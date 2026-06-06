@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM Hermes - Start Hermes API (FastAPI) with built-in Chat Pro
+REM Hermes - Start Hermes API (FastAPI) with built-in chat
 REM Serves the chat UI at /chat, API at /api/*, launcher at /launcher.
 REM ============================================================
 setlocal enabledelayedexpansion
@@ -27,7 +27,7 @@ set "PORT=%~1"
 if "%PORT%"=="" set "PORT=7860"
 
 echo ============================================================
-echo   Hermes - API + Chat Pro
+echo   Hermes - API + Chat
 echo   URL: http://localhost:%PORT%
 echo ============================================================
 echo.

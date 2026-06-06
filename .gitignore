@@ -6,15 +6,7 @@ runtime/
 
 # 数据目录
 hermes/data/
-!hermes/data/nextchat/
-!hermes/data/nextchat/package.json
-!hermes/data/nextchat/next.config.mjs
-!hermes/data/nextchat/tsconfig.json
-!hermes/data/nextchat/app/
-!hermes/data/nextchat/public/
-hermes/data/nextchat/node_modules/
-hermes/data/nextchat/.next/
-hermes/data/nextchat/.env.local
+hermes/data/nextchat/
 tests/hermes/data/
 data/
 !data/models/

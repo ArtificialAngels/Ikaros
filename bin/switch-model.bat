@@ -10,7 +10,7 @@ REM
 REM What it does:
 REM   1. Stops llama-server (frees GGUF + VRAM).
 REM   2. Restarts llama-server with new model (smart NGL).
-REM   3. Model is immediately available in Chat Pro / API.
+REM   3. Model is immediately available in Hermes Chat / API.
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul

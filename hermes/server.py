@@ -1,7 +1,7 @@
 """
 FastAPI web server for Hermes.
 
-Provides the /api/* endpoints, built-in Chat Pro UI (/chat),
+Provides the /api/* endpoints, built-in chat UI (/chat),
 and OpenAI-compatible /v1/* shims for external clients.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ logger = logging.getLogger("hermes.server")
 # Hermes project root (parent of this hermes/ package)
 HERMES_ROOT = Path(__file__).resolve().parent.parent
 
-# ChatGPT-Next-Web (:7890) is the primary chat UI.
+# Built-in chat UI at /chat is the primary interface.
 
 HTML_FALLBACK = """<!DOCTYPE html>
 <html>
@@ -32,10 +32,10 @@ HTML_FALLBACK = """<!DOCTYPE html>
 <body>
 <h1>Hermes Agent</h1>
 <p>The Hermes API is running on this port.</p>
-<p>Chat UI: <a href="http://localhost:7890">ChatGPT-Next-Web (:7890)</a></p>
+<p>Chat UI: <a href="/chat">Hermes Chat</a></p>
 <h2>Useful endpoints</h2>
 <ul>
-  <li><a href="/chat"><code>/chat</code></a> — Chat Pro UI</li>
+  <li><a href="/chat"><code>/chat</code></a> — Hermes Chat</li>
   <li><a href="/health"><code>/health</code></a> — health probe (JSON)</li>
   <li><a href="/v1/models"><code>/v1/models</code></a> — OpenAI-compatible model list</li>
   <li><a href="/api/status"><code>/api/status</code></a> — agent status (memory, KB, skills)</li>
@@ -410,7 +410,7 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/")
     async def index():
-        """Home — redirects to ChatGPT-Next-Web."""
+        """Home page."""
         return HTMLResponse(HTML_FALLBACK)
 
     @app.get("/chat")
@@ -892,7 +892,7 @@ def run_server(agent, host: str = "0.0.0.0", port: int = 7860):
     import uvicorn
     app = create_app(agent)
     logger.info(f"Starting on http://{host}:{port}")
-    logger.info("API mode (Chat Pro at /chat)")
+    logger.info("Hermes API + Chat at http://%s:%s", host, port)
     # loop="asyncio" + http="h11" avoids Windows httptools compatibility issues
     uvicorn.run(app, host=host, port=port, log_level="info",
                 loop="asyncio", http="h11", ws="none")
