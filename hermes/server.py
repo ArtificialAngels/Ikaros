@@ -21,7 +21,7 @@ logger = logging.getLogger("hermes.server")
 # Hermes project root (parent of this hermes/ package)
 HERMES_ROOT = Path(__file__).resolve().parent.parent
 
-# Chat Pro UI (/chat) is the primary interface.
+# ChatGPT-Next-Web (:7890) is the primary chat UI.
 
 HTML_FALLBACK = """<!DOCTYPE html>
 <html>
@@ -31,7 +31,7 @@ HTML_FALLBACK = """<!DOCTYPE html>
 <body>
 <h1>Hermes Agent</h1>
 <p>The Hermes API is running on this port.</p>
-<p>Chat UI: <a href="/chat"><code>/chat</code></a></p>
+<p>Chat UI: <a href="http://localhost:7890">ChatGPT-Next-Web (:7890)</a></p>
 <h2>Useful endpoints</h2>
 <ul>
   <li><a href="/chat"><code>/chat</code></a> — Chat Pro UI</li>
@@ -409,14 +409,14 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/")
     async def index():
-        """Home — redirects to Chat Pro."""
+        """Home — redirects to ChatGPT-Next-Web."""
         return HTMLResponse(HTML_FALLBACK)
 
     @app.get("/chat")
     async def chat_ui():
-        """Rich chat UI with conversations, model switching, settings."""
-        from hermes.chat_ui import CHAT_PRO_HTML
-        return HTMLResponse(CHAT_PRO_HTML)
+        """Redirect to ChatGPT-Next-Web UI."""
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("http://127.0.0.1:7890")
 
     @app.get("/healthz")
     async def healthz():

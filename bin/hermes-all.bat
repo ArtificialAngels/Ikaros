@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM Hermes - One-click Launcher
-REM v5: llama-server + Hermes API (Chat Pro built-in)
+REM v6: llama-server + Hermes API + ChatGPT-Next-Web
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -9,7 +9,10 @@ chcp 65001 >nul
 set "HERMES_ROOT=%~dp0.."
 set "LLAMA_PORT=8080"
 set "HERMES_PORT=7860"
+set "NEXTCHAT_PORT=7890"
 set "PY=%HERMES_ROOT%\portable-python\python.exe"
+set "NODE=%HERMES_ROOT%\runtime\node\node.exe"
+set "NEXTCHAT_DIR=%HERMES_ROOT%\hermes\data\nextchat"
 
 REM ---- Smart default model selection (auto-detect VRAM) ----
 if not "%HERMES_MODEL%"=="" set "MODEL=%HERMES_MODEL%"
@@ -63,28 +66,24 @@ if exist "%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe" (
 echo ============================================================
 echo   Hermes - All-in-One Launcher
 echo.
-echo   Chat UI:    http://localhost:%HERMES_PORT%/chat
-echo   Launcher:   http://localhost:%HERMES_PORT%/launcher
-echo   API:        http://localhost:%HERMES_PORT%/status
-echo   LLM:        http://127.0.0.1:%LLAMA_PORT%  ^(llama-server^)
-echo   GPU mode:   %GPU_MODE%
+echo   Chat UI:  http://localhost:%NEXTCHAT_PORT%  (ChatGPT-Next-Web)
+echo   API:      http://localhost:%HERMES_PORT%/status
+echo   LLM:      http://127.0.0.1:%LLAMA_PORT%  (llama-server)
+echo   GPU mode: %GPU_MODE%
 echo ============================================================
 echo.
 
 REM ---- Step 0: Environment check ----
-echo [0/3] Environment check...
-call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto
-if errorlevel 1 (
-    echo   [WARN] environment check found issues - continuing
-)
+echo [0/4] Environment check...
+call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
 
 REM ---- Step 1: Start llama-server ----
-echo [1/3] Starting llama-server (smart NGL)...
+echo [1/4] Starting llama-server (smart NGL)...
 set "LLAMA_MODEL=%MODEL%"
 start "Hermes-LLM" /MIN cmd /c ""%HERMES_ROOT%\bin\start-llm-smart.bat""
 
 REM ---- Step 2: Wait for llama-server ----
-echo [2/3] Waiting for llama-server...
+echo [2/4] Waiting for llama-server...
 set /a "WAITED=0"
 :wait_llm
 timeout /t 3 /nobreak >nul
@@ -94,19 +93,14 @@ if not errorlevel 1 (
     echo   llama-server ready in %WAITED%s
     goto :start_hermes
 )
-if %WAITED% GEQ 120 (
-    echo   [WARN] llama-server not ready after 120s
-    goto :start_hermes
-)
-if %WAITED% EQU 15 echo   still loading...
+if %WAITED% GEQ 120 goto :start_hermes
 if %WAITED% EQU 30 echo   still loading...
 if %WAITED% EQU 60 echo   still loading...
-if %WAITED% EQU 90 echo   still loading...
 goto :wait_llm
 
 REM ---- Step 3: Start Hermes API ----
 :start_hermes
-echo [3/3] Starting Hermes API + Chat Pro...
+echo [3/4] Starting Hermes API...
 start "Hermes-API" /MIN "%PY%" -m hermes serve --host 127.0.0.1 --port %HERMES_PORT%
 set /a "WAITED=0"
 :wait_hermes
@@ -115,29 +109,52 @@ set /a "WAITED+=2"
 powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:%HERMES_PORT%/healthz' -UseBasicParsing -TimeoutSec 2).StatusCode } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 (
     echo   Hermes ready in %WAITED%s
-    goto :done
+    goto :start_nextchat
 )
-if %WAITED% GEQ 30 (
-    echo   [WARN] Hermes not ready, but LLM is up
-    goto :done
-)
+if %WAITED% GEQ 20 goto :start_nextchat
 goto :wait_hermes
+
+REM ---- Step 4: Start ChatGPT-Next-Web ----
+:start_nextchat
+echo [4/4] Starting ChatGPT-Next-Web...
+
+REM Copy static files into standalone dir (required for Next.js standalone mode)
+if exist "%NEXTCHAT_DIR%\.next\static" (
+    xcopy /E /I /Y "%NEXTCHAT_DIR%\.next\static" "%NEXTCHAT_DIR%\.next\standalone\.next\static\" >nul 2>&1
+)
+if exist "%NEXTCHAT_DIR%\public" (
+    xcopy /E /I /Y "%NEXTCHAT_DIR%\public" "%NEXTCHAT_DIR%\.next\standalone\public\" >nul 2>&1
+)
+
+if exist "%NEXTCHAT_DIR%\.next\standalone\server.js" (
+    set "PATH=%HERMES_ROOT%\runtime\node;%PATH%"
+    set "PORT=%NEXTCHAT_PORT%"
+    set "HOSTNAME=127.0.0.1"
+    start "Hermes-NextChat" /MIN "%NODE%" "%NEXTCHAT_DIR%\.next\standalone\server.js"
+    echo   NextChat production started
+) else (
+    echo   [WARN] NextChat build not found. Run: bin\start-nextchat.bat to build
+)
 
 :done
 echo.
 echo ============================================================
 echo   Ready!
 echo.
-echo   Chat Pro:  http://localhost:%HERMES_PORT%/chat
-echo   Launcher:  http://localhost:%HERMES_PORT%/launcher
+echo   Chat:     http://localhost:%NEXTCHAT_PORT%
+echo   API:      http://localhost:%HERMES_PORT%/status
+echo.
+echo   NextChat config (gear icon):
+echo     Endpoint: http://127.0.0.1:%LLAMA_PORT%
+echo     API Key:  sk-no-key-needed
 echo.
 echo   Switch model:  bin\switch-model.bat ^<name^>.gguf
 echo   Stop all:      bin\hermes-stop.bat
 echo ============================================================
 echo.
-start "" "http://localhost:%HERMES_PORT%/chat"
+start "" "http://localhost:%NEXTCHAT_PORT%"
 echo.
-echo (后台窗口保持运行 — 关掉它们可停止服务)
+echo (后台窗口保持运行)
 echo.
 endlocal
 exit /b 0
