@@ -167,12 +167,12 @@ function navTo(p){
  document.querySelectorAll('.page').forEach(function(n){n.classList.toggle('show',n.id==='page-'+p)});
  cur=p;
  if(p==='agent')loadAgent();if(p==='memory')loadMemory();if(p==='skills')loadSkills();
- if(p==='models')loadModels();if(p==='history')loadHistory();if(p==='archive')loadArchive();if(p==='plugins')loadPlugins();
+ if(p==='models')loadModels();if(p==='history')loadHistoryPage();if(p==='archive')loadArchivePage();if(p==='plugins')loadPlugins();
 }
 
 //==== api ====
 async function api(url,opts){
- try{var r=await fetch(url,opts);if(!r.ok){var t=await r.text();throw new Error(t)}return await r.json()}
+ try{var r=await fetch(url,opts);if(!r.ok){var t='';try{var e=await r.json();t=e.detail||e.error||JSON.stringify(e)}catch(_){t=await r.text()};throw new Error(t||r.status)}return await r.json()}
  catch(e){st(e.message,1);return null}
 }
 function st(t,err){E('status-text').innerHTML=t;E('status-text').style.color=err?'var(--rd)':''}
@@ -182,19 +182,19 @@ function esc(s){var d=document.createElement('div');d.textContent=s||'';return d
 async function loadSessions(){
  var j=await api('/api/chat/sessions');if(!j)return;
  SESS=j.sessions||[];renderSessions();
- if(!SID&&SESS.length){SID=SESS[SESS.length-1].id;loadHistory()}
+ if(!SID&&SESS.length){SID=SESS[SESS.length-1].id;loadChatHistory()}
 }
 function renderSessions(){
  var h='',el=E('sessions');
  SESS.forEach(function(s){var cl=s.id===SID?'on':'';h+='<div class="sess-item '+cl+'" onclick="openSession(\''+s.id+'\')"><span class="si-title">'+esc(s.title||'Chat')+'</span><button class="si-del" onclick="event.stopPropagation();delSess(\''+s.id+'\')">×</button></div>'});
  el.innerHTML=h||'<div style="padding:12px;color:var(--dm);font-size:11px;text-align:center">No chats</div>';
 }
-function openSession(id){SID=id;loadHistory();navTo('chat');renderSessions()}
+function openSession(id){SID=id;loadChatHistory();navTo('chat');renderSessions()}
 function newChat(){SID=null;MSGS=[];renderChat();renderSessions();E('user-input').focus();navTo('chat')}
 async function delSess(id){await api('/api/chat/sessions/'+id,{method:'DELETE'});SESS=SESS.filter(function(s){return s.id!==id});if(SID===id){SID=SESS.length?SESS[SESS.length-1].id:null;MSGS=[]};renderSessions();renderChat()}
 
-//==== history load ====
-async function loadHistory(){
+//==== chat history loader ====
+async function loadChatHistory(){
  if(!SID){renderChat();return}
  var j=await api('/api/chat/history?session='+SID);
  MSGS=j?j.messages||[]:[];renderChat();
@@ -228,9 +228,8 @@ async function sendMsg(){
  try{AB=new AbortController();
   var r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:tx,session:SID||undefined}),signal:AB.signal});
   var j=await r.json();shimmer.remove();
-  if(j.ok){if(!SID&&j.session_id){SID=j.session_id;renderSessions()}if(j.message)MSGS.push(j.message);renderChat();loadSessions();
-   var tok=j.message.content.length,ms=Date.now()-t0;st('<span class="tok">'+Math.round(tok/(ms/1000)||0)+' tok/s</span> · '+ms+'ms');}
-  else st('Error: '+(j.error||'?'),1);
+  if(j.ok){if(!SID&&j.session_id){SID=j.session_id;renderSessions()}if(j.message){MSGS.push(j.message);renderChat();loadSessions();var tok=(j.message.content||'').length,ms=Date.now()-t0;st('<span class="tok">'+Math.round(tok/(ms/1000)||0)+' tok/s</span> · '+ms+'ms');}}
+  else{st('Error: '+(j.error||'?'),1);shimmer.remove()}
  }catch(e){shimmer.remove();if(e.name!=='AbortError')st(e.message,1)}
  sb.style.display='inline-block';stb.style.display='none';LOAD=false;inp.focus();AB=null;
 }
@@ -292,7 +291,7 @@ async function scanModels(){
 }
 
 //==== HISTORY page ====
-async function loadHistory(){
+async function loadHistoryPage(){
  var j=await api('/api/status');if(!j)return;
  var mem=j.memory||{},h='<h3 style="margin-bottom:14px">Recent Activity ('+(mem.total_items||0)+' items)</h3>';
  h+='<div style="display:flex;flex-direction:column;gap:4px">';
@@ -301,10 +300,10 @@ async function loadHistory(){
 }
 
 //==== ARCHIVE page ====
-async function loadArchive(){
+async function loadArchivePage(){
  var j=await api('/api/chat/sessions');if(!j)return;
  var s=(j.sessions||[]).slice(0).reverse(),h='<div style="display:flex;flex-direction:column;gap:4px">';
- s.forEach(function(s){h+='<div class="list-item" onclick="openSession(\''+s.id+'\')"><div class="li-title">📁 '+esc(s.title||'Chat')+'</div><div class="li-meta">'+s.message_count+' msgs</div></div>'});
+ s.forEach(function(s){h+='<div class="list-item" onclick="openSession(\''+s.id+'\')"><div class="li-title">📁 '+esc(s.title||'Chat')+'</div><div class="li-meta">'+(s.message_count||s.messageCount||0)+' msgs</div></div>'});
  h+='</div>';if(!s.length)h='<div class="empty"><h2>No Archives</h2><p>Completed conversations appear here</p></div>';
  E('archive-content').innerHTML=h;
 }
