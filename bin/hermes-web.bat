@@ -1,8 +1,7 @@
 @echo off
 REM ============================================================
-REM Hermes - Start Hermes API (FastAPI) for embeddings + JSON API
-REM v2: not the main UI anymore (Open WebUI on :7870 is main).
-REM This launcher is for programmatic access / RAG embeddings.
+REM Hermes - Start Hermes API (FastAPI) with built-in Chat Pro
+REM Serves the chat UI at /chat, API at /api/*, launcher at /launcher.
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -28,9 +27,8 @@ set "PORT=%~1"
 if "%PORT%"=="" set "PORT=7860"
 
 echo ============================================================
-echo   Hermes - API only
+echo   Hermes - API + Chat Pro
 echo   URL: http://localhost:%PORT%
-echo   (Main chat UI is at http://localhost:7870 - run hermes-all.bat)
 echo ============================================================
 echo.
 

@@ -2,7 +2,7 @@
 REM ============================================================
 REM Hermes - Install real embedding model
 REM
-REM Optional: improves Open WebUI RAG search quality.
+REM Optional: improves RAG / semantic search quality.
 REM Adds sentence-transformers + all-MiniLM-L6-v2 (~80MB) to portable-python.
 REM
 REM Without this, Hermes uses hash-based pseudo-embeddings (UI works, search quality is poor).

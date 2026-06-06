@@ -114,7 +114,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div class="sidebar-actions">
 <a href="/launcher" target="_blank">&#8599; Model Manager</a>
 <a href="/api/status" target="_blank">&#8599; API Status</a>
-<a href="http://localhost:7870" target="_blank" id="webui-link" style="display:none">&#8599; Open WebUI</a>
 </div>
 </div>
 <div class="main">

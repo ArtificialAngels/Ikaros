@@ -1,10 +1,8 @@
 """
 FastAPI web server for Hermes.
 
-Provides the /api/* endpoints used by clients (Open WebUI, CLI, scripts).
-The legacy React admin panel (web_dist/) was removed; unknown GETs now
-return a minimal HTML fallback so direct browser visits to :7860 still
-get a useful page instead of a 404.
+Provides the /api/* endpoints, built-in Chat Pro UI (/chat),
+and OpenAI-compatible /v1/* shims for external clients.
 """
 from __future__ import annotations
 import asyncio
@@ -23,9 +21,7 @@ logger = logging.getLogger("hermes.server")
 # Hermes project root (parent of this hermes/ package)
 HERMES_ROOT = Path(__file__).resolve().parent.parent
 
-# Note: web_dist/ was the legacy React admin SPA. Removed; Open WebUI (:7870)
-# is the primary chat UI. This server now only serves JSON APIs (plus a small
-# /launcher page for switching local GGUF models).
+# Chat Pro UI (/chat) is the primary interface.
 
 HTML_FALLBACK = """<!DOCTYPE html>
 <html>
@@ -34,12 +30,11 @@ HTML_FALLBACK = """<!DOCTYPE html>
 </head>
 <body>
 <h1>Hermes Agent</h1>
-<p>The Hermes FastAPI is running on this port. There is no admin UI here.</p>
-<p>Open WebUI (the primary chat UI) is served separately. If you started the
-full stack via <code>bin\\hermes-all.bat</code>, look at port <strong>7870</strong>
-in your browser instead of 7860.</p>
+<p>The Hermes API is running on this port.</p>
+<p>Chat UI: <a href="/chat"><code>/chat</code></a></p>
 <h2>Useful endpoints</h2>
 <ul>
+  <li><a href="/chat"><code>/chat</code></a> — Chat Pro UI</li>
   <li><a href="/health"><code>/health</code></a> — health probe (JSON)</li>
   <li><a href="/v1/models"><code>/v1/models</code></a> — OpenAI-compatible model list</li>
   <li><a href="/api/status"><code>/api/status</code></a> — agent status (memory, KB, skills)</li>
@@ -414,7 +409,7 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/")
     async def index():
-        # No admin SPA anymore — show a helpful fallback pointing to Open WebUI.
+        """Home — redirects to Chat Pro."""
         return HTMLResponse(HTML_FALLBACK)
 
     @app.get("/chat")
@@ -696,7 +691,7 @@ def create_app(agent) -> FastAPI:
             ]
         }
 
-    # ---- OpenAI-compatible shim endpoints (for Open WebUI integration) ----
+    # ---- OpenAI-compatible shim endpoints ----
 
     # Pick the best available embedder: real (sbert) if installed, else hash.
     try:
@@ -747,9 +742,7 @@ def create_app(agent) -> FastAPI:
     async def v1_models():
         """OpenAI-compatible models listing.
 
-        The 'id' here is what llama-server exposes via --alias; Open WebUI
-        shows this name in the model dropdown. We keep it in sync with the
-        default --alias used by bin/hermes-all.bat and bin/start-llm-smart.bat.
+        Returns models available through the local llama-server.
         """
         return {
             "object": "list",
@@ -775,7 +768,7 @@ def create_app(agent) -> FastAPI:
             ],
         }
 
-    # ---- Web fallback (no SPA anymore, just point users to Open WebUI) ----
+    # ---- Web fallback ----
 
     @app.get("/", include_in_schema=False)
     async def root_fallback():
@@ -794,7 +787,7 @@ def run_server(agent, host: str = "0.0.0.0", port: int = 7860):
     import uvicorn
     app = create_app(agent)
     logger.info(f"Starting on http://{host}:{port}")
-    logger.info("API-only mode (no admin SPA; chat UI is Open WebUI on :7870)")
+    logger.info("API mode (Chat Pro at /chat)")
     # loop="asyncio" + http="h11" avoids Windows httptools compatibility issues
     uvicorn.run(app, host=host, port=port, log_level="info",
                 loop="asyncio", http="h11", ws="none")

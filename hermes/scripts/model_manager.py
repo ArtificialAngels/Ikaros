@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Hermes Model Manager - 类似 ComfyUI 启动器的模型管理工具
+"""Hermes Model Manager - 模型管理工具
 
 功能：
 1. 扫描 data/models/ 目录中的所有 GGUF 模型
 2. 显示模型信息（大小、参数量、推荐GPU配置）
 3. 一键切换模型（自动重启 llama-server）
 4. GPU 加速检测和配置
-5. Open WebUI 模型列表清理和同步
 """
 
 import os
@@ -14,9 +13,7 @@ import sys
 import json
 import time
 import subprocess
-import sqlite3
 import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -73,8 +70,6 @@ class ModelManager:
     def __init__(self, hermes_root: Path):
         self.hermes_root = hermes_root
         self.models_dir = hermes_root / "data" / "models"
-        self.webui_db = hermes_root / "hermes" / "data" / "openwebui" / "webui.db"
-        self.webui_url = "http://127.0.0.1:7870"
         self.llama_port = 8080
         self.models: Dict[str, ModelInfo] = {}
 
@@ -172,102 +167,6 @@ class ModelManager:
             print(f"[ERROR] 启动 llama-server 失败: {e}")
             return False
 
-    def clean_webui_models(self) -> bool:
-        """清理 Open WebUI 中的无效模型"""
-        if not self.webui_db.exists():
-            return False
-
-        try:
-            conn = sqlite3.connect(self.webui_db)
-            cursor = conn.cursor()
-
-            # 获取数据库中的所有模型
-            cursor.execute("SELECT id, name FROM model")
-            db_models = cursor.fetchall()
-
-            # 删除不在当前运行模型列表中的模型
-            current_model_id = self._get_current_model_id()
-            deleted = 0
-            for model_id, model_name in db_models:
-                if model_id != current_model_id:
-                    cursor.execute("DELETE FROM model WHERE id = ?", (model_id,))
-                    deleted += 1
-
-            conn.commit()
-            conn.close()
-            return deleted > 0
-        except Exception as e:
-            print(f"[WARN] 清理模型列表失败: {e}")
-            return False
-
-    def _get_current_model_id(self) -> str:
-        """获取当前运行的模型 ID"""
-        try:
-            resp = urllib.request.urlopen(f"http://127.0.0.1:{self.llama_port}/v1/models", timeout=5)
-            data = json.loads(resp.read())
-            if data.get("data"):
-                return data["data"][0]["id"]
-        except:
-            pass
-        return ""
-
-    def add_model_to_webui(self, model: ModelInfo) -> bool:
-        """添加模型到 Open WebUI"""
-        try:
-            # 获取 admin token
-            token = self._get_webui_token()
-            if not token:
-                return False
-
-            # 构造模型 ID
-            model_id = model.name.replace(".", "_").replace("-", "_")
-            model_name = f"{model.name.replace('.gguf', '')} (Local)"
-
-            # 添加模型
-            data = json.dumps({
-                "id": model_id,
-                "name": model_name,
-                "base_model_id": model_id,
-                "base_model_name": model_id,
-                "meta": {"capabilities": {"vision": False, "usage": True}},
-                "params": {},
-            }).encode()
-
-            req = urllib.request.Request(
-                f"{self.webui_url}/api/v1/models/create",
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {token}",
-                }
-            )
-
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status == 200
-        except Exception as e:
-            print(f"[WARN] 添加模型到 Open WebUI 失败: {e}")
-            return False
-
-    def _get_webui_token(self) -> Optional[str]:
-        """获取 WebUI token"""
-        try:
-            data = json.dumps({
-                "email": "admin@hermes.local",
-                "password": "hermes123",
-            }).encode()
-
-            req = urllib.request.Request(
-                f"{self.webui_url}/api/v1/auths/signin",
-                data=data,
-                headers={"Content-Type": "application/json"}
-            )
-
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read())
-                return result.get("token")
-        except:
-            return None
-
     def switch_model(self, model_name: str) -> bool:
         """切换模型"""
         if model_name not in self.models:
@@ -288,25 +187,17 @@ class ModelManager:
         print()
 
         # 停止旧服务
-        print("[1/4] 停止 llama-server...")
+        print("[1/2] 停止 llama-server...")
         self.stop_llama_server()
 
         # 启动新服务
-        print("[2/4] 启动 llama-server...")
+        print("[2/2] 启动 llama-server...")
         if not self.start_llama_server(model, ngl):
             print("[ERROR] 启动失败")
             return False
 
-        # 清理旧模型
-        print("[3/4] 清理 Open WebUI 模型列表...")
-        self.clean_webui_models()
-
-        # 添加新模型
-        print("[4/4] 添加模型到 Open WebUI...")
-        self.add_model_to_webui(model)
-
-        print("\n✓ 模型切换完成！")
-        print(f"  请刷新浏览器: http://localhost:7870")
+        print("\n模型切换完成！")
+        print(f"  浏览器打开: http://localhost:7860/chat")
         return True
 
     def list_models(self):
@@ -348,15 +239,11 @@ def main():
         elif cmd == "gpu":
             gpu = manager.get_gpu_info()
             print(json.dumps(gpu, indent=2, ensure_ascii=False))
-        elif cmd == "clean":
-            manager.clean_webui_models()
-            print("✓ 模型列表已清理")
         else:
             print("用法:")
             print("  python model_manager.py list              # 列出所有模型")
             print("  python model_manager.py switch <model>     # 切换模型")
             print("  python model_manager.py gpu               # 显示 GPU 信息")
-            print("  python model_manager.py clean             # 清理模型列表")
     else:
         manager.list_models()
 

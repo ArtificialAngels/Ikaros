@@ -29,7 +29,6 @@ ENV_EXAMPLE = HERMES_ROOT / ".env.example"
 GOPEED_BASE = "http://127.0.0.1:9999"
 DEFAULT_MODEL_PORT = 8080
 HERMES_API_PORT = 7860
-OW_PORT = 7870
 
 
 # ---- helpers ----
@@ -203,11 +202,6 @@ def check_services(r: Report):
         r.ok(f"Hermes API (:{HERMES_API_PORT})", "up")
     else:
         r.warn(f"Hermes API (:{HERMES_API_PORT}) not running", "run bin/hermes-web.bat")
-    code, body = http_get(f"http://127.0.0.1:{OW_PORT}/")
-    if code == 200:
-        r.ok(f"Open WebUI (:{OW_PORT})", "up")
-    else:
-        r.warn(f"Open WebUI (:{OW_PORT}) not running", "run bin/start-openwebui.bat")
 
 
 def check_gopeed(r: Report):

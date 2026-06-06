@@ -3,9 +3,8 @@ REM ============================================================
 REM Hermes - Stop all running Hermes processes
 REM
 REM Kills:
-REM   - llama-server*.exe (any variant: -cuda-12.4, -vulkan, -cuda-11.8, plain)
+REM   - llama-server*.exe (any variant)
 REM   - python -m hermes serve (Hermes FastAPI)
-REM   - python -c "from open_webui import app..." (Open WebUI)
 REM   - gopeed-web (the Python download bridge, optional)
 REM
 REM v2: 2026-06-06 - use wildcard IM match. v1's "llama-server.exe" literal
@@ -34,16 +33,15 @@ if "%LLAMA_COUNT%"=="0" (
         2>nul
 )
 
-REM ---- 2. Kill python processes related to Hermes / Open WebUI ----
-REM   Match by command-line, NOT by name (so we don't kill user's other python work).
-echo [2/4] Killing hermes/openwebui python processes...
+REM ---- 2. Kill python processes related to Hermes ----
+echo [2/3] Killing Hermes python processes...
 powershell -NoProfile -Command ^
-    "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes|open_webui' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" ^
+    "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" ^
     >nul 2>&1
 if errorlevel 1 echo   (none found)
 
 REM ---- 3. Kill gopeed-web (Python download bridge) if we own it ----
-echo [3/4] Killing gopeed-web (if Hermes-spawned)...
+echo [2/3] Killing gopeed-web (if Hermes-spawned)...
 REM gopeed-web is a single-exe headless server; only kill it if we started it
 REM (i.e. it's running on 9999 and was spawned by our process tree). For now
 REM just attempt taskkill on the binary name - user can re-launch easily.
@@ -53,7 +51,7 @@ powershell -NoProfile -Command ^
 if errorlevel 1 echo   (none / not owned by Hermes)
 
 REM ---- 4. Kill any leftover "Hermes-*" window (defensive) ----
-echo [4/4] Killing leftover Hermes-* windows...
+echo [3/3] Killing leftover Hermes-* windows...
 REM taskkill prints child-termination info to stdout (not stderr), so we
 REM need >nul 2>&1 to suppress it cleanly.
 taskkill /F /FI "WINDOWTITLE eq Hermes*" /T >nul 2>&1

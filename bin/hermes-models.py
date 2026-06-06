@@ -6,7 +6,7 @@ Hermes Agent - 多模型 CLI 切换器
 类似 bin/switch-model.bat 但更友好:
 - 列出 data/models/*.gguf (带大小、量化、参数量、context、tensors)
 - 输入编号切换
-- 调 switch-model.bat 切模型 + 自动重启 Open WebUI
+- 调 switch-model.bat 切模型
 - 调 gopeed-web API 列/添加模型 (通信桥演示)
 
 Usage:
