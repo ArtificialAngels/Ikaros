@@ -1,12 +1,12 @@
 # Portable Python (不跟踪整个便携Python环境)
 portable-python/
-!portable-python/python.exe
-!portable-python/pythonw.exe
 
 # Runtime 目录
 runtime/
 
 # 数据目录
+hermes/data/
+tests/hermes/data/
 data/
 !data/models/
 data/models/*.gguf
@@ -20,7 +20,15 @@ data/models/*.gguf
 __pycache__/
 *.pyc
 *.pyo
+*.pyc
+*.pyo
 *.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
 
 # 日志文件
 *.log
