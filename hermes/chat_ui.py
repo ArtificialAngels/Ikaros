@@ -1,291 +1,241 @@
-"""
-Hermes Chat — professional single-file UI inspired by hermes-workspace prompt-kit.
-Zero JS dependencies, 100% standalone. Design: clean dark, avatars, sessions,
-markdown, code highlighting, auto-scroll, keyboard shortcuts.
-"""
-from __future__ import annotations
-
-CHAT_HTML = r"""<!DOCTYPE html>
+"""Hermes Chat — professional chat interface. Zero JS deps, single file."""
+CHAT_HTML = r'''<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
 <title>Hermes Chat</title>
 <style>
-:root{--bg:#0b0f17;--sbg:#0d131f;--card:#111827;--brd:#1e293b;--hover:#1e3050;--tx:#e2e8f0;--dm:#64748b;--ac:#22d3ee;--bl:#3b82f6;--gn:#22c55e;--rd:#ef4444;--am:#f59e0b;--r:10px}
+:root{--bg:#0c0e14;--sbg:#0f131b;--card:#131826;--brd:#1c2333;--hover:#1a2340;--tx:#dbe2ec;--dm:#64748b;--ac:#40e0d0;--bl:#4d87f0;--gn:#34d399;--rd:#f87171;--am:#fbbf24;--r:12px;--r-sm:8px;--font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 600;font-display:swap;src:local('Segoe UI'),local('system-ui')}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;height:100vh;overflow:hidden}
-/* sidebar */
-.sidebar{width:280px;background:var(--sbg);border-right:1px solid var(--brd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
-.side-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--brd)}
-.side-header h2{font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
-.side-header h2::before{content:'';display:inline-block;width:8px;height:8px;background:var(--ac);border-radius:50%;box-shadow:0 0 8px var(--ac)}
-.new-btn{background:var(--bl);color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer}
-.new-btn:hover{background:#2563eb}
-.sess-list{flex:1;overflow-y:auto;padding:8px}
-.sess-item{padding:10px 14px;border-radius:8px;cursor:pointer;font-size:12px;color:var(--dm);margin-bottom:2px;display:flex;align-items:center;gap:8px;transition:background .15s}
+body{font-family:var(--font);background:var(--bg);color:var(--tx);display:flex;height:100vh;overflow:hidden;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--brd);border-radius:10px}
+.sidebar{width:292px;background:var(--sbg);border-right:1px solid var(--brd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.side-header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--brd)}
+.side-header .logo{font-size:14px;font-weight:600;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
+.side-header .logo .dot{width:9px;height:9px;background:var(--ac);border-radius:50%;box-shadow:0 0 10px rgba(64,224,208,.4)}
+.side-header .dot.live{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 10px rgba(64,224,208,.4)}50%{opacity:.6;box-shadow:0 0 20px rgba(64,224,208,.7)}}
+.btn-new{background:var(--bl);color:#fff;border:none;padding:6px 14px;border-radius:var(--r-sm);font-size:11px;font-weight:500;cursor:pointer;letter-spacing:.3px;transition:background .15s}
+.btn-new:hover{background:#3b74e0}
+.sess-list{flex:1;overflow-y:auto;padding:6px 10px}
+.sess-item{padding:10px 14px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;margin-bottom:1px;display:flex;align-items:center;gap:10px;transition:all .12s;color:var(--dm);position:relative}
 .sess-item:hover{background:var(--hover);color:var(--tx)}
-.sess-item.active{background:var(--hover);color:var(--tx);border-left:2px solid var(--ac)}
-.sess-item .title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sess-item .del-btn{opacity:0;color:var(--rd);background:none;border:none;cursor:pointer;font-size:14px;padding:0 4px;transition:opacity .15s}
-.sess-item:hover .del-btn{opacity:1}
-/* main chat */
+.sess-item.active{background:var(--hover);color:var(--tx)}
+.sess-item.active::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--ac);border-radius:0 2px 2px 0}
+.sess-item .icon{width:20px;height:20px;border-radius:6px;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0}
+.sess-item .title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}
+.sess-item .del-btn{opacity:0;color:var(--rd);background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;border-radius:4px;transition:all .15s}
+.sess-item:hover .del-btn{opacity:.7}.sess-item .del-btn:hover{opacity:1;background:rgba(248,113,113,.1)}
+.side-footer{padding:10px 18px 16px;border-top:1px solid var(--brd)}
+.side-footer .info{font-size:10px;color:var(--dm);line-height:1.6}
+.side-footer .info b{color:var(--ac);font-weight:500}
 .main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
-.chat-header{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--brd);background:var(--sbg)}
-.chat-header .model-badge{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--brd);padding:5px 12px;border-radius:20px;font-size:11px;cursor:pointer}
-.chat-header .model-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--gn);box-shadow:0 0 6px var(--gn)}
-.chat-header .count{font-size:11px;color:var(--dm);margin-left:auto}
-.messages{flex:1;overflow-y:auto;padding:20px 0;scroll-behavior:smooth}
-.msg-wrap{max-width:800px;margin:0 auto 20px;padding:0 24px;animation:slide .2s ease}
-.msg{display:flex;gap:12px}
-.avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
-.msg.user .avatar{background:var(--bl);color:#fff}
-.msg.assistant .avatar{background:var(--ac);color:#0b0f17}
-.msg-body{flex:1;min-width:0;padding:14px 18px;border-radius:var(--r);border:1px solid var(--brd);line-height:1.7;font-size:14px;background:var(--card)}
-.msg.user .msg-body{border-color:var(--bl)}
-.msg-body pre{background:#0a0f1a;padding:14px 16px;border-radius:8px;overflow-x:auto;font-size:12px;margin:10px 0;line-height:1.5;border:1px solid var(--brd);position:relative}
-.msg-body pre .lang{position:absolute;top:4px;right:8px;font-size:10px;color:var(--dm)}
-.msg-body code{font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:12px}
-.msg-body :not(pre)>code{background:#1e293b;padding:2px 6px;border-radius:4px}
-.msg-body table{border-collapse:collapse;width:100%;margin:10px 0}
-.msg-body th,.msg-body td{border:1px solid var(--brd);padding:6px 12px;text-align:left;font-size:13px}
-.msg-body th{background:var(--sbg)}
-.msg-body blockquote{border-left:3px solid var(--ac);padding:8px 14px;color:var(--dm);margin:10px 0;background:#0e1520;border-radius:0 6px 6px 0}
-.msg-body h1,.msg-body h2,.msg-body h3{margin:12px 0 6px}
-.msg-body h1{font-size:18px}.msg-body h2{font-size:16px}.msg-body h3{font-size:14px}
-.msg-body ul,.msg-body ol{padding-left:20px;margin:8px 0}
-.msg-actions{display:flex;gap:8px;margin-top:4px;opacity:0;transition:opacity .15s}
+.chat-header{display:flex;align-items:center;gap:12px;padding:13px 24px;border-bottom:1px solid var(--brd);background:var(--sbg);min-height:50px}
+.chat-header .badge{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--brd);padding:5px 14px;border-radius:20px;font-size:11px;cursor:pointer;transition:border-color .15s}
+.chat-header .badge:hover{border-color:var(--ac)}
+.chat-header .badge .dot{width:7px;height:7px;border-radius:50%;background:var(--gn);box-shadow:0 0 6px rgba(52,211,153,.4)}
+.chat-header .meta{font-size:11px;color:var(--dm);margin-left:auto}
+.messages{flex:1;overflow-y:auto;padding:24px 0;scroll-behavior:smooth}
+.msg-wrap{max-width:840px;margin:0 auto 20px;padding:0 28px;animation:fadeIn .2s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.msg{display:flex;gap:14px}
+.avatar{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;letter-spacing:-.3px}
+.msg.user .avatar{background:linear-gradient(135deg,var(--bl),#6d28d9);color:#fff;box-shadow:0 2px 8px rgba(77,135,240,.3)}
+.msg.assistant .avatar{background:linear-gradient(135deg,var(--ac),#0ea5e9);color:#0c0e14;box-shadow:0 2px 8px rgba(64,224,208,.3)}
+.msg-body{flex:1;min-width:0;line-height:1.75;font-size:14px}
+.msg-body p{margin:6px 0}
+.msg-body p:first-child{margin-top:0}
+.msg-body pre{background:#090d15;padding:16px 18px;border-radius:var(--r-sm);overflow-x:auto;font-size:12px;margin:12px 0;line-height:1.6;border:1px solid var(--brd);position:relative}
+.msg-body pre::before{content:attr(data-lang);position:absolute;top:6px;right:10px;font-size:10px;color:var(--dm);text-transform:uppercase;letter-spacing:.8px}
+.msg-body code{font-family:'Cascadia Code','Fira Code','JetBrains Mono',Consolas,monospace;font-size:12px}
+.msg-body :not(pre)>code{background:#1a2340;padding:2px 7px;border-radius:4px;font-size:12px;color:var(--ac)}
+.msg-body table{border-collapse:collapse;width:100%;margin:12px 0}
+.msg-body th,.msg-body td{border:1px solid var(--brd);padding:8px 14px;text-align:left;font-size:13px}
+.msg-body th{background:var(--sbg);font-weight:600}
+.msg-body blockquote{border-left:3px solid var(--ac);padding:10px 16px;color:var(--dm);margin:12px 0;background:rgba(64,224,208,.04);border-radius:0 6px 6px 0}
+.msg-body h1,.msg-body h2,.msg-body h3{margin:16px 0 8px;font-weight:600}
+.msg-body h1{font-size:20px}.msg-body h2{font-size:17px}.msg-body h3{font-size:15px}
+.msg-body ul,.msg-body ol{padding-left:22px;margin:8px 0}.msg-body li{margin:4px 0}
+.msg-body a{color:var(--ac);text-decoration:none}.msg-body a:hover{text-decoration:underline}
+.msg-body hr{border:none;border-top:1px solid var(--brd);margin:16px 0}
+.msg-body img{max-width:100%;border-radius:var(--r-sm);margin:8px 0}
+.msg-actions{display:flex;gap:6px;margin-top:8px;margin-left:48px;opacity:0;transition:opacity .15s}
 .msg-wrap:hover .msg-actions{opacity:1}
-.msg-actions button{background:none;border:none;color:var(--dm);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px}
-.msg-actions button:hover{color:var(--tx);background:var(--hover)}
-/* input */
-.input-area{padding:16px 24px 20px;background:var(--sbg);border-top:1px solid var(--brd)}
-.input-row{max-width:800px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
-.input-row textarea{flex:1;background:var(--bg);color:var(--tx);border:1px solid var(--brd);border-radius:var(--r);padding:12px 16px;font-size:14px;resize:none;min-height:48px;max-height:180px;font-family:inherit;line-height:1.5;transition:border-color .2s}
-.input-row textarea:focus{outline:none;border-color:var(--ac)}
-.input-row button{background:var(--bl);color:#fff;border:none;padding:12px 24px;border-radius:var(--r);cursor:pointer;font-size:14px;font-weight:500;white-space:nowrap;transition:background .2s}
-.input-row button:hover{background:#2563eb}
-.input-row button:disabled{background:#334155;cursor:not-allowed}
-.input-row .stop-btn{background:var(--rd);display:none}
-.input-row .stop-btn:hover{background:#dc2626}
-.status{padding:0 24px 8px;font-size:11px;text-align:center;min-height:20px}
-.spinner{display:inline-block;width:10px;height:10px;border:2px solid var(--dm);border-top-color:var(--ac);border-radius:50%;animation:spin .8s linear infinite;margin-right:4px;vertical-align:middle}
-.tok{color:var(--gn)}
-/* scroll-to-bottom */
-.scroll-btn{position:fixed;bottom:100px;right:32px;width:36px;height:36px;border-radius:50%;background:var(--card);border:1px solid var(--brd);color:var(--tx);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:18px;z-index:10;transition:transform .2s,opacity .2s}
-.scroll-btn.visible{display:flex}
-.scroll-btn:hover{transform:scale(1.1)}
-/* shimmer */
-.shimmer{background:linear-gradient(90deg,var(--card) 30%,var(--hover) 50%,var(--card) 70%);background-size:200% 100%;animation:shimmer 2s ease-in-out infinite;border-radius:var(--r);height:16px;margin:4px 0}
-.shimmer.w2{width:60%}.shimmer.w3{width:30%}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes slide{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.thinking{color:var(--dm);font-style:italic;font-size:13px;animation:pulse 1.5s ease-in-out infinite}
-/* empty state */
+.msg-actions button{background:var(--card);border:1px solid var(--brd);color:var(--dm);cursor:pointer;font-size:10px;padding:3px 10px;border-radius:4px;transition:all .15s;font-family:var(--font)}
+.msg-actions button:hover{color:var(--tx);border-color:var(--dm);background:var(--hover)}
 .empty{text-align:center;padding:80px 20px;color:var(--dm)}
-.empty h1{font-size:26px;color:var(--tx);margin-bottom:8px}
-.empty p{font-size:13px;line-height:1.6}
-.empty .hints{font-size:11px;margin-top:16px}
-.empty .hints span{display:inline-block;background:var(--card);border:1px solid var(--brd);padding:4px 10px;border-radius:12px;margin:2px;cursor:pointer;transition:background .15s}
-.empty .hints span:hover{background:var(--hover)}
-@media(max-width:720px){.sidebar{display:none}.msg-wrap{padding:0 10px}.scroll-btn{right:12px;bottom:80px}}
+.empty h1{font-size:26px;font-weight:600;color:var(--tx);margin-bottom:12px;letter-spacing:-.5px}
+.empty p{font-size:13px;line-height:1.6;max-width:420px;margin:0 auto 20px}
+.empty .hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:500px;margin:0 auto}
+.empty .hints span{background:var(--card);border:1px solid var(--brd);padding:8px 16px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;color:var(--tx)}
+.empty .hints span:hover{background:var(--hover);border-color:var(--ac)}
+.input-area{padding:18px 28px 22px;background:var(--sbg);border-top:1px solid var(--brd)}
+.input-row{max-width:840px;margin:0 auto;display:flex;gap:12px;align-items:flex-end}
+.input-row textarea{flex:1;background:var(--bg);color:var(--tx);border:1px solid var(--brd);border-radius:var(--r);padding:14px 18px;font-size:14px;resize:none;min-height:52px;max-height:200px;font-family:var(--font);line-height:1.55;transition:border-color .2s,box-shadow .2s}
+.input-row textarea:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px rgba(64,224,208,.1)}
+.input-row textarea::placeholder{color:var(--dm)}
+.btn-send{background:var(--bl);color:#fff;border:none;padding:12px 28px;border-radius:var(--r);cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap;letter-spacing:.3px;transition:all .15s}
+.btn-send:hover{background:#3b74e0;transform:translateY(-1px);box-shadow:0 4px 12px rgba(77,135,240,.3)}
+.btn-send:disabled{background:var(--card);color:var(--dm);cursor:not-allowed;transform:none;box-shadow:none}
+.btn-stop{background:var(--rd);display:none}.btn-stop:hover{background:#e05a5a}
+.status{padding:0 28px 8px;font-size:11px;text-align:center;min-height:20px;color:var(--dm)}
+.status .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--brd);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;margin-right:6px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.status .tok{color:var(--gn)}
+/* shimmer loading */
+.shimmer-wrap{padding:0 28px;max-width:840px;margin:0 auto 20px}
+.shimmer{background:linear-gradient(90deg,var(--card) 25%,var(--hover) 50%,var(--card) 75%);background-size:200% 100%;animation:shimmer 2s ease-in-out infinite;border-radius:6px;margin:8px 0}
+.shimmer.h1{height:14px;width:75%}.shimmer.h2{height:14px;width:55%}.shimmer.h3{height:14px;width:85%}.shimmer.h4{height:14px;width:40%;margin-bottom:16px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+/* scroll */
+.scroll-btn{position:fixed;bottom:110px;right:36px;width:38px;height:38px;border-radius:50%;background:var(--card);border:1px solid var(--brd);color:var(--tx);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:17px;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.3);transition:all .2s}
+.scroll-btn.visible{display:flex}.scroll-btn:hover{transform:translateY(-2px);border-color:var(--ac)}
+/* mobile */
+@media(max-width:750px){.sidebar{display:none}.msg-wrap{padding:0 12px}.input-area{padding:14px 14px 18px}.empty h1{font-size:20px}.chat-header{padding:12px 16px}.scroll-btn{right:14px;bottom:100px}}
 </style>
 </head>
 <body>
 <div class="sidebar">
-<div class="side-header"><h2>Hermes Chat</h2><button class="new-btn" onclick="newSession()">+ New</button></div>
+<div class="side-header"><span class="logo"><span class="dot live"></span>Hermes Chat</span><button class="btn-new" onclick="newSession()">+ New</button></div>
 <div class="sess-list" id="sess-list"></div>
+<div class="side-footer"><div class="info"><b id="info-model">loading</b><br><span id="info-backend">llama.cpp</span></div></div>
 </div>
 <div class="main">
 <div class="chat-header">
-<div class="model-badge" onclick="switchModel()" title="Switch model via Model Manager"><span class="dot"></span><span id="model-display">local</span></div>
-<span class="count" id="msg-count"></span>
+<div class="badge" onclick="window.open('/launcher','_blank')" title="Switch model"><span class="dot"></span><span id="header-model">local</span><span style="color:var(--dm);font-size:10px;margin-left:2px">&#9662;</span></div>
+<span class="meta" id="msg-count"></span>
 </div>
 <div class="messages" id="messages"></div>
 <div class="status"><span id="status-text">Ready</span></div>
 <div class="input-area"><div class="input-row">
-<textarea id="user-input" placeholder="Message Hermes... (Ctrl+Enter to send, Shift+Enter new line)" rows="1"></textarea>
-<button id="send-btn" onclick="send()">Send</button>
-<button class="stop-btn" id="stop-btn" onclick="stop()">Stop</button>
+<textarea id="user-input" placeholder="Message Hermes... (Enter to send)" rows="1"></textarea>
+<button class="btn-send" id="send-btn" onclick="send()">Send</button>
+<button class="btn-send btn-stop" id="stop-btn" onclick="stop()">Stop</button>
 </div></div>
 </div>
-<button class="scroll-btn" id="scroll-btn" onclick="scrollToBottom()" title="Scroll to bottom">↓</button>
+<button class="scroll-btn" id="scroll-btn" title="Scroll to bottom">↓</button>
 <script>
-var SESSIONS=[],ACTIVE=null,MSG_HISTORY=[],ABORT=null;
+var SESS=[],ACT=null,MSGS=[],AB=null,LOADING=false;
 
 async function api(url,opts){
- try{var r=await fetch(url,opts);if(!r.ok)throw new Error(await r.text());return await r.json()}
- catch(e){s('Error: '+e.message,1);return null}
+ try{var r=await fetch(url,opts);if(!r.ok)throw new Error((await r.json()).detail||await r.text());return await r.json()}
+ catch(e){st(e.message,1);return null}
 }
-function s(t,err){var e=document.getElementById('status-text');e.innerHTML=t;e.style.color=err?'var(--rd)':''}
-function showThinking(){var d=document.createElement('div');d.className='msg-wrap';d.innerHTML='<div class="msg assistant"><div class="avatar">H</div><div class="msg-body"><div class="shimmer" style="width:80%"></div><div class="shimmer w2"></div><div class="shimmer w3"></div></div></div>';document.getElementById('messages').appendChild(d);scrollToBottom();return d}
-function thinkingDone(el,html){el.innerHTML='<div class="msg assistant"><div class="avatar">H</div><div class="msg-body">'+html+'</div></div>'}
-function thinkingErr(el,msg){el.innerHTML='<div class="msg assistant"><div class="avatar">H</div><div class="msg-body" style="color:var(--rd)">'+msg+'</div></div>'}
+function st(t,err){var e=document.getElementById('status-text');e.innerHTML=t;e.style.color=err?'var(--rd)':''}
+var scrollBtn=document.getElementById('scroll-btn');
+document.getElementById('messages').addEventListener('scroll',function(){var m=this,d=m.scrollHeight-m.scrollTop-m.clientHeight;scrollBtn.classList.toggle('visible',d>200)});
 
-// === sessions ===
+function scrollToBottom(){var m=document.getElementById('messages');m.scrollTop=m.scrollHeight;scrollBtn.classList.remove('visible')}
+
+// sessions
 async function loadSessions(){
- var j=await api('/api/chat/sessions');
- if(!j)return;
- SESSIONS=j.sessions||[];
- renderSessList();
- // Auto-select latest
- if(!ACTIVE&&SESSIONS.length){var last=SESSIONS[SESSIONS.length-1];ACTIVE=last.id}
- renderSessList();
- if(ACTIVE)await loadHistory();
+ var j=await api('/api/chat/sessions');if(!j)return;
+ SESS=j.sessions||[];renderSessList();
+ if(!ACT&&SESS.length){var s=SESS[SESS.length-1];ACT=s.id;loadHistory()}
 }
 function renderSessList(){
  var el=document.getElementById('sess-list');
- if(!SESSIONS.length){el.innerHTML='<div style="padding:16px;color:var(--dm);font-size:11px">No conversations yet</div>';return}
- var h=SESSIONS.map(function(s){
-  var cls=s.id===ACTIVE?'active':'';
-  return '<div class="sess-item '+cls+'" onclick="openSession(\''+s.id+'\')"><span class="title">'+esc(s.title||'Chat')+'</span><button class="del-btn" onclick="event.stopPropagation();delSession(\''+s.id+'\')">&times;</button></div>';
+ if(!SESS.length){el.innerHTML='<div style="padding:20px 14px;color:var(--dm);font-size:11px;text-align:center">No conversations yet</div>';return}
+ var h=SESS.map(function(s){
+  var cls=s.id===ACT?'active':'',title=s.title||'Chat',preview=s.last_message||'';
+  return'<div class="sess-item '+cls+'" onclick="openSession(\''+s.id+'\')"><div class="icon">'+title.charAt(0).toUpperCase()+'</div><div class="title">'+esc(title)+'</div><button class="del-btn" onclick="event.stopPropagation();delSession(\''+s.id+'\')">×</button></div>';
  }).join('');
  el.innerHTML=h;
 }
 function esc(t){var d=document.createElement('div');d.textContent=t||'';return d.innerHTML}
-
-// === history ===
 async function loadHistory(){
- if(!ACTIVE){renderMessages();return}
- var j=await api('/api/chat/history?session='+ACTIVE);
- MSG_HISTORY=j?j.messages||[]:[];
- renderMessages();
+ if(!ACT){renderMessages();return}
+ var j=await api('/api/chat/history?session='+ACT);
+ MSGS=j?j.messages||[]:[];renderMessages();
 }
-function openSession(id){ACTIVE=id;loadHistory();renderSessList()}
-async function newSession(){ACTIVE=null;MSG_HISTORY=[];renderMessages();renderSessList();document.getElementById('user-input').focus()}
-async function delSession(id){await api('/api/chat/sessions/'+id,{method:'DELETE'});SESSIONS=SESSIONS.filter(function(s){return s.id!==id});if(ACTIVE===id){ACTIVE=null;MSG_HISTORY=[]};renderSessList();renderMessages()}
+function openSession(id){ACT=id;loadHistory();renderSessList()}
+function newSession(){ACT=null;MSGS=[];renderMessages();renderSessList();document.getElementById('user-input').focus()}
+async function delSession(id){await api('/api/chat/sessions/'+id,{method:'DELETE'});SESS=SESS.filter(function(s){return s.id!==id});if(ACT===id){ACT=SESS.length?SESS[SESS.length-1].id:null;MSGS=[]};renderSessList();loadHistory()}
 
-// === messages ===
+// messages
 function renderMessages(){
  var el=document.getElementById('messages'),count=document.getElementById('msg-count');
- if(!MSG_HISTORY.length){
-  el.innerHTML='<div class="empty"><h1>Hermes Chat</h1><p>Ask anything. Models run locally via llama.cpp.<br>Type a message to start a conversation.</p><div class="hints">'+['"Explain quantum computing"','"Write a Python script"','"Summarize this article"'].map(function(t){return'<span onclick="quickSend(\''+t+'\')">'+t+'</span>'}).join(' ')+'</div></div>';
-  count.textContent='';return;
- }
- count.textContent=MSG_HISTORY.length+' messages';
+ if(!MSGS.length){el.innerHTML='<div class="empty"><h1>Hermes Chat</h1><p>Powered by local AI. Ask anything — answers run entirely on your machine.</p><div class="hints"><span onclick="quickSend(\'Explain quantum computing in simple terms\')">Explain quantum computing</span><span onclick="quickSend(\'Write a Python function to sort a list\')">Write Python code</span><span onclick="quickSend(\'What are the best practices for git?\')">Git best practices</span></div></div>';count.textContent='';return}
+ count.textContent=MSGS.length+' messages';
  var h='';
- for(var i=0;i<MSG_HISTORY.length;i++){
-  var m=MSG_HISTORY[i];
-  if(!m.content)continue;
-  var role=m.role==='user'?'user':'assistant';
-  var avatar=role==='user'?'U':'H';
+ for(var i=0;i<MSGS.length;i++){
+  var m=MSGS[i];if(!m.content)continue;
+  var role=m.role==='user'?'user':'assistant',avatar=role==='user'?'U':'H';
   var body=role==='user'?esc(m.content):md2html(m.content);
-  h+='<div class="msg-wrap"><div class="msg '+role+'"><div class="avatar">'+avatar+'</div><div class="msg-body">'+body+'</div></div><div class="msg-actions"><button onclick="copyText(this,\''+i+'\')">Copy</button><button onclick="regen('+i+')">Regen</button></div></div>';
+  h+='<div class="msg-wrap"><div class="msg '+role+'"><div class="avatar">'+avatar+'</div><div class="msg-body">'+body+'</div></div><div class="msg-actions"><button onclick="copyMsg('+i+',this)">Copy</button><button onclick="regen('+i+')">Regen</button></div></div>';
  }
  el.innerHTML=h;scrollToBottom();
 }
 
-// === markdown ===
+// markdown
 function md2html(s){
  if(!s)return'';
- // code blocks
  s=s.replace(/```(\w*)\n([\s\S]*?)```/g,function(_,lang,code){
-  var lt=lang?'<span class="lang">'+lang+'</span>':'';
-  return '<pre>'+lt+'<code>'+code.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</code></pre>';
+  var lt=lang||'text';
+  return'<pre data-lang="'+lt+'"><code>'+code.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</code></pre>';
  });
- // inline code, bold, italic
  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
- s=s.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
- s=s.replace(/\*(.+?)\*/g,'<i>$1</i>');
- // headings
- s=s.replace(/^### (.+)$/gm,'<h3>$1</h3>');
- s=s.replace(/^## (.+)$/gm,'<h2>$1</h2>');
- s=s.replace(/^# (.+)$/gm,'<h1>$1</h1>');
- // blockquotes
+ s=s.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');s=s.replace(/\*(.+?)\*/g,'<i>$1</i>');
+ s=s.replace(/^### (.+)$/gm,'<h3>$1</h3>');s=s.replace(/^## (.+)$/gm,'<h2>$1</h2>');s=s.replace(/^# (.+)$/gm,'<h1>$1</h1>');
  s=s.replace(/^>\s?(.+)$/gm,'<blockquote>$1</blockquote>');
- // lists
- s=s.replace(/^- (.+)$/gm,'<li>$1</li>');
- s=s.replace(/(<li>[\s\S]*?<\/li>)/g,'<ul>$1</ul>');
- // hr
- s=s.replace(/^---$/gm,'<hr>');
- s=s.replace(/\n/g,'<br>');
+ s=s.replace(/^- (.+)$/gm,'<li>$1</li>');s=s.replace(/(<li>[\s\S]*?<\/li>)/g,'<ul>$1</ul>');
+ s=s.replace(/^---$/gm,'<hr>');s=s.replace(/\n/g,'<br>');
  return s;
 }
 
-// === send ===
+// send
 async function send(){
+ if(LOADING)return;
  var inp=document.getElementById('user-input'),sendBtn=document.getElementById('send-btn'),stopBtn=document.getElementById('stop-btn');
  var txt=inp.value.trim();if(!txt)return;
- inp.value='';inp.style.height='auto';
+ inp.value='';inp.style.height='auto';LOADING=true;
  sendBtn.style.display='none';stopBtn.style.display='inline-block';
- s('<span class="spinner"></span>Thinking...');
-
- // Add user message
- MSG_HISTORY.push({role:'user',content:txt});
- renderMessages();
- var thinkingEl=showThinking();
-
+ st('<span class="spinner"></span>Thinking...');
+ 
+ MSGS.push({role:'user',content:txt});renderMessages();
+ var shimmerDiv=document.createElement('div');shimmerDiv.className='shimmer-wrap';
+ shimmerDiv.innerHTML='<div class="msg"><div class="avatar">H</div><div style="flex:1"><div class="shimmer h1"></div><div class="shimmer h2"></div><div class="shimmer h3"></div><div class="shimmer h4"></div></div></div>';
+ document.getElementById('messages').appendChild(shimmerDiv);scrollToBottom();
+ 
  var t0=Date.now();
- try{
-  ABORT=new AbortController();
-  var r=await fetch('/api/chat/send',{
-   method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({message:txt,session:ACTIVE||undefined}),
-   signal:ABORT.signal
-  });
+ try{AB=new AbortController();
+  var r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:txt,session:ACT||undefined}),signal:AB.signal});
   var j=await r.json();
-
-  if(j.ok){
-   if(!ACTIVE&&j.session_id){ACTIVE=j.session_id;renderSessList()}
-   if(j.user_message)MSG_HISTORY.push(j.user_message);
-   if(j.message){MSG_HISTORY.push(j.message)}
-   renderMessages();loadSessions();
-   var ms=Date.now()-t0;
-   s('<span class="tok">'+Math.round((j.message.content.length/(ms/1000))||0)+' tok/s</span> &middot; '+ms+'ms');
-  }else{
-   thinkingErr(thinkingEl,'Error: '+(j.error||'unknown'));
-   s(j.error||'Failed',1);
-  }
- }catch(e){
-  if(e.name!=='AbortError'){
-   thinkingErr(thinkingEl,'Error: '+e.message);
-   s(e.message,1);
-  }
- }
- sendBtn.style.display='inline-block';stopBtn.style.display='none';
- inp.focus();ABORT=null;
+  shimmerDiv.remove();
+  if(j.ok){if(!ACT&&j.session_id){ACT=j.session_id;renderSessList()}if(j.message){MSGS.push(j.message)}renderMessages();loadSessions();
+   var tok=j.message.content.length,ms=Date.now()-t0;
+   st('<span class="tok">'+Math.round(tok/(ms/1000)||0)+' tok/s</span> · '+ms+'ms');
+  }else{st('Error: '+(j.error||'unknown'),1)}
+ }catch(e){shimmerDiv.remove();if(e.name!=='AbortError'){st(e.message,1)}}
+ sendBtn.style.display='inline-block';stopBtn.style.display='none';LOADING=false;inp.focus();AB=null;
 }
 
-function stop(){if(ABORT){ABORT.abort();ABORT=null;s('Stopped');document.getElementById('send-btn').style.display='inline-block';document.getElementById('stop-btn').style.display='none'}}
-
-// === helpers ===
-function scrollToBottom(){var m=document.getElementById('messages');m.scrollTop=m.scrollHeight}
+function stop(){if(AB){AB.abort();AB=null;st('Stopped');document.getElementById('send-btn').style.display='inline-block';document.getElementById('stop-btn').style.display='none';LOADING=false}}
 function quickSend(t){document.getElementById('user-input').value=t;send()}
-function copyText(btn,i){var m=MSG_HISTORY[i];if(m){navigator.clipboard.writeText(m.content).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500)})}}
-function regen(i){MSG_HISTORY=MSG_HISTORY.slice(0,i);renderMessages();document.getElementById('user-input').focus()}
-function switchModel(){window.open('/launcher','_blank')}
-function showStatus(){window.open('/api/status','_blank')}
+function copyMsg(i,btn){var m=MSGS[i];if(m){navigator.clipboard.writeText(m.content).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500)})}}
+function regen(i){MSGS=MSGS.slice(0,i);renderMessages();document.getElementById('user-input').focus()}
 
-// === scroll-to-bottom button ===
-var scrollBtn=document.getElementById('scroll-btn');
-document.getElementById('messages').addEventListener('scroll',function(){
- var m=this,d=m.scrollHeight-m.scrollTop-m.clientHeight;
- scrollBtn.classList.toggle('visible',d>150);
-});
-scrollBtn.addEventListener('click',function(){scrollToBottom();scrollBtn.classList.remove('visible')});
-
-// === keyboard ===
+// keyboard
 document.getElementById('user-input').addEventListener('keydown',function(e){
- if((e.key==='Enter')&&(e.ctrlKey||e.metaKey)){e.preventDefault();send()}
+ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}
+ if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();send()}
 });
-document.addEventListener('keydown',function(e){if(e.key==='Escape'&&ABORT)stop()});
-document.getElementById('user-input').addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,180)+'px'});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&AB)stop()});
+document.getElementById('user-input').addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,200)+'px'});
 
-// === init ===
-loadSessions();
-setInterval(function(){
- fetch('/api/chat/sessions').then(function(r){return r.json()}).then(function(j){
-  if(j&&j.sessions){
-   var models=[];
-   fetch('http://127.0.0.1:8080/v1/models').then(function(r){return r.json()}).then(function(j2){
-    var m=j2.data||j2.models||[];
-    if(m.length)document.getElementById('model-display').textContent=m[0].id||'local';
-   }).catch(function(){});
-  }
- }).catch(function(){});
-},15000);
+// model info
+function updateModelInfo(){
+ document.getElementById('info-backend').textContent='llama.cpp · :8080';
+ fetch('http://127.0.0.1:8080/v1/models').then(function(r){return r.json()}).then(function(j){
+  var m=j.data||j.models||[];
+  if(m.length){var name=m[0].id||'local';document.getElementById('info-model').textContent=name;document.getElementById('header-model').textContent=name}
+ }).catch(function(){document.getElementById('info-model').textContent='offline'});
+}
+
+// init
+loadSessions();updateModelInfo();setInterval(updateModelInfo,20000);
 </script>
 </body>
-</html>"""
+</html>'''
