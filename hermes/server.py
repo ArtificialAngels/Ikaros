@@ -77,7 +77,7 @@ def create_app(agent) -> FastAPI:
     async def startup():
         await agent.initialize()
 
-    # ---- API endpoints the SPA expects (most important) ----
+    # ---- API endpoints ----
 
     @app.get("/api/status")
     async def api_status():
@@ -89,9 +89,15 @@ def create_app(agent) -> FastAPI:
             "cloud": agent.cloud_available,
             "local": agent.local_available,
             "mock": agent.mock_available,
-            "memory": agent.memory.stats(),
+            "memory": {
+                **agent.memory.stats(),
+                "recent": [
+                    {"text": it.text, "tags": it.tags, "id": it.id}
+                    for it in agent.memory.items[-30:]
+                ] if hasattr(agent.memory, "items") else [],
+            },
             "knowledge": agent.knowledge.stats(),
-            "skills": [s["name"] for s in agent.skills.list()],
+            "skills": [{"name": s["name"], "description": s.get("description",""), "category": "builtin" if s.get("path") is None else "custom"} for s in agent.skills.list()],
             "session": agent.session_id,
             "turn_count": agent.turn_count,
             "data_dir": str(agent.paths["base"]),
@@ -692,11 +698,62 @@ def create_app(agent) -> FastAPI:
             ]
         }
 
-    # ---- Chat API (sessions + history + send, inspired by hermes-workspace prompt-kit) ----
+    # ---- API shims ----
+
+    @app.get("/api/ping")
+    async def ws_ping():
+        """Health check endpoint (workspace-ui compatible)."""
+        return {"ok": True, "status": 200}
+
+    @app.get("/api/sessions")
+    async def ws_sessions(sessionKey: str = "", friendlyId: str = ""):
+        """List sessions. DELETE with query params handled elsewhere."""
+        sessions = []
+        if hasattr(agent, "_chat_sessions"):
+            for sid, sess in agent._chat_sessions.items():
+                if isinstance(sess, dict):
+                    msgs = sess.get("messages", [])
+                    last = msgs[-1] if msgs else {}
+                    sessions.append({
+                        "key": sid,
+                        "friendlyId": sid,
+                        "title": (sess.get("title") or last.get("content", "")[:40]) or "Chat",
+                        "lastMessage": last.get("content", "")[:100] if last else "",
+                        "messageCount": len(msgs),
+                        "updatedAt": int(sess.get("updated_at", 0) * 1000),
+                        "createdAt": int(sess.get("created_at", 0) * 1000),
+                    })
+        return {"sessions": sessions}
+
+    @app.get("/api/history")
+    async def ws_history(sessionKey: str = "", friendlyId: str = "", limit: int = 1000):
+        """Get message history."""
+        session_id = sessionKey or friendlyId
+        messages = []
+        if hasattr(agent, "_chat_sessions") and session_id in agent._chat_sessions:
+            sess = agent._chat_sessions[session_id]
+            if isinstance(sess, dict):
+                raw = sess.get("messages", [])
+                # Convert to workspace-ui message format
+                for m in raw:
+                    content = m.get("content", "")
+                    messages.append({
+                        "role": m.get("role", "assistant"),
+                        "content": [{"type": "text", "text": content}],
+                        "timestamp": m.get("timestamp", 0),
+                    })
+        return {"sessionKey": session_id, "friendlyId": session_id, "messages": messages}
+
+    @app.delete("/api/sessions")
+    async def ws_delete_session(sessionKey: str = ""):
+        """Delete a session."""
+        if hasattr(agent, "_chat_sessions") and sessionKey in agent._chat_sessions:
+            del agent._chat_sessions[sessionKey]
+        return {"ok": True}
 
     @app.get("/api/chat/sessions")
     async def chat_sessions():
-        """List all chat sessions with last message preview."""
+        """List chat sessions."""
         import uuid as _uuid
         sessions = []
         for item in reversed(agent.memory.items[-50:]):
