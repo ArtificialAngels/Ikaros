@@ -20,7 +20,7 @@ param(
     [string]$Binary      = 'runtime\llama-server-cuda-12.4.exe',
     [string]$Model       = 'data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf',
     [int]   $NGpuLayers  = 99,
-    [string]$Alias       = 'qwen3.5-35b-a3b',
+    [string]$Alias       = '',
     [string]$ListenHost  = '127.0.0.1',  # NOTE: not -Host, that's a read-only PS var
     [int]   $Port        = 8080,
     [int]   $CtxSize     = 4096,
@@ -44,6 +44,13 @@ function Resolve-HermesPath {
 $BinFull    = Resolve-HermesPath $Binary  $RootDir
 $ModelFull  = Resolve-HermesPath $Model   $RootDir
 $LogDirFull = Resolve-HermesPath $LogDir  $RootDir
+
+# Auto-derive alias from model filename if not provided
+if (-not $Alias) {
+    $modelFileName = [System.IO.Path]::GetFileNameWithoutExtension($ModelFull)
+    # Clean: replace dots/hyphens with underscores for a clean alias
+    $Alias = $modelFileName -replace '[.\s-]+', '_'
+}
 if (-not (Test-Path $LogDirFull)) {
     New-Item -ItemType Directory -Path $LogDirFull -Force | Out-Null
 }

@@ -11,9 +11,47 @@ set "LLAMA_PORT=8080"
 set "HERMES_PORT=7860"
 set "WEBUI_PORT=7870"
 set "PY=%HERMES_ROOT%\portable-python\python.exe"
-set "MODEL=%HERMES_ROOT%\data\models\Qwen3.5-35B-A3B-Q4_K_M.gguf"
 set "WEBUI_DATA_DIR=%HERMES_ROOT%\hermes\data\openwebui"
 set "WEBUI_KEY_FILE=%WEBUI_DATA_DIR%\.webui_secret_key"
+
+REM ---- Smart default model selection ----
+REM Priority: env HERMES_MODEL > arg %1 > auto-detect best for GPU > 3B fallback
+if not "%HERMES_MODEL%"=="" set "MODEL=%HERMES_MODEL%"
+if not "%~1"=="" set "MODEL=%~1"
+if "%MODEL%"=="" (
+    REM Get VRAM to pick best default model
+    set "VRAM_CHECK=0"
+    where nvidia-smi >nul 2>&1
+    if not errorlevel 1 (
+        for /f "usebackq tokens=*" %%V in (`powershell -NoProfile -Command "$f = (& nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null) -split '\n' | Select-Object -First 1; [int]$f"`) do (
+            set "VRAM_CHECK=%%V"
+        )
+    )
+    REM Auto-select: if VRAM >= 8GB -> 7B, if >= 3GB -> 3B, else -> 1.8B
+    if !VRAM_CHECK! GEQ 8000 (
+        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen2.5 7B (GPU accelerated)
+    ) else if !VRAM_CHECK! GEQ 3000 (
+        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen2.5 3B (GPU accelerated)
+    ) else (
+        set "MODEL=%HERMES_ROOT%\data\models\Qwen1.5-1.8B-Chat-Q4_K_M.gguf"
+        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen1.5 1.8B (GPU accelerated)
+    )
+)
+REM Final fallback: if chosen model doesn't exist, find any .gguf
+if not exist "%MODEL%" (
+    echo [WARN] configured model not found: %MODEL%
+    for %%F in ("%HERMES_ROOT%\data\models\*.gguf") do (
+        set "MODEL=%%F"
+        echo [auto] falling back to: %%~nxf
+        goto :model_found
+    )
+    echo [ERROR] No .gguf model found in data\models\
+    pause
+    exit /b 1
+)
+:model_found
 
 REM ---- Auto-pick llama-server binary: CUDA 12.4 > CUDA 11.8 > Vulkan > CPU ----
 set "LLAMA_BIN=%HERMES_ROOT%\runtime\llama-server.exe"
