@@ -419,9 +419,9 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/chat")
     async def chat_ui():
-        """Embedded lightweight chat UI (no external dependencies)."""
-        from hermes.chat_ui import CHAT_HTML
-        return HTMLResponse(CHAT_HTML)
+        """Rich chat UI with conversations, model switching, settings."""
+        from hermes.chat_ui import CHAT_PRO_HTML
+        return HTMLResponse(CHAT_PRO_HTML)
 
     @app.get("/healthz")
     async def healthz():
