@@ -20,8 +20,6 @@ data/models/*.gguf
 __pycache__/
 *.pyc
 *.pyo
-*.pyc
-*.pyo
 *.pyd
 .Python
 *.so
