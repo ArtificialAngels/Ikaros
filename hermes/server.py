@@ -417,6 +417,12 @@ def create_app(agent) -> FastAPI:
         # No admin SPA anymore — show a helpful fallback pointing to Open WebUI.
         return HTMLResponse(HTML_FALLBACK)
 
+    @app.get("/chat")
+    async def chat_ui():
+        """Embedded lightweight chat UI (no external dependencies)."""
+        from hermes.chat_ui import CHAT_HTML
+        return HTMLResponse(CHAT_HTML)
+
     @app.get("/healthz")
     async def healthz():
         return {"ok": True, "version": agent.config.agent.version}

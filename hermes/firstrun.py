@@ -255,34 +255,83 @@ ROCM_RUNTIME = "https://github.com/ggml-org/llama.cpp/releases/download/b9538/ll
 
 
 def install_cudart(force: bool = False) -> bool:
-    """Download cudart zip via gopeed-web, extract to runtime/."""
+    """Download cudart zip via gopeed-web or direct HTTP, extract to runtime/."""
     if has_cuda_runtime() and not force:
         print(f"[firstrun] cudart/cublas already present, skip")
         return True
-    if not ensure_gopeed_web():
-        print(f"[firstrun] cannot install cudart: gopeed-web unavailable")
-        return False
-    print(f"[firstrun] downloading cudart zip (391MB) via gopeed-web...")
-    task = gopeed_create(CUDA_12_4_RUNTIME, RUNTIME)
-    if not task:
-        return False
-    final = gopeed_wait(task)
-    if final != "done":
-        print(f"[firstrun] cudart download ended in {final}")
-        return False
-    # find downloaded zip
+
+    # If gopeed-web is running, use it. Otherwise try direct download.
+    if ensure_gopeed_web():
+        print(f"[firstrun] downloading cudart zip (391MB) via gopeed-web...")
+        task = gopeed_create(CUDA_12_4_RUNTIME, RUNTIME)
+        if task:
+            final = gopeed_wait(task)
+            if final == "done":
+                return _extract_cudart_zip()
+            print(f"[firstrun] gopeed download ended in {final}, trying direct...")
+        else:
+            print(f"[firstrun] gopeed task creation failed, trying direct...")
+
+    # Fallback: direct HTTP download via Python
+    print(f"[firstrun] downloading cudart via direct HTTP (this will take a few minutes)...")
+    return _download_cudart_direct()
+
+
+def _extract_cudart_zip() -> bool:
+    """Find and extract cudart zip. Returns True if DLLs now exist."""
+    import zipfile
     zips = list(RUNTIME.glob("cudart*.zip"))
     if not zips:
         print(f"[firstrun] cudart zip not found after download")
         return False
     z = zips[0]
-    print(f"[firstrun] extracting {z.name}...")
-    import zipfile
-    with zipfile.ZipFile(z) as zf:
-        zf.extractall(RUNTIME)
-    z.unlink()
-    print(f"[firstrun] cudart installed, {len(list(RUNTIME.glob('*cudart*.dll')))} DLLs")
-    return True
+    print(f"[firstrun] extracting {z.name} ({z.stat().st_size/1e6:.0f}MB)...")
+    try:
+        with zipfile.ZipFile(z) as zf:
+            dll_names = [n for n in zf.namelist() if n.endswith('.dll')]
+            print(f"[firstrun] found {len(dll_names)} DLLs in zip")
+            zf.extractall(RUNTIME)
+        z.unlink()
+        print(f"[firstrun] extracted, cleanup done")
+    except (zipfile.BadZipFile, OSError) as e:
+        print(f"[firstrun] zip corrupted: {e}")
+        z.unlink(missing_ok=True)
+        return False
+    return has_cuda_runtime()
+
+
+def _download_cudart_direct() -> bool:
+    """Download cudart zip via Python urllib (no gopeed dependency)."""
+    import urllib.request
+    dest = RUNTIME / "cudart-temp.zip"
+    # Remove any stale partial downloads
+    dest.unlink(missing_ok=True)
+    try:
+        print(f"[firstrun] downloading from {CUDA_12_4_RUNTIME}...")
+        print(f"[firstrun] this is ~391MB, please wait...")
+        with urllib.request.urlopen(CUDA_12_4_RUNTIME, timeout=600) as resp:
+            total = int(resp.headers.get('Content-Length', 0))
+            downloaded = 0
+            with open(dest, 'wb') as f:
+                while True:
+                    chunk = resp.read(1024 * 1024)  # 1MB chunks
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded * 100 // total
+                        if pct % 10 == 0:
+                            print(f"[firstrun] ... {pct}% ({downloaded//1e6:.0f}MB / {total//1e6:.0f}MB)")
+        # Rename to expected name so _extract_cudart_zip can find it
+        final = RUNTIME / "cudart-llama-bin-win-cuda-12.4-x64.zip"
+        dest.rename(final)
+        print(f"[firstrun] download complete: {final.stat().st_size/1e6:.0f}MB")
+        return _extract_cudart_zip()
+    except Exception as e:
+        print(f"[firstrun] direct download failed: {e}")
+        dest.unlink(missing_ok=True)
+        return False
 
 
 # ---- public entry points ----
