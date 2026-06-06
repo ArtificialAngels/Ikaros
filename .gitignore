@@ -1,0 +1,46 @@
+# Portable Python (不跟踪整个便携Python环境)
+portable-python/
+!portable-python/python.exe
+!portable-python/pythonw.exe
+
+# Runtime 目录
+runtime/
+
+# 数据目录
+data/
+!data/models/
+data/models/*.gguf
+
+# 配置文件
+.env
+.env.*
+.webui_secret_key
+
+# 临时文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 日志文件
+*.log
+logs/
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统文件
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# Docker
+docker-compose*.yml
+
+# 测试
+.coverage
+htmlcov/
+.pytest_cache/

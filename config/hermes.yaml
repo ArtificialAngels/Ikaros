@@ -1,0 +1,152 @@
+# ============================================================
+# Hermes Agent — Mavis 配置
+# 支持：云端 LLM（online） + 本地 LLM（offline fallback）
+# ============================================================
+
+agent:
+  name: hermes
+  version: 2.0.0
+  persona: |
+    你是 Hermes——一个被深度调教的赛博游民数字管家。
+    你的运行环境可能随时切换（云端 / 本地模型 / 离线），
+    保持冷静、高效、富有判断力。优先用工具解决实际问题。
+
+# ============================================================
+# LLM 路由：双引擎 + 智能 fallback
+# ============================================================
+llm:
+  # ---- 路由器配置 ----
+  router:
+    strategy: fallback_chain       # fallback_chain | race | cost_optimized
+    primary: cloud                 # 首选 cloud
+    fallback_order: [cloud, local]
+    # 失败后切换的触发条件
+    failover:
+      on_status: [429, 500, 502, 503, 504]
+      on_timeout_ms: 8000
+      on_network_error: true
+      max_retries: 1                # 失败 1 次就切换
+
+  # ---- 云端 LLM 列表（按优先级）----
+  cloud:
+    - name: openai
+      provider: openai
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      models:
+        default: gpt-4o
+        fast: gpt-4o-mini
+        vision: gpt-4o
+      enabled_if: ${HERMES_CLOUD_OK}    # 由路由器动态决定
+
+    - name: anthropic
+      provider: anthropic
+      base_url: https://api.anthropic.com
+      api_key: ${ANTHROPIC_API_KEY}
+      models:
+        default: claude-3-5-sonnet-20241022
+        fast: claude-3-5-haiku-20241022
+      enabled_if: ${HERMES_CLOUD_OK}
+
+    - name: openrouter
+      provider: openai                # OpenAI 兼容协议
+      base_url: https://openrouter.ai/api/v1
+      api_key: ${OPENROUTER_API_KEY}
+      models:
+        default: anthropic/claude-3.5-sonnet
+        fast: meta-llama/llama-3.1-8b-instruct:free
+      enabled_if: ${HERMES_CLOUD_OK}
+
+    - name: minimax
+      provider: openai                # MiniMax 使用 OpenAI 兼容协议
+      base_url: ${MINIMAX_BASE_URL:-https://api.minimaxi.chat/v1}
+      api_key: ${MINIMAX_API_KEY}
+      models:
+        default: ${MINIMAX_MODEL:-MiniMax-Text-01}
+        fast: abab6.5s-chat
+      enabled_if: ${HERMES_CLOUD_OK}
+
+  # ---- 本地 LLM（llama-server，OpenAI 兼容）----
+  local:
+    provider: openai                  # 假装是 OpenAI，走 OpenAI 协议
+    base_url: ${HERMES_LOCAL_LLM_URL}/v1     # http://127.0.0.1:8080/v1
+    api_key: not-needed               # 本地服务不校验
+    models:
+      default: ${LOCAL_MODEL_NAME:-qwen2.5-3b-instruct}
+      fast: ${LOCAL_MODEL_NAME:-qwen2.5-3b-instruct}
+    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE}
+
+# ============================================================
+# Embedding（同样支持双源）
+# ============================================================
+embedding:
+  router:
+    strategy: fallback_chain
+    fallback_order: [cloud, local]
+
+  cloud:
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    model: text-embedding-3-small
+    dimensions: 1536
+    enabled_if: ${HERMES_CLOUD_OK}
+
+  local:
+    provider: openai                  # llama.cpp 也提供 /v1/embeddings
+    base_url: ${HERMES_LOCAL_LLM_URL}/v1
+    api_key: not-needed
+    model: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}
+    dimensions: 768
+    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE}
+
+# ============================================================
+# 长期记忆
+# ============================================================
+memory:
+  backend: chroma                     # chroma | lancedb | faiss
+  path: /data/memory/chroma
+  recency_decay: 0.95
+  max_results: 10
+
+# ============================================================
+# 技能
+# ============================================================
+skills:
+  builtin:
+    - web-search
+    - file-ops
+    - shell-exec
+    - code-review
+  custom_dir: /data/skills
+  hot_reload: true
+
+# ============================================================
+# 行为策略
+# ============================================================
+behavior:
+  confirm_destructive: true
+  log_level: info
+  max_iterations: 50
+
+  # 离线降级策略（可选）
+  offline_mode:
+    enabled: true
+    max_response_tokens: 1024         # 本地模型上下文小，限制输出
+    prefer_concise: true             # 自动切换简洁风格
+    disable_tools:
+      - web-search                    # 离线时无网
+      - http-fetch
+
+# ============================================================
+# 服务器
+# ============================================================
+server:
+  host: 0.0.0.0
+  port: 7860
+  cors_origins: ["*"]
+
+  # 健康检查端点（Docker HEALTHCHECK 用）
+  healthz:
+    enabled: true
+    path: /healthz

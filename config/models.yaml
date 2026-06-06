@@ -1,0 +1,23 @@
+active: default
+
+models:
+  default:
+    chat: E:\Hermes Agent\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf
+    embedding: E:\Hermes Agent\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 4096
+    threads: 4
+    description: Qwen 2.5 3B Instruct (Q4_K_M) - balance
+
+  powerful:
+    chat: E:\Hermes Agent\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
+    embedding: E:\Hermes Agent\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 4096
+    threads: 8
+    description: Qwen 2.5 7B Instruct (Q4_K_M) - quality
+
+llama_server:
+  n_gpu_layers: 0
+  batch_size: 512
+  ubatch_size: 128
+  host: 127.0.0.1
+  port: 8080

@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Portable Agent v2 — Mavis + 双 LLM 路由</title>
+<style>
+  :root {
+    --bg-0: #0a0e14;
+    --bg-1: #11161f;
+    --bg-2: #1a212c;
+    --bg-3: #232b38;
+    --border: #2d3845;
+    --text-0: #e6edf3;
+    --text-1: #b3becd;
+    --text-2: #7d8a9b;
+    --accent: #00ff9d;
+    --accent-2: #00b8ff;
+    --accent-3: #ff00aa;
+    --warn: #ffb454;
+    --err: #ff5577;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Consolas', 'SF Mono', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background:
+      radial-gradient(ellipse at 20% 0%, rgba(0, 184, 255, 0.06), transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(255, 0, 170, 0.05), transparent 50%),
+      var(--bg-0);
+    min-height: 100vh;
+  }
+  .container { max-width: 1280px; margin: 0 auto; padding: 48px 32px 96px; }
+
+  .hero {
+    text-align: center;
+    padding: 48px 0 64px;
+    border-bottom: 1px dashed var(--border);
+    margin-bottom: 64px;
+  }
+  .hero-tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 4px 12px;
+    border-radius: 99px;
+    margin-bottom: 24px;
+    letter-spacing: 1px;
+  }
+  .hero h1 {
+    font-size: clamp(32px, 5vw, 56px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 50%, var(--accent-3) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 16px;
+  }
+  .hero p {
+    font-size: 18px;
+    color: var(--text-1);
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .hero-meta {
+    margin-top: 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .badges {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--bg-2);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .badge.cyan { color: var(--accent-2); border-color: var(--accent-2); }
+  .badge.pink { color: var(--accent-3); border-color: var(--accent-3); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  section { margin-bottom: 80px; }
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text-0);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h2::before {
+    content: '';
+    width: 4px;
+    height: 24px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    border-radius: 2px;
+  }
+  .section-sub {
+    color: var(--text-2);
+    font-size: 14px;
+    margin-bottom: 32px;
+    font-family: var(--mono);
+  }
+
+  .card { background: var(--bg-1); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .stat-card { background: var(--bg-1); border: 1px solid var(--border); border-radius: 8px; padding: 20px; text-align: center; }
+  .stat-num { font-family: var(--mono); font-size: 36px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .stat-label { font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 1px; margin-top: 8px; }
+
+  .arch-wrap { background: var(--bg-1); border: 1px solid var(--border); border-radius: 12px; padding: 32px; overflow-x: auto; }
+  .arch-wrap svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+  .tree { font-family: var(--mono); font-size: 14px; line-height: 1.8; color: var(--text-1); background: var(--bg-1); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; overflow-x: auto; }
+  .tree .dir { color: var(--accent-2); font-weight: 600; }
+  .tree .file { color: var(--text-0); }
+  .tree .comment { color: var(--text-2); font-style: italic; }
+  .tree .exe { color: var(--accent); }
+  .tree .config { color: var(--warn); }
+  .tree .model { color: var(--accent-3); }
+
+  pre { background: #060a0f; border: 1px solid var(--border); border-radius: 8px; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; color: var(--text-0); position: relative; }
+  pre::before { content: attr(data-lang); position: absolute; top: 8px; right: 12px; font-size: 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: 1px; }
+  code { font-family: var(--mono); }
+  .comment { color: #5c6e7e; font-style: italic; }
+  .kw { color: var(--accent-3); }
+  .str { color: #a3e635; }
+  .num { color: var(--warn); }
+  .flag { color: var(--accent-2); }
+  .punc { color: var(--text-2); }
+  .var { color: var(--accent); }
+
+  .timeline { position: relative; padding-left: 32px; }
+  .timeline::before { content: ''; position: absolute; left: 11px; top: 8px; bottom: 8px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--accent-3) 100%); }
+  .timeline-step { position: relative; margin-bottom: 32px; }
+  .timeline-step::before { content: ''; position: absolute; left: -32px; top: 6px; width: 24px; height: 24px; border-radius: 50%; background: var(--bg-0); border: 2px solid var(--accent); box-shadow: 0 0 12px rgba(0, 255, 157, 0.4); }
+  .timeline-step h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: var(--text-0); }
+  .timeline-step .time { font-family: var(--mono); font-size: 12px; color: var(--accent); margin-bottom: 8px; }
+  .timeline-step p { color: var(--text-1); font-size: 14px; }
+
+  .table-wrap { background: var(--bg-1); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--bg-2); font-weight: 600; color: var(--accent); font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  td { color: var(--text-1); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg-2); }
+  .star { color: var(--accent); }
+
+  blockquote { border-left: 3px solid var(--accent); padding: 8px 0 8px 20px; margin: 16px 0; color: var(--text-1); font-style: italic; }
+
+  /* 路由决策图样式 */
+  .routing-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .routing-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    position: relative;
+  }
+  .routing-card.online { border-color: var(--accent-2); }
+  .routing-card.offline { border-color: var(--accent-3); }
+  .routing-card h4 {
+    color: var(--text-0);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .routing-card .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .online .dot { background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); }
+  .offline .dot { background: var(--accent-3); box-shadow: 0 0 8px var(--accent-3); }
+
+  @media (max-width: 768px) {
+    .container { padding: 24px 16px 64px; }
+    .hero { padding: 24px 0 32px; }
+    section { margin-bottom: 48px; }
+    h2 { font-size: 22px; }
+    .routing-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- HERO -->
+  <div class="hero">
+    <span class="hero-tag">// v2.0 // HYBRID LLM ROUTING</span>
+    <h1>Hermes · Mavis 双 LLM 路由</h1>
+    <p>云端 / 本地无缝切换 · 即插即用 · 过境无痕 · 真正能塞进 U 盘的"赛博游民"数字管家</p>
+    <div class="badges">
+      <span class="badge">Mavis Framework</span>
+      <span class="badge cyan">Hybrid LLM</span>
+      <span class="badge pink">Offline-First</span>
+      <span class="badge warn">Plug &amp; Play</span>
+    </div>
+    <div class="hero-meta">
+      <code>root@cyber-nomad:~$ ./scripts/start.sh && <span style="color: var(--accent);">▶ ready · online</span></code>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <section>
+    <div class="card-grid">
+      <div class="stat-card">
+        <div class="stat-num">2GB+</div>
+        <div class="stat-label">DEFAULT LOCAL MODEL</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">0</div>
+        <div class="stat-label">NETWORK REQUIRED</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">4</div>
+        <div class="stat-label">CLOUD PROVIDERS</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">5-30s</div>
+        <div class="stat-label">COLD START</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROUTING ARCHITECTURE -->
+  <section>
+    <h2>双 LLM 路由架构</h2>
+    <p class="section-sub">// HYBRID.LLM.ROUTER</p>
+
+    <div class="arch-wrap">
+      <svg viewBox="0 0 1080 800" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, monospace">
+        <defs>
+          <linearGradient id="gradUsb" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#00ff9d" stop-opacity="0.15"/>
+            <stop offset="100%" stop-color="#00ff9d" stop-opacity="0.05"/>
+          </linearGradient>
+          <linearGradient id="gradContainer" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ffb454" stop-opacity="0.15"/>
+            <stop offset="100%" stop-color="#ffb454" stop-opacity="0.05"/>
+          </linearGradient>
+          <linearGradient id="gradRouter" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ff00aa" stop-opacity="0.2"/>
+            <stop offset="100%" stop-color="#00b8ff" stop-opacity="0.1"/>
+          </linearGradient>
+          <linearGradient id="gradCloud" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#00b8ff" stop-opacity="0.2"/>
+            <stop offset="100%" stop-color="#00b8ff" stop-opacity="0.05"/>
+          </linearGradient>
+          <linearGradient id="gradLocal" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#00ff9d" stop-opacity="0.2"/>
+            <stop offset="100%" stop-color="#00ff9d" stop-opacity="0.05"/>
+          </linearGradient>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#7d8a9b"/>
+          </marker>
+          <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#00ff9d"/>
+          </marker>
+          <marker id="arrow-pink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff00aa"/>
+          </marker>
+        </defs>
+
+        <!-- L1: USB / Mobile SSD -->
+        <rect x="40" y="30" width="1000" height="110" rx="12" fill="url(#gradUsb)" stroke="#00ff9d" stroke-width="1.5"/>
+        <text x="60" y="58" fill="#00ff9d" font-size="13" font-weight="600">L1 · USB DRIVE / MOBILE SSD</text>
+        <text x="60" y="76" fill="#7d8a9b" font-size="11">// 数字灵魂的"物理载体"</text>
+
+        <rect x="80" y="90" width="220" height="40" rx="6" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="190" y="106" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">docker/image.tar.gz</text>
+        <text x="190" y="120" fill="#7d8a9b" font-size="9" text-anchor="middle">含 llama.cpp + Mavis</text>
+
+        <rect x="320" y="90" width="220" height="40" rx="6" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="430" y="106" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">data/models/*.gguf</text>
+        <text x="430" y="120" fill="#7d8a9b" font-size="9" text-anchor="middle">本地 LLM 模型（2-5GB）</text>
+
+        <rect x="560" y="90" width="220" height="40" rx="6" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="670" y="106" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">data/ (memory/skills)</text>
+        <text x="670" y="120" fill="#7d8a9b" font-size="9" text-anchor="middle">bind mount → /data</text>
+
+        <rect x="800" y="90" width="220" height="40" rx="6" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="910" y="106" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">.env + config/*.yaml</text>
+        <text x="910" y="120" fill="#7d8a9b" font-size="9" text-anchor="middle">API Key + 路由配置</text>
+
+        <!-- arrow down to container -->
+        <line x1="540" y1="140" x2="540" y2="180" stroke="#7d8a9b" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- L2: Container -->
+        <rect x="40" y="190" width="1000" height="540" rx="12" fill="url(#gradContainer)" stroke="#ffb454" stroke-width="1.5"/>
+        <text x="60" y="218" fill="#ffb454" font-size="13" font-weight="600">L2 · HERMES CONTAINER (portable-hermes:latest)</text>
+        <text x="60" y="236" fill="#7d8a9b" font-size="11">// 整个运行环境封装在这里</text>
+
+        <!-- Network Detector -->
+        <rect x="80" y="260" width="280" height="80" rx="8" fill="#11161f" stroke="#ff00aa" stroke-width="1"/>
+        <text x="220" y="285" fill="#ff00aa" font-size="13" text-anchor="middle" font-weight="600">Network Detector</text>
+        <text x="220" y="305" fill="#7d8a9b" font-size="10" text-anchor="middle">entrypoint → llama-router.sh</text>
+        <text x="220" y="320" fill="#a3e635" font-size="10" text-anchor="middle">探测 DNS / HTTPS / 各 Provider</text>
+        <text x="220" y="335" fill="#00ff9d" font-size="10" text-anchor="middle">输出: HERMES_NETWORK + LLM_MODE</text>
+
+        <!-- Local LLM Engine -->
+        <rect x="400" y="260" width="280" height="80" rx="8" fill="#11161f" stroke="#00ff9d" stroke-width="1"/>
+        <text x="540" y="285" fill="#00ff9d" font-size="13" text-anchor="middle" font-weight="600">llama.cpp Server</text>
+        <text x="540" y="305" fill="#7d8a9b" font-size="10" text-anchor="middle">llama-supervisor.sh</text>
+        <text x="540" y="320" fill="#a3e635" font-size="10" text-anchor="middle">:8080 OpenAI-compatible</text>
+        <text x="540" y="335" fill="#00ff9d" font-size="10" text-anchor="middle">chat + embedding 二合一</text>
+
+        <!-- Cloud Probe -->
+        <rect x="720" y="260" width="280" height="80" rx="8" fill="#11161f" stroke="#00b8ff" stroke-width="1"/>
+        <text x="860" y="285" fill="#00b8ff" font-size="13" text-anchor="middle" font-weight="600">Cloud API Probes</text>
+        <text x="860" y="305" fill="#7d8a9b" font-size="10" text-anchor="middle">llama-router.sh</text>
+        <text x="860" y="320" fill="#a3e635" font-size="10" text-anchor="middle">OpenAI · Anthropic · OpenRouter</text>
+        <text x="860" y="335" fill="#00b8ff" font-size="10" text-anchor="middle">至少一个 2xx → HERMES_CLOUD_OK=true</text>
+
+        <!-- arrow down to router -->
+        <line x1="540" y1="340" x2="540" y2="385" stroke="#7d8a9b" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- L3: Mavis Router (核心) -->
+        <rect x="180" y="395" width="720" height="120" rx="12" fill="url(#gradRouter)" stroke="#ff00aa" stroke-width="2"/>
+        <text x="540" y="425" fill="#ff00aa" font-size="16" text-anchor="middle" font-weight="700">Mavis LLM Router</text>
+        <text x="540" y="445" fill="#b3becd" font-size="11" text-anchor="middle">strategy: fallback_chain · primary: cloud · max_retries: 1</text>
+
+        <!-- Router sub-blocks -->
+        <rect x="220" y="460" width="180" height="40" rx="6" fill="#11161f" stroke="#ff00aa" stroke-width="0.5"/>
+        <text x="310" y="478" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">1. 尝试 Cloud</text>
+        <text x="310" y="492" fill="#7d8a9b" font-size="9" text-anchor="middle">timeout 8s / 5xx 触发</text>
+
+        <rect x="450" y="460" width="180" height="40" rx="6" fill="#11161f" stroke="#ff00aa" stroke-width="0.5"/>
+        <text x="540" y="478" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">2. 失败 → Local</text>
+        <text x="540" y="492" fill="#7d8a9b" font-size="9" text-anchor="middle">本地 llama-server 兜底</text>
+
+        <rect x="680" y="460" width="180" height="40" rx="6" fill="#11161f" stroke="#ff00aa" stroke-width="0.5"/>
+        <text x="770" y="478" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="600">3. 用户强制</text>
+        <text x="770" y="492" fill="#7d8a9b" font-size="9" text-anchor="middle">HERMES_LLM_MODE=*</text>
+
+        <!-- arrow down to LLM providers -->
+        <line x1="320" y1="515" x2="320" y2="560" stroke="#00b8ff" stroke-width="2" marker-end="url(#arrow-green)"/>
+        <line x1="760" y1="515" x2="760" y2="560" stroke="#ff00aa" stroke-width="2" marker-end="url(#arrow-pink)"/>
+
+        <!-- L4: LLM Backends -->
+        <rect x="80" y="570" width="480" height="140" rx="10" fill="url(#gradCloud)" stroke="#00b8ff" stroke-width="1.5"/>
+        <text x="100" y="595" fill="#00b8ff" font-size="12" font-weight="600">L4a · CLOUD LLM (online path)</text>
+
+        <rect x="100" y="610" width="100" height="40" rx="4" fill="#11161f" stroke="#00b8ff" stroke-width="0.5"/>
+        <text x="150" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">OpenAI</text>
+        <text x="150" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">gpt-4o / 4o-mini</text>
+
+        <rect x="220" y="610" width="100" height="40" rx="4" fill="#11161f" stroke="#00b8ff" stroke-width="0.5"/>
+        <text x="270" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">Anthropic</text>
+        <text x="270" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">claude-3.5</text>
+
+        <rect x="340" y="610" width="100" height="40" rx="4" fill="#11161f" stroke="#00b8ff" stroke-width="0.5"/>
+        <text x="390" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">OpenRouter</text>
+        <text x="390" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">200+ models</text>
+
+        <rect x="460" y="610" width="90" height="40" rx="4" fill="#11161f" stroke="#00b8ff" stroke-width="0.5"/>
+        <text x="505" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">Google</text>
+        <text x="505" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">gemini-pro</text>
+
+        <text x="320" y="680" fill="#7d8a9b" font-size="10" text-anchor="middle">api.openai.com  ·  api.anthropic.com  ·  openrouter.ai  ·  generativelanguage.googleapis.com</text>
+
+        <rect x="580" y="570" width="420" height="140" rx="10" fill="url(#gradLocal)" stroke="#00ff9d" stroke-width="1.5"/>
+        <text x="600" y="595" fill="#00ff9d" font-size="12" font-weight="600">L4b · LOCAL LLM (offline path)</text>
+
+        <rect x="600" y="610" width="180" height="40" rx="4" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="690" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">llama-server (chat)</text>
+        <text x="690" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">:8080/v1/chat/completions</text>
+
+        <rect x="800" y="610" width="180" height="40" rx="4" fill="#11161f" stroke="#00ff9d" stroke-width="0.5"/>
+        <text x="890" y="628" fill="#e6edf3" font-size="10" text-anchor="middle" font-weight="600">llama-server (embed)</text>
+        <text x="890" y="642" fill="#7d8a9b" font-size="8" text-anchor="middle">:8080/v1/embeddings</text>
+
+        <text x="790" y="680" fill="#7d8a9b" font-size="10" text-anchor="middle">Qwen2.5 / Llama-3.2 / nomic-embed · 全部跑在 :8080</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ROUTING DECISIONS -->
+  <section>
+    <h2>路由决策矩阵</h2>
+    <p class="section-sub">// ROUTING.MATRIX</p>
+
+    <div class="routing-grid">
+      <div class="routing-card online">
+        <h4><span class="dot"></span>在线模式 (Hybrid / Cloud-only)</h4>
+        <p style="color: var(--text-1); font-size: 14px; margin-bottom: 12px;">检测到外网 + 至少 1 个云端 API 可达</p>
+        <ul style="color: var(--text-1); font-size: 13px; padding-left: 20px; line-height: 1.9;">
+          <li>首选 <strong style="color: var(--accent-2);">云端 LLM</strong>（最佳质量）</li>
+          <li>失败 1 次（5xx/超时/网络错误）→ <strong style="color: var(--accent);">切本地</strong></li>
+          <li>embedding 同样优先云端，降级到本地 nomic-embed</li>
+          <li>可设置 <code>HERMES_LLM_MODE=cloud-only</code> 强制只用云端</li>
+        </ul>
+      </div>
+
+      <div class="routing-card offline">
+        <h4><span class="dot"></span>离线模式 (Local-only)</h4>
+        <p style="color: var(--text-1); font-size: 14px; margin-bottom: 12px;">无外网 / API Key 缺失 / 所有云 API 探测失败</p>
+        <ul style="color: var(--text-1); font-size: 13px; padding-left: 20px; line-height: 1.9;">
+          <li>只走 <strong style="color: var(--accent);">本地 llama-server</strong></li>
+          <li>自动降级响应：max_tokens=1024、prefer_concise=true</li>
+          <li>禁用工具：web-search / http-fetch</li>
+          <li>可设置 <code>HERMES_LLM_MODE=local-only</code> 强制只用本地</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- STARTUP FLOW -->
+  <section>
+    <h2>启动流程时间线</h2>
+    <p class="section-sub">// BOOT.SEQUENCE.v2</p>
+
+    <div class="timeline">
+      <div class="timeline-step">
+        <div class="time">T+0s</div>
+        <h3>插入移动硬盘 + 双击 <code>start.bat</code></h3>
+        <p>脚本自动解析 U 盘根目录（不依赖盘符），检测 Podman/Docker。</p>
+      </div>
+      <div class="timeline-step">
+        <div class="time">T+5-90s (首次) / T+2s (后续)</div>
+        <h3>镜像加载</h3>
+        <p>首次 <code>gunzip -c image.tar.gz | docker load</code>。镜像含 Mavis + llama.cpp + 所有 Python 依赖。</p>
+      </div>
+      <div class="timeline-step">
+        <div class="time">T+95s (首次) / T+5s (后续)</div>
+        <h3>容器启动 + 网络检测</h3>
+        <p><code>entrypoint.sh</code> 跑起来，<code>llama-router.sh</code> 探测外网和云端 API，输出 <code>HERMES_NETWORK</code> / <code>HERMES_LLM_MODE</code>。</p>
+      </div>
+      <div class="timeline-step">
+        <div class="time">T+100-150s</div>
+        <h3>本地 LLM 预热</h3>
+        <p>如果 <code>/data/models/*.gguf</code> 存在，<code>llama-supervisor.sh</code> 启动 llama-server，加载模型到内存，等待 <code>/health 200</code>。</p>
+      </div>
+      <div class="timeline-step">
+        <div class="time">T+150s</div>
+        <h3>Mavis 就绪</h3>
+        <p>Web UI @ <code>http://localhost:7860</code>。在线时调云端 GPT-4o / Claude，离线时调本地 Qwen2.5-3B，<strong>用户无感切换</strong>。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- KEY COMMANDS -->
+  <section>
+    <h2>核心命令速查</h2>
+    <p class="section-sub">// QUICK.REFERENCE</p>
+
+    <h3 style="color: var(--accent); font-size: 16px; margin: 16px 0 8px;">首次配置（装机）</h3>
+<pre data-lang="bash"><span class="comment"># 1. 构建 Docker 镜像（含 Mavis + llama.cpp）</span>
+docker buildx build --platform linux/amd64 \
+    --output type=docker,dest=docker/image.tar \
+    -t portable-hermes:latest .
+
+<span class="comment"># 2. 压缩保存</span>
+docker save portable-hermes:latest | gzip -9 > docker/image.tar.gz
+
+<span class="comment"># 3. 准备 .env</span>
+cp .env.example .env
+<span class="comment"># 编辑填入 OPENAI_API_KEY 等</span>
+
+<span class="comment"># 4. 下载本地模型（首次必跑，需要网络）</span>
+./scripts/setup-model.sh default</pre>
+
+    <h3 style="color: var(--accent); font-size: 16px; margin: 24px 0 8px;">日常使用（任意机器）</h3>
+<pre data-lang="bash"><span class="comment"># 启动</span>
+./scripts/start.sh                  <span class="comment"># Mac/Linux</span>
+scripts\start.bat                   <span class="comment"># Windows</span>
+
+<span class="comment"># 切换本地模型档位</span>
+./scripts/switch-model.sh powerful
+
+<span class="comment"># 强制模式（写到 .env 持久化）</span>
+<span class="var">HERMES_LLM_MODE</span>=local-only   <span class="comment"># 只用本地</span>
+<span class="var">HERMES_LLM_MODE</span>=cloud-only    <span class="comment"># 只用云端</span>
+<span class="var">HERMES_LLM_MODE</span>=hybrid        <span class="comment"># 默认</span>
+
+<span class="comment"># 启用 GPU（需要 nvidia-container-toolkit）</span>
+<span class="var">LLAMA_USE_GPU</span>=1 ./scripts/start.sh
+
+<span class="comment"># 拉取新镜像</span>
+./scripts/update.sh https://your-server.com/hermes-latest.tar.gz</pre>
+
+    <h3 style="color: var(--accent); font-size: 16px; margin: 24px 0 8px;">容器内调试</h3>
+<pre data-lang="bash"><span class="comment"># 查看本地 LLM 状态</span>
+docker exec hermes-portable llama-supervisor.sh status
+
+<span class="comment"># 重启本地 LLM（切换模型后）</span>
+docker exec hermes-portable llama-supervisor.sh restart
+
+<span class="comment"># 查看本地 LLM 日志</span>
+docker exec hermes-portable tail -f /opt/llama/logs/llama-server.log
+
+<span class="comment"># 直接 curl 本地 LLM</span>
+curl http://localhost:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model":"qwen2.5-3b","messages":[{"role":"user","content":"hi"}]}'</pre>
+  </section>
+
+  <!-- MODEL CATALOG -->
+  <section>
+    <h2>本地模型档位</h2>
+    <p class="section-sub">// MODEL.CATALOG</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>档位</th>
+          <th>模型</th>
+          <th>大小</th>
+          <th>内存</th>
+          <th>适用</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong style="color: var(--accent);">lightweight</strong></td>
+          <td>Llama-3.2-1B-Instruct Q4_K_M</td>
+          <td>0.8 GB</td>
+          <td>4 GB+</td>
+          <td>老旧机器、秒级响应</td>
+        </tr>
+        <tr style="background: rgba(0, 255, 157, 0.04);">
+          <td><strong style="color: var(--accent);">default</strong> ⭐</td>
+          <td>Qwen2.5-3B-Instruct Q4_K_M</td>
+          <td>2.0 GB</td>
+          <td>8 GB+</td>
+          <td>日常使用、平衡首选</td>
+        </tr>
+        <tr>
+          <td><strong style="color: var(--accent);">powerful</strong></td>
+          <td>Qwen2.5-7B-Instruct Q4_K_M</td>
+          <td>4.7 GB</td>
+          <td>16 GB+</td>
+          <td>复杂任务、质量优先</td>
+        </tr>
+        <tr>
+          <td><strong style="color: var(--accent);">chinese</strong></td>
+          <td>Qwen2.5-3B + BGE-small-zh</td>
+          <td>2.1 GB</td>
+          <td>8 GB+</td>
+          <td>中文任务、RAG 优化</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- 引用 -->
+  <section>
+    <h2>记住这个原则</h2>
+    <blockquote>
+      "云端只是锦上添花，本地才是立身之本。<br>
+      网络是变量，模型才是常量。<br>
+      让 Agent 在任何网络状态下都能优雅地活下去。"
+    </blockquote>
+    <p style="color: var(--text-2); text-align: center; margin-top: 32px;">
+      <code style="color: var(--accent);">cloud is optional · local is mandatory · portability is everything</code>
+    </p>
+  </section>
+
+</div>
+
+</body>
+</html>
