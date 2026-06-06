@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, HTTPException, Request
@@ -414,9 +415,9 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/chat")
     async def chat_ui():
-        """Redirect to ChatGPT-Next-Web UI."""
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse("http://127.0.0.1:7890")
+        """Professional chat UI with sessions, history, markdown."""
+        from hermes.chat_ui import CHAT_HTML
+        return HTMLResponse(CHAT_HTML)
 
     @app.get("/healthz")
     async def healthz():
@@ -690,6 +691,110 @@ def create_app(agent) -> FastAPI:
                 for c, s in results
             ]
         }
+
+    # ---- Chat API (sessions + history + send, inspired by hermes-workspace prompt-kit) ----
+
+    @app.get("/api/chat/sessions")
+    async def chat_sessions():
+        """List all chat sessions with last message preview."""
+        import uuid as _uuid
+        sessions = []
+        for item in reversed(agent.memory.items[-50:]):
+            if not item.text or len(item.text) < 2:
+                continue
+            # Derive session ID from memory tags or generate one
+            sid = item.id[:8]
+            title = item.text[:60].replace("\n", " ").strip()
+            sessions.append({
+                "id": sid,
+                "title": title,
+                "last_message": title[:40],
+                "message_count": 1,
+                "updated_at": int(item.last_access),
+                "created_at": int(item.created_at),
+            })
+        # Also include real chat sessions if they exist
+        if hasattr(agent, "_chat_sessions"):
+            for sid, sess in agent._chat_sessions.items():
+                if isinstance(sess, dict):
+                    sessions.append({
+                        "id": sid,
+                        "title": (sess.get("title") or sess.get("messages", [{}])[0].get("content", "")[:40]) or "Chat",
+                        "last_message": (sess.get("messages", [{}])[-1].get("content", "")[:40] if sess.get("messages") else ""),
+                        "message_count": len(sess.get("messages", [])),
+                        "updated_at": int(sess.get("updated_at", time.time())),
+                        "created_at": int(sess.get("created_at", time.time())),
+                    })
+        return {"sessions": sessions}
+
+    @app.get("/api/chat/history")
+    async def chat_history(session: str = ""):
+        """Get message history for a session."""
+        messages = []
+        if hasattr(agent, "_chat_sessions") and session in agent._chat_sessions:
+            sess = agent._chat_sessions[session]
+            if isinstance(sess, dict) and "messages" in sess:
+                messages = sess["messages"]
+        return {"session_id": session, "messages": messages}
+
+    @app.post("/api/chat/send")
+    async def chat_send(req: dict):
+        """Send a message and get AI response. Returns full message objects.
+        Body: {"message": "text", "session": "optional-session-id"}
+        """
+        message = req.get("message", "").strip()
+        if not message:
+            raise HTTPException(400, "message required")
+
+        session_id = req.get("session", "") or str(uuid.uuid4())[:8]
+
+        # Ensure _chat_sessions exists
+        if not hasattr(agent, "_chat_sessions"):
+            agent._chat_sessions = {}
+        if session_id not in agent._chat_sessions:
+            agent._chat_sessions[session_id] = {
+                "id": session_id,
+                "title": message[:40],
+                "messages": [],
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+
+        sess = agent._chat_sessions[session_id]
+        sess["messages"].append({
+            "role": "user",
+            "content": message,
+            "timestamp": int(time.time() * 1000),
+        })
+        sess["updated_at"] = time.time()
+
+        try:
+            reply = await agent.chat(message, remember=True)
+            
+            assistant_msg = {
+                "role": "assistant",
+                "content": reply,
+                "timestamp": int(time.time() * 1000),
+            }
+            sess["messages"].append(assistant_msg)
+            sess["updated_at"] = time.time()
+
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "message": assistant_msg,
+                "user_message": {"role": "user", "content": message},
+            }
+        except Exception as e:
+            logger.error(f"Chat send failed: {e}")
+            raise HTTPException(500, str(e))
+
+    @app.delete("/api/chat/sessions/{session_id}")
+    async def chat_delete_session(session_id: str):
+        """Delete a chat session."""
+        if hasattr(agent, "_chat_sessions") and session_id in agent._chat_sessions:
+            del agent._chat_sessions[session_id]
+        return {"ok": True}
 
     # ---- OpenAI-compatible shim endpoints ----
 
