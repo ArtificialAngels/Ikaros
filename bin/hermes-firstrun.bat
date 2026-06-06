@@ -46,8 +46,7 @@ if "%MODE%"=="status" goto :status
 if "%MODE%"=="check"  goto :check
 if "%MODE%"=="install" goto :install
 
-REM ---- "auto" mode: only CHECK, don't auto-install (install can take 10-30 min) ----
-REM ---- (hermes-all.bat uses this; if user wants install, run explicit) ----
+REM ---- "auto" mode: check + auto-install missing CUDA runtime ----
 :check
 echo [firstrun] checking environment...
 "%PY%" -m hermes.firstrun check
@@ -56,9 +55,11 @@ echo [firstrun] check exit=%RC%
 if "%MODE%"=="check" exit /b %RC%
 if %RC%==0 goto :done
 if %RC%==1 (
-    echo [firstrun] WARN: missing GPU runtime, will fall back to whatever works.
-    echo [firstrun] To download cudart etc, run: bin\hermes-firstrun.bat install
-    exit /b 1
+    echo [firstrun] CUDA runtime DLLs missing (cudart64_12.dll, cublas64_12.dll)
+    echo [firstrun] Auto-downloading ~391MB from GitHub (one-time, ~3-5 min)...
+    echo [firstrun] To skip, press Ctrl+C now. GPU will run on CPU.
+    timeout /t 3 /nobreak >nul
+    goto :install
 )
 if %RC%==2 (
     echo [firstrun] check failed (err=2)
