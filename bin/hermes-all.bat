@@ -118,6 +118,10 @@ REM ---- Step 4: Start ChatGPT-Next-Web ----
 :start_nextchat
 echo [4/4] Starting ChatGPT-Next-Web...
 
+REM Auto-configure: hide cloud models, show only local llama-server models
+echo   Configuring NextChat for local models only...
+"%PY%" "%HERMES_ROOT%\hermes\scripts\setup_nextchat_config.py" 2>nul
+
 REM Copy static files into standalone dir (required for Next.js standalone mode)
 if exist "%NEXTCHAT_DIR%\.next\static" (
     xcopy /E /I /Y "%NEXTCHAT_DIR%\.next\static" "%NEXTCHAT_DIR%\.next\standalone\.next\static\" >nul 2>&1

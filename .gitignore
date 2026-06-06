@@ -14,6 +14,7 @@ hermes/data/
 !hermes/data/nextchat/public/
 hermes/data/nextchat/node_modules/
 hermes/data/nextchat/.next/
+hermes/data/nextchat/.env.local
 tests/hermes/data/
 data/
 !data/models/
