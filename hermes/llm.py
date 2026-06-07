@@ -6,13 +6,24 @@ Supports:
   - Anthropic Claude (best-effort)
   - Multi-provider fallback chain
   - Streaming
+
+Streaming API (Phase 1 addition):
+  - `BaseProvider.stream(messages, **kwargs) -> AsyncIterator[str]`
+    Yields content tokens (or, for Mock, one character at a time).
+  - `LLMRouter.stream_chat(...)` walks the fallback chain and returns the
+    first async iterator that yields; on provider failure it closes the
+    current stream and tries the next provider in line.
+  - `LLMRouter.collect_stream(...)` consumes the async iterator to a string
+    while still yielding each chunk via an optional callback (useful for
+    incremental persistence / SSE).
 """
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import os
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable, Optional
 from dataclasses import dataclass, field
 import httpx
 
@@ -58,6 +69,39 @@ class BaseProvider:
         **kwargs,
     ) -> LLMResponse | AsyncIterator[str]:
         raise NotImplementedError
+
+    async def stream(
+        self,
+        messages: list[Message],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Yield content tokens from the LLM.
+
+        Default implementation calls ``chat(stream=True)`` and delegates to
+        the provider's streaming path. Providers with first-class streaming
+        (OpenAI-compatible) override this to avoid buffering the full reply.
+        Yields plain content deltas (NOT including role metadata).
+        """
+        result = await self.chat(
+            messages=messages, model=model,
+            temperature=temperature, max_tokens=max_tokens,
+            stream=True, **kwargs,
+        )
+        # When stream=True, OpenAIProvider returns the async iterator directly
+        if hasattr(result, "__aiter__"):
+            async for chunk in result:  # type: ignore[union-attr]
+                yield chunk
+            return
+        # Non-streaming fallback: emit the whole content as a single chunk
+        if isinstance(result, LLMResponse):
+            yield result.content
+            return
+        # Defensive: iterator-like but not async
+        async for chunk in result:  # type: ignore[union-attr]
+            yield chunk
 
 
 # ---- OpenAI-compatible provider (works for OpenAI, llama-server, etc.) ----
@@ -158,6 +202,42 @@ class OpenAIProvider(BaseProvider):
                     except Exception:
                         continue
 
+    async def stream(
+        self,
+        messages: list[Message],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """True token-level streaming via SSE.
+
+        For OpenAI-compatible APIs (llama-server, Ollama, vLLM, etc.) this
+        uses HTTP chunked transfer and yields each ``delta.content`` as soon
+        as it arrives. Falls back to the default ``stream()`` base method
+        if the streaming request fails (so the caller still gets a reply).
+        """
+        payload = {
+            "model": model,
+            "messages": [self._msg_to_dict(m) for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            **kwargs,
+        }
+        try:
+            async for chunk in self._stream_chat(payload, model):
+                yield chunk
+        except (httpx.HTTPError, LLMError) as e:
+            logger.warning(f"[{self.name}] stream failed ({e}); falling back to non-streaming")
+            resp = await self.chat(
+                messages=messages, model=model,
+                temperature=temperature, max_tokens=max_tokens,
+                stream=False, **kwargs,
+            )
+            if isinstance(resp, LLMResponse) and resp.content:
+                yield resp.content
+
     async def embed(self, texts: list[str], model: str, **kwargs) -> list[list[float]]:
         """OpenAI-compatible embeddings endpoint."""
         payload = {"model": model, "input": texts, **kwargs}
@@ -215,6 +295,31 @@ class MockProvider(BaseProvider):
             usage={"completion_tokens": len(content)},
             latency_ms=10,
         )
+
+    async def stream(
+        self,
+        messages: list[Message],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Mock streaming: build the canned reply, then yield one character
+        at a time with a small delay. This simulates true token streaming
+        so the SSE pipeline can be tested end-to-end without a real LLM.
+        """
+        msg_dicts = [{"role": m.role, "content": m.content} for m in messages]
+        loop = asyncio.get_event_loop()
+        content = await loop.run_in_executor(None, self._chat_fn, msg_dicts)
+        if not content:
+            return
+        # Per-character yield with a small delay to make the stream visible
+        # in the WebUI. Cap delay at first/last char to avoid super-slow tails.
+        for i, ch in enumerate(content):
+            yield ch
+            # ~10ms per char — fast enough for a feel, slow enough to demo
+            if i < len(content) - 1:
+                await asyncio.sleep(0.01)
 
     async def embed(self, texts: list[str], model: str, **kwargs) -> list[list[float]]:
         loop = asyncio.get_event_loop()
@@ -371,6 +476,89 @@ class LLMRouter:
                 return models[hint]
             return models.get("default") or models.get("fast") or hint or "default"
         return hint or "default"
+
+    # ---- Streaming (Phase 1: real SSE) -------------------------------------
+
+    async def stream_chat(
+        self,
+        messages: list[Message],
+        model_hint: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        prefer: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Async generator that yields content tokens.
+
+        Walks the fallback chain. On LLMError it moves to the next provider;
+        on a mid-stream error it raises (so the caller can decide whether to
+        retry or terminate). Yields the provider name and model in the first
+        chunk via a side-channel is NOT done here; the server captures it
+        from the router state before iterating.
+        """
+        order = self.order[:]
+        if prefer and prefer in order:
+            order.remove(prefer)
+            order.insert(0, prefer)
+
+        last_error: Exception | None = None
+        for name in order:
+            provider = self.providers.get(name)
+            if not provider:
+                continue
+            model = self._pick_model(provider, model_hint)
+            logger.info(f"[llm.stream] trying {name} / {model}")
+            # Track which provider actually served the stream — useful for
+            # the final "done" event so the UI can show the model name.
+            self._last_stream_provider = name
+            self._last_stream_model = model
+            try:
+                agen = provider.stream(
+                    messages=messages, model=model,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+                async for chunk in agen:
+                    yield chunk
+                # Provider's stream ended cleanly
+                return
+            except LLMError as e:
+                last_error = e
+                logger.warning(f"[llm.stream] {name} failed: {e}")
+                continue
+            except Exception as e:
+                # Mid-stream failure — surface as the final error if no more
+                # providers are available. We still try the next provider
+                # so the user gets a reply even if one backend dies halfway.
+                last_error = e
+                logger.warning(f"[llm.stream] {name} mid-stream error: {e}")
+                continue
+        # All providers failed
+        raise LLMError(f"All providers failed streaming. Last error: {last_error}")
+
+    async def collect_stream(
+        self,
+        messages: list[Message],
+        on_chunk: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> tuple[str, str, str]:
+        """Consume a stream into a final string while calling ``on_chunk``
+        for each delta. Returns ``(content, provider, model)``.
+
+        The callback is invoked from the same async context as the consumer
+        — useful for incremental session persistence (server.py).
+        """
+        buf: list[str] = []
+        async for ch in self.stream_chat(messages, **kwargs):
+            buf.append(ch)
+            if on_chunk is not None:
+                try:
+                    on_chunk(ch)
+                except Exception as cb_err:
+                    logger.debug(f"[llm.collect_stream] callback error: {cb_err}")
+        return (
+            "".join(buf),
+            getattr(self, "_last_stream_provider", "unknown"),
+            getattr(self, "_last_stream_model", "unknown"),
+        )
 
 
 # ---- Builder ----

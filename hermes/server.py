@@ -3,47 +3,112 @@ FastAPI web server for Hermes.
 
 Provides the /api/* endpoints, built-in chat UI (/chat),
 and OpenAI-compatible /v1/* shims for external clients.
+
+Phase 1+2 (real SSE streaming + session persistence):
+  - ``SessionStore`` (hermes.sessions) replaces the in-memory
+    ``agent._chat_sessions`` dict; sessions live as JSON files under
+    ``<data_dir>/sessions/<id>.json`` and survive process restarts.
+  - ``POST /api/chat/start`` is a non-blocking entry point that returns
+    a ``stream_id`` immediately and starts a background asyncio task to
+    drive the LLM. ``GET /api/chat/stream/{stream_id}`` returns a real
+    ``text/event-stream`` so the WebUI can render tokens as they arrive.
+  - ``POST /api/chat/cancel/{stream_id}`` signals the background task
+    to stop. ``/api/chat/send`` (legacy blocking) is kept for backward
+    compatibility and other clients (CLI, tests).
 """
 from __future__ import annotations
 import asyncio
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import httpx
+
+from hermes.sessions import SessionStore
+from hermes.llm import Message, LLMResponse
 
 logger = logging.getLogger("hermes.server")
 
 # Hermes project root (parent of this hermes/ package)
 HERMES_ROOT = Path(__file__).resolve().parent.parent
 
-# Built-in chat UI at /chat is the primary interface.
+# Default port for llama-server (real LLM runtime). Used by /v1/models
+# to live-proxy the OpenAI-compatible models listing when llama-server
+# is up, and to construct a "this is the local LLM" indicator elsewhere.
+LLAMA_PORT = int(os.environ.get("HERMES_LLAMA_PORT", "8080"))
 
-HTML_FALLBACK = """<!DOCTYPE html>
-<html>
-<head><title>Hermes Agent</title>
-<style>body{font-family:system-ui;background:#0a0e14;color:#e6edf3;margin:40px;max-width:800px;line-height:1.5}</style>
-</head>
-<body>
-<h1>Hermes Agent</h1>
-<p>The Hermes API is running on this port.</p>
-<p>Chat UI: <a href="/chat">Hermes Chat</a></p>
-<h2>Useful endpoints</h2>
-<ul>
-  <li><a href="/chat"><code>/chat</code></a> — Hermes Chat</li>
-  <li><a href="/health"><code>/health</code></a> — health probe (JSON)</li>
-  <li><a href="/v1/models"><code>/v1/models</code></a> — OpenAI-compatible model list</li>
-  <li><a href="/api/status"><code>/api/status</code></a> — agent status (memory, KB, skills)</li>
-  <li><a href="/api/skills"><code>/api/skills</code></a> — available skills</li>
-  <li><a href="/api/memory"><code>/api/memory</code></a> — memory store stats</li>
-</ul>
-</body>
-</html>"""
+
+# ---- Stream registry (in-process, scoped per app instance) -----------------
+# Each entry: {
+#   "id": str,
+#   "session_id": str,
+#   "queue": asyncio.Queue,  # pushed events for the SSE consumer
+#   "cancel": asyncio.Event, # set by /api/chat/cancel
+#   "task": asyncio.Task,    # background runner
+#   "model": str,
+#   "provider": str,
+#   "created_at": float,
+#   "done": bool,
+# }
+# The registry is intentionally simple: one process, one registry, no
+# cross-process coordination needed. On restart, all in-flight streams
+# are simply gone — the client's EventSource will get a 404 and the
+# session will show whatever was persisted so far.
+
+class _StreamRegistry:
+    def __init__(self):
+        self._streams: dict[str, dict] = {}
+        self._lock = asyncio.Lock()
+
+    async def create(self, session_id: str, model: str, provider_hint: str = "") -> str:
+        stream_id = "stream_" + uuid.uuid4().hex[:12]
+        async with self._lock:
+            self._streams[stream_id] = {
+                "id": stream_id,
+                "session_id": session_id,
+                "queue": asyncio.Queue(maxsize=1024),
+                "cancel": asyncio.Event(),
+                "task": None,
+                "model": model,
+                "provider": provider_hint,
+                "created_at": time.time(),
+                "done": False,
+            }
+        return stream_id
+
+    async def attach_task(self, stream_id: str, task: asyncio.Task) -> None:
+        async with self._lock:
+            s = self._streams.get(stream_id)
+            if s:
+                s["task"] = task
+
+    def get(self, stream_id: str) -> dict | None:
+        return self._streams.get(stream_id)
+
+    async def cancel(self, stream_id: str) -> bool:
+        s = self._streams.get(stream_id)
+        if not s:
+            return False
+        s["cancel"].set()
+        return True
+
+    async def remove(self, stream_id: str) -> None:
+        async with self._lock:
+            self._streams.pop(stream_id, None)
+
+    def stats(self) -> dict:
+        return {
+            "active": sum(1 for s in self._streams.values() if not s["done"]),
+            "total": len(self._streams),
+        }
 
 
 # ---- Pydantic models for the SPA API ----
@@ -73,9 +138,25 @@ class RememberRequest(BaseModel):
 def create_app(agent) -> FastAPI:
     app = FastAPI(title="Hermes Agent", version=agent.config.agent.version)
 
+    # Persistent session store (Phase 2). Lives at <data_dir>/sessions.
+    # Falls back to a per-process dir if data paths are not available.
+    _data_base = agent.paths.get("base") if isinstance(agent.paths, dict) else None
+    if _data_base:
+        _sessions_dir = Path(_data_base) / "sessions"
+    else:
+        _sessions_dir = HERMES_ROOT / "hermes" / "data" / "sessions"
+    session_store = SessionStore(_sessions_dir)
+    logger.info(f"SessionStore at {_sessions_dir}")
+
+    # In-process SSE stream registry (Phase 1). Lost on restart; the
+    # persisted session messages survive, so a refresh after restart
+    # can still render whatever was completed before the crash.
+    stream_registry = _StreamRegistry()
+
     @app.on_event("startup")
     async def startup():
         await agent.initialize()
+        logger.info(f"SessionStore ready: {session_store.stats()}")
 
     # ---- API endpoints ----
 
@@ -105,6 +186,81 @@ def create_app(agent) -> FastAPI:
                 {"name": name, "url": getattr(p, "base_url", "?")}
                 for name, p in agent.router.providers.items()
             ],
+        }
+
+    @app.get("/api/dashboard")
+    async def api_dashboard():
+        """Comprehensive dashboard status (inspired by ComfyUI-aki-v3 launcher)."""
+        memory_stats = agent.memory.stats()
+        kb_stats = agent.knowledge.stats()
+        skills_list = agent.skills.list()
+
+        # Network / mirror status
+        network_info = {}
+        try:
+            from hermes.mirror import get_mirror_config
+            mc = get_mirror_config()
+            network_info = {
+                "proxy": mc.proxy_address or "none",
+                "mirror_pypi": mc.mirror_pypi,
+                "mirror_huggingface": mc.mirror_huggingface,
+                "mirror_git": mc.mirror_git,
+                "pypi_mirror": mc.pypi_mirror if mc.mirror_pypi else "direct",
+                "hf_mirror": mc.hf_mirror if mc.mirror_huggingface else "direct",
+            }
+        except Exception:
+            network_info = {"proxy": "unknown", "mirror_pypi": False, "mirror_huggingface": False, "mirror_git": False}
+
+        # Download support
+        download_info = {}
+        try:
+            from hermes.download import find_aria2c
+            a2 = find_aria2c()
+            download_info = {"aria2c": str(a2) if a2 else None, "gopeed": None}
+        except Exception:
+            download_info = {"aria2c": None, "gopeed": None}
+
+        return {
+            "system": {
+                "name": agent.config.agent.name,
+                "version": agent.config.agent.version,
+                "platform": sys.platform,
+                "python": sys.version.split()[0],
+                "data_dir": str(agent.paths["base"]),
+            },
+            "llm": {
+                "mode": agent._mode_str(),
+                "cloud_available": agent.cloud_available,
+                "local_available": agent.local_available,
+                "mock_available": agent.mock_available,
+                "providers": [
+                    {"name": name, "url": getattr(p, "base_url", "?")}
+                    for name, p in agent.router.providers.items()
+                ],
+                "turn_count": agent.turn_count,
+            },
+            "components": {
+                "memory": {
+                    "backend": agent.config.memory.backend,
+                    "total_items": memory_stats.get("total_items", 0),
+                    "path": str(agent.paths["memory"]),
+                },
+                "knowledge": {
+                    "total_chunks": kb_stats.get("total_chunks", 0),
+                    "total_sources": kb_stats.get("total_sources", 0),
+                    "chunk_size": agent.config.knowledge.chunk_size,
+                },
+                "skills": {
+                    "count": len(skills_list),
+                    "list": [{
+                        "name": s["name"],
+                        "description": s.get("description", ""),
+                        "category": "builtin" if s.get("path") is None else "custom",
+                    } for s in skills_list],
+                },
+            },
+            "network": network_info,
+            "download": download_info,
         }
 
     @app.get("/api/config")
@@ -388,6 +544,100 @@ def create_app(agent) -> FastAPI:
     async def api_analytics_models(days: int = 30):
         return {"models": [], "totals": {}, "period_days": days}
 
+    # ---- Hermes WebUI integration (nesquena/hermes-webui) ----
+    # These routes must be registered BEFORE the /api/{path:path} catch-all
+    # below; otherwise the catch-all swallows them and returns its stub.
+    # The client-side adapter (static/api-adapter.js) translates the new
+    # UI's expected endpoints onto our /api/chat/* + /v1/* backends.
+
+    @app.get("/", include_in_schema=False)
+    async def root_fallback():
+        # Serve the Hermes WebUI (nesquena/hermes-webui) from hermes/static/.
+        # Static dir is required — if missing, the install is broken; 503 it.
+        static_dir = HERMES_ROOT / "hermes" / "static"
+        if not static_dir.is_dir() or not (static_dir / "index.html").is_file():
+            return HTMLResponse(
+                "<h1>Hermes WebUI not installed</h1>"
+                "<p>Expected hermes/static/index.html — reinstall the hermes-webui assets.</p>",
+                status_code=503,
+            )
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        # Replace server-side template placeholders the new UI expects.
+        html = html.replace("__WEBUI_VERSION__", "1.0.0-hermes")
+        html = html.replace("__MAX_UPLOAD_BYTES__", str(50 * 1024 * 1024))
+        html = html.replace("__CSRF_TOKEN_JSON__", "null")
+        return HTMLResponse(html)
+
+    @app.get("/api/webui/settings")
+    async def webui_settings_get():
+        return {}
+
+    @app.post("/api/webui/settings")
+    async def webui_settings_post(req: dict = None):
+        return {"ok": True, "settings": req or {}}
+
+    @app.get("/api/webui/profile/active")
+    async def webui_profile_active():
+        return {"name": "default", "is_default": True}
+
+    @app.get("/api/webui/profiles")
+    async def webui_profiles():
+        return {"profiles": [{"name": "default", "is_default": True}]}
+
+    @app.get("/api/webui/auth/status")
+    async def webui_auth_status():
+        return {"enabled": False, "user": None, "mode": "open"}
+
+    @app.get("/api/webui/dashboard/config")
+    async def webui_dashboard_config_get():
+        return {"config": {}}
+
+    @app.post("/api/webui/dashboard/config")
+    async def webui_dashboard_config_post(req: dict = None):
+        return {"ok": True, "config": req or {}}
+
+    @app.get("/api/webui/workspaces")
+    async def webui_workspaces():
+        return {"workspaces": []}
+
+    @app.post("/api/webui/session/new")
+    async def webui_session_new(req: dict = None):
+        sid = "sess_" + uuid.uuid4().hex[:12]
+        return {
+            "session": {
+                "session_id": sid,
+                "id": sid,
+                "title": (req or {}).get("title", "New chat"),
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "message_count": 0,
+                "profile": "default",
+                "archived": False,
+                "pinned": False,
+                "messages": [],
+            }
+        }
+
+    @app.post("/api/webui/session/rename")
+    async def webui_session_rename(req: dict = None):
+        req = req or {}
+        sid = req.get("session_id") or req.get("sessionKey") or ""
+        title = req.get("title") or "Chat"
+        if sid:
+            data = session_store.get(sid)
+            if data is not None:
+                data["title"] = title
+                await session_store.save(sid, data)
+                # Keep legacy mirror consistent
+                if hasattr(agent, "_chat_sessions"):
+                    agent._chat_sessions[sid] = data
+        return {"ok": True, "session_id": sid, "title": title}
+
+    @app.api_route("/api/webui/noop", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def webui_noop():
+        """Catch-all stub for endpoints the new UI calls but we don't implement."""
+        return {"ok": True}
+
     # ---- Catch-all for unknown API endpoints (SPA graceful degradation) ----
 
     @app.get("/api/{path:path}")
@@ -413,17 +663,6 @@ def create_app(agent) -> FastAPI:
             "local_available": getattr(agent, "local_available", None),
             "mode": agent._mode_str() if hasattr(agent, "_mode_str") else "unknown",
         }
-
-    @app.get("/")
-    async def index():
-        """Home page."""
-        return HTMLResponse(HTML_FALLBACK)
-
-    @app.get("/chat")
-    async def chat_ui():
-        """Professional chat UI with sessions, history, markdown."""
-        from hermes.chat_ui import CHAT_HTML
-        return HTMLResponse(CHAT_HTML)
 
     @app.get("/healthz")
     async def healthz():
@@ -707,35 +946,31 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/api/sessions")
     async def ws_sessions(sessionKey: str = "", friendlyId: str = ""):
-        """List sessions. DELETE with query params handled elsewhere."""
-        sessions = []
-        if hasattr(agent, "_chat_sessions"):
-            for sid, sess in agent._chat_sessions.items():
-                if isinstance(sess, dict):
-                    msgs = sess.get("messages", [])
-                    last = msgs[-1] if msgs else {}
-                    sessions.append({
-                        "key": sid,
-                        "friendlyId": sid,
-                        "title": (sess.get("title") or last.get("content", "")[:40]) or "Chat",
-                        "lastMessage": last.get("content", "")[:100] if last else "",
-                        "messageCount": len(msgs),
-                        "updatedAt": int(sess.get("updated_at", 0) * 1000),
-                        "createdAt": int(sess.get("created_at", 0) * 1000),
-                    })
-        return {"sessions": sessions}
+        """List sessions (Phase 2: SessionStore-backed; workspace-ui shape)."""
+        out = []
+        for s in session_store.list(limit=200):
+            ts_updated_ms = int(s.get("updated_at", 0) * 1000)
+            ts_created_ms = int(s.get("created_at", 0) * 1000)
+            out.append({
+                "key": s["id"],
+                "friendlyId": s["id"],
+                "title": s.get("title") or "Chat",
+                "lastMessage": s.get("last_message", "")[:100],
+                "messageCount": s.get("message_count", 0),
+                "updatedAt": ts_updated_ms,
+                "createdAt": ts_created_ms,
+            })
+        return {"sessions": out}
 
     @app.get("/api/history")
     async def ws_history(sessionKey: str = "", friendlyId: str = "", limit: int = 1000):
-        """Get message history."""
+        """Get message history (Phase 2: SessionStore-backed)."""
         session_id = sessionKey or friendlyId
         messages = []
-        if hasattr(agent, "_chat_sessions") and session_id in agent._chat_sessions:
-            sess = agent._chat_sessions[session_id]
-            if isinstance(sess, dict):
-                raw = sess.get("messages", [])
-                # Convert to workspace-ui message format
-                for m in raw:
+        if session_id:
+            data = session_store.get(session_id)
+            if data:
+                for m in data.get("messages", []):
                     content = m.get("content", "")
                     messages.append({
                         "role": m.get("role", "assistant"),
@@ -746,112 +981,415 @@ def create_app(agent) -> FastAPI:
 
     @app.delete("/api/sessions")
     async def ws_delete_session(sessionKey: str = ""):
-        """Delete a session."""
-        if hasattr(agent, "_chat_sessions") and sessionKey in agent._chat_sessions:
-            del agent._chat_sessions[sessionKey]
-        return {"ok": True}
+        """Delete a session (Phase 2: SessionStore-backed)."""
+        ok = await session_store.delete(sessionKey) if sessionKey else False
+        if hasattr(agent, "_chat_sessions") and sessionKey:
+            agent._chat_sessions.pop(sessionKey, None)
+        return {"ok": ok, "sessionKey": sessionKey, "deleted": ok}
+
+    # ===================================================================
+    # Real SSE streaming + SessionStore-backed chat endpoints (Phase 1+2)
+    # ===================================================================
+    # These endpoints replace the previous blocking /api/chat/send with
+    # a non-blocking pattern that survives process restarts.
+    #
+    # Flow:
+    #   1. Client POSTs to /api/chat/start with {message, session_id?, model?, ...}
+    #   2. Server returns {stream_id, session_id, effective_model, ...} immediately
+    #      and starts a background asyncio task that:
+    #        - calls agent.llm.stream_chat(messages)
+    #        - pushes each delta onto an asyncio.Queue
+    #        - patches the persisted session message after every chunk
+    #   3. Client opens GET /api/chat/stream/{stream_id} (text/event-stream)
+    #      and receives:  data: {"type":"delta","content":"..."}
+    #                    data: {"type":"done","session_id":"..."}
+    #   4. Client may POST /api/chat/cancel/{stream_id} to abort
+    #
+    # The legacy /api/chat/send is kept below for backward compat
+    # (CLI, tests, scripts that don't want to handle SSE).
+    # -------------------------------------------------------------------
+
+    async def _stream_runner(
+        stream_id: str,
+        session_id: str,
+        user_message: str,
+        model_hint: str,
+        profile: str,
+    ) -> None:
+        """Background coroutine: drive the LLM, push SSE events, persist
+        each delta to the SessionStore. Runs until the LLM finishes,
+        raises, or the cancel event is set.
+        """
+        entry = stream_registry.get(stream_id)
+        if not entry:
+            logger.error(f"[_stream_runner] stream {stream_id} vanished before start")
+            return
+        queue: asyncio.Queue = entry["queue"]
+        cancel: asyncio.Event = entry["cancel"]
+        provider_hint = entry.get("provider", "")
+        full_text_chunks: list[str] = []
+        last_persist_len = 0
+
+        async def _push(event: dict) -> None:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                # Slow consumer: drop the event but keep streaming so the
+                # next chunk has a slot. We log so this is visible.
+                logger.warning(f"[_stream_runner] queue full on stream {stream_id}; dropped event")
+
+        try:
+            # Build context (system + memory + KB) exactly like agent.chat does
+            ctx = await agent.build_context(user_message)
+            messages = [
+                Message("system", f"{ctx['system']}\n\nRELEVANT MEMORIES:\n{ctx['memory']}\n\nRELEVANT KNOWLEDGE:\n{ctx['knowledge']}"),
+                Message("user", user_message),
+            ]
+            # Push the initial "starting" event so the UI knows the
+            # connection is live even if the first token takes a while.
+            await _push({
+                "type": "starting",
+                "stream_id": stream_id,
+                "session_id": session_id,
+                "model": model_hint or None,
+                "provider": provider_hint or None,
+            })
+
+            # Persist a placeholder assistant message so chat history
+            # always shows an in-flight row.
+            await session_store.append_message(
+                session_id, "assistant", "",
+                model=model_hint or None, provider=provider_hint or None,
+                stream_id=stream_id, in_progress=True,
+            )
+
+            # The actual streaming loop. We walk chunks one at a time,
+            # checking the cancel flag between them.
+            try:
+                # Snapshot attributes for the post-loop "done" event
+                provider_name = ""
+                model_name = model_hint
+                # We need access to which provider served the request;
+                # router.stream_chat() sets self._last_stream_provider
+                # on the router. We pull it AFTER the loop terminates.
+                async for delta in agent.router.stream_chat(
+                    messages, model_hint=model_hint or None,
+                ):
+                    if cancel.is_set():
+                        await _push({"type": "cancelled", "stream_id": stream_id})
+                        break
+                    full_text_chunks.append(delta)
+                    await _push({
+                        "type": "delta",
+                        "content": delta,
+                        "stream_id": stream_id,
+                    })
+                    # Persist incrementally — but only every N chars to
+                    # avoid disk thrash on token-by-token models.
+                    cumulative = "".join(full_text_chunks)
+                    if len(cumulative) - last_persist_len >= 32:
+                        await session_store.patch_message(
+                            session_id, -1, content=cumulative,
+                        )
+                        last_persist_len = len(cumulative)
+                else:
+                    # Stream finished without a cancel
+                    pass
+            except Exception as llm_err:
+                logger.error(f"[_stream_runner] LLM error on {stream_id}: {llm_err}")
+                await _push({
+                    "type": "error",
+                    "error": str(llm_err),
+                    "stream_id": stream_id,
+                })
+
+            # Final persistence: write the full accumulated text
+            final_text = "".join(full_text_chunks)
+            provider_name = getattr(agent.router, "_last_stream_provider", provider_hint or "unknown")
+            model_name = getattr(agent.router, "_last_stream_model", model_hint or "unknown")
+            await session_store.patch_message(
+                session_id, -1,
+                content=final_text,
+                in_progress=False,
+                cancelled=cancel.is_set(),
+                provider=provider_name,
+                model=model_name,
+            )
+            # Memory persistence mirrors the blocking path so the agent's
+            # long-term memory still gets the exchange. Best-effort.
+            try:
+                await agent.memory.remember(
+                    f"User: {user_message}\nAssistant: {final_text[:500]}",
+                    tags=["conversation"],
+                )
+            except Exception as mem_err:
+                logger.debug(f"[_stream_runner] memory.remember failed: {mem_err}")
+
+            # Send the final "done" event
+            if not cancel.is_set():
+                await _push({
+                    "type": "done",
+                    "stream_id": stream_id,
+                    "session_id": session_id,
+                    "provider": provider_name,
+                    "model": model_name,
+                    "content_length": len(final_text),
+                })
+            entry["done"] = True
+            entry["provider"] = provider_name
+            entry["model"] = model_name
+        except Exception as e:
+            logger.exception(f"[_stream_runner] fatal: {e}")
+            await _push({"type": "error", "error": str(e), "stream_id": stream_id})
+            entry["done"] = True
+        finally:
+            # Always signal end-of-stream so the SSE consumer closes.
+            try:
+                queue.put_nowait({"type": "__eof__"})
+            except Exception:
+                pass
+            # Schedule cleanup of the registry entry after a delay so
+            # the SSE consumer has time to read the final events.
+            async def _cleanup_later():
+                await asyncio.sleep(30)
+                await stream_registry.remove(stream_id)
+            asyncio.create_task(_cleanup_later())
+
+    @app.post("/api/chat/start")
+    async def chat_start(req: dict):
+        """Start a chat stream. Non-blocking.
+
+        Body: { message: str, session?: str, model?: str, profile?: str,
+                workspace?, model_provider? }
+        Returns immediately with { stream_id, session_id, effective_model, ... }
+        """
+        message = (req.get("message") or "").strip()
+        if not message:
+            raise HTTPException(400, "message required")
+        session_id = (req.get("session") or req.get("session_id") or "").strip()
+        model_hint = (req.get("model") or "").strip() or None
+        profile = (req.get("profile") or "default").strip() or "default"
+
+        # Create or reuse the session
+        existing = session_store.get(session_id) if session_id else None
+        if existing is None:
+            if not session_id:
+                session_id = "sess_" + uuid.uuid4().hex[:12]
+            new_data = session_store.create(
+                message, model=model_hint or "", profile=profile, session_id=session_id,
+            )
+            existing = new_data
+
+        # Determine an effective model — same heuristic as the WebUI uses.
+        effective_model = model_hint
+        if not effective_model:
+            try:
+                # Prefer the local provider's default if it has one
+                local_prov = agent.router.get("local")
+                if local_prov and hasattr(local_prov, "_models"):
+                    effective_model = local_prov._models.get("default") or list(local_prov._models.values())[0]
+            except Exception:
+                pass
+        if not effective_model:
+            effective_model = "mock"
+
+        # Register the stream and start the background runner
+        stream_id = await stream_registry.create(
+            session_id, model_hint or effective_model,
+            provider_hint="local" if agent.local_available else (
+                "cloud" if agent.cloud_available else "mock"
+            ),
+        )
+        task = asyncio.create_task(_stream_runner(
+            stream_id=stream_id,
+            session_id=session_id,
+            user_message=message,
+            model_hint=model_hint or effective_model or "",
+            profile=profile,
+        ))
+        await stream_registry.attach_task(stream_id, task)
+
+        # Mirror to the legacy in-memory dict so any code that still
+        # looks at agent._chat_sessions (e.g. /api/sessions legacy
+        # handler) sees the session. Best-effort.
+        if not hasattr(agent, "_chat_sessions"):
+            agent._chat_sessions = {}
+        agent._chat_sessions[session_id] = existing
+
+        return {
+            "ok": True,
+            "stream_id": stream_id,
+            "session_id": session_id,
+            "title": existing.get("title", message[:60]),
+            "effective_model": effective_model,
+            "effective_model_provider": "local" if agent.local_available else (
+                "cloud" if agent.cloud_available else "mock"
+            ),
+            "pending_started_at": time.time(),
+        }
+
+    @app.get("/api/chat/stream/{stream_id}")
+    async def chat_stream_sse(stream_id: str, request: Request):
+        """Server-Sent Events endpoint for an in-flight chat stream.
+
+        Each frame is a JSON object on a single ``data:`` line:
+            data: {"type":"starting",...}
+            data: {"type":"delta","content":"hello",...}
+            data: {"type":"done","session_id":"...",...}
+            data: {"type":"cancelled",...}
+            data: {"type":"error","error":"...",...}
+        The connection is closed after the ``done`` / ``cancelled`` /
+        ``error`` event arrives. Heartbeat comments are sent every 15s
+        so the connection survives corporate proxies.
+        """
+        entry = stream_registry.get(stream_id)
+        if not entry:
+            # Stream is gone (server restart, expired). Tell the client
+            # so it can re-render the partial session from disk.
+            async def _gone_gen():
+                yield f"data: {json.dumps({'type': 'error', 'error': 'stream not found', 'stream_id': stream_id, 'restarted': True})}\n\n"
+            return StreamingResponse(_gone_gen(), media_type="text/event-stream", status_code=200)
+
+        queue: asyncio.Queue = entry["queue"]
+        session_id = entry["session_id"]
+
+        async def event_gen():
+            # Initial comment so the browser sees the connection open
+            yield ": connected\n\n"
+            # If the stream already completed before we connected, replay
+            # the persisted session's last assistant message as a single
+            # delta so the UI doesn't render an empty bubble.
+            if entry.get("done"):
+                try:
+                    sess = session_store.get(session_id)
+                    if sess:
+                        last_asst = None
+                        for m in reversed(sess.get("messages", [])):
+                            if m.get("role") == "assistant":
+                                last_asst = m
+                                break
+                        if last_asst and last_asst.get("content"):
+                            yield f"data: {json.dumps({'type': 'replay', 'content': last_asst['content'], 'stream_id': stream_id, 'session_id': session_id, 'provider': entry.get('provider'), 'model': entry.get('model')})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'stream_id': stream_id, 'session_id': session_id, 'replayed': True})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(e), 'stream_id': stream_id})}\n\n"
+                return
+
+            last_heartbeat = time.time()
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps the connection alive through proxies
+                    yield ": ping\n\n"
+                    last_heartbeat = time.time()
+                    continue
+                if event.get("type") == "__eof__":
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") in ("done", "cancelled", "error"):
+                    break
+
+        return StreamingResponse(
+            event_gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.post("/api/chat/cancel/{stream_id}")
+    async def chat_cancel(stream_id: str):
+        """Cancel an in-flight chat stream."""
+        ok = await stream_registry.cancel(stream_id)
+        return {"ok": ok, "stream_id": stream_id, "cancelled": ok}
+
+    @app.get("/api/chat/stream/status")
+    async def chat_stream_status(stream_id: str):
+        """Quick status check (debug + adapter compatibility)."""
+        entry = stream_registry.get(stream_id)
+        if not entry:
+            return {"stream_id": stream_id, "active": False, "status": "gone"}
+        return {
+            "stream_id": stream_id,
+            "session_id": entry["session_id"],
+            "active": not entry.get("done", False),
+            "status": "running" if not entry.get("done", False) else "done",
+            "model": entry.get("model"),
+            "provider": entry.get("provider"),
+        }
 
     @app.get("/api/chat/sessions")
     async def chat_sessions():
-        """List chat sessions."""
-        import uuid as _uuid
-        sessions = []
-        for item in reversed(agent.memory.items[-50:]):
-            if not item.text or len(item.text) < 2:
-                continue
-            # Derive session ID from memory tags or generate one
-            sid = item.id[:8]
-            title = item.text[:60].replace("\n", " ").strip()
-            sessions.append({
-                "id": sid,
-                "title": title,
-                "last_message": title[:40],
-                "message_count": 1,
-                "updated_at": int(item.last_access),
-                "created_at": int(item.created_at),
-            })
-        # Also include real chat sessions if they exist
-        if hasattr(agent, "_chat_sessions"):
-            for sid, sess in agent._chat_sessions.items():
-                if isinstance(sess, dict):
-                    sessions.append({
-                        "id": sid,
-                        "title": (sess.get("title") or sess.get("messages", [{}])[0].get("content", "")[:40]) or "Chat",
-                        "last_message": (sess.get("messages", [{}])[-1].get("content", "")[:40] if sess.get("messages") else ""),
-                        "message_count": len(sess.get("messages", [])),
-                        "updated_at": int(sess.get("updated_at", time.time())),
-                        "created_at": int(sess.get("created_at", time.time())),
-                    })
-        return {"sessions": sessions}
+        """List chat sessions (Phase 2: SessionStore-backed)."""
+        sessions = session_store.list(limit=200)
+        return {"sessions": sessions, "total": len(sessions)}
 
     @app.get("/api/chat/history")
     async def chat_history(session: str = ""):
-        """Get message history for a session."""
-        messages = []
-        if hasattr(agent, "_chat_sessions") and session in agent._chat_sessions:
-            sess = agent._chat_sessions[session]
-            if isinstance(sess, dict) and "messages" in sess:
-                messages = sess["messages"]
-        return {"session_id": session, "messages": messages}
+        """Get message history for a session (Phase 2: SessionStore-backed)."""
+        if not session:
+            return {"session_id": "", "messages": []}
+        data = session_store.get(session)
+        if not data:
+            return {"session_id": session, "messages": []}
+        return {"session_id": session, "messages": data.get("messages", [])}
 
     @app.post("/api/chat/send")
     async def chat_send(req: dict):
-        """Send a message and get AI response. Returns full message objects.
+        """Legacy blocking send (kept for backward compat and CLI use).
+
         Body: {"message": "text", "session": "optional-session-id"}
+        Returns the full assistant reply without streaming.
         """
-        message = req.get("message", "").strip()
+        message = (req.get("message") or "").strip()
         if not message:
             raise HTTPException(400, "message required")
 
-        session_id = req.get("session", "") or str(uuid.uuid4())[:8]
-
-        # Ensure _chat_sessions exists
-        if not hasattr(agent, "_chat_sessions"):
-            agent._chat_sessions = {}
-        if session_id not in agent._chat_sessions:
-            agent._chat_sessions[session_id] = {
-                "id": session_id,
-                "title": message[:40],
-                "messages": [],
-                "created_at": time.time(),
-                "updated_at": time.time(),
-            }
-
-        sess = agent._chat_sessions[session_id]
-        sess["messages"].append({
-            "role": "user",
-            "content": message,
-            "timestamp": int(time.time() * 1000),
-        })
-        sess["updated_at"] = time.time()
-
+        session_id = (req.get("session") or req.get("session_id") or "").strip() \
+            or ("sess_" + uuid.uuid4().hex[:12])
+        # Ensure the session exists
+        if session_store.get(session_id) is None:
+            session_store.create(message, session_id=session_id)
+        # Append user turn
+        await session_store.append_message(session_id, "user", message)
+        # Sync LLM call (no streaming on this path)
         try:
             reply = await agent.chat(message, remember=True)
-            
-            assistant_msg = {
-                "role": "assistant",
-                "content": reply,
-                "timestamp": int(time.time() * 1000),
-            }
-            sess["messages"].append(assistant_msg)
-            sess["updated_at"] = time.time()
-
-            return {
-                "ok": True,
-                "session_id": session_id,
-                "message": assistant_msg,
-                "user_message": {"role": "user", "content": message},
-            }
         except Exception as e:
             logger.error(f"Chat send failed: {e}")
             raise HTTPException(500, str(e))
+        # Append assistant turn
+        await session_store.append_message(
+            session_id, "assistant", reply,
+            provider="(blocking)", model="(blocking)",
+        )
+        # Mirror to legacy in-memory dict (defensive)
+        if not hasattr(agent, "_chat_sessions"):
+            agent._chat_sessions = {}
+        existing = session_store.get(session_id) or {}
+        agent._chat_sessions[session_id] = existing
+        # Return the latest assistant message
+        last = (existing.get("messages") or [{}])[-1]
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "message": last,
+            "user_message": {"role": "user", "content": message},
+        }
 
     @app.delete("/api/chat/sessions/{session_id}")
     async def chat_delete_session(session_id: str):
-        """Delete a chat session."""
-        if hasattr(agent, "_chat_sessions") and session_id in agent._chat_sessions:
-            del agent._chat_sessions[session_id]
-        return {"ok": True}
+        """Delete a chat session (Phase 2: SessionStore-backed)."""
+        ok = await session_store.delete(session_id)
+        # Also clear from legacy in-memory dict if present
+        if hasattr(agent, "_chat_sessions"):
+            agent._chat_sessions.pop(session_id, None)
+        return {"ok": ok, "session_id": session_id, "deleted": ok}
 
     # ---- OpenAI-compatible shim endpoints ----
 
@@ -904,43 +1442,74 @@ def create_app(agent) -> FastAPI:
     async def v1_models():
         """OpenAI-compatible models listing.
 
-        Returns models available through the local llama-server.
+        Resolution order:
+          1. Proxy live to llama-server at LLAMA_PORT (so the UI sees the
+             exact model llama-server has loaded, with its --alias).
+          2. Fall back to scanning hermes/data/models/*.gguf via the GGUF
+             header parser (hermes/gguf.py), exposing the filename stem
+             as the model id (matches llama-server's default alias).
+          3. Empty list (UI handles no-models gracefully).
         """
-        return {
-            "object": "list",
-            "data": [
-                {
-                    "id": "qwen3.5-35b-a3b",
+        # 1) Live proxy to llama-server
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"http://127.0.0.1:{LLAMA_PORT}/v1/models")
+                if r.status_code == 200:
+                    return r.json()
+        except Exception:
+            pass
+
+        # 2) Scan local GGUF files
+        try:
+            from hermes.gguf import list_gguf_models
+            models_dir = HERMES_ROOT / "data" / "models"
+            ggufs = list_gguf_models(models_dir)
+            data = []
+            for g in ggufs:
+                stem = g["name"]
+                if stem.lower().endswith(".gguf"):
+                    stem = stem[:-5]
+                data.append({
+                    "id": stem,
                     "object": "model",
-                    "created": int(time.time()),
+                    "created": int(g["path"].stat().st_mtime) if False else int(time.time()),
                     "owned_by": "local",
-                },
-                {
-                    "id": "qwen2.5-7b-instruct",
-                    "object": "model",
-                    "created": int(time.time()),
-                    "owned_by": "local",
-                },
-                {
-                    "id": "qwen2.5-3b-instruct",
-                    "object": "model",
-                    "created": int(time.time()),
-                    "owned_by": "local",
-                },
-            ],
-        }
+                    # extras the adapter/UI may use
+                    "_size_gb": g.get("size_gb"),
+                    "_arch": g.get("arch"),
+                    "_ctx_len": g.get("ctx_len"),
+                    "_quant": g.get("quant"),
+                    "_filename": g["name"],
+                    "_source": "gguf_scan",
+                })
+            return {"object": "list", "data": data}
+        except Exception as e:
+            logger.warning(f"GGUF scan failed: {e}")
+
+        # 3) Empty
+        return {"object": "list", "data": []}
 
     # ---- Web fallback ----
 
-    @app.get("/", include_in_schema=False)
-    async def root_fallback():
-        return HTMLResponse(HTML_FALLBACK)
-
     @app.get("/health", include_in_schema=False)
     async def root_health_alias():
-        # /health is also handled above as a real JSON endpoint, but keep
-        # this here as a no-op so the route exists in schema.
-        return HTMLResponse(HTML_FALLBACK)
+        # /health is a real JSON endpoint above. If the request reaches here
+        # with Accept: text/html (e.g. someone browsed to it), serve the UI.
+        static_dir = HERMES_ROOT / "hermes" / "static"
+        if not static_dir.is_dir() or not (static_dir / "index.html").is_file():
+            return JSONResponse({"status": "install_missing"}, status_code=503)
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        html = html.replace("__WEBUI_VERSION__", "1.0.0-hermes")
+        html = html.replace("__MAX_UPLOAD_BYTES__", str(50 * 1024 * 1024))
+        html = html.replace("__CSRF_TOKEN_JSON__", "null")
+        return HTMLResponse(html)
+
+    # ---- Static asset mount for Hermes WebUI ----
+    # Mounted AFTER all /api/* and / routes so they take precedence.
+    static_dir = HERMES_ROOT / "hermes" / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="hermes-webui-static")
+        logger.info(f"Mounted Hermes WebUI static at /static from {static_dir}")
 
     return app
 
