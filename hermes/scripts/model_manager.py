@@ -127,45 +127,70 @@ class ModelManager:
             return max(1, min(99, ngl))
 
     def stop_llama_server(self) -> bool:
-        """停止 llama-server"""
-        try:
-            subprocess.run(
+        """Stop llama-server — fire-and-forget like switch-model.bat, then verify."""
+        import subprocess as sp
+
+        # Fire-and-forget: launch kill, don't wait for it
+        for _ in range(3):
+            sp.Popen(
                 ["powershell", "-NoProfile", "-Command",
                  "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | Stop-Process -Force"],
-                capture_output=True,
-                timeout=10
+                stdout=sp.DEVNULL, stderr=sp.DEVNULL,
             )
             time.sleep(2)
-            return True
-        except Exception as e:
-            print(f"[WARN] 停止 llama-server 失败: {e}")
-            return False
+
+            # Check if any still alive
+            result = sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "if (Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"],
+                capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                return True
+
+        # Last resort: taskkill by PID
+        print("[WARN] Stop-Process failed, trying taskkill...")
+        sp.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name LIKE 'llama-server%'\" | ForEach-Object { & taskkill /F /PID $_.ProcessId /T 2>$null }"],
+            capture_output=True, timeout=10
+        )
+        time.sleep(2)
+        return True  # proceed regardless — new start will fail-fast if port in use
 
     def start_llama_server(self, model: ModelInfo, ngl: int) -> bool:
-        """启动 llama-server"""
+        """Start llama-server."""
+        import subprocess as sp
+
+        # Check port availability first — fail fast if old process still running
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            script = self.hermes_root / "bin" / "start-llm-smart.bat"
-            env = os.environ.copy()
-            env["LLAMA_MODEL"] = str(model.path)
-            env["LLAMA_NGL"] = str(ngl)
-
-            subprocess.Popen(
-                ["cmd", "/c", str(script)],
-                env=env,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-            )
-
-            # 等待启动
-            for i in range(60):
-                try:
-                    urllib.request.urlopen(f"http://127.0.0.1:{self.llama_port}/health", timeout=2)
-                    return True
-                except:
-                    time.sleep(2)
+            s.bind(("127.0.0.1", self.llama_port))
+            s.close()
+        except OSError:
+            print(f"[ERROR] Port {self.llama_port} still in use — old process not killed")
             return False
-        except Exception as e:
-            print(f"[ERROR] 启动 llama-server 失败: {e}")
-            return False
+
+        script = self.hermes_root / "bin" / "start-llm-smart.bat"
+        env = os.environ.copy()
+        env["LLAMA_MODEL"] = str(model.path)
+        env["LLAMA_NGL"] = str(ngl)
+
+        sp.Popen(
+            ["cmd", "/c", str(script)],
+            env=env,
+            stdout=sp.DEVNULL, stderr=sp.DEVNULL,
+            creationflags=sp.CREATE_NEW_PROCESS_GROUP
+        )
+
+        for i in range(60):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{self.llama_port}/health", timeout=2)
+                return True
+            except Exception:
+                time.sleep(2)
+        return False
 
     def switch_model(self, model_name: str) -> bool:
         """切换模型"""
@@ -235,7 +260,9 @@ def main():
             manager.list_models()
         elif cmd == "switch" and len(sys.argv) > 2:
             model_name = sys.argv[2]
-            manager.switch_model(model_name)
+            manager.scan_models()  # populate self.models before lookup
+            ok = manager.switch_model(model_name)
+            sys.exit(0 if ok else 1)
         elif cmd == "gpu":
             gpu = manager.get_gpu_info()
             print(json.dumps(gpu, indent=2, ensure_ascii=False))

@@ -1,68 +1,61 @@
 @echo off
 REM ============================================================
 REM Hermes - Stop all running Hermes processes
-REM
-REM Kills:
-REM   - llama-server*.exe (any variant)
-REM   - python -m hermes serve (Hermes FastAPI)
-REM   - gopeed-web (the Python download bridge, optional)
-REM
-REM v2: 2026-06-06 - use wildcard IM match. v1's "llama-server.exe" literal
-REM missed the actual binary name "llama-server-cuda-12.4.exe" and the
-REM model stayed in VRAM after stop.
 REM ============================================================
 setlocal
-
+chcp 65001 >nul
 echo Stopping Hermes processes...
 
-REM ---- 1. Kill ALL llama-server variants (frees VRAM) ----
-REM   The binary is named llama-server-cuda-12.4.exe (not llama-server.exe).
-REM   /T also kills child processes spawned by detached .ps1 launchers.
-echo [1/4] Killing llama-server* (any variant)...
-REM Count first, then kill (so the "no matches" branch is unambiguous).
-powershell -NoProfile -Command ^
-    "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | Measure-Object | ForEach-Object { $_.Count }" ^
-    > "%TEMP%\hermes-stop-count.txt" 2>nul
-set /p LLAMA_COUNT=< "%TEMP%\hermes-stop-count.txt" >nul 2>&1
-del "%TEMP%\hermes-stop-count.txt" 2>nul
-if "%LLAMA_COUNT%"=="0" (
-    echo   (no llama-server* found running)
+REM ---- 1. Graceful WebUI stop (first, so bridge can flush DB) ----
+echo [1/7] Stopping WebUI gracefully...
+if exist "%~dp0webui-new.bat" (
+    call "%~dp0webui-new.bat" stop >nul 2>&1
+    echo   WebUI stopped.
 ) else (
-    powershell -NoProfile -Command ^
-        "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (' + $_.ProcessName + ')'); Stop-Process -Id $_.Id -Force }" ^
-        2>nul
+    echo   webui-new.bat not found, skipping.
 )
 
-REM ---- 2. Kill python processes related to Hermes ----
-echo [2/3] Killing Hermes python processes...
+REM ---- 2. Kill llama-server (GPU process) ----
+echo [2/7] Killing llama-server...
 powershell -NoProfile -Command ^
-    "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" ^
-    >nul 2>&1
-if errorlevel 1 echo   (none found)
+    "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (' + $_.ProcessName + ')'); $_ } | Stop-Process -Force -ErrorAction SilentlyContinue"
+timeout /t 2 /nobreak >nul
 
-REM ---- 3. Kill gopeed-web (Python download bridge) if we own it ----
-echo [2/3] Killing gopeed-web (if Hermes-spawned)...
-REM gopeed-web is a single-exe headless server; only kill it if we started it
-REM (i.e. it's running on 9999 and was spawned by our process tree). For now
-REM just attempt taskkill on the binary name - user can re-launch easily.
+REM ---- 3. Kill Hermes python processes ----
+echo [3/7] Killing Hermes python...
 powershell -NoProfile -Command ^
-    "Get-Process -Name 'gopeed-web' -ErrorAction SilentlyContinue | Where-Object { $_.MainModule.FileName -like '*Hermes Agent*' } | Stop-Process -Force" ^
-    >nul 2>&1
-if errorlevel 1 echo   (none / not owned by Hermes)
+    "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (hermes)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
-REM ---- 4. Kill any leftover "Hermes-*" window (defensive) ----
-echo [3/3] Killing leftover Hermes-* windows...
-REM taskkill prints child-termination info to stdout (not stderr), so we
-REM need >nul 2>&1 to suppress it cleanly.
-taskkill /F /FI "WINDOWTITLE eq Hermes*" /T >nul 2>&1
+REM ---- 4. Kill WebUI node process (fallback if graceful stop failed) ----
+echo [4/7] Killing WebUI node (fallback)...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -match 'hermes-web-ui' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (webui)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
+REM ---- 5. Kill Console + Trace powershell ----
+echo [5/7] Killing Console ^& Trace...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" | Where-Object { $_.CommandLine -match 'hermes-console' -or $_.CommandLine -match 'hermes-trace' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (console/trace)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
+REM ---- 6. Kill Hermes shell + Terminal windows ----
+echo [6/7] Killing shell ^& Terminal windows...
+REM cmd.exe wrappers
+powershell -NoProfile -Command ^
+    "Get-Process -Name 'cmd' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like 'Hermes-*' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (shell: ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }" 2>nul
+REM Windows Terminal (Win11)
+powershell -NoProfile -Command ^
+    "Get-Process -Name 'WindowsTerminal','wt' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (Terminal: ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }" 2>nul
+
+REM ---- 7. Kill gopeed-web ----
+echo [7/8] Killing gopeed-web...
+taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
+
+REM ---- 8. Close browser tabs showing Hermes (by title match on browser process) ----
+echo [8/8] Closing Hermes browser tabs...
+powershell -NoProfile -Command ^
+    "$browsers = @('msedge','chrome','firefox','brave','opera'); foreach ($b in $browsers) { Get-Process -Name $b -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (' + $b + ': ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } }" 2>nul
 
 echo.
 echo ============================================================
 echo   Hermes stopped.
-echo.
-echo   VRAM should release within 1-2 seconds.
-echo   If memory is still high, check nvidia-smi manually.
 echo ============================================================
-timeout /t 2 /nobreak >nul
+timeout /t 1 /nobreak >nul
 endlocal
 exit /b 0

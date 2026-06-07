@@ -27,13 +27,17 @@ import uuid
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import httpx
 
 from hermes.sessions import SessionStore
+from hermes.webui_settings import WebUISettingsStore, get_settings_store
 from hermes.llm import Message, LLMResponse
+from hermes.cron import CronManager
+from hermes.kanban import KanbanStore
+from hermes.workspace import WorkspaceManager
 
 logger = logging.getLogger("hermes.server")
 
@@ -148,15 +152,58 @@ def create_app(agent) -> FastAPI:
     session_store = SessionStore(_sessions_dir)
     logger.info(f"SessionStore at {_sessions_dir}")
 
+    # Persistent WebUI settings store (Phase 4). Lives at
+    # <data_dir>/webui_settings.json. Single global settings file (no
+    # per-user split — Hermes currently has no auth layer). Same base
+    # resolution as the session store above; falls back to
+    # hermes/data/webui_settings.json.
+    if _data_base:
+        _settings_dir = Path(_data_base)
+    else:
+        _settings_dir = HERMES_ROOT / "hermes" / "data"
+    webui_settings_store = get_settings_store(_settings_dir)
+    logger.info(f"WebUISettingsStore at {webui_settings_store._path}")
+
     # In-process SSE stream registry (Phase 1). Lost on restart; the
     # persisted session messages survive, so a refresh after restart
     # can still render whatever was completed before the crash.
     stream_registry = _StreamRegistry()
 
+    # Cron manager (Phase 3: jobs + scheduler + history). Persists to
+    # <data_dir>/crons/jobs.json and runs a 30s background loop that
+    # triggers due jobs.  Initialized on startup so the agent is fully
+    # available (the "task" action calls agent.run_task).
+    _data_base = agent.paths.get("base") if isinstance(agent.paths, dict) else None
+    if _data_base:
+        _crons_dir = Path(_data_base)
+    else:
+        _crons_dir = HERMES_ROOT / "hermes" / "data"
+    cron_manager = CronManager(_crons_dir, agent=agent)
+    logger.info(f"CronManager at {_crons_dir / 'crons'}")
+
+    # Kanban store (Phase 5: boards + tasks). Persists to
+    # <data_dir>/kanban/{boards,tasks,events}.json. The new WebUI's
+    # Kanban panel depends on this for board switching, task CRUD,
+    # status/block transitions, and the read-only event feed used for
+    # 30s polling refreshes (SSE is intentionally not implemented in
+    # this MVP — the UI falls back to /api/kanban/events polling).
+    _data_base = agent.paths.get("base") if isinstance(agent.paths, dict) else None
+    if _data_base:
+        _kanban_dir = Path(_data_base) / "kanban"
+    else:
+        _kanban_dir = HERMES_ROOT / "hermes" / "data" / "kanban"
+    kanban_store = KanbanStore(_kanban_dir)
+    logger.info(f"KanbanStore at {_kanban_dir}")
+
     @app.on_event("startup")
     async def startup():
         await agent.initialize()
+        await cron_manager.start()
         logger.info(f"SessionStore ready: {session_store.stats()}")
+
+    @app.on_event("shutdown")
+    async def shutdown():
+        await cron_manager.stop()
 
     # ---- API endpoints ----
 
@@ -552,29 +599,46 @@ def create_app(agent) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def root_fallback():
-        # Serve the Hermes WebUI (nesquena/hermes-webui) from hermes/static/.
-        # Static dir is required — if missing, the install is broken; 503 it.
-        static_dir = HERMES_ROOT / "hermes" / "static"
-        if not static_dir.is_dir() or not (static_dir / "index.html").is_file():
-            return HTMLResponse(
-                "<h1>Hermes WebUI not installed</h1>"
-                "<p>Expected hermes/static/index.html — reinstall the hermes-webui assets.</p>",
-                status_code=503,
-            )
-        html = (static_dir / "index.html").read_text(encoding="utf-8")
-        # Replace server-side template placeholders the new UI expects.
-        html = html.replace("__WEBUI_VERSION__", "1.0.0-hermes")
-        html = html.replace("__MAX_UPLOAD_BYTES__", str(50 * 1024 * 1024))
-        html = html.replace("__CSRF_TOKEN_JSON__", "null")
-        return HTMLResponse(html)
+        # Redirect to the new Hermes WebUI (hermes-web-ui-main) at :8648.
+        # The old nesquena/hermes-webui embedded in hermes/static/ is deprecated.
+        webui_port = os.environ.get("HERMES_WEBUI_PORT", "8648")
+        return RedirectResponse(f"http://localhost:{webui_port}/", status_code=302)
 
     @app.get("/api/webui/settings")
     async def webui_settings_get():
-        return {}
+        """Return the persisted WebUI settings (full dict, not a wrapper).
+
+        Backed by ``WebUISettingsStore`` — the server is now the source
+        of truth, so user changes survive page reloads and process
+        restarts. On first call (no file yet) the store seeds from
+        ``hermes.webui_settings.DEFAULT_SETTINGS``.
+        """
+        return webui_settings_store.get()
 
     @app.post("/api/webui/settings")
-    async def webui_settings_post(req: dict = None):
-        return {"ok": True, "settings": req or {}}
+    async def webui_settings_post(req: Request):
+        """Merge a partial settings update into the store.
+
+        Body is a plain JSON object (the WebUI's ``/api/settings`` POST
+        format). The store does a shallow merge on top-level keys and a
+        one-level deep merge for nested dicts (``display``, ``agent``,
+        ``memory``, ``session``, ``privacy``) so partial updates like
+        ``{"display": {"streaming": false}}`` don't wipe out sibling
+        fields. Returns the new full settings state.
+        """
+        try:
+            body = await req.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="expected a JSON object body",
+            )
+        new_state = await webui_settings_store.update(body)
+        return {"ok": True, "settings": new_state}
 
     @app.get("/api/webui/profile/active")
     async def webui_profile_active():
@@ -638,18 +702,501 @@ def create_app(agent) -> FastAPI:
         """Catch-all stub for endpoints the new UI calls but we don't implement."""
         return {"ok": True}
 
-    # ---- Catch-all for unknown API endpoints (SPA graceful degradation) ----
+    # =======================================================================
+    # Kanban (Phase 5)
+    # =======================================================================
+    # Powers the new WebUI's Kanban panel. Scope is the MVP: board + task
+    # CRUD, status / block / unblock transitions, bulk status updates,
+    # board switcher, default board bootstrap, and read-only aggregates
+    # (stats, assignees, config, events).  Real-time SSE push and the
+    # dispatcher are intentionally NOT implemented in this MVP — the UI
+    # falls back to 30s polling against ``/api/kanban/events`` and treats
+    # ``/api/kanban/dispatch`` as a noop. See hermes/kanban.py for the
+    # full design notes.
+    #
+    # All routes registered here MUST come before the catch-all at the
+    # end of the file (see the comment near the ``@app.get("/api/{path:path}")``
+    # block for the FastAPI route-ordering gotcha this avoids).
+    # -----------------------------------------------------------------------
 
-    @app.get("/api/{path:path}")
-    @app.post("/api/{path:path}")
-    @app.put("/api/{path:path}")
-    @app.delete("/api/{path:path}")
-    async def api_fallback(path: str, request: Request):
-        """Return safe empty defaults for unimplemented API endpoints."""
-        return JSONResponse(
-            status_code=200,
-            content={"ok": True, "_stub": True, "endpoint": f"/api/{path}"}
+    def _kanban_resolve_board(req) -> str:
+        """Extract the active board id from query params or the request body.
+
+        Order of preference:
+          1. ``?board=<slug>`` query param
+          2. ``?board_id=<slug>`` query param (legacy alias)
+          3. ``board`` / ``board_id`` in the JSON body
+          4. The persisted active-board pointer (set by /api/kanban/boards/{slug}/switch)
+        """
+        qb = req.query_params.get("board") or req.query_params.get("board_id")
+        if qb:
+            return qb
+        # Some endpoints (POST /api/kanban/tasks) only get the board id in the body.
+        # We can't always read the body here (FastAPI may have already consumed it),
+        # so callers should pass ?board= explicitly for POST bodies. The
+        # create/update endpoints below re-resolve from the body when needed.
+        return ""
+
+    @app.get("/api/kanban/boards")
+    async def kanban_list_boards(request: Request):
+        """List all non-archived boards with task counts.
+
+        The new UI uses this to render the board switcher (Default ▾) and
+        its menu of available boards. Shape::
+
+            {
+              "boards": [ {board_id, slug, name, color, icon, task_count, counts, ...}, ... ],
+              "current": "default"     # active board slug
+            }
+        """
+        boards = await kanban_store.list_boards()
+        active = await kanban_store.get_active()
+        return {
+            "boards": boards,
+            "current": (active or {}).get("board_id") if active else "default",
+        }
+
+    @app.post("/api/kanban/boards")
+    async def kanban_create_board(request: Request):
+        """Create a new board. The new WebUI's create-board modal posts
+        ``{slug, name, description, icon, color, switch}``; ``switch=true``
+        is honoured by making the new board the active one (the store does
+        this automatically on create).
+        """
+        req = await request.json() if (request.headers.get("content-type", "").startswith("application/json")) else {}
+        name = (req.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name is required")
+        try:
+            board = await kanban_store.create_board(
+                name=name,
+                slug=req.get("slug", ""),
+                description=req.get("description", ""),
+                icon=req.get("icon", ""),
+                color=req.get("color", ""),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "board": board}
+
+    @app.api_route("/api/kanban/boards/{slug}", methods=["GET", "PUT", "PATCH", "DELETE"])
+    async def kanban_board_by_slug(slug: str, request: Request):
+        """GET / PATCH / PUT update a board; DELETE archives it.
+
+        The new WebUI uses PATCH for renames (matched by registering both
+        methods), and DELETE for archive.
+        """
+        method = request.method.upper()
+        if method == "GET":
+            board = await kanban_store.get_board(slug)
+            if not board:
+                raise HTTPException(404, f"board {slug!r} not found")
+            return board
+        if method in ("PUT", "PATCH"):
+            req = await request.json() if (request.headers.get("content-type", "").startswith("application/json")) else {}
+            board = await kanban_store.update_board(slug, **req)
+            if not board:
+                raise HTTPException(404, f"board {slug!r} not found")
+            return {"ok": True, "board": board}
+        if method == "DELETE":
+            ok = await kanban_store.delete_board(slug)
+            if not ok:
+                raise HTTPException(400, f"cannot archive board {slug!r}")
+            return {"ok": True, "archived": slug}
+        raise HTTPException(405, "method not allowed")
+
+    @app.post("/api/kanban/boards/{slug}/switch")
+    async def kanban_switch_board(slug: str):
+        """Mark ``slug`` as the active board for this agent process.
+
+        The new WebUI's switcher calls this on every board change so the
+        CLI / other tabs share the same pointer (per-process in this MVP —
+        a real multi-process coordination layer is out of scope).
+        """
+        board = await kanban_store.set_active(slug)
+        if not board:
+            raise HTTPException(404, f"board {slug!r} not found")
+        return {"ok": True, "board": board, "current": board.get("board_id")}
+
+    @app.get("/api/kanban/board")
+    async def kanban_get_board_view(
+        request: Request,
+        board: str = "",
+        board_id: str = "",
+        assignee: str = "",
+        tenant: str = "",
+        include_archived: int = 0,
+    ):
+        """Return the bundle the new UI's Kanban panel renders:
+
+            {board_id, name, columns:[{name, tasks:[]}], assignees, tenants, ...}
+
+        The ``include_archived=1`` query string opts into showing
+        archived tasks (off by default).
+        """
+        bid = board or board_id or _kanban_resolve_board(request)
+        view = await kanban_store.board_view(
+            bid,
+            assignee=assignee,
+            tenant=tenant,
+            include_archived=bool(include_archived),
         )
+        return view
+
+    @app.get("/api/kanban/tasks")
+    async def kanban_list_tasks(
+        request: Request,
+        board: str = "",
+        board_id: str = "",
+        status: str = "",
+        assignee: str = "",
+        tenant: str = "",
+        include_archived: int = 0,
+    ):
+        """List tasks for a board, optionally filtered by status / assignee / tenant."""
+        bid = board or board_id or _kanban_resolve_board(request)
+        tasks = await kanban_store.list_tasks(
+            board_id=bid,
+            status=status or None,
+            assignee=assignee or None,
+            tenant=tenant or None,
+            include_archived=bool(include_archived),
+        )
+        return {"tasks": tasks, "total": len(tasks)}
+
+    @app.post("/api/kanban/tasks")
+    async def kanban_create_task(request: Request):
+        """Create a task. Body fields (all optional except ``title``)::
+
+            {
+              "board" | "board_id": str,
+              "title": str,                 # required
+              "body":  str,
+              "status": str,
+              "assignee": str,
+              "tenant":   str,
+              "priority": int,
+              "tags":     [str, ...],
+              "due_at":   float,
+            }
+        """
+        try:
+            req = await request.json()
+        except Exception:
+            req = {}
+        title = (req.get("title") or "").strip()
+        if not title:
+            raise HTTPException(400, "title is required")
+        bid = (req.get("board") or req.get("board_id")
+               or request.query_params.get("board")
+               or request.query_params.get("board_id"))
+        try:
+            task = await kanban_store.create_task(
+                board_id=bid or "",
+                title=title,
+                body=req.get("body", ""),
+                status=req.get("status"),
+                assignee=req.get("assignee"),
+                tenant=req.get("tenant"),
+                priority=req.get("priority", 0),
+                tags=req.get("tags") or [],
+                due_at=req.get("due_at"),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "task": task}
+
+    @app.get("/api/kanban/tasks/{task_id}")
+    async def kanban_get_task(task_id: str, request: Request):
+        """Return a task plus its events / comments / links (links + comments
+        are empty in this MVP — see hermes/kanban.py for the design notes)."""
+        view = await kanban_store.task_view(task_id)
+        if not view:
+            raise HTTPException(404, f"task {task_id!r} not found")
+        return view
+
+    @app.api_route("/api/kanban/tasks/{task_id}", methods=["PUT", "PATCH"])
+    async def kanban_update_task(task_id: str, request: Request):
+        """Update a task. Accepts any subset of: title, body, status, assignee,
+        tenant, priority, tags, due_at, archived.  Unknown fields are ignored."""
+        try:
+            req = await request.json()
+        except Exception:
+            req = {}
+        task = await kanban_store.update_task(task_id, **req)
+        if not task:
+            raise HTTPException(404, f"task {task_id!r} not found")
+        return {"ok": True, "task": task}
+
+    @app.delete("/api/kanban/tasks/{task_id}")
+    async def kanban_delete_task(task_id: str):
+        ok = await kanban_store.delete_task(task_id)
+        if not ok:
+            raise HTTPException(404, f"task {task_id!r} not found")
+        return {"ok": True, "deleted": task_id}
+
+    @app.post("/api/kanban/tasks/{task_id}/block")
+    async def kanban_block_task(task_id: str, request: Request):
+        try:
+            req = await request.json()
+        except Exception:
+            req = {}
+        reason = (req.get("reason") or "").strip()
+        task = await kanban_store.block_task(task_id, reason=reason)
+        if not task:
+            raise HTTPException(404, f"task {task_id!r} not found")
+        return {"ok": True, "task": task, "blocked": task.get("blocked", False)}
+
+    @app.post("/api/kanban/tasks/{task_id}/unblock")
+    async def kanban_unblock_task(task_id: str):
+        task = await kanban_store.unblock_task(task_id)
+        if not task:
+            raise HTTPException(404, f"task {task_id!r} not found")
+        return {"ok": True, "task": task, "blocked": task.get("blocked", False)}
+
+    @app.post("/api/kanban/tasks/bulk")
+    async def kanban_bulk_update_tasks(request: Request):
+        """Apply the same patch to many tasks at once. Body: ``{ids: [...], ...}``."""
+        try:
+            req = await request.json()
+        except Exception:
+            req = {}
+        ids = req.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(400, "ids (non-empty list) is required")
+        # Anything in the body except ``ids`` is treated as a field to update.
+        fields = {k: v for k, v in req.items() if k != "ids"}
+        if not fields:
+            raise HTTPException(400, "no fields to update")
+        return await kanban_store.bulk_update(ids, **fields)
+
+    @app.get("/api/kanban/config")
+    async def kanban_get_config(request: Request, board: str = "", board_id: str = ""):
+        """Column / status / assignee / tenant defaults for the given board.
+
+        The new WebUI uses this to populate the status dropdown in the
+        create-task modal and the column headers on first render.
+        """
+        bid = board or board_id or _kanban_resolve_board(request)
+        return await kanban_store.get_config(bid)
+
+    @app.get("/api/kanban/assignees")
+    async def kanban_list_assignees(request: Request, board: str = "", board_id: str = ""):
+        """All distinct assignee names used by tasks on the given board."""
+        bid = board or board_id or _kanban_resolve_board(request)
+        return {"assignees": await kanban_store.list_assignees(bid)}
+
+    @app.get("/api/kanban/stats")
+    async def kanban_stats(request: Request, board: str = "", board_id: str = ""):
+        """Per-status and per-assignee task counts for the given board."""
+        bid = board or board_id or _kanban_resolve_board(request)
+        return await kanban_store.stats(bid)
+
+    @app.get("/api/kanban/events")
+    async def kanban_events(
+        request: Request,
+        board: str = "",
+        board_id: str = "",
+        since: int = 0,
+        limit: int = 200,
+    ):
+        """Read-only event feed for polling.  The new WebUI's 30s poll loop
+        hits this endpoint with ``since=<last_id>`` to fetch deltas."""
+        bid = board or board_id or _kanban_resolve_board(request)
+        return await kanban_store.list_events(bid, since=since, limit=limit)
+
+    @app.api_route("/api/kanban/dispatch", methods=["GET", "POST"])
+    async def kanban_dispatch(request: Request):
+        """Dispatcher stub — returns an empty ``dispatched`` list.
+
+        The real dispatcher (claim Ready tasks, spawn ``hermes -p <profile>``
+        workers) is intentionally not implemented in this MVP; the UI's
+        Preview / Run dispatcher buttons get a noop response.
+        """
+        return {"dispatched": [], "spawned": [], "skipped_unassigned": [],
+                "skipped_nonspawnable": [], "promoted": 0, "reclaimed": 0,
+                "auto_blocked": [], "timed_out": [], "crashed": []}
+
+    # The following endpoints are NOT implemented in this MVP. The new
+    # WebUI may still call them; we return safe empty defaults so the UI
+    # doesn't break. Document each here so future maintainers know why
+    # these are noops (and not bugs).
+    @app.api_route(
+        "/api/kanban/events/stream",
+        methods=["GET"],
+    )
+    async def kanban_events_stream():
+        """SSE push channel — intentionally a noop in this MVP. The UI
+        detects the lack of hello frames and falls back to 30s polling
+        against ``/api/kanban/events``."""
+        # Return an immediate empty SSE response with a "hello" frame so
+        # the client's EventSource can decide to switch to polling without
+        # retrying forever.
+        from fastapi.responses import StreamingResponse
+        async def _gen():
+            yield ": noop\n\n"  # comment frame
+            yield "data: {\"type\":\"hello\",\"events\":[]}\n\n"
+        return StreamingResponse(_gen(), media_type="text/event-stream")
+
+    @app.api_route(
+        "/api/kanban/tasks/{task_id}/comments",
+        methods=["GET", "POST", "PUT", "DELETE"],
+    )
+    async def kanban_task_comments(task_id: str, request: Request):
+        """Comments — noop in this MVP. The UI's comment form will silently
+        no-op against the empty array we return."""
+        return {"comments": []}
+
+    @app.api_route(
+        "/api/kanban/tasks/{task_id}/log",
+        methods=["GET"],
+    )
+    async def kanban_task_log(task_id: str):
+        """Worker log — noop in this MVP (no dispatcher is running)."""
+        return {"content": "", "tail": 0}
+
+    @app.api_route(
+        "/api/kanban/tasks/{task_id}/worktree/{rest:path}",
+        methods=["GET", "POST", "DELETE"],
+    )
+    async def kanban_task_worktree(task_id: str, rest: str = ""):
+        """Worktree operations — noop in this MVP."""
+        return {"ok": True, "noop": True, "task_id": task_id, "op": rest}
+
+    # ---- Workspace file browser (Phase 4) ---------------------------------
+    # These endpoints power the new WebUI's right-hand "files" panel.
+    # The new UI calls /api/workspaces, /api/list?path=..., /api/file?path=...,
+    # and /api/media?path=... directly. There is no `session_id` concept on
+    # the Hermes side, so the api-adapter strips it before forwarding.
+    #
+    # Trust model (see hermes/workspace.py for the full design):
+    #   - Default workspace is HERMES_ROOT (E:\Hermes Agent).
+    #   - Whitelist of sub-paths is enforced server-side; path traversal
+    #     and out-of-whitelist access both return 403.
+    #   - ``/api/file`` is text-only with a 200KB cap; binary assets go
+    #     through ``/api/media``.
+    workspace_manager = WorkspaceManager()
+
+    @app.get("/api/workspaces")
+    async def api_workspaces_list():
+        """Return the registered workspace list.
+
+        Response shape mirrors the new WebUI's expectation:
+        ``{"workspaces": [{"name", "path", "added_at"}, ...]}``
+        """
+        return {"workspaces": workspace_manager.list_workspaces()}
+
+    @app.post("/api/workspaces/add")
+    async def api_workspaces_add(req: dict = None):
+        """Register a new workspace by absolute path.
+
+        The path is validated to be a directory inside HERMES_ROOT before
+        being added. Out-of-bounds paths return 403; missing paths 404.
+        """
+        req = req or {}
+        path = req.get("path", "")
+        if not path:
+            raise HTTPException(400, "path is required")
+        try:
+            entry = await workspace_manager.add_workspace(path)
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "workspace": entry, "workspaces": workspace_manager.list_workspaces()}
+
+    @app.post("/api/workspaces/remove")
+    async def api_workspaces_remove(req: dict = None):
+        """Remove a workspace by name or path. The default workspace
+        cannot be removed (no-op, returns ``ok: False`` with a hint)."""
+        req = req or {}
+        path = req.get("path", "") or req.get("name", "")
+        if not path:
+            raise HTTPException(400, "path or name is required")
+        try:
+            removed = await workspace_manager.remove_workspace(path)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {
+            "ok": removed,
+            "removed": removed,
+            "workspaces": workspace_manager.list_workspaces(),
+        }
+
+    @app.get("/api/list")
+    async def api_list_dir(path: str = "", workspace: str | None = None):
+        """List a directory under a workspace.
+
+        Query params:
+          - ``path``     (required-ish) — workspace-relative path.
+                                  Empty/``"."`` lists the workspace root.
+          - ``workspace`` (optional)    — name or path of the workspace
+                                  to use. Defaults to the first registered
+                                  workspace (which is ``default`` = HERMES_ROOT).
+
+        Returns: ``{"entries": [{"name", "type", "size", "modified", "path"}, ...]}``
+        """
+        # ``session_id`` is accepted but ignored — the new UI sends it for
+        # compatibility with the Open WebUI contract; we have no session
+        # concept on the Hermes side.
+        try:
+            entries = workspace_manager.list_dir(path, workspace)
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except NotADirectoryError as e:
+            raise HTTPException(400, str(e))
+        return {"entries": entries}
+
+    @app.get("/api/file")
+    async def api_file_read(path: str = "", workspace: str | None = None):
+        """Read a text file (max 200KB). Binary files return 400 with
+        a hint to use ``/api/media`` instead.
+
+        Returns: ``{"path": ..., "content": str, "size": int}``
+        """
+        try:
+            content = workspace_manager.read_file(path, workspace)
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except IsADirectoryError as e:
+            raise HTTPException(400, str(e))
+        except ValueError as e:
+            # Binary or oversized — both are 400 (caller's fault).
+            raise HTTPException(400, str(e))
+        return {"path": path, "content": content, "size": len(content.encode("utf-8"))}
+
+    @app.get("/api/media")
+    async def api_media(path: str = "", workspace: str | None = None):
+        """Serve a binary file (image/audio/etc.) with the appropriate
+        Content-Type. Whitelist and traversal checks still apply.
+        """
+        try:
+            abs_path, mime = workspace_manager.media_path(path, workspace)
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except IsADirectoryError as e:
+            raise HTTPException(400, str(e))
+        return FileResponse(
+            path=str(abs_path),
+            media_type=mime,
+            filename=abs_path.name,
+        )
+
+    # NOTE: The catch-all `/api/{path:path}` route is intentionally registered
+    # LATER (see end of file) so that all specific /api/* routes defined
+    # above (and in the Simple API block below, and in the chat endpoints
+    # further down) match first. FastAPI/Starlette resolves routes in
+    # registration order, so a catch-all registered too early will shadow
+    # any specific endpoint defined after it. This bit us twice: first
+    # with /api/webui/*, then with /api/chat/* — keep the catch-all LAST.
 
     # ---- Simple API (legacy, also used by the basic UI) ----
 
@@ -1393,6 +1940,230 @@ def create_app(agent) -> FastAPI:
 
     # ---- OpenAI-compatible shim endpoints ----
 
+    # ===================================================================
+    # Cron scheduler endpoints (Phase 3: jobs + scheduler + history)
+    # ===================================================================
+    # These endpoints back the "Tasks" / "Cron" tab in the Hermes WebUI.
+    # The UI calls:
+    #   GET    /api/crons                       list
+    #   POST   /api/crons/create                create
+    #   POST   /api/crons/update                update
+    #   POST   /api/crons/delete                delete
+    #   POST   /api/crons/run                   trigger
+    #   POST   /api/crons/pause                 disable
+    #   POST   /api/crons/resume                enable
+    #   GET    /api/crons/status?job_id=...     running? elapsed?
+    #   GET    /api/crons/history?job_id=...    last N runs
+    #   GET    /api/crons/run?job_id=...&filename=...   read run output
+    #   GET    /api/crons/delivery-options      available delivery platforms
+    # All bodies are JSON dicts; missing/empty bodies are tolerated.
+    # -------------------------------------------------------------------
+
+    def _cron_api_job(job):
+        return cron_manager.to_api_job(job)
+
+    @app.get("/api/crons")
+    async def api_crons_list():
+        return {"jobs": [_cron_api_job(j) for j in cron_manager.list_jobs()]}
+
+    @app.post("/api/crons/create")
+    async def api_crons_create(req: dict):
+        # The UI sends {schedule, prompt, deliver, profile, toast_notifications,
+        # name, skills, no_agent, script}.  Map it to a "task" action
+        # by default (the only path the UI knows how to drive).  Tests
+        # and CLI callers can POST {action:{type,payload}} directly to
+        # create shell/webhook jobs.
+        try:
+            cron_expr = (req.get("schedule") or req.get("cron_expr") or "").strip()
+            if not cron_expr:
+                raise HTTPException(400, "schedule (cron expression) required")
+            name = (req.get("name") or "").strip() or cron_expr
+            # Direct action override
+            if isinstance(req.get("action"), dict) and req["action"].get("type"):
+                action = {
+                    "type": req["action"]["type"],
+                    "payload": req["action"].get("payload") or {},
+                }
+            else:
+                # Default to a "task" action that re-uses the agent's planner
+                payload = {
+                    "goal": req.get("prompt") or req.get("script") or "",
+                }
+                # Carry UI hints in the payload for downstream use
+                if req.get("deliver"):
+                    payload["deliver"] = req["deliver"]
+                if req.get("profile"):
+                    payload["profile"] = req["profile"]
+                if req.get("skills"):
+                    payload["skills"] = req["skills"]
+                if req.get("provider"):
+                    payload["provider"] = req["provider"]
+                if req.get("model"):
+                    payload["model"] = req["model"]
+                action = {"type": "task", "payload": payload}
+
+            no_agent = bool(req.get("no_agent"))
+            script = (req.get("script") or "").strip()
+
+            # If the UI tagged this as no_agent, route the script through
+            # a shell action instead.  This is the one place we map the
+            # UI's "no_agent" flag to a different action type.
+            if no_agent and script:
+                action = {"type": "shell", "payload": {"cmd": script}}
+
+            try:
+                job = await cron_manager.create_job(
+                    name=name,
+                    cron_expr=cron_expr,
+                    action=action,
+                    enabled=bool(req.get("enabled", True)),
+                    deliver=req.get("deliver") or "local",
+                    profile=req.get("profile") or "",
+                    toast_notifications=bool(req.get("toast_notifications", True)),
+                    skills=req.get("skills") or [],
+                    no_agent=no_agent,
+                    script=script,
+                    prompt=req.get("prompt") or "",
+                    provider=req.get("provider") or "",
+                    model=req.get("model") or "",
+                )
+            except ValueError as ve:
+                raise HTTPException(400, str(ve))
+            return {"ok": True, "id": job.id, "job": _cron_api_job(job)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("[api/crons/create] failed")
+            raise HTTPException(500, str(e))
+
+    @app.post("/api/crons/update")
+    async def api_crons_update(req: dict):
+        job_id = req.get("job_id") or req.get("id")
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        # Translate UI field "schedule" -> internal "cron_expr" (only if
+        # present in the request).  The UI also sends "no_agent" + "script"
+        # sometimes; if the resulting combo is "no_agent + script", swap
+        # the action type the same way /create does.
+        fields: dict = {}
+        if "schedule" in req or "cron_expr" in req:
+            fields["cron_expr"] = (req.get("schedule") or req.get("cron_expr") or "").strip()
+        for k in ("name", "deliver", "profile", "prompt", "script",
+                  "provider", "model"):
+            if k in req:
+                fields[k] = req.get(k) or ""
+        if "toast_notifications" in req:
+            fields["toast_notifications"] = bool(req["toast_notifications"])
+        if "skills" in req:
+            fields["skills"] = list(req.get("skills") or [])
+        if "enabled" in req:
+            fields["enabled"] = bool(req["enabled"])
+        if "no_agent" in req:
+            fields["no_agent"] = bool(req["no_agent"])
+        # If the update carries an explicit action, prefer that.
+        if isinstance(req.get("action"), dict) and req["action"].get("type"):
+            fields["action"] = {
+                "type": req["action"]["type"],
+                "payload": req["action"].get("payload") or {},
+            }
+        elif fields.get("no_agent") and fields.get("script"):
+            fields["action"] = {"type": "shell", "payload": {"cmd": fields["script"]}}
+        try:
+            job = await cron_manager.update_job(job_id, **fields)
+        except KeyError:
+            raise HTTPException(404, f"job {job_id} not found")
+        except ValueError as ve:
+            raise HTTPException(400, str(ve))
+        return {"ok": True, "job": _cron_api_job(job)}
+
+    @app.post("/api/crons/delete")
+    async def api_crons_delete(req: dict):
+        job_id = req.get("job_id") or req.get("id")
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        ok = await cron_manager.delete_job(job_id)
+        if not ok:
+            raise HTTPException(404, f"job {job_id} not found")
+        return {"ok": True, "job_id": job_id, "deleted": True}
+
+    @app.post("/api/crons/run")
+    async def api_crons_run(req: dict):
+        job_id = req.get("job_id") or req.get("id")
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        result = await cron_manager.trigger_job(job_id)
+        if not result.get("ok"):
+            # 409 if a run is already in flight, 404 if not found
+            if "not found" in (result.get("error") or "").lower():
+                raise HTTPException(404, result.get("error"))
+            raise HTTPException(409, result.get("error"))
+        return result
+
+    @app.post("/api/crons/pause")
+    async def api_crons_pause(req: dict):
+        job_id = req.get("job_id") or req.get("id")
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        try:
+            job = await cron_manager.disable_job(job_id)
+        except KeyError:
+            raise HTTPException(404, f"job {job_id} not found")
+        return {"ok": True, "job_id": job_id, "enabled": False, "state": cron_manager._state_of(job)}
+
+    @app.post("/api/crons/resume")
+    async def api_crons_resume(req: dict):
+        job_id = req.get("job_id") or req.get("id")
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        try:
+            job = await cron_manager.enable_job(job_id)
+        except KeyError:
+            raise HTTPException(404, f"job {job_id} not found")
+        return {"ok": True, "job_id": job_id, "enabled": True, "state": cron_manager._state_of(job)}
+
+    @app.get("/api/crons/status")
+    async def api_crons_status(job_id: str = ""):
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        return cron_manager.status(job_id)
+
+    @app.get("/api/crons/history")
+    async def api_crons_history(job_id: str = "", limit: int = 50):
+        if not job_id:
+            raise HTTPException(400, "job_id required")
+        job = cron_manager.get_job(job_id)
+        if job is None:
+            raise HTTPException(404, f"job {job_id} not found")
+        runs = cron_manager.to_api_runs(job, limit=limit)
+        return {
+            "job_id": job_id,
+            "runs": runs,
+            "total": len(job.history),
+        }
+
+    @app.get("/api/crons/run")
+    async def api_crons_run_content(job_id: str = "", filename: str = ""):
+        if not job_id or not filename:
+            raise HTTPException(400, "job_id and filename required")
+        job = cron_manager.get_job(job_id)
+        if job is None:
+            raise HTTPException(404, f"job {job_id} not found")
+        return cron_manager.to_api_run_content(job, filename)
+
+    @app.get("/api/crons/delivery-options")
+    async def api_crons_delivery_options():
+        # The UI expects {platforms: [{value, label}, ...]}.  We list the
+        # four platforms the spec calls out.  Actual delivery integration
+        # is out of scope for this milestone (see plan "do not" list).
+        return {
+            "platforms": [
+                {"value": "telegram", "label": "Telegram"},
+                {"value": "discord",  "label": "Discord"},
+                {"value": "slack",    "label": "Slack"},
+                {"value": "email",    "label": "Email"},
+            ]
+        }
+
     # Pick the best available embedder: real (sbert) if installed, else hash.
     try:
         from hermes.embeddings import make_embedder
@@ -1494,15 +2265,9 @@ def create_app(agent) -> FastAPI:
     @app.get("/health", include_in_schema=False)
     async def root_health_alias():
         # /health is a real JSON endpoint above. If the request reaches here
-        # with Accept: text/html (e.g. someone browsed to it), serve the UI.
-        static_dir = HERMES_ROOT / "hermes" / "static"
-        if not static_dir.is_dir() or not (static_dir / "index.html").is_file():
-            return JSONResponse({"status": "install_missing"}, status_code=503)
-        html = (static_dir / "index.html").read_text(encoding="utf-8")
-        html = html.replace("__WEBUI_VERSION__", "1.0.0-hermes")
-        html = html.replace("__MAX_UPLOAD_BYTES__", str(50 * 1024 * 1024))
-        html = html.replace("__CSRF_TOKEN_JSON__", "null")
-        return HTMLResponse(html)
+        # with Accept: text/html (e.g. someone browsed to it), redirect to new UI.
+        webui_port = os.environ.get("HERMES_WEBUI_PORT", "8648")
+        return RedirectResponse(f"http://localhost:{webui_port}/", status_code=302)
 
     # ---- Static asset mount for Hermes WebUI ----
     # Mounted AFTER all /api/* and / routes so they take precedence.
@@ -1510,6 +2275,22 @@ def create_app(agent) -> FastAPI:
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="hermes-webui-static")
         logger.info(f"Mounted Hermes WebUI static at /static from {static_dir}")
+
+    # ---- Catch-all for unknown API endpoints (SPA graceful degradation) ----
+    # MUST be the last @app.* decorator in this file. FastAPI/Starlette
+    # resolves routes in registration order; an early catch-all shadows
+    # every specific /api/* route registered after it. See the comment
+    # where the catch-all used to live (around line 640) for history.
+    @app.get("/api/{path:path}")
+    @app.post("/api/{path:path}")
+    @app.put("/api/{path:path}")
+    @app.delete("/api/{path:path}")
+    async def api_fallback(path: str, request: Request):
+        """Return safe empty defaults for unimplemented API endpoints."""
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "_stub": True, "endpoint": f"/api/{path}"}
+        )
 
     return app
 

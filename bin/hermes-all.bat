@@ -1,7 +1,8 @@
 @echo off
 REM ============================================================
-REM Hermes - One-click Launcher v7
-REM llama-server + Hermes API (Chat UI built-in)
+REM Hermes - One-click Launcher v10
+REM llama-server + Hermes API (:7860) + Hermes WebUI (:8648)
+REM Browser opens to new WebUI at :8648
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -9,9 +10,20 @@ chcp 65001 >nul
 set "HERMES_ROOT=%~dp0.."
 set "LLAMA_PORT=8080"
 set "HERMES_PORT=7860"
+set "WEBUI_PORT=8648"
 set "PY=%HERMES_ROOT%\portable-python\python.exe"
 
-REM ---- Smart default model selection (auto-detect VRAM) ----
+REM ---- Kill previous instances ----
+echo [pre] Stopping old instances...
+taskkill /F /IM "llama-server.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-cuda-12.4.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-cuda-11.8.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-vulkan.exe" /T >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
+timeout /t 2 /nobreak >nul
+
+REM ---- Smart default model selection ----
 if not "%HERMES_MODEL%"=="" set "MODEL=%HERMES_MODEL%"
 if not "%~1"=="" set "MODEL=%~1"
 if "%MODEL%"=="" (
@@ -24,63 +36,57 @@ if "%MODEL%"=="" (
     )
     if !VRAM_CHECK! GEQ 8000 (
         set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen2.5 7B (GPU accelerated)
+        echo [auto] VRAM=!VRAM_CHECK!MB - 7B GPU
     ) else if !VRAM_CHECK! GEQ 3000 (
         set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen2.5 3B (GPU accelerated)
+        echo [auto] VRAM=!VRAM_CHECK!MB - 3B GPU
     ) else (
-        set "MODEL=%HERMES_ROOT%\data\models\Qwen1.5-1.8B-Chat-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - using Qwen1.5 1.8B (GPU accelerated)
+        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+        echo [auto] VRAM=!VRAM_CHECK!MB - 3B (min)
     )
 )
 if not exist "%MODEL%" (
-    echo [WARN] configured model not found: %MODEL%
+    echo [WARN] model not found: %MODEL%
     for %%F in ("%HERMES_ROOT%\data\models\*.gguf") do (
         set "MODEL=%%F"
-        echo [auto] falling back to: %%~nxf
+        echo [auto] fallback: %%~nxf
         goto :model_found
     )
-    echo [ERROR] No .gguf model found in data\models\
+    echo [ERROR] No .gguf model in data\models\
     pause
     exit /b 1
 )
 :model_found
 
 REM ---- Auto-pick llama-server binary ----
-set "LLAMA_BIN=%HERMES_ROOT%\runtime\llama-server.exe"
 set "GPU_MODE=CPU"
-if exist "%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe" (
-    set "LLAMA_BIN=%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe"
-    set "GPU_MODE=CUDA 12.4"
-) else if exist "%HERMES_ROOT%\runtime\llama-server-cuda-11.8.exe" (
-    set "LLAMA_BIN=%HERMES_ROOT%\runtime\llama-server-cuda-11.8.exe"
-    set "GPU_MODE=CUDA 11.8"
-) else if exist "%HERMES_ROOT%\runtime\llama-server-vulkan.exe" (
-    set "LLAMA_BIN=%HERMES_ROOT%\runtime\llama-server-vulkan.exe"
-    set "GPU_MODE=Vulkan"
-)
+if exist "%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe" set "GPU_MODE=CUDA 12.4"
+if exist "%HERMES_ROOT%\runtime\llama-server-cuda-11.8.exe" set "GPU_MODE=CUDA 11.8"
+if exist "%HERMES_ROOT%\runtime\llama-server-vulkan.exe" set "GPU_MODE=Vulkan"
 
 echo ============================================================
 echo   Hermes - All-in-One Launcher
 echo.
-echo   Chat:   http://localhost:%HERMES_PORT%/chat
-echo   API:    http://localhost:%HERMES_PORT%/status
-echo   LLM:    http://127.0.0.1:%LLAMA_PORT%  (llama-server)
-echo   GPU:    %GPU_MODE%
+echo   New WebUI: http://localhost:%WEBUI_PORT%/
+echo   API:       http://localhost:%HERMES_PORT%/api/status
+echo   LLM:       http://127.0.0.1:%LLAMA_PORT%  (llama-server)
+echo   Console:   bin\hermes-console.bat
+echo   Trace:     bin\hermes-trace.bat
+echo   GPU:       %GPU_MODE%
 echo ============================================================
 echo.
 
 REM ---- Step 0: Environment check ----
-echo [0/3] Environment check...
+echo [0/6] Environment check...
 call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
 
 REM ---- Step 1: Start llama-server ----
-echo [1/3] Starting llama-server (smart NGL)...
+echo [1/6] Starting llama-server (smart NGL)...
 set "LLAMA_MODEL=%MODEL%"
 start "Hermes-LLM" /MIN cmd /c ""%HERMES_ROOT%\bin\start-llm-smart.bat""
 
-REM ---- Step 2: Wait for llama-server ----
-echo [2/3] Waiting for llama-server...
+REM ---- Wait for llama-server ----
+echo [2/6] Waiting for llama-server...
 set /a "WAITED=0"
 :wait_llm
 timeout /t 3 /nobreak >nul
@@ -95,9 +101,9 @@ if %WAITED% EQU 30 echo   still loading...
 if %WAITED% EQU 60 echo   still loading...
 goto :wait_llm
 
-REM ---- Step 3: Start Hermes API + Chat ----
+REM ---- Step 2: Start Hermes API ----
 :start_hermes
-echo [3/3] Starting Hermes API + Chat...
+echo [3/6] Starting Hermes API...
 start "Hermes-API" /MIN "%PY%" -m hermes serve --host 127.0.0.1 --port %HERMES_PORT%
 set /a "WAITED=0"
 :wait_hermes
@@ -105,25 +111,55 @@ timeout /t 2 /nobreak >nul
 set /a "WAITED+=2"
 powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:%HERMES_PORT%/healthz' -UseBasicParsing -TimeoutSec 2).StatusCode } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 (
-    echo   Hermes ready in %WAITED%s
-    goto :done
+    echo   Hermes API ready in %WAITED%s
+    goto :start_webui
 )
-if %WAITED% GEQ 20 goto :done
+if %WAITED% GEQ 60 goto :start_webui
+if %WAITED% EQU 30 echo   still loading...
 goto :wait_hermes
+
+REM ---- Step 3: Start new Hermes WebUI (:8648) ----
+:start_webui
+echo [4/6] Starting new Hermes WebUI at :%WEBUI_PORT%...
+set "HERMES_WEB_UI_NO_BROWSER=1"
+call "%HERMES_ROOT%\bin\webui-new.bat" start
+set /a "WAITED=0"
+:wait_webui
+timeout /t 2 /nobreak >nul
+set /a "WAITED+=2"
+powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:%WEBUI_PORT%/health' -UseBasicParsing -TimeoutSec 2).StatusCode } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (
+    echo   WebUI ready in %WAITED%s
+    goto :start_console
+)
+if %WAITED% GEQ 30 goto :start_console
+goto :wait_webui
+
+REM ---- Step 4: Start Hermes Console (persistent model management) ----
+:start_console
+echo [5/6] Starting Hermes Console...
+start "Hermes-Console" "%HERMES_ROOT%\bin\hermes-console.bat"
+
+REM ---- Step 5: Start Hermes Trace (real-time log viewer) ----
+echo [6/6] Starting Hermes Trace...
+start "Hermes-Trace" "%HERMES_ROOT%\bin\hermes-trace.bat"
 
 :done
 echo.
 echo ============================================================
 echo   Ready!
 echo.
-echo   Chat:    http://localhost:%HERMES_PORT%/chat
-echo   Manager: http://localhost:%HERMES_PORT%/launcher
+echo   WebUI:  http://localhost:%WEBUI_PORT%/
+echo   API:    http://localhost:%HERMES_PORT%/api/status
 echo.
-echo   Switch model: bin\switch-model.bat ^<name^>.gguf
-echo   Stop all:     bin\hermes-stop.bat
+echo   Stop:   bin\hermes-stop.bat
 echo ============================================================
 echo.
-start "" "http://localhost:%HERMES_PORT%/chat"
+
+REM ---- Open browser to new WebUI ----
+echo [*] Opening http://localhost:%WEBUI_PORT%/...
+powershell -NoProfile -Command "[System.Diagnostics.Process]::Start('http://localhost:%WEBUI_PORT%/')" >nul 2>&1
+if errorlevel 1 explorer "http://localhost:%WEBUI_PORT%/" 2>nul
 
 endlocal
 exit /b 0

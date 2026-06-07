@@ -1,10 +1,30 @@
 /* ========================================================================
- * Hermes WebUI -> Hermes FastAPI API Adapter (v0.2 - real SSE)
+ * Hermes WebUI -> Hermes FastAPI API Adapter (v0.5 - kanban + workspaces)
  *
  * Bridges nesquena/hermes-webui's API expectations to our local
- * /api/chat/* + /v1/* endpoints. Loaded synchronously in <head>
- * before pwa-startup.js / boot.js so window.fetch is wrapped before
- * any other module uses it.
+ * /api/chat/* + /v1/* + /api/kanban/* + /api/* endpoints. Loaded
+ * synchronously in <head> before pwa-startup.js / boot.js so
+ * window.fetch is wrapped before any other module uses it.
+ *
+ * v0.5 changes (Phase 5 of the kanban plan):
+ *  - **Kanban passthrough**. The /api/kanban/* catch-all that used to
+ *    return {ok: true, data: []} from /api/webui/noop now forwards to
+ *    the real /api/kanban/* endpoints implemented in hermes/kanban.py
+ *    (boards + tasks + config/assignees/stats/events/dispatch). SSE
+ *    /api/kanban/events/stream is also forwarded to the server's
+ *    noop-SSE handler (returns an empty hello frame so the client
+ *    falls back to polling).
+ *  - Specific high-traffic kanban routes get explicit entries above the
+ *    catch-all (board list, board CRUD, task CRUD, block/unblock, bulk)
+ *    so they show up clearly in the table and we can drop in per-route
+ *    transform logic later without touching the catch-all.
+ *
+ * v0.4 changes (Phase 4 of the workspace-browser plan):
+ *  - Workspace + file browser: /api/workspaces, /api/list, /api/file,
+ *    /api/media all forward to the real server endpoints. Added a
+ *    `dropParams` mechanism so /api/list?session_id=... (sent by the
+ *    upstream WebUI for compat) doesn't pollute the server's file
+ *    resolver.
  *
  * v0.2 changes (Phase 1+2 of the streaming-and-sessions plan):
  *  - **Removed** the EventSource mock. The new server exposes
@@ -28,7 +48,7 @@
   if (window.__hermesAdapterLoaded) return;
   window.__hermesAdapterLoaded = true;
 
-  console.info('[hermes-adapter] loading API adapter v0.2 (real SSE)');
+  console.info('[hermes-adapter] loading API adapter v0.5 (kanban + workspaces)');
 
   // ---- helpers -----------------------------------------------------------
 
@@ -63,48 +83,19 @@
   // transform: optional (path, method, data) -> response-shaped data
 
   const ROUTES = [
-    // === Settings (no real persistence; return defaults; new UI uses
-    //     these to populate theme / skin / streaming toggles) ===
+    // === Settings (server-persisted; pure passthrough to /api/webui/settings) ===
+    // The server is the source of truth. The WebUI calls
+    // /api/settings (its native shape) and we just translate the URL —
+    // the response body comes from hermes.webui_settings store verbatim.
     { match: (p) => p === '/api/settings', method: 'GET',
       url: '/api/webui/settings', method2: 'GET',
-      transform: () => ({
-        theme: localStorage.getItem('hermes-theme') || 'dark',
-        skin: localStorage.getItem('hermes-skin') || 'default',
-        language: localStorage.getItem('hermes-lang') || 'zh',
-        send_key: 'enter',
-        show_token_usage: true,
-        show_thinking: true,
-        show_tps: false,
-        show_cli_sessions: false,
-        show_quota_chip: false,
-        hide_empty_state_suggestions: false,
-        fade_text_effect: false,
-        sound_enabled: false,
-        notifications_enabled: false,
-        whats_new_summary_enabled: false,
-        whitelisted_browsers: [],
-        session_endless_scroll_enabled: false,
-        bot_name: 'Hermes',
-        simplified_tool_calling: true,
-        terminal_auto_expand_on_output: false,
-        session_jump_buttons_enabled: false,
-        sidebar_density: 'compact',
-        pinned_sessions_limit: 3,
-        busy_input_mode: 'queue',
-        onboarding_completed: true,
-        check_for_updates: false,
-        show_reasoning: true,
-        reasoning_effort: 'medium',
-        display: { show_reasoning: true, show_cost: false, compact_mode: false, streaming: true },
-        agent: { max_turns: 50, timeout: 300, tools_required: false },
-        memory: { enabled: true, max_chars: 4000 },
-        session: { idle_timeout: 1800, reset_schedule: null },
-        privacy: { pii_redaction: false },
-      }) },
+      transform: (data) => data,
+      passthrough: true },
 
     { match: (p) => p === '/api/settings', method: 'POST',
       url: '/api/webui/settings', method2: 'POST',
-      transform: (data) => ({ ok: true, settings: data || {} }) },
+      transform: (data) => data,
+      passthrough: true },
 
     // === Models (OpenAI-compat -> new UI shape) ===
     { match: (p) => p === '/api/models', method: 'GET',
@@ -293,12 +284,20 @@
     { match: (p) => p === '/api/system/health' || p === '/api/health/agent', method: 'GET',
       url: '/health', method2: 'GET' },
 
-    // === Workspaces (no equivalent; return empty) ===
+    // === Workspaces (v0.4: real server endpoint, no longer a stub) ===
+    // The new WebUI's right-hand file panel calls these to list, add,
+    // and remove workspaces. The server (hermes.workspace.WorkspaceManager)
+    // is the source of truth; we just pass the call through.
     { match: (p) => p === '/api/workspaces', method: 'GET',
-      url: '/api/webui/workspaces', method2: 'GET',
-      transform: () => ({ workspaces: [] }) },
-    { match: (p) => ['/api/workspaces/add','/api/workspaces/remove','/api/workspaces/rename',
-                     '/api/workspaces/reorder','/api/workspaces/suggest'].includes(p), method: 'POST',
+      url: '/api/workspaces', method2: 'GET', passthrough: true },
+    { match: (p) => p === '/api/workspaces/add', method: 'POST',
+      url: '/api/workspaces/add', method2: 'POST', passthrough: true },
+    { match: (p) => p === '/api/workspaces/remove', method: 'POST',
+      url: '/api/workspaces/remove', method2: 'POST', passthrough: true },
+    // Workspace mutation we don't implement yet — keep them as noops
+    // so the UI doesn't error if a future server adds them.
+    { match: (p) => ['/api/workspaces/rename','/api/workspaces/reorder',
+                     '/api/workspaces/suggest'].includes(p), method: 'POST',
       url: '/api/webui/noop', method2: 'POST',
       transform: (data) => ({ ok: true, data: data || {} }) },
 
@@ -321,19 +320,67 @@
 
     // === Crons, Kanban, Wiki, Logs, Goals, Personalities, Commands,
     //     Reasoning, Provider quota, Updates, Insights, Notes ===
-    //     All return safe empty defaults.
+    //     Crons has a real backend now (hermes.cron); pass it through.
     { match: (p) => p === '/api/crons', method: 'GET',
-      url: '/api/webui/noop', method2: 'GET',
-      transform: () => ({ jobs: [] }) },
+      url: '/api/crons', method2: 'GET',
+      transform: (d) => d && typeof d === 'object' ? d : { jobs: [] } },
     { match: (p) => p.startsWith('/api/crons/'), method: 'POST',
-      url: '/api/webui/noop', method2: 'POST',
-      transform: () => ({ ok: true }) },
+      url: null, method2: 'POST',
+      passthrough: true },
+    { match: (p) => p.startsWith('/api/crons/'), method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    // === Kanban (v0.5: passthrough to real /api/kanban/* endpoints) ===
+    // The server in hermes/kanban.py implements board + task CRUD, status
+    // transitions, block/unblock, bulk updates, board switcher, default
+    // board bootstrap, and read-only aggregates (stats / assignees /
+    // config / events). The paths in the new WebUI line up 1:1 with what
+    // the server exposes, so we forward verbatim. SSE
+    // /api/kanban/events/stream is also a passthrough — the server's
+    // handler returns an empty "hello" frame so the UI's EventSource
+    // falls back to 30s polling against /api/kanban/events.
     { match: (p) => p === '/api/kanban/boards', method: 'GET',
-      url: '/api/webui/noop', method2: 'GET',
-      transform: () => ({ boards: [] }) },
-    { match: (p) => p.startsWith('/api/kanban/'), method: '*',
-      url: '/api/webui/noop', method2: 'GET',
-      transform: () => ({ ok: true, data: [] }) },
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/boards', method: 'POST',
+      url: null, method2: 'POST',
+      passthrough: true },
+    { match: (p) => p.startsWith('/api/kanban/boards/'), method: '*',
+      url: null, method2: null,
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/board', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/tasks', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/tasks', method: 'POST',
+      url: null, method2: 'POST',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/tasks/bulk', method: 'POST',
+      url: null, method2: 'POST',
+      passthrough: true },
+    { match: (p) => p.startsWith('/api/kanban/tasks/'), method: '*',
+      url: null, method2: null,
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/config', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/assignees', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/stats', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/events', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/events/stream', method: 'GET',
+      url: null, method2: 'GET',
+      passthrough: true },
+    { match: (p) => p === '/api/kanban/dispatch', method: '*',
+      url: null, method2: null,
+      passthrough: true },
     { match: (p) => p === '/api/wiki/status', method: 'GET',
       url: '/api/webui/noop', method2: 'GET',
       transform: () => ({ status: 'disabled' }) },
@@ -391,12 +438,24 @@
     { match: (p) => ['/api/skills/toggle','/api/skills/save','/api/skills/delete'].includes(p), method: 'POST',
       url: '/api/webui/noop', method2: 'POST',
       transform: () => ({ ok: true }) },
-    { match: (p) => p === '/api/file' || p === '/api/list' || p === '/api/git-info', method: 'GET',
+    // === File browser (v0.4: real server endpoints) ===
+    // The new UI calls these with `?session_id=X&path=Y`. Hermes has no
+    // session concept, so we drop `session_id` and forward `path` as-is.
+    // ``dropParams`` is a v0.4 addition to the route spec — see the
+    // fetch wrapper below.
+    { match: (p) => p === '/api/list', method: 'GET',
+      url: '/api/list', method2: 'GET', passthrough: true,
+      dropParams: ['session_id'] },
+    { match: (p) => p === '/api/file', method: 'GET',
+      url: '/api/file', method2: 'GET', passthrough: true,
+      dropParams: ['session_id'] },
+    { match: (p) => p === '/api/media', method: 'GET',
+      url: '/api/media', method2: 'GET', passthrough: true,
+      dropParams: ['session_id'] },
+    // Git info: still not implemented (out of scope per the plan).
+    { match: (p) => p === '/api/git-info', method: 'GET',
       url: '/api/webui/noop', method2: 'GET',
       transform: () => ({ entries: [], files: [] }) },
-    { match: (p) => p === '/api/media', method: 'GET',
-      url: '/api/webui/noop', method2: 'GET',
-      transform: () => emptyResponse(404) },
     { match: (p) => p.startsWith('/api/file/') || p.startsWith('/api/folder/') ||
                      p === '/api/workspace/upload' || p === '/api/client-events/log', method: 'POST',
       url: '/api/webui/noop', method2: 'POST',
@@ -437,10 +496,25 @@
     }
 
     // Build translated request
-    const newUrl = new URL(route.url, location.origin);
-    // Carry over query string except for translated ones
-    for (const [k, v] of u.searchParams) {
-      if (!newUrl.searchParams.has(k)) newUrl.searchParams.set(k, v);
+    let newUrl;
+    if (route.url) {
+      newUrl = new URL(route.url, location.origin);
+      // Carry over query string except for translated ones
+      for (const [k, v] of u.searchParams) {
+        if (!newUrl.searchParams.has(k)) newUrl.searchParams.set(k, v);
+      }
+    } else {
+      // passthrough: use the original URL verbatim
+      newUrl = u;
+    }
+
+    // Drop named query params (v0.4). The new UI's file-browser calls
+    // include `session_id=X&path=Y`; we have no session concept, so
+    // stripping session_id keeps the server's whitelist checks clean.
+    if (route.dropParams && route.dropParams.length) {
+      for (const k of route.dropParams) {
+        newUrl.searchParams.delete(k);
+      }
     }
 
     const newInit = Object.assign({}, init, { method: route.method2 || method });

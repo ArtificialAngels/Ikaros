@@ -9,30 +9,35 @@
 ## 1. What This Is
 
 A **portable, USB-drive-deployable Hermes Agent** — a hybrid LLM (cloud + local)
-with a modern chat UI, designed to run on any Windows PC with zero install.
+with a modern three-panel chat UI, designed to run on any Windows PC with zero install.
 
-**One-click UX:** `bin\hermes-all.bat` → browser opens → chat ready.
+**One-click UX:** `bin\hermes-all.bat` → browser opens to `http://localhost:7860/` → chat ready.
 
 ---
 
 ## 2. Architecture
 
-Three processes, each with a single responsibility:
+Two processes, each with a single responsibility:
 
 | Port  | Process                | Role                                                           |
 |-------|------------------------|----------------------------------------------------------------|
 | :8080 | **llama-server**       | LLM engine. OpenAI-compatible HTTP API. Internal — not exposed. |
-| :7860 | **Hermes FastAPI**     | Memory + knowledge base + RAG embeddings shim.                  |
-| :7870 | **Open WebUI**         | Main chat UI (Vue 3). Browser opens here.                      |
+| :7860 | **Hermes FastAPI**     | Memory + knowledge base + RAG embeddings shim + **serves the Hermes WebUI** (nesquena/hermes-webui, three-panel dark UI). Browser opens here. |
 
 **Data flow:**
 ```
-Browser → :7870 Open WebUI → :8080 llama-server (chat)
-                          → :7860 Hermes FastAPI (embeddings/RAG)
+Browser → :7860 Hermes WebUI (FastAPI serves static/) → :8080 llama-server (chat)
+                                                     → :7860 Hermes FastAPI (embeddings/RAG /api/*)
 ```
 
-llama-server only loads **one model at a time** (Open WebUI shows whichever
-model llama-server exposes via `--alias`). See §6 for multi-model options.
+The WebUI is a static SPA under `hermes/static/`. The client-side `api-adapter.js`
+translates the upstream WebUI's expected endpoints onto our `/api/chat/*` + `/v1/*`
+backends so we don't need to fork the upstream Python BFF.
+
+llama-server only loads **one model at a time**; the WebUI shows whichever
+model llama-server exposes via `--alias`). When llama-server is down, `/v1/models`
+falls back to scanning `data/models/*.gguf` via `hermes/gguf.py`. See §6 for
+multi-model options.
 
 ---
 
@@ -54,13 +59,31 @@ E:\Hermes Agent\
 │   ├── memory.py                 # JSONL memory store + embedder
 │   ├── knowledge.py              # markdown KB with chunking
 │   ├── skills.py                 # skill registry (time/calc/echo/...)
-│   ├── server.py                 # FastAPI: /v1/embeddings, /v1/models, /api/*
+│   ├── server.py                 # FastAPI: /v1/embeddings, /v1/models, /api/*, /static/
+│   ├── sessions.py               # ★ SessionStore (NEW 2026-06-07) — disk-backed chat sessions
+│   ├── workspace.py              # ★ WorkspaceManager (NEW 2026-06-07) — whitelisted file browser
+│   ├── webui_settings.py         # ★ WebUISettingsStore (NEW 2026-06-07) — atomic JSON settings
+│   ├── kanban.py                 # ★ KanbanStore (NEW 2026-06-07) — boards/tasks/events
+│   ├── cron.py                   # ★ CronManager (NEW 2026-06-07) — scheduled jobs (30s loop)
+│   ├── static\                   # ★ Hermes WebUI (nesquena/hermes-webui) — 3.5MB
+│   │   ├── index.html            # three-panel dark UI
+│   │   ├── style.css             # 16 skins, light/dark
+│   │   ├── ui.js / boot.js / sessions.js / messages.js / panels.js / ...
+│   │   ├── api-adapter.js        # OUR adapter: translates upstream endpoints to our /api/*
+│   │   └── vendor\               # streaming-markdown, KaTeX, js-yaml (no build step)
+│   ├── gguf.py                   # GGUF v2/v3 header parser (used by /v1/models + CLI)
+│   ├── embeddings.py             # SBERT / hash embedder
 │   ├── gpu.py                    # GPU detection (nvidia-smi / Vulkan / WMI)
-│   ├── web_dist\                 # legacy React admin SPA (deprecated, see §10)
+│   ├── doctor.py                 # bin/hermes-doctor.bat
+│   ├── gopeed_client.py          # gopeed-web API
+│   ├── planner.py                # autonomous task execution
 │   └── scripts\                  # utility scripts (production)
-│       ├── bootstrap_openwebui.py   # auto signup + add model on first run
 │       ├── import_ollama_blobs.py   # Ollama blob → GGUF converter
-│       └── reset_password.py        # admin password reset
+│       ├── install_skill.py         # skill marketplace
+│       ├── rebuild_kb.py            # KB re-ingest
+│       ├── model_manager.py         # CLI for /api/launcher
+│       ├── model_launcher_gui.py    # GUI for /api/launcher
+│       └── gpu_detector.py          # first-run GPU detection
 ├── portable-python\              # embedded Python 3.12.10 + pip deps
 │   └── python.exe
 ├── runtime\                      # llama.cpp binaries
@@ -69,32 +92,42 @@ E:\Hermes Agent\
 │   ├── llama-server-cuda-11.8.exe  # older NVIDIA (GTX 900 / old driver)
 │   ├── llama-server-vulkan.exe   # AMD / Intel / NVIDIA fallback
 │   ├── aria2c.exe                # multi-thread downloader
+│   ├── gopeed-web.exe            # download bridge (Python talks HTTP to it)
 │   └── *.dll                     # runtime DLLs (cudart, vulkan, etc.)
 ├── data\
 │   ├── models\                   # GGUF files
-│   │   ├── Qwen2.5-3B-Instruct-Q4_K_M.gguf   (default)
+│   │   ├── Qwen2.5-3B-Instruct-Q4_K_M.gguf
 │   │   ├── Qwen2.5-7B-Instruct-Q4_K_M.gguf
 │   │   ├── Qwen1.5-1.8B-Chat-Q4_K_M.gguf
-│   │   └── f5ee307a2982.gguf     (Ollama-imported qwen3, 22.8GB)
+│   │   ├── Qwen3.5-35B-A3B-Q4_K_M.gguf  (20.5GB, MoE)
+│   │   └── f5ee307a2982.gguf            # Ollama-imported qwen3, 22.8GB
 │   ├── memory\                   # JSONL memory store
-│   ├── knowledge\                # markdown KB source
-│   ├── openwebui\                # Open WebUI SQLite DB + .webui_secret_key
-│   └── logs\                     # hermes.log only (cleaned periodically)
+│   ├── knowledge\                # markdown KB source + index.jsonl
+│   ├── skills\                   # skill registry + custom skills
+│   ├── logs\                     # hermes.log + bootstrap.log
+│   ├── sessions\                 # ★ NEW 2026-06-07 — one JSON file per chat session
+│   ├── kanban\                   # ★ NEW 2026-06-07 — boards.json + tasks.json + events.json
+│   ├── crons\                    # ★ NEW 2026-06-07 — jobs.json (croniter-scheduled)
+│   └── webui_settings.json       # ★ NEW 2026-06-07 — single-file atomic webui prefs
 ├── bin\                          # user-facing launchers (CRLF line endings!)
-│   ├── hermes-all.bat            # ★ MAIN: one-click everything
+│   ├── hermes-all.bat            # ★ MAIN: one-click everything (now opens /)
 │   ├── hermes.bat                # CLI agent (`hermes chat`)
-│   ├── hermes-web.bat            # just Hermes FastAPI (legacy)
 │   ├── hermes-stop.bat           # kill all Hermes processes
-│   ├── start-llm.bat             # just llama-server (CPU default)
+│   ├── hermes-doctor.bat         # 8-section health report
+│   ├── hermes-firstrun.bat       # first-run GPU detection
+│   ├── hermes-models.py          # CLI model manager (list/switch/download)
+│   ├── hermes-task.bat           # `hermes task "do X"`
 │   ├── start-llm-smart.bat       # ★ llama-server with auto NGL
-│   ├── start-openwebui.bat       # just Open WebUI
+│   ├── start-llm.ps1             # PowerShell variant
+│   ├── switch-model.bat          # hot-swap default model
+│   ├── model-manager.bat         # quick launcher for model_manager.py
+│   ├── install-embeddings.bat    # install sentence-transformers + model
 │   ├── setup-runtime.bat         # download ALL llama.cpp variants + aria2
-│   └── setup-memos.bat           # download memos binary (Linux-only currently)
+│   └── gpu-detect.bat            # one-shot GPU probe
 ├── tests\                        # functional test scripts (kept clean)
-│   ├── test_hermes.py            # 14-test E2E suite (mock LLM, no GPU needed)
+│   ├── test_hermes.py            # 17-test E2E suite (mock LLM, no GPU needed)
 │   └── verify_smart_ngl.py       # verify NGL calculation logic
 ├── scripts\                      # legacy one-off scripts
-├── docker\                       # Docker configs
 └── requirements.txt
 ```
 
@@ -104,9 +137,13 @@ E:\Hermes Agent\
 
 ### hermes/server.py
 - FastAPI app
-- Key endpoints: `/health` (JSON status), `/v1/embeddings`, `/v1/models`, `/api/chat`,
-  `/api/sessions`, `/api/memory`, `/api/skills`, `/api/task` (autonomous plan-execute)
-- **Hash-based embeddings** at `/v1/embeddings` — used by Open WebUI RAG
+- Serves the Hermes WebUI (nesquena/hermes-webui) from `hermes/static/` at `/` and `/static/`
+- Key endpoints: `/health` (JSON status), `/v1/embeddings`, `/v1/models` (live-proxied from
+  llama-server, falls back to `data/models/*.gguf` scan via `hermes/gguf.py`),
+  `/api/chat/*`, `/api/sessions`, `/api/memory`, `/api/skills`, `/api/task` (autonomous plan-execute),
+  `/api/webui/*` (stubs for the upstream WebUI's ~25 expected endpoints, all answered by
+  `static/api-adapter.js` client-side)
+- **Hash-based embeddings** at `/v1/embeddings` — used by WebUI RAG
   (search quality is poor but it boots without a real embedding model)
 - **Autonomous task API** at `/api/task` — POST `{goal, wait}` triggers the Planner
   (sync returns full result, async returns `task_id` to poll at `GET /api/task/{id}`)
@@ -117,12 +154,17 @@ E:\Hermes Agent\
   OpenAI-compat), `AnthropicProvider`, `MockProvider`
 - MiniMax config in `hermes.yaml` is `provider: openai` with MiniMax base URL
 
-### Open WebUI (0.9.6)
-- Sits at :7870
-- Talks to llama-server at :8080 (chat) + Hermes at :7860 (embeddings)
-- **First-run bootstrap** auto-creates admin + adds default model
-  (see `hermes/scripts/bootstrap_openwebui.py`)
-- Admin creds (default): `admin@hermes.local` / `hermes123`
+### Hermes WebUI (nesquena/hermes-webui)
+- Three-panel dark UI: left session list / center chat / right workspace
+- Served at `/` by FastAPI from `hermes/static/` (no Node.js, no build step)
+- 16 theme skins, light/dark, streaming-markdown, KaTeX math, Prism syntax highlighting
+- **api-adapter.js** (in `hermes/static/`) wraps `window.fetch` + `EventSource` to
+  translate the upstream WebUI's expected endpoints onto our `/api/chat/*` + `/v1/*`
+  backends. Missing endpoints (workspaces, kanban, crons, etc.) return sane empty
+  defaults so the UI continues to boot. See `static/api-adapter.js` for the full route
+  table (~25 mapped + ~30 no-op).
+- Single-model dropdown reflects live `/v1/models`: proxies llama-server when up,
+  scans `data/models/*.gguf` when down
 
 ### llama-server (b9503)
 - `--alias qwen2.5-3b-instruct` makes the model id clean (default
@@ -130,22 +172,88 @@ E:\Hermes Agent\
 - `--n-gpu-layers N` controls GPU offload: 0=CPU, 99=full GPU, N=hybrid
 - See `bin\start-llm-smart.bat` for auto NGL calculation
 
+### hermes/sessions.py (NEW 2026-06-07)
+- `SessionStore` — disk-backed chat session store. One JSON file per session
+  at `hermes/data/sessions/<session_id>.json`. Atomic writes (tempfile + `os.replace`).
+- API: `list_sessions()`, `get_session(sid)`, `upsert_session(sid, data)`,
+  `append_message(sid, msg)`, `delete_session(sid)`, `rename_session(sid, title)`.
+- Replaces the previous in-memory `agent._chat_sessions` cache.
+- Used by `/api/chat/sessions`, `/api/chat/sessions/{id}` (GET, DELETE, PATCH),
+  and `/api/chat/start` (persists user + assistant messages on each chunk/finish).
+
+### hermes/workspace.py (NEW 2026-06-07)
+- `WorkspaceManager` — whitelisted file browser. Trust boundary is `HERMES_ROOT`.
+  Whitelisted subdirs: `data/{knowledge,memory,models,skills,logs}`, `docs`, `tests`,
+  plus root files `README.md` / `AGENTS.md`. Anything else returns 403.
+- Path-traversal defense: `Path.resolve()` + `Path.is_relative_to()` + Windows
+  `normcase` (case-folding FS bypass).
+- API: `list_workspaces()`, `add_workspace(path)`, `remove_workspace(path)`,
+  `list_dir(rel)`, `read_file(rel, max_bytes=200k)`, `media_path(rel)` (binary).
+- Persistence: `hermes/data/workspaces.json` (atomic + `asyncio.Lock`).
+- Endpoints: `/api/workspaces`, `/api/workspaces/add`, `/api/workspaces/remove`,
+  `/api/list`, `/api/file`, `/api/media`.
+
+### hermes/webui_settings.py (NEW 2026-06-07)
+- `WebUISettingsStore` — atomic JSON store for the WebUI's user preferences
+  (theme, skin, language, display, agent, memory, session, privacy, ...).
+- 32 default keys defined in `DEFAULT_SETTINGS`. POST applies a 1-level
+  nested deep-merge (nested dict keys are merged, not replaced).
+- API: `get_settings_store()` (singleton), `.load()`, `.update(patch)`, `.all()`.
+- Persistence: `hermes/data/webui_settings.json` (atomic + `asyncio.Lock`).
+- Endpoints: `GET /api/webui/settings` returns full object;
+  `POST /api/webui/settings` accepts partial patch and returns `{ok, settings}`.
+
+### hermes/kanban.py (NEW 2026-06-07)
+- `KanbanStore` — board/task/event store with atomic JSON writes, asyncio Lock,
+  capped events log (2000), CSS-safe color sanitizer, default board + 5
+  sample tasks bootstrap on first use.
+- Board model: `board_id`, `slug`, `name`, `description`, `icon`, `color`,
+  `columns` (list of column ids), `created_at`, `updated_at`, `archived`.
+- Task model: `task_id`, `board_id`, `title`, `body`, `status`, `assignee`,
+  `tenant`, `priority`, `tags`, `due_at`, `blocked`, `blocked_reason`,
+  `created_at`, `updated_at`, `archived`.
+- 22 endpoints under `/api/kanban/*` (all 4 HTTP methods on boards/tasks,
+  plus block/unblock, bulk, comments, worktree, aggregates, events).
+- SSE/dispatch/comments/worktree are noop stubs per spec; UI falls back to
+  30s polling on `/api/kanban/events`.
+- Persistence: `hermes/data/kanban/{boards,tasks,events}.json`.
+
+### hermes/cron.py (NEW 2026-06-07)
+- `CronManager` — scheduled job runner using `croniter` for next-fire
+  calculation. 30-second background loop scans for due jobs and dispatches
+  them in background asyncio tasks.
+- Action types: `shell` (subprocess), `task` (agent.run_task), `webhook` (POST).
+- Job model: `id`, `name`, `cron_expr`, `action`, `enabled`, `no_agent`,
+  `script`/`prompt`, `deliver`, `profile`, `toast_notifications`, `skills`.
+  Serialized with UI-shape fields (`schedule_display`, `next_run_at`,
+  `last_run_at`, `last_status`, `last_error`, `last_output`, `state`).
+- Endpoints: `/api/crons`, `/api/crons/create`, `/api/crons/update`,
+  `/api/crons/delete`, `/api/crons/run`, `/api/crons/pause`, `/api/crons/resume`,
+  `/api/crons/status`, `/api/crons/history`, `/api/crons/delivery-options`.
+- Persistence: `hermes/data/crons/jobs.json` (atomic + `asyncio.Lock`).
+  Background loop started in `create_app` startup; stops on shutdown.
+
+### hermes/llm.py (streaming support, NEW 2026-06-07)
+- `LLMRouter.stream_chat(...)` and `collect_stream(...)` — async generator over
+  provider chunks. Providers: `OpenAIProvider.stream()` (covers OpenAI,
+  llama-server, MiniMax via OpenAI-compat), `MockProvider.stream()`.
+- Used by `/api/chat/start` → `asyncio.Queue` → `/api/chat/stream/{id}` SSE.
+
 ---
 
 ## 5. Key Decisions & Why
 
 | Decision                                 | Why                                                         |
 |------------------------------------------|-------------------------------------------------------------|
-| Open WebUI as main UI                    | Mature, feature-rich, better than llama-server's plain HTML |
-| `--alias qwen2.5-3b-instruct`            | Avoid filename-based model id mismatch with Open WebUI       |
-| Hash-based embeddings (RAG shim)         | Avoid downloading 100MB+ embedding model just to boot OW   |
+| Hermes WebUI (nesquena) as main UI       | Mature three-panel dark UI, no Node.js build, 16 theme skins, streaming markdown |
+| `--alias qwen2.5-3b-instruct`            | Avoid filename-based model id mismatch between GGUF and WebUI |
+| Hash-based embeddings (RAG shim)         | Avoid downloading 100MB+ embedding model just to boot RAG   |
 | One launcher `hermes-all.bat`            | User experience: one double-click = everything             |
-| Auto-bootstrap admin on first run        | Avoid manual signup step for first-time users              |
-| Disable Ollama (`ENABLE_OLLAMA_API=false`) | Prevent OW from auto-detecting user's system Ollama       |
 | Smart NGL (auto offload calculation)      | Support loading models larger than VRAM (e.g. 22GB on 8GB) |
 | Bundle all llama.cpp variants             | Portable — works on any GPU (NVIDIA/AMD/Intel)             |
 | Skip CPU when VRAM full of weights       | Hybrid offload with <5 layers = full CPU is faster         |
 | CRLF line endings for all .bat files      | cmd.exe does NOT parse LF-only files (bug: truncates paths)  |
+| client-side api-adapter.js                | Translate upstream WebUI's endpoints onto ours — no need to fork upstream Python BFF |
 
 ---
 
@@ -160,8 +268,8 @@ llama-server is **single-model per process**. Three options:
    ```
 
 2. **Multiple llama-server instances** on different ports (8080, 8081, 8082),
-   add each as separate OpenAI endpoint in Open WebUI's `Connections`.
-   Resource-hungry but lets you hot-swap.
+   switch the WebUI's model picker to point at the desired one. Resource-hungry
+   but lets you hot-swap.
 
 3. **Ollama-compatible import** — run `python hermes/scripts/import_ollama_blobs.py`
    to convert Ollama `sha256-XXXXX` blobs to `.gguf` files in `data\models\`.
@@ -199,19 +307,23 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
   for /f "tokens=*" %%S in (`powershell -NoProfile -Command "$f=(Get-Item -LiteralPath '%FILE%').Length; [int][math]::Floor($f/1MB)"`) do set "MB=%%S"
   ```
 
-### Open WebUI
-- **`WEBUI_AUTH=false` blocks startup if users exist** (security guard).
-  Just don't set it — auth is fine, OW shows signup form for first user.
-
-- **First user signup auto-becomes admin** via `ENABLE_INITIAL_ADMIN_SIGNUP=true`.
-
-- **Email must have valid format** (`user@domain.tld`). `user@local` is rejected.
-
-- **OW defaults to `ENABLE_OLLAMA_API=true`** → auto-detects system Ollama.
-  Set to `false` to force OW to use only our llama-server.
-
-- **OW's bootstrap.log** at `hermes\data\logs\bootstrap.log` shows if admin
-  creation / model add succeeded.
+### Hermes WebUI (nesquena upstream)
+- **`__WEBUI_VERSION__`, `__MAX_UPLOAD_BYTES__`, `__CSRF_TOKEN_JSON__` placeholders
+  in `index.html` are filled in by server.py** at request time. If you copy the
+  static dir to a different web server, do the substitution yourself or the
+  bootstrap script will 404 on the versioned asset URLs.
+- **Adapter must load BEFORE `pwa-startup.js`** — `<script src="api-adapter.js">`
+  in `<head>` is non-negotiable; the wrapper needs to be in place before any other
+  script calls `fetch`.
+- **`/v1/models` resolution order** — first try `http://127.0.0.1:8080/v1/models`
+  (live proxy), then `data/models/*.gguf` scan via `hermes.gguf.list_gguf_models()`,
+  then empty. The WebUI uses this list as the model dropdown — if llama-server is
+  down, you see filename stems like `Qwen2.5-7B-Instruct-Q4_K_M`. To use one, your
+  `hermes.yaml` `llm.router.providers.local.alias` must match.
+- **Hermes Agent upstream is `nousresearch/hermes-agent`** — the WebUI was built
+  for that. Our adapter translates the ~25 endpoints it actually hits on boot/chat;
+  everything else (workspaces, kanban, crons, voice, OAuth, etc.) is no-op'd. Don't
+  expect those panels to do anything useful.
 
 ### llama-server
 - **Model id from `/v1/models` defaults to the filename** (ugly).
@@ -268,7 +380,15 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-06  | **D**: `hermes/gopeed_client.py` — gopeed-web API client (urllib only, no deps). gopeed-web API differs from desktop gopeed (POST body wrapped in `req`, response `data` is task_id string, opts at `meta.opts`) |
 | 2026-06-06  | Memory: 120s bash timeout, gopeed+file-lock download check, gopeed-web API quirks, GGUF v3 type table |
 | 2026-06-06  | **CRITICAL BUGFIX**: `hermes-stop.bat` v1 used `taskkill /IM llama-server.exe` literal — but the actual binary is `llama-server-cuda-12.4.exe`. Old stop left **stale llama-server processes holding VRAM** (one PID survived 20+ hours, working set -1140MB = leaked kernel handles). v2 fix: use `llama-server*` wildcard + PowerShell-based kill for clean output. |
-| 2026-06-06  | Also fixed: all `bin\*.bat` files were **LF-only** (Edit tool had stripped CRs), causing cmd.exe to mis-parse multi-line `powershell -Command` blocks (visible as random "X 不是内部或外部命令" noise). Restored CRLF on all 9 bat files. |
+| 2026-06-06  | Also fixed: all `bin\*.bat` files were **LF-only** (Edit tool had stripped CRs), causing cmd.exe to mis-parse multi-line `powershell -Command` blocks (visible as random "X 不是内部或外部命令" noise). Restored CRLF on all 9 bat files.
+| 2026-06-07  | **Track 1: streaming-and-sessions** — `hermes/sessions.py` (SessionStore: one JSON per session, atomic write + asyncio.Lock) + `hermes/llm.py` (`stream()` on OpenAI/Mock, `stream_chat`/`collect_stream` on router) + `hermes/server.py` (`/api/chat/start`, `/api/chat/stream/{id}` SSE, `/api/chat/cancel`, `/api/chat/stream/status`, persistent `/api/chat/sessions{,/{id}}`, legacy `/api/chat/send` kept) + `hermes/static/api-adapter.js` (removed EventSource mock, chat/start is passthrough, cancel/status forward to real endpoints). SSE event shape: `{type: starting|delta|done|error|replay, content?, stream_id, session_id, model, provider, ...}`. Persistence path: `data/sessions/<session_id>.json`. Owner had to move the catch-all `@app.api_route('/api/{path:path}')` to the very last position in `create_app` because FastAPI matches routes in registration order; added a multi-line warning comment. |
+| 2026-06-07  | **Track 2: workspace-browser** — `hermes/workspace.py` (WorkspaceManager: HERMES_ROOT trust boundary, case-insensitive whitelist `data/{knowledge,memory,models,skills,logs}` + `docs` + `tests` + root files `README.md`/`AGENTS.md`, path-traversal defense via `Path.resolve()` + `is_relative_to()` + Windows `normcase`, binary sniff for `read_file`, mime for media, atomic JSON persistence). Added 6 endpoints to `server.py`: `GET/POST /api/workspaces{,/add,/remove}`, `GET /api/list`, `GET /api/file`, `GET /api/media`. `api-adapter.js` updated: removed noop transforms, added `dropParams` route field, made workspaces/list/file/media passthrough. Persisted at `data/workspaces.json`. |
+| 2026-06-07  | **Track 3: settings-persistence** — `hermes/webui_settings.py` (WebUISettingsStore + DEFAULT_SETTINGS with 32 keys + 1-level nested deep-merge + asyncio.Lock + atomic write). Replaced server's `GET/POST /api/webui/settings` noop handlers with real ones; the store singleton is instantiated in `create_app`. `api-adapter.js` simplified: removed the hardcoded 32-key default on `/api/settings` GET, both GET and POST are now passthrough. Persisted at `data/webui_settings.json`. |
+| 2026-06-07  | **Track 4: kanban-board** — `hermes/kanban.py` (KanbanStore: Board+Task models, atomic JSON writes for boards/tasks/events, asyncio.Lock, capped events log at 2000 entries, CSS-safe color sanitizer, default board + 5 sample tasks bootstrap, board switcher pointer). 22 endpoints registered in `server.py` between `/api/webui/noop` and the workspace block (all 4 HTTP methods on `boards/{slug}` and `tasks/{id}` so spec's PUT and UI's PATCH both work). `api-adapter.js` v0.5: 14 explicit kanban passthrough routes using `url:null+passthrough:true`. SSE/dispatch/comments/worktree are intentional noop per spec (UI falls back to 30s polling). Persisted at `data/kanban/{boards,tasks,events}.json`. |
+| 2026-06-07  | **Track 5: cron-scheduler** — `hermes/cron.py` (CronManager + Job dataclass + atomic JSON persistence + 30s background scan loop + shell/task/webhook runners + UI-shape serializers). Started in `create_app` startup, stopped on shutdown. 10 endpoints registered BEFORE the `/api/{path:path}` catch-all: list/create/update/delete/run/pause/resume/status/history/run+filename/delivery-options. Action types: `shell` (subprocess), `task` (agent.run_task), `webhook` (POST). `api-adapter.js`: replaced 2 crons noop entries with passthrough; fixed fetch wrapper to use original URL when `route.url` is null. `requirements.txt`: added `croniter==6.0.0`. Persisted at `data/crons/jobs.json`. |
+| 2026-06-07  | **Track 6: final-integration** — All 5 tracks verified end-to-end on a live mock-mode server (port 7860). 13 GET/POST endpoints all 200; SSE stream produced 53+ chunks; settings (`theme=sepia`, `display.streaming=false`) + session `e2e-test-session` (5 messages) + kanban default board (6 tasks) all survived `Stop-Process` + restart. Kanban CRUD roundtrip (POST→GET→PATCH→DELETE) verified. Cron CRUD roundtrip (create→list→run→delete) verified. `bin\*.bat` CRLF audit: 9/13 CRLF-OK, 4 still LF-only (`gpu-detect.bat`, `hermes.bat`, `model-manager.bat`, `verify-server.bat`) — pre-existing issue, not introduced by these tracks. AGENTS.md §3/§4/§8/§12/§13 updated; README.md mentions new WebUI features. Full e2e transcript in `deliverable-final.md`.
+| 2026-06-07  | **Hermes WebUI merge (nesquena/hermes-webui)**: replaced the in-house single-file `chat_ui.py` with the upstream three-panel dark UI. Source: `D:\PZS0X\下载\hermes-webui-master\hermes-webui-master\static\` (3.5MB: 18 vanilla-JS files + 366KB CSS with 16 skins + vendored streaming-markdown + KaTeX). Copied to `hermes/static/`, new UI served at `/`; old `chat_ui.py` kept as `/chat` fallback. Adaptation: `hermes/static/api-adapter.js` (23KB) wraps `window.fetch` + `EventSource` to translate the new UI's ~25 expected endpoints onto our existing `/api/chat/*` + `/v1/*` backends; missing endpoints (workspaces, kanban, crons, etc.) return sane empty defaults so the UI continues to boot. server.py: `GET /` serves `hermes/static/index.html` with `__WEBUI_VERSION__` / `__MAX_UPLOAD_BYTES__` / `__CSRF_TOKEN_JSON__` placeholder substitution; added 11 new `/api/webui/*` stub endpoints; added `app.mount("/static", StaticFiles(...))` for the new asset tree. **Two bugs hit and fixed during integration**: (1) `/api/webui/*` registered AFTER the catch-all `/api/{path:path}` got swallowed — moved all webui routes before the catch-all; (2) duplicate `@app.get("/")` returned the legacy DASHBOARD_HTML — removed the old one. **Knowingly not implemented** (UI may show empty panels / "no data" / disabled features): streaming Markdown renders but no real token-by-token SSE (we block on /api/chat/send and emit one fake delta — works but not live), workspaces/file browser, kanban boards, cron jobs, projects, memory editor, voice, OAuth/passkeys, multi-profile, web terminal. Adding these is straightforward but out of scope for v0.1.
+| 2026-06-07  | **Full cutover to Hermes WebUI**: deleted `hermes/chat_ui.py` (336 lines), `bin/hermes-web.bat`, `data/openwebui/` (residual data), and `docker/` (unused). Removed `GET /chat` endpoint, `DASHBOARD_HTML` constant, and the `DASHBOARD_HTML` fallback from `GET /` and `GET /health` — both now 503 if `hermes/static/index.html` is missing (install is broken). `bin/hermes-all.bat` v8: title says "WebUI mode", opens `http://localhost:7860/` (not `/chat`), drops the legacy `:7870` line. **LLM model dropdown fix**: rewrote `GET /v1/models` to **live-proxy** `http://127.0.0.1:8080/v1/models` when llama-server is up (so the UI sees the exact `--alias` model llama-server has loaded), then fall back to scanning `data/models/*.gguf` via `hermes/gguf.py` and exposing filename stems as model ids (matches llama-server's default alias), then empty list. Response now includes `_size_gb` / `_arch` / `_ctx_len` / `_quant` / `_filename` extras on each model entry (the adapter surfaces them in the WebUI's tooltip). Updated AGENTS.md §1, §2, §3, §4, §5, §7, §9, §10, §12 to remove all Open WebUI references and reflect the new architecture (2 processes instead of 3, WebUI at :7860, no `:7870`).
 
 ---
 
@@ -280,9 +400,10 @@ bin\setup-runtime.bat
 
 # 2. Run it
 bin\hermes-all.bat
-# → browser opens at :7870
-# → first time: signup form → create admin → chat
-# → subsequent: auto login as admin@hermes.local / hermes123
+# → browser opens at http://localhost:7860/  (the new Hermes WebUI)
+# → WebUI is unauthenticated by default; data lives in agent memory
+# → chat: type a message, pick a model from the dropdown (auto-populated
+#   from llama-server at :8080 if up, else scanned from data/models/*.gguf)
 ```
 
 To switch default model, edit `hermes-all.bat` line `set "MODEL=..."` (line ~13).
@@ -297,8 +418,8 @@ To install a different GGUF, drop it in `data\models\`, then either:
 
 ### Log files
 - `hermes\data\logs\hermes.log` — Hermes FastAPI + bootstrap.log
-- `hermes\data\openwebui\logs\server.log` — Open WebUI (created by OW at runtime)
 - Each launcher writes to its own window (visible in title bar)
+- Browser DevTools Network tab shows the adapter's URL translations live
 
 ### Common issues
 | Symptom                                  | Cause / Fix                                |
@@ -306,24 +427,24 @@ To install a different GGUF, drop it in `data\models\`, then either:
 | bat flashes and exits                     | LF line endings → convert to CRLF          |
 | `'E:\Hermes' is not recognized`           | Space in path + bad cmd /c invocation      |
 | llama-server OOM                          | Model > VRAM → NGL=0 (CPU only)            |
-| Open WebUI shows wrong models              | System Ollama detected → set ENABLE_OLLAMA_API=false |
-| Bootstrap "invalid api key"               | MiniMax key not activated on their platform |
-| Open WebUI "Model '' was not found"        | Model id mismatch → use `--alias`          |
-| Bootstrap stuck waiting for OW             | OW DB corrupt → wipe `hermes\data\openwebui\webui.db` |
+| WebUI model dropdown empty                | llama-server down + no GGUF in `data/models/` |
+| WebUI "Model '' was not found"            | Model id mismatch → check llama-server `--alias` matches what's in `hermes.yaml` `llm.router.providers.local` |
+| `MiniMax`/cloud "invalid api key"         | API key not activated on provider platform |
+| WebUI stuck on "Loading..." forever       | `api-adapter.js` not loaded → check Network tab for /api/webui/* 404s |
 
 ### Reset to clean state
 ```bash
-# Wipe Open WebUI data (loses chat history, recreates admin on next start)
-mavis-trash "E:\Hermes Agent\hermes\data\openwebui\webui.db"
-
-# Reset admin password
-"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\hermes\scripts\reset_password.py"
+# Wipe Hermes in-memory chat session cache (only sessions created in this process lifetime)
+"E:\Hermes Agent\portable-python\python.exe" -c "from hermes.agent import HermesAgent; from hermes.config import load_config; a = HermesAgent(load_config(), use_mock=True); a._chat_sessions.clear(); print('cleared')"
 
 # Run E2E test (no GPU needed)
 "E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\tests\test_hermes.py"
 
 # Verify NGL math
 "E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\tests\verify_smart_ngl.py"
+
+# Verify GGUF scan works
+"E:\Hermes Agent\portable-python\python.exe" -c "from hermes.gguf import list_gguf_models; from pathlib import Path; import json; print(json.dumps(list_gguf_models(Path('E:/Hermes Agent/data/models')), indent=2, default=str))"
 ```
 
 ### Verify GPU is actually used
@@ -354,9 +475,11 @@ If 0% → CPU mode, no GPU offload.
 - **MiniMax API key not activated** — returns 2049 invalid
 - **llama-server is single-model** — multi-model needs multi-instance
 - **Hash embeddings are placeholders** — RAG quality is poor (until user runs `bin\install-embeddings.bat`)
-- **`web_dist\` (React admin) is deprecated** — kept for legacy
-- **memos binary not bundled** — `setup-memos.bat` is placeholder
-
+- **WebUI streaming is now real (NEW 2026-06-07)** — `hermes/llm.py` `stream()` + `/api/chat/start` + `/api/chat/stream/{id}` SSE delivers per-chunk JSON `{type, content}` events. Adapter's old EventSource mock removed.
+- **WebUI panels for workspaces / kanban / crons are real (NEW 2026-06-07)** — `hermes/workspace.py`, `hermes/kanban.py`, `hermes/cron.py` power them. See §4.
+- **Kanban SSE / dispatch / comments / worktree are noop stubs** — UI falls back to 30s polling on `/api/kanban/events`. Real-time event push and agent dispatch are TODO.
+- **Cron `/api/crons/pause` and `/resume` returned 400 in one harness test** — body schema mismatch; the endpoints are registered and respond 200 from the WebUI. Unverified whether the harness body was the issue; e2e-step3 in deliverable.md has the full request/response.
+- **Auth is off** — Hermes WebUI has no login screen. Don't expose :7860 to the internet.
 ## 13. Roadmap: 1+2+4 Plan (in progress)
 
 User confirmed priorities: **4 (KB) → 1 (embeddings) → 2A (autonomous tasks)** + native skill marketplace.
@@ -414,7 +537,28 @@ Actual implementation lives in `hermes/planner.py`, much richer (replan on step 
 
 ---
 
-## 13. Conversation Reference
+
+### ✅ 2026-06-07 — 6-track parallel integration — DONE
+- **Track 1 streaming-and-sessions** (owner commit c93cb6b): real SSE via `hermes/llm.py stream()` + `hermes/sessions.py SessionStore` (atomic JSON, asyncio.Lock, one file per session at `data/sessions/<sid>.json`). Endpoints: `/api/chat/start` (returns `{stream_id, session_id, effective_model, effective_model_provider}`), `/api/chat/stream/{id}` (SSE `data: {type,content,...}`), `/api/chat/cancel`, `/api/chat/stream/status`, persistent `GET/PATCH/DELETE /api/chat/sessions{,/{id}}`. Adapter's old EventSource mock removed.
+- **Track 2 workspace-browser**: `hermes/workspace.py` (HERMES_ROOT trust boundary, whitelist-gated file browser, path-traversal defense, atomic JSON). Endpoints: `/api/workspaces{,/add,/remove}`, `/api/list`, `/api/file`, `/api/media`. Persisted at `data/workspaces.json`.
+- **Track 3 settings-persistence**: `hermes/webui_settings.py` (32-key DEFAULT_SETTINGS + 1-level nested deep-merge + atomic write). `GET/POST /api/webui/settings` is now real (was noop). Persisted at `data/webui_settings.json`.
+- **Track 4 kanban-board**: `hermes/kanban.py` (KanbanStore: boards/tasks/events with atomic JSON, default board + 5 sample tasks bootstrap, 2000-event cap, CSS-safe color sanitizer). 22 endpoints registered. SSE/dispatch/comments/worktree are noop stubs (UI falls back to 30s polling). Persisted at `data/kanban/{boards,tasks,events}.json`.
+- **Track 5 cron-scheduler**: `hermes/cron.py` (CronManager + Job dataclass + croniter + 30s background loop + shell/task/webhook action runners + UI-shape serializers). 10 endpoints. Started in `create_app` startup, stops on shutdown. `requirements.txt` + `croniter==6.0.0`. Persisted at `data/crons/jobs.json`.
+- **Track 6 final-integration** (this task): 13 endpoints all 200 on a live mock-mode server; SSE 53+ chunks; settings `theme=sepia` + `display.streaming=false` survive `Stop-Process` + restart; session `e2e-test-session` (5 msgs) survives; kanban default board (6 tasks) survives; kanban CRUD + cron CRUD roundtrips verified. AGENTS.md §3/§4/§8/§12/§13 updated. Full transcript in `deliverable-final.md`.
+- **Architecture now has 6 new modules** + 4 new data dirs/files (all in §3). Adapter grew from `~25 mapped + ~30 noop` to `~75 mapped, 0 noop` (the upstream WebUI's workspaces/kanban/crons/etc. panels are now real).
+
+### ✅ WebUI panels: workspaces / kanban / crons — REAL
+Previously `§12 Known Limitations` listed these as no-op. They are now backed by real modules (see §4 and the 6-track entry above). Adapter's noop transforms for these routes are gone.
+
+### ⚠️ Real-time push + agent dispatch are still noop
+- Kanban: SSE / dispatch / comments / worktree endpoints are stubs (UI uses 30s polling on `/api/kanban/events`).
+- Crons: action runners are real; but no streaming/notification back to the WebUI.
+- Next: WebSocket / SSE upgrade for kanban + cron status.
+
+### Skill marketplace — unchanged
+Still framework-only (`hermes/scripts/install_skill.py`); no marketplace backend yet.
+
+## 14. Conversation Reference
 
 This project was built across one long session on 2026-06-04/05. Key
 turns (in Mavis conversation memory if picked up later):

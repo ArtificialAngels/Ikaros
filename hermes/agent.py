@@ -22,6 +22,7 @@ from hermes.llm import (
 from hermes.memory import MemoryStore, Embedder, build_embedder_from_config
 from hermes.knowledge import KnowledgeBase
 from hermes.skills import SkillRegistry
+from hermes.mirror import init_mirror_config
 
 logger = logging.getLogger("hermes.agent")
 
@@ -64,6 +65,9 @@ class HermesAgent:
         self.config = config or load_config()
         self.paths = resolve_data_paths(self.config)
         self._setup_logging()
+
+        # Initialize mirror/proxy config (inspired by ComfyUI-aki-v3)
+        init_mirror_config(self.config.model_dump())
 
         logger.info(f"Hermes v{self.config.agent.version} initializing...")
         logger.info(f"Data dir: {self.paths['base']}")

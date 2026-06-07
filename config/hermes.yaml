@@ -150,3 +150,20 @@ server:
   healthz:
     enabled: true
     path: /healthz
+
+# ============================================================
+# 网络偏好 — 镜像与代理（参考 ComfyUI-aki-v3）
+# ============================================================
+network:
+  # HTTP/HTTPS 代理（国内用户如用 Clash/SS 填 http://127.0.0.1:7890）
+  proxy_address: ""
+
+  # 国内镜像开关（慢网用户建议全部开启）
+  mirror_pypi: false              # PyPI 镜像（aliyun / tsinghua）
+  mirror_huggingface: false       # HuggingFace 镜像（hf-mirror.com）
+  mirror_git: false               # GitHub 镜像（gh-proxy.com）
+
+  # 镜像站点选择
+  pypi_mirror: aliyun             # aliyun | tsinghua | ustc
+  hf_mirror: hf-mirror            # hf-mirror
+  git_mirror: gh-proxy            # gh-proxy | gitclone | fastgit

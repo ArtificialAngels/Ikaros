@@ -89,6 +89,17 @@ class ServerConfig(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class NetworkConfig(BaseModel):
+    """Network preferences: proxy + mirrors (inspired by ComfyUI-aki-v3)."""
+    proxy_address: str = ""
+    mirror_pypi: bool = False
+    mirror_huggingface: bool = False
+    mirror_git: bool = False
+    pypi_mirror: str = "aliyun"
+    hf_mirror: str = "hf-mirror"
+    git_mirror: str = "gh-proxy"
+
+
 class HermesConfig(BaseModel):
     agent: PersonaConfig = Field(default_factory=PersonaConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -97,6 +108,7 @@ class HermesConfig(BaseModel):
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
 
     # Runtime
     data_dir: str = "/data"

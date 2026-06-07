@@ -263,13 +263,26 @@ def install_cudart(force: bool = False) -> bool:
     print(f"[firstrun] installing CUDA runtime via pip (~100MB download)...")
     import subprocess as _sp
     python = str(HERMES_ROOT / "portable-python" / "python.exe")
-    
-    rc = _sp.run([
-        python, "-m", "pip", "install",
+
+    # Check for mirror config
+    pip_args = [python, "-m", "pip", "install", "-q"]
+    try:
+        from hermes.mirror import get_mirror_config
+        mirror_cfg = get_mirror_config()
+        if mirror_cfg.mirror_pypi:
+            index_url = mirror_cfg.get_pypi_index_url()
+            pip_args.extend(["--index-url", index_url])
+            print(f"[firstrun] using PyPI mirror: {index_url}")
+    except Exception:
+        pass
+
+    pip_args.extend([
         "nvidia-cuda-runtime-cu12", "nvidia-cublas-cu12",
-        "--target", str(RUNTIME), "--upgrade", "--no-deps", "-q"
-    ], capture_output=True, text=True, timeout=600)
-    
+        "--target", str(RUNTIME), "--upgrade", "--no-deps",
+    ])
+
+    rc = _sp.run(pip_args, capture_output=True, text=True, timeout=600)
+
     if rc.returncode != 0:
         print(f"[firstrun] pip install failed: {rc.stderr}")
         return False

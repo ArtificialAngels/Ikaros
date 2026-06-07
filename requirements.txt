@@ -41,6 +41,7 @@ typer==0.13.0              # CLI
 click==8.1.7
 structlog==24.4.0
 loguru==0.7.2
+croniter==6.0.0            # cron schedule calculator (used by hermes.cron)
 
 # ---- 安全 / 加密 ----
 cryptography==43.0.3

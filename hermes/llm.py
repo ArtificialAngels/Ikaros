@@ -407,15 +407,28 @@ class LLMRouter:
         return [self.providers[n] for n in self.order if n in self.providers]
 
     async def health_check_all(self) -> dict[str, bool]:
-        results = {}
-        for name, p in self.providers.items():
+        """Concurrently probe all providers (max 5s total, not N * 3s each)."""
+        async def _probe(name: str, p) -> tuple[str, bool]:
             try:
                 if hasattr(p, "health_check"):
-                    results[name] = await p.health_check()
+                    ok = await p.health_check()
                 else:
-                    results[name] = True
+                    ok = True
+                return name, ok
             except Exception:
-                results[name] = False
+                return name, False
+
+        tasks = [_probe(name, p) for name, p in self.providers.items()]
+        results = {}
+        for coro in asyncio.as_completed(tasks):
+            try:
+                name, ok = await asyncio.wait_for(coro, timeout=5.0)
+                results[name] = ok
+            except asyncio.TimeoutError:
+                pass  # already handled by per-provider 3s timeout, this is belt-and-suspenders
+        # ensure every provider has a result
+        for name in self.providers:
+            results.setdefault(name, False)
         return results
 
     async def chat(

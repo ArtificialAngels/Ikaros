@@ -2,6 +2,8 @@
 
 > **赛博游民数字管家** · 装在 U 盘里 · 插到任何 Windows 电脑就能跑 · **零依赖**（无需 Python、无需联网）
 
+📖 **完整文档**：[docs/README-总览.md](docs/README-总览.md) — 速览 / 启动 / 目录 / 维护 / 故障排查
+
 ## 🎯 核心理念
 
 把 Hermes Agent 完整打包成"开箱即用"：
@@ -26,11 +28,13 @@
 ```
 直接进入交互式命令行
 
-### 方式 3：Web UI
+### 方式 3：Web UI（推荐）
 ```
-双击 bin\hermes-web.bat
+双击 bin\hermes-all.bat
 ```
-启动 Web 界面，浏览器访问
+一键启动 llama-server + Hermes WebUI，浏览器自动打开 `http://localhost:7860/`。
+新 UI 是三栏深色面板（左侧 session 列表 / 中间聊天 / 右侧 workspace）。
+**WebUI 现在支持**：真实流式聊天（token-by-token SSE）+ 持久化 session + 文件浏览（hermes 项目内的白名单目录）+ 看板任务（boards/tasks）+ 定时任务（cron jobs）+ 设置面板（主题/皮肤/语言等 32 项可配置，原子写入 `data/webui_settings.json`）。
 
 ### 方式 4：仅本地 LLM
 ```
@@ -89,12 +93,11 @@ Hermes Agent\                                    ← 这就是 U 盘
 │   │   └── cache\
 │
 ├── bin\                                         ← 启动器
-│   ├── hermes-all.bat                            ← ⭐ 一键启动
+│   ├── hermes-all.bat                            ← ⭐ 一键启动（LLM + WebUI）
 │   ├── hermes.bat                                ← CLI
-│   ├── hermes-web.bat                            ← Web UI
-│   ├── start-llm.bat                             ← 仅 LLM 服务
 │   ├── hermes-stop.bat                           ← 停止所有
-│   └── hermes-test.bat                           ← 自检
+│   ├── start-llm-smart.bat                       ← 仅 LLM 服务（自动 NGL）
+│   └── ...
 │
 ├── config\                                      ← 配置
 │   ├── hermes.yaml
@@ -169,7 +172,7 @@ FULLY PORTABLE - no host Python needed ✓
    ```
    OPENAI_API_KEY=sk-xxx
    ```
-2. 双击 `bin\hermes.bat` 或 `bin\hermes-web.bat`
+2. 双击 `bin\hermes.bat`（CLI）或 `bin\hermes-all.bat`（WebUI）
 3. 在线用云端 API，离线自动降级到本地
 
 ### 场景 3：嵌入到其他项目
@@ -187,34 +190,11 @@ print(asyncio.run(agent.chat("你好")))
 
 ## 🛠️ 维护与升级
 
-### 添加更多 Python 包
-```cmd
-:: 升级模式下使用（保持离线特性）
-E:\Hermes Agent\portable-python\python.exe -m pip install <pkg>
-
-:: 之后可以离线分发整个 U 盘
-```
-
-### 切换模型
-```cmd
-bin\switch-model.bat powerful    :: 切换到 7B
-bin\switch-model.bat default     :: 切回 3B
-```
-
-### 完全重新构建（高级）
-1. 删除 `portable-python\` 和 `runtime\`
-2. 运行 `scripts\install-portable.bat`（如果存在）
-3. 或手动按本文档步骤重新下载
+> 📖 详见 [docs/14-维护与升级.md](docs/14-维护与升级.md) — 升级 / 备份 / 重置完整指南
 
 ## 🐛 故障排查
 
-| 症状 | 原因 | 解决 |
-|------|------|------|
-| `python.exe 不是有效应用` | Win7 之类太老 | 需要 Win10+ |
-| `缺少 MSVCR140.dll` | 缺 Visual C++ 运行库 | 安装 [VC++ Redist](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
-| 第一次启动 2 分钟 | 模型冷启动 | 正常现象，第二次就快 |
-| 回答乱码 | 控制台编码问题 | 改用 Web UI（自动 UTF-8） |
-| 端口 7860 占用 | 其他程序占用 | `bin\hermes-web.bat 8080` |
+> 📖 详见 [docs/15-故障排查.md](docs/15-故障排查.md) — 完整的问题→解决表格 + 救命命令
 
 ## 📈 性能预期
 
@@ -259,3 +239,18 @@ hermes> [响应]
 ---
 *最后一次完整测试：Qwen2.5-3B 真实响应通过 ✓*
 *总 U 盘占用：~7.7 GB / 822 GB 可用*
+
+## 🆕 2026-06-07 更新
+
+6 个新模块 + 4 个新数据目录已上线（详见 `AGENTS.md` §3/§4/§8/§12/§13）：
+
+- `hermes/sessions.py` — 持久化 chat session（每个 session 一个 JSON）
+- `hermes/workspace.py` — 白名单文件浏览（hermes 根目录内）
+- `hermes/webui_settings.py` — WebUI 设置原子持久化
+- `hermes/kanban.py` — 看板（boards/tasks/events，22 个 endpoint）
+- `hermes/cron.py` — 定时任务（croniter 调度，30s 后台循环，10 个 endpoint）
+- `hermes/llm.py` — 新增 `stream()` 真实流式输出（SSE 替代旧的假流式）
+
+数据目录：`hermes/data/sessions/` `hermes/data/kanban/` `hermes/data/crons/` `hermes/data/webui_settings.json`
+
+启动方式不变：`双击 bin\hermes-all.bat` 即可。

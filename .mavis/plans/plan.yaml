@@ -1,0 +1,502 @@
+version: 1
+plan:
+  name: "Hermes WebUI 全套适配(真流式 + session + workspace + settings + kanban + cron)"
+  max_concurrency: 4
+  max_consecutive_failures: 2
+  max_cycles: 12
+  verifier_config:
+    default_verifiers: [verifier]
+    audit_sample_rate: 0.0
+
+tasks:
+  # ============================================================
+  # Task 1: 真流式 SSE + session 持久化(前置, 其它 task 都改 server.py
+  # 所以这个先做完, 避免 server.py 大块冲突)
+  # ============================================================
+  - id: streaming-and-sessions
+    title: "真流式 SSE chat + session 持久化 + adapter 简化"
+    assigned_to: coder
+    timeout_ms: 1800000
+    prompt: |
+      在 E:\Hermes Agent\ 项目里完成两件事。**先读 AGENTS.md §1-§12 了解项目, 重点 §4(server.py) 和 §10 调试**。
+
+      ## 当前状态
+      - `hermes/server.py` (约 1100 行) 提供 /api/chat/send (一次性返回), /api/chat/history, /api/chat/sessions 等
+      - `hermes/static/api-adapter.js` (23KB) 当前在客户端拦截 fetch + EventSource, 把 /api/chat/start 翻译成 /api/chat/send, 把 EventSource('api/chat/stream') 拦截下来用 mock 发整块内容
+      - session 当前存在 agent._chat_sessions (内存 dict, 进程重启就丢)
+      - agent.py 有 `agent.chat(message, remember=True)` 方法, 同步阻塞, 返回完整回复字符串
+
+      ## 要做的(分阶段, 全部做)
+
+      ### 阶段 1: 真 SSE 流式
+      1. 在 `hermes/server.py` 把 `POST /api/chat/send` 拆成两个端点:
+         - `POST /api/chat/start` 返回 `{stream_id, session_id, effective_model, ...}` 后立刻返回(不阻塞)
+         - `GET /api/chat/stream/{stream_id}` 返回 `text/event-stream`, 实时把 LLM 的 token 推下来, 最后发 `event: done` 终止
+         - `POST /api/chat/cancel/{stream_id}` 取消运行中的流
+      2. 实现细节:
+         - 用 FastAPI `StreamingResponse(media_type="text/event-stream")`
+         - 用 `agent.llm.stream_chat(messages)` (你要在 `hermes/llm.py` 加这个方法, 或自己写一个), 必须真从 LLM 拿流式 token (不是等完整回复)
+         - OpenAIProvider 已经支持 `stream=True` 的 httpx 异步流式, 你可以基于它写一个 async generator `async def stream(messages) -> AsyncIterator[str]`
+         - MockProvider 也得支持流式, 模拟一字一字吐
+         - 流式过程中把累积的回复定期存到 session 内存
+         - SSE 事件格式: `data: {"type":"delta","content":"hello"}\n\n` 然后 `data: {"type":"done","session_id":"..."}\n\n`
+      3. 改 `hermes/static/api-adapter.js`:
+         - **删除** `window.EventSource` 包装 (不再 mock, 让浏览器直接连真 SSE)
+         - **保留** `window.fetch` 包装(其它路由仍需要翻译)
+         - 更新 `/api/chat/start` 的 transform: 不再调 /api/chat/send, 直接返回 server 给的 stream_id
+      4. 验证: `bin\hermes-all.bat` 启动后(可以用 mock), 在浏览器发消息, 应该看到逐字流式出现(而不是等几秒后整块出现)
+
+      ### 阶段 2: session 持久化
+      1. `hermes/server.py` 里建一个 `SessionStore` 类 (或一个 module `hermes/sessions.py`):
+         - 持久化到 `hermes/data/sessions/<session_id>.json`
+         - 文件内容: `{"id": str, "title": str, "created_at": float, "updated_at": float, "messages": [{role, content, timestamp, ...}], "model": str, "profile": str}`
+         - 提供 `get(sid) -> dict | None`, `list() -> list[dict]`, `save(sid, data) -> None`, `delete(sid) -> None`, `create(initial_msg: str) -> dict`
+         - 用 `asyncio.Lock` 保护并发写
+      2. 把现有 `agent._chat_sessions` 内存 dict 的所有用法替换为 SessionStore 调用
+         - `POST /api/chat/start` 创建/复用 session (按需落盘)
+         - 流式 chat 过程中, 每收到一个 delta 就 `patch` 到 session.messages 最新一条
+         - 进程重启后 `GET /api/sessions` 仍能列出所有历史 session (从 `data/sessions/*.json` 读)
+      3. `GET /api/chat/sessions` 改成读 SessionStore.list()
+      4. `GET /api/chat/history?session=X` 改成读 SessionStore.get(sid)
+      5. `DELETE /api/chat/sessions/{sid}` 改成 SessionStore.delete
+
+      ## 不要做
+      - 不要碰 `hermes/llm.py` 的 router 调度逻辑 (除非加 stream_chat 方法)
+      - 不要碰 OpenAI/Anthropic/Mock provider 的构造 (只加新方法, 不改签名)
+      - 不要删 `hermes/agent.py` 的方法, 只改 server.py 怎么用它
+      - 不要改 `bin/hermes-all.bat` 或 `AGENTS.md` 排版
+      - 不要碰 `hermes/static/` 下其它文件(只改 index.html 加 script + api-adapter.js + server.py 端点)
+
+      ## 必跑的验证(写到 deliverable.md)
+      1. **语法**: `E:\Hermes Agent\portable-python\python.exe -c "import hermes.server"` 不能 ImportError
+      2. **启动**: `HERMES_LLM_MOCK=1 $env:HERMES_LLM_MOCK=1; Start-Process ... hermes serve` 等 8s
+      3. **真流式**: 跑这段, 必须看到 >1 个 chunk, 不是一次性:
+         ```
+         $sid = (Invoke-WebRequest http://127.0.0.1:7860/api/chat/sessions).Content
+         $body = '{"message":"count from 1 to 3 slowly","session":""}'
+         $r = Invoke-WebRequest -Uri http://127.0.0.1:7860/api/chat/start -Method POST -Body $body -ContentType application/json
+         $streamId = ($r.Content | ConvertFrom-Json).stream_id
+         # 用 httpx 或 curl 流式读 /api/chat/stream/$streamId, 数 data: 行数量
+         ```
+         期望: >3 个 data: 事件(delta 内容 + 终态 done)
+      4. **session 持久化**: 启动 server, POST /api/chat/start 发消息, 流式完成后 **kill server**, 重启, `GET /api/chat/sessions` 应该能看到刚才的 session
+      5. **adapter 仍工作**: `GET /api/sessions` (无 _stub, 返回 SessionStore 列表), `GET /api/chat/start` 用 adapter 应能流式
+      6. **端点没崩**: 把 7 个之前测过的端点 (`/`, `/v1/models`, `/api/webui/profile/active` 等) 都再过一遍
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-streaming-and-sessions.md`, 包含:
+      - 改/新增文件清单
+      - 真流式测试输出 (>1 chunk 的证据)
+      - session 持久化测试输出 (kill + 重启后 session 还在)
+      - 全部受影响的端点列表 (新/改/删)
+      - 已知限制
+      - 给下一棒(workspace/settings/kanban/cron)的接口约定: "后续 track 加新端点时, 改 server.py 末尾 (line 650+ 的 catch-all 之前)"
+
+    verified_by: verifier
+    verify_prompt: |
+      独立验证 task 1 deliverable, **不要只读 producer 报告**。
+
+      **必做**:
+      1. 启动 mock server: `cd "E:\Hermes Agent"; $env:HERMES_LLM_MOCK=1; Start-Process portable-python\python.exe -Args "-m hermes serve --host 127.0.0.1 --port 7860" -RedirectStandardOutput hermes\data\logs\test-serve.log -RedirectStandardError hermes\data\logs\test-serve-err.log -WindowStyle Hidden -PassThru; sleep 8`
+      2. **真流式**: 用 `Invoke-WebRequest` (或自己写 PowerShell + `HttpClient`) 真流式读 `/api/chat/stream/{stream_id}`, **数 SSE data: 事件数量**。如果只有 1 个 data: 事件(整块返回), 立刻 FAIL, 这就是没真流式
+      3. **session 持久化**: 
+         - `POST /api/chat/start` 发消息, 拿到 stream_id, 读流到完成
+         - 列出 `E:\Hermes Agent\hermes\data\sessions\` 看是否生成 .json
+         - `Stop-Process` server, 重新启动, `GET /api/chat/sessions` 应该返回刚才那个 session
+         - 删了 `hermes\data\sessions\*.json` 然后重启, `GET /api/chat/sessions` 应返回空数组 `{"sessions":[]}` (不报错)
+      4. **adapter 简化**: 读 `hermes/static/api-adapter.js`, 确认 **不再有** `_makeFakeEventSource` 函数和 `window.EventSource` 重写
+      5. **回归**: 之前 7 个测过的端点 (`/`, `/v1/models`, `/api/webui/profile/active`, `/api/chat/sessions`, `/api/webui/noop`, `/static/api-adapter.js`, `POST /api/chat/send` 如果还在的话) 都要再过一遍
+      6. **CRLF**: 检查所有 `bin\*.bat` 仍是 CRLF
+
+      FAIL 条件:
+      - 流式测试拿到 < 2 个 data: 事件
+      - session 持久化测试不通过 (kill 后找不到)
+      - adapter 还包含 EventSource 包装
+      - 任何之前通过的端点现在 5xx
+      - producer 自己声明的实现 ≠ 实际 server 行为 (用真实启动 + 请求验证)
+
+      PASS 时把验证命令的输出贴到 verify report, 标每个 PASS/FAIL 维度。
+
+  # ============================================================
+  # Task 2: workspace 文件浏览
+  # ============================================================
+  - id: workspace-browser
+    title: "workspace 文件浏览端点 + UI 可见"
+    assigned_to: coder
+    depends_on: [streaming-and-sessions]
+    timeout_ms: 1500000
+    prompt: |
+      在 E:\Hermes Agent\ 里加 workspace 文件浏览。新 WebUI 右侧面板期望看到工作区文件树。
+
+      ## 当前状态
+      - 新 WebUI 通过 `GET /api/workspaces` 列工作区, `GET /api/list?session_id=X&path=Y` 列目录, `GET /api/file?session_id=X&path=Y` 读文件
+      - 当前 adapter 把这些都 noop 掉, 返回 `[]` 或 `{}`
+      - 用户的 `data/knowledge/` 是 markdown KB, `data/models/` 是 GGUF, 都是文件系统
+      - 之前没有 workspace 概念
+
+      ## 要做的
+
+      1. **新模块** `hermes/workspace.py`:
+         - 写一个 `WorkspaceManager` 类
+         - 默认 workspace 根: `HERMES_ROOT` (即 `E:\Hermes Agent`), 但 **白名单** 限定可访问的子目录: `data/knowledge`, `data/memory`, `data/models`, `data/skills`, `data/logs`, `docs`, `tests`, 根目录的 `README.md` / `AGENTS.md`
+         - **路径越界检查** (防 path traversal): 任何 path 必须 resolve 后仍在白名单内, 否则 raise HTTPException(403)
+         - `list_workspaces() -> list[dict]` 返回 `[{path, name, added_at}]` 列表
+         - `list_dir(workspace_path, rel_path) -> list[dict]` 返回 `[{"name", "type": "file"|"dir", "size", "modified", "path"}]`
+         - `read_file(workspace_path, rel_path, max_bytes=200000) -> str` 读文本文件, 超大报错
+         - 持久化: `hermes/data/workspaces.json` 存当前激活 workspace 列表, 默认加一个 `"default"` 指向 `E:\Hermes Agent`
+
+      2. **新增 server.py 端点** (必须在 catch-all `/api/{path:path}` 之前, 看现有 `/api/webui/*` 位置参照):
+         - `GET /api/workspaces` -> `WorkspaceManager.list_workspaces()`
+         - `POST /api/workspaces/add` (body: `{"path": "..."}`) -> 验证在白名单内后添加
+         - `POST /api/workspaces/remove` (body: `{"path": "..."}`)
+         - `GET /api/list?path=...` -> `WorkspaceManager.list_dir(...)`  注意: 新 UI 调的是 `?session_id=X&path=Y` 但 session_id 可以忽略, 我们没 session 概念
+         - `GET /api/file?path=...` -> `WorkspaceManager.read_file(...)`
+         - `GET /api/media?path=...` -> 二进制文件, 用 `FileResponse`, 推断 mime
+
+      3. **改 api-adapter.js**:
+         - 把 `GET /api/workspaces` 的 noop 删掉, 改成直传给 server (`/api/webui/workspaces` 那条规则要改成 `/api/workspaces`)
+         - `GET /api/list?session_id=X&path=Y` 翻译成 `GET /api/list?path=Y` (扔掉 session_id)
+         - `GET /api/file?session_id=X&path=Y` 翻译成 `GET /api/file?path=Y`
+         - `GET /api/media?path=Y` 翻译成 `GET /api/media?path=Y` (直接透传, 不再 404)
+
+      4. **验证**:
+         - 启动 server
+         - `GET /api/workspaces` 至少返回 `[{name: "default", path: "E:\\Hermes Agent"}]`
+         - `GET /api/list?path=data/knowledge` 返回 `data/knowledge` 下文件列表
+         - `GET /api/file?path=README.md` 返回 README 文本
+         - `GET /api/list?path=../../../etc/passwd` 返回 403 (path traversal blocked)
+         - `GET /api/file?path=portable-python/python.exe` 返回 403 (二进制白名单外)
+
+      ## 不要做
+      - 不要做上传/编辑/删除文件 (用户没要求, 容易引入安全漏洞)
+      - 不要做文件搜索/grep (out of scope)
+      - 不要做 git integration (新 UI 有但太复杂, noop 即可)
+      - 不要改 task 1 改的 SSE / session 代码
+      - 不要改其它 track 需要的 server.py 区域(workspace 端点放在 `/api/webui/*` 块之后, `catch-all` 之前)
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-workspace-browser.md`, 包含:
+      - 新增/改文件清单
+      - 5 个验证命令的输出
+      - 白名单定义
+      - 已知限制
+      - 端点契约(给 verifier)
+
+    verified_by: verifier
+    verify_prompt: |
+      独立验证 workspace browser, **不要只读 producer 报告**。
+
+      **必做**:
+      1. 启动 server (mock 模式)
+      2. `GET /api/workspaces` 至少返回 1 个 workspace
+      3. `GET /api/list?path=data/knowledge` 返回目录条目数组, 包含 `name`/`type`/`size`
+      4. `GET /api/file?path=README.md` 返回内容(非空字符串, 含 "Hermes" 字样)
+      5. **安全测试**: 试 `GET /api/file?path=../../../Windows/System32/drivers/etc/hosts` 必须 403
+      6. **安全测试**: 试 `GET /api/file?path=hermes/llm.py` 必须 200 (这是 python 源码, 应该在白名单内)
+      7. **adapter 改动**: 读 `hermes/static/api-adapter.js` 确认 `/api/workspaces`, `/api/list`, `/api/file`, `/api/media` 这四条规则已不再走 `/api/webui/noop`
+      8. 之前的 7 个端点都还能正常工作
+      9. 读 `hermes/workspace.py`, 确认有 path traversal 检查 (`Path.resolve()` 后在白名单内)
+
+      FAIL 条件:
+      - 任何 path traversal 测试返回 200
+      - 任何之前通过的端点现在 5xx
+      - workspaces 返回 `[]` 或 404
+
+  # ============================================================
+  # Task 3: WebUI settings 持久化
+  # ============================================================
+  - id: settings-persistence
+    title: "WebUI settings 服务端持久化(theme/skin/streaming 等)"
+    assigned_to: coder
+    depends_on: [streaming-and-sessions]
+    timeout_ms: 1200000
+    prompt: |
+      把 WebUI 的 settings (theme, skin, language, send_key, show_token_usage, show_thinking, display, agent, memory, session, privacy 等, 完整字段在 api-adapter.js transform 的 /api/settings GET 返回里) **从 localStorage 改到服务端持久化**。
+
+      ## 当前状态
+      - `GET /api/webui/settings` 现在返回 `{}`, adapter transform 里硬编码一份完整默认 settings
+      - adapter 把 settings POST 到 `/api/webui/settings` 走 noop
+      - 用户每次刷新都拿同一份默认, 改的没存住
+
+      ## 要做的
+
+      1. **新模块** `hermes/webui_settings.py`:
+         - 写一个 `WebUISettingsStore` 单例
+         - 持久化到 `hermes/data/webui_settings.json` (一份全局 settings, 不按用户分)
+         - 提供 `get() -> dict`, `update(partial: dict) -> dict`, `reset() -> dict`
+         - 加载时如果文件不存在, 用 `api-adapter.js` 里那份默认 (复制过来, 这是 single source of truth)
+         - 合并逻辑: 浅 merge, 嵌套 dict 也要深 merge 一层 (display/agent/memory/session/privacy 几个 nested dict)
+         - 写盘用 `asyncio.Lock` 保护
+
+      2. **改 server.py** 把 `/api/webui/settings` GET/POST 改用 store:
+         - `GET /api/webui/settings` -> `WebUISettingsStore.get()`
+         - `POST /api/webui/settings` (body 是 partial settings) -> `WebUISettingsStore.update(body)`
+
+      3. **改 api-adapter.js**:
+         - 删掉 `/api/settings` GET 的硬编码 default (之前在 transform 里) — 改成直接透传 server 的响应
+         - 改 `GET /api/settings` -> `GET /api/webui/settings` (新路径, 让 server 返回真实存储的)
+         - 改 `POST /api/settings` -> `POST /api/webui/settings`
+         - WebUI 调用 `/api/settings` 仍能 work, 因为 adapter 翻译
+
+      4. **验证**:
+         - 启动 server
+         - `GET /api/webui/settings` 返回完整默认 settings
+         - `POST /api/webui/settings` body `{"theme":"light","skin":"catppuccin"}` 后, `GET` 应返回修改后的
+         - 杀 server, 重启, `GET` 仍返回修改后的 (持久化生效)
+         - 嵌套: `POST` body `{"display":{"streaming":false,"compact_mode":true}}` 后, `GET` 整个 display 对象应该被合并, 不是覆盖 (即 streaming: false, compact_mode: true 都在)
+         - adapter: 浏览器开 devtools, 调 `fetch('/api/settings')` 应被 adapter 翻译到 `/api/webui/settings`
+
+      ## 不要做
+      - 不要做按用户分 settings (目前无 auth, 单用户)
+      - 不要做 settings 导出/导入
+      - 不要做 settings schema 校验 (前端做就行)
+      - 不要改其它 track 涉及的 server.py 区域
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-settings-persistence.md`
+
+    verified_by: verifier
+    verify_prompt: |
+      独立验证 settings 持久化。
+
+      **必做**:
+      1. 启动 server
+      2. `GET /api/webui/settings` 返回完整对象(含 theme, skin, display, agent, memory, session, privacy)
+      3. `POST /api/webui/settings` body `{"theme":"light"}`, 再 `GET` 验证 theme=light, 其它字段保留默认 (深 merge)
+      4. `POST` body `{"display":{"streaming":false}}`, 再 `GET` 验证 display.streaming=false 但 display.show_reasoning 仍在(原默认 true)
+      5. 杀 server, 重启, `GET /api/webui/settings` 仍返回 light + streaming=false (持久化)
+      6. 读 `hermes/webui_settings.py` 确认用了 lock
+      7. 读 `hermes/static/api-adapter.js` 确认 `/api/settings` 翻译到 `/api/webui/settings`
+      8. 之前的 7 个端点仍正常
+
+      FAIL 条件: 持久化失败, 深 merge 不对 (覆盖整个嵌套 dict), 其它端点崩
+
+  # ============================================================
+  # Task 4: kanban 任务看板
+  # ============================================================
+  - id: kanban-board
+    title: "kanban 任务看板 (boards + tasks + 状态/分配/标签)"
+    assigned_to: coder
+    depends_on: [streaming-and-sessions]
+    timeout_ms: 1500000
+    prompt: |
+      在 E:\Hermes Agent\ 里实现一个轻量级 kanban 看板(新 WebUI 期望的功能)。MVP 范围: board + task + 状态流转, 暂不做实时 SSE 推送(可后续)。
+
+      ## 当前状态
+      - 新 WebUI 调 `/api/kanban/boards` 列看板, `/api/kanban/board` 看单个, `/api/kanban/tasks` 增删改查, `/api/kanban/tasks/{id}` 详情, `/api/kanban/tasks/{id}/block|unblock` 等
+      - 当前 adapter 把所有 kanban 端点都 noop
+      - 用户没有现成的看板数据
+
+      ## 要做的
+
+      1. **新模块** `hermes/kanban.py`:
+         - 数据模型:
+           ```
+           Board: {board_id, name, color, created_at, columns: ["todo","doing","done"]}
+           Task: {task_id, board_id, title, body, status, assignee, tags, blocked, blocked_reason, created_at, updated_at, due_at}
+           ```
+         - 持久化: `hermes/data/kanban/boards.json` 和 `hermes/data/kanban/tasks.json`
+         - 提供 `list_boards()`, `get_board(id)`, `create_board(name, color)`, `delete_board(id)`, `list_tasks(board_id, status=None)`, `get_task(id)`, `create_task(board_id, title, body, ...)`, `update_task(id, **fields)`, `delete_task(id)`, `set_status(id, status)`, `block_task(id, reason)`, `unblock_task(id)`
+         - 默认 bootstrap: 创建一个 `"default"` board, 3 个默认列, 几个示例 task ("Explore Hermes features", "Add real embeddings" 等), 状态分别为 todo/doing/done
+         - 写盘用 lock
+
+      2. **新增 server.py 端点** (放在 `/api/webui/*` 之后, catch-all 之前):
+         - `GET /api/kanban/boards` -> `list_boards()`
+         - `POST /api/kanban/boards` (body: `{"name": "..."}`) -> `create_board(name)`
+         - `GET /api/kanban/boards/{slug}` -> `get_board(slug)`
+         - `PUT /api/kanban/boards/{slug}` (body) -> 更新
+         - `DELETE /api/kanban/boards/{slug}` -> 删
+         - `POST /api/kanban/boards/{slug}/switch` -> 激活(返回该 board)
+         - `GET /api/kanban/board?board_id=...` -> `get_board(board_id)`
+         - `GET /api/kanban/tasks?board_id=...&status=...` -> `list_tasks(...)`
+         - `POST /api/kanban/tasks` (body: board_id, title, body, ...) -> `create_task(...)`
+         - `GET /api/kanban/tasks/{id}` -> 详情
+         - `PUT /api/kanban/tasks/{id}` (body) -> 更新
+         - `DELETE /api/kanban/tasks/{id}` -> 删
+         - `POST /api/kanban/tasks/{id}/block` (body: `{"reason": "..."}`) -> `block_task`
+         - `POST /api/kanban/tasks/{id}/unblock` -> `unblock_task`
+         - `POST /api/kanban/tasks/bulk` (body: `{"ids":[], "status":"..."}`) -> 批量改状态
+         - `GET /api/kanban/config` -> 默认配置
+         - `GET /api/kanban/assignees` -> 已知 assignee 列表(从 task 聚合)
+         - `GET /api/kanban/stats` -> `{total_tasks, by_status: {...}, by_assignee: {...}}`
+         - `GET /api/kanban/events` -> 最近 events 数组 (read-only, 不实现 SSE)
+         - `GET /api/kanban/dispatch` -> noop (返回 `{"dispatched":[]}`)
+
+      3. **改 api-adapter.js**:
+         - 把所有 kanban 端点从 `/api/webui/noop` 改为透传到 `/api/kanban/...`
+         - 保持新 UI 的 session_id / profile 等 query 参数
+
+      4. **验证**:
+         - 启动 server
+         - `GET /api/kanban/boards` 返回 `[{"board_id":"default",...}]`
+         - `POST /api/kanban/tasks` body `{"board_id":"default","title":"test"}` 后, `GET /api/kanban/tasks?board_id=default` 含这条
+         - `POST /api/kanban/tasks/{id}/block` 后, GET 任务详情含 `blocked: true`
+         - adapter 改动确认
+
+      ## 不要做
+      - 不要做 SSE 实时推送 (新 UI 期望 `/api/kanban/events/stream`, 返 noop `{events:[]}`)
+      - 不要做 task 之间的依赖图
+      - 不要做评论 (`/api/kanban/tasks/{id}/comments` 返 noop `{comments:[]}`)
+      - 不要做 worktree (`/api/kanban/tasks/{id}/worktree/...` 全部 noop)
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-kanban.md`
+
+    verified_by: verifier
+    verify_prompt: |
+      独立验证 kanban。
+
+      **必做**:
+      1. 启动 server
+      2. `GET /api/kanban/boards` 返回至少 default board
+      3. `POST /api/kanban/tasks` 创建测试 task, `GET /api/kanban/tasks?board_id=default` 看到它
+      4. `POST /api/kanban/tasks/{id}/block` 后, GET 看到 blocked=true
+      5. `DELETE /api/kanban/tasks/{id}` 后, GET 返回 404
+      6. `GET /api/kanban/stats` 返回带 by_status 字段的对象
+      7. 杀 server, 重启, board 和 task 都还在 (持久化)
+      8. 读 adapter 确认 kanban 端点不再走 noop
+      9. 之前的端点都正常
+
+      FAIL: 持久化失败, 端点 5xx, 其它端点崩
+
+  # ============================================================
+  # Task 5: cron 任务调度
+  # ============================================================
+  - id: cron-scheduler
+    title: "cron 任务调度 (jobs + 触发 + 历史)"
+    assigned_to: coder
+    depends_on: [streaming-and-sessions]
+    timeout_ms: 1500000
+    prompt: |
+      在 E:\Hermes Agent\ 里实现 cron 任务调度(新 WebUI 期望的功能)。MVP: 注册 cron job, 列出/编辑/暂停/恢复/手动触发/看历史。
+
+      ## 当前状态
+      - 新 WebUI 调 `/api/crons` 列表, `/api/crons/create` `/api/crons/update` `/api/crons/delete` 等
+      - adapter 全 noop
+      - 用户没现成 cron
+
+      ## 要做的
+
+      1. **新模块** `hermes/cron.py`:
+         - 数据模型:
+           ```
+           Job: {job_id, name, cron_expr, action: {type, payload}, enabled, created_at, updated_at, last_run_at, last_status, last_output, history: [{run_at, status, output, duration_ms}]}
+           ```
+         - `action.type` 限定: `shell` (跑 shell 命令), `task` (调 `hermes.task()`), `webhook` (POST 到 URL)
+         - 持久化: `hermes/data/crons/jobs.json`
+         - 提供 `list_jobs()`, `get_job(id)`, `create_job(name, cron_expr, action)`, `update_job(id, **fields)`, `delete_job(id)`, `enable_job(id)` / `disable_job(id)`, `trigger_job(id)` (立即跑一次), `get_history(id, limit=50)`, `get_status(id)`
+         - `trigger_job` 用 `asyncio.create_subprocess_exec` 跑 `shell` action; 调 agent API 跑 `task` action; httpx POST 跑 `webhook` action
+         - 用 `croniter` 库(检查 `requirements.txt` 有没有, 没有就 `pip install` 加到 requirements.txt) 计算下次执行时间
+         - 后台 loop (在 `create_app` startup 注册, shutdown 时 cancel): 每 30s 扫一次 enabled jobs, 到了时间的就 `trigger_job` 异步跑
+         - history 自动 trim 到最近 50 条
+
+      2. **新增 server.py 端点** (位置同其它新模块, catch-all 之前):
+         - `GET /api/crons` -> `{jobs: [...]}`
+         - `POST /api/crons/create` (body: name, cron_expr, action)
+         - `POST /api/crons/update` (body: job_id, ...)
+         - `POST /api/crons/delete` (body: job_id)
+         - `POST /api/crons/run` (body: job_id) -> `trigger_job` 异步, 返回 `{ok, run_id}`
+         - `POST /api/crons/pause` (body: job_id)
+         - `POST /api/crons/resume` (body: job_id)
+         - `GET /api/crons/status?job_id=...`
+         - `GET /api/crons/history?job_id=...&limit=50`
+         - `GET /api/crons/delivery-options` -> `["telegram","discord","slack","email"]` (新 UI 列平台)
+
+      3. **改 api-adapter.js**: 删 crons 端点的 noop, 改透传
+
+      4. **验证**:
+         - 启动 server
+         - `GET /api/crons` 返回 `{jobs: []}` 或 default 几个
+         - `POST /api/crons/create` body `{"name":"echo-test","cron_expr":"*/5 * * * *","action":{"type":"shell","payload":{"cmd":"echo hello"}}}` 后, `GET /api/crons` 看到
+         - `POST /api/crons/run` 立即跑一次, `GET /api/crons/history?job_id=...` 看到 history
+         - 杀 server, 重启, jobs 仍在 (持久化)
+
+      ## 不要做
+      - 不要做平台投递集成 (telegram/discord/slack 实际发送, 留 noop)
+      - 不要做依赖图 (jobs 之间的 wait-for)
+      - 不要做 timezone 切换 (假设本机时区)
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-cron.md`
+
+    verified_by: verifier
+    verify_prompt: |
+      独立验证 cron。
+
+      **必做**:
+      1. 启动 server
+      2. `GET /api/crons` 返回 jobs 列表
+      3. `POST /api/crons/create` 创建测试 job, `GET` 看到
+      4. `POST /api/crons/run` 手动跑, 验证 history 增加
+      5. **安全**: `POST /api/crons/create` body `{"action":{"type":"shell","payload":{"cmd":"rm -rf /"}}}` 应该被白名单/沙箱拒绝 (或者至少不静默执行) — **如果实现, 验证有限 shell 命令白名单**; 如果 noop shell, 也 OK, 但要 declare
+      6. 杀 server, 重启, jobs 还在
+      7. 之前的端点都正常
+
+      FAIL: jobs 跑不了, 持久化失败, 安全检查完全没做
+
+  # ============================================================
+  # Task 6: 最终集成 e2e + 文档
+  # ============================================================
+  - id: final-integration
+    title: "集成 e2e 验证 + AGENTS.md 更新 + 启动器 smoke test"
+    assigned_to: coder
+    depends_on: [streaming-and-sessions, workspace-browser, settings-persistence, kanban-board, cron-scheduler]
+    timeout_ms: 1200000
+    prompt: |
+      所有 5 个 track 完成后,做最终集成验证。
+
+      ## 要做的
+
+      1. **启动 server (mock 模式)**, 跑完整 e2e:
+         - 浏览器开 `http://localhost:7860/` 应能加载新 UI (HTML 200, `/static/api-adapter.js` 200, `/static/style.css` 200)
+         - `GET /` 拉到 index.html, 包含 `api-adapter.js` script tag
+         - `GET /v1/models` 返回 4 个本地 GGUF
+         - `GET /api/webui/settings` 返回完整对象
+         - `POST /api/webui/settings` 改 theme, 重启后仍在
+         - `POST /api/chat/start` 发消息, 真流式拿 >1 个 chunk
+         - `GET /api/chat/sessions` 看到刚创建的 session
+         - 杀 server 重启, session 还在
+         - `GET /api/workspaces` 至少 1 个
+         - `GET /api/list?path=data/knowledge` 返回文件
+         - `GET /api/kanban/boards` 返回 default board
+         - `GET /api/crons` 返回 jobs
+         - `GET /api/webui/profile/active` 返回 default
+
+      2. **更新 AGENTS.md**:
+         - §3 Project Layout 加新模块: `hermes/sessions.py` `hermes/workspace.py` `hermes/webui_settings.py` `hermes/kanban.py` `hermes/cron.py`, `data/sessions/` `data/kanban/` `data/crons/` `data/webui_settings.json`
+         - §4 Components 加新子节
+         - §12 Known Limitations 移除"workspaces/file browser, kanban boards, cron jobs"等已实现项
+         - §8 Modification Log 加 2026-06-07 多条新条目 (每个 track 一条)
+         - 顶部 §1/§2 可能也要微调(架构现在有 6 个新模块)
+
+      3. **更新 README.md** (如有需要):
+         - 简介提一句"WebUI 现在支持工作区/看板/定时任务"
+         - 删 outdated 引用
+
+      4. **CRLF 检查**: 所有 `bin\*.bat` 仍 CRLF (虽然这次没改 bat, 验证一下)
+
+      5. **AGENTS.md §13 加 2026-06-07 综合条目** 说明 6 个 track 完成
+
+      ## 交付
+      写 `E:\Hermes Agent\.mavis\plans\deliverable-final.md`, 包含:
+      - 完整 e2e 测试输出 (复制粘贴终端输出)
+      - AGENTS.md 改动 summary
+      - 6 个新模块的接口契约表(给未来参考)
+      - 给用户的 "how to verify" 步骤 (启动 hermes-all.bat, 看到什么)
+
+    verified_by: verifier
+    verify_prompt: |
+      独立做完整 e2e + 文档验证。
+
+      **必做**:
+      1. 启动 mock server, 跑上面列的 12 个 e2e 检查, 全部 PASS
+      2. 读 AGENTS.md, 确认:
+         - §3 列出 5 个新模块 (`hermes/sessions.py` 等)
+         - §8 加了新条目
+         - §12 已知限制更新
+         - 没有遗留下来 Open WebUI / web_dist / chat_ui 引用 (grep)
+      3. **CRLF 验证**: `Get-Content bin\hermes-all.bat -Raw` 后数 CR 和 LF, 必须相等
+      4. **adapter 适配**: 读 api-adapter.js, 确认所有 `/api/webui/noop` 都对应到真端点 (应该没有 kanban/workspace/cron 相关的 noop)
+      5. 之前所有 track 的 deliverable 标注的端点契约, 都能跑通
+
+      FAIL: 任何 e2e 检查失败, AGENTS.md 漏更, CRLF 破

@@ -19,6 +19,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# Optional: mirror presets for display
+try:
+    from hermes.mirror import MIRROR_PRESETS
+except ImportError:
+    MIRROR_PRESETS = {}
+
 HERMES_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME = HERMES_ROOT / "runtime"
 MODELS_DIR = HERMES_ROOT / "data" / "models"
@@ -275,6 +281,93 @@ def check_env(r: Report):
             r.warn(".env has no LLM API key", "cloud LLM will be unavailable")
 
 
+def check_mirrors(r: Report):
+    """Check mirror/proxy configuration (inspired by ComfyUI-aki-v3)."""
+    r.section("mirrors & proxy (network acceleration)")
+    try:
+        from hermes.mirror import get_mirror_config
+        mc = get_mirror_config()
+    except Exception:
+        r.warn("mirror config unavailable", "hermes.mirror not importable")
+        return
+
+    # Proxy
+    if mc.proxy_address:
+        r.ok("proxy", mc.proxy_address)
+        # Test proxy
+        code, _ = http_get("https://www.google.com", timeout=2)
+        if code > 0:
+            r.ok("  proxy reachable", "google.com via proxy")
+        else:
+            r.warn("  proxy may not work", "test failed, check proxy is running")
+    else:
+        r.warn("no proxy configured", "set proxy_address in config/hermes.yaml for slow networks")
+
+    # PyPI mirror
+    if mc.mirror_pypi:
+        index_url = mc.get_pypi_index_url()
+        r.ok("PyPI mirror", index_url)
+    else:
+        r.warn("PyPI mirror disabled", "enable mirror_pypi in config/hermes.yaml for faster pip installs")
+
+    # HuggingFace mirror
+    if mc.mirror_huggingface:
+        m = str(MIRROR_PRESETS["huggingface"].get(mc.hf_mirror, "?"))
+        r.ok("HuggingFace mirror", m)
+        # Quick connectivity check
+        code, _ = http_get(m, timeout=3)
+        if code > 0:
+            r.ok("  HF mirror reachable", m)
+        else:
+            r.warn("  HF mirror unreachable", "check network / firewall")
+    else:
+        r.warn("HuggingFace mirror disabled", "enable mirror_huggingface for faster model downloads")
+
+    # Git mirror
+    if mc.mirror_git:
+        r.ok("Git mirror", mc.git_mirror)
+    else:
+        r.warn("Git mirror disabled", "enable mirror_git for faster git clones")
+
+    # aria2c
+    try:
+        from hermes.download import find_aria2c
+        a2 = find_aria2c()
+        if a2:
+            r.ok("aria2c", f"available at {a2}")
+        else:
+            r.warn("aria2c not found", "install aria2 for faster multi-threaded downloads")
+    except Exception:
+        r.warn("download module unavailable", "hermes.download not importable")
+
+
+def check_network(r: Report):
+    """Quick network connectivity checks."""
+    r.section("network connectivity")
+    targets = [
+        ("PyPI (direct)", "https://pypi.org", 3),
+        ("PyPI (aliyun mirror)", "https://mirrors.aliyun.com/pypi/simple/", 3),
+        ("HuggingFace (direct)", "https://huggingface.co", 3),
+        ("HF-Mirror", "https://hf-mirror.com", 3),
+        ("GitHub", "https://github.com", 3),
+    ]
+    reachable = 0
+    for name, url, timeout in targets:
+        code, _ = http_get(url, timeout=timeout)
+        if code > 0:
+            r.ok(name, "reachable")
+            reachable += 1
+        else:
+            r.warn(name, "unreachable")
+
+    if reachable == 0:
+        r.err("NO network", "Hermes requires network for cloud LLM and model downloads")
+    elif reachable >= 4:
+        r.ok("network OK", f"{reachable}/{len(targets)} services reachable")
+    else:
+        r.warn("limited connectivity", f"{reachable}/{len(targets)} services reachable")
+
+
 # ---- main ----
 
 def main():
@@ -287,6 +380,8 @@ def main():
     check_python(r)
     check_disk(r)
     check_env(r)
+    check_mirrors(r)
+    check_network(r)
     print(r.render())
     return r.exit_code
 
