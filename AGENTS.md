@@ -117,6 +117,12 @@ E:\Hermes Agent\
 │   ├── hermes-firstrun.bat       # first-run GPU detection
 │   ├── hermes-models.py          # CLI model manager (list/switch/download)
 │   ├── hermes-task.bat           # `hermes task "do X"`
+│   ├── hermes-console.bat        # ★ NEW 2026-06-07 — wrapper for console.ps1
+│   ├── hermes-console.ps1        # ★ NEW 2026-06-07 — model management shell
+│   ├── hermes-trace.bat          # ★ NEW 2026-06-07 — wrapper for trace.ps1
+│   ├── hermes-trace.ps1          # ★ NEW 2026-06-07 — real-time log viewer (webui/bridge/agent)
+│   ├── hermes-model-run.bat      # ★ NEW 2026-06-07 — wrapper for live LLM log viewer
+│   ├── hermes-model-run.ps1      # ★ NEW 2026-06-07 — tail llm-server.log/err with smart colors
 │   ├── start-llm-smart.bat       # ★ llama-server with auto NGL
 │   ├── start-llm.ps1             # PowerShell variant
 │   ├── switch-model.bat          # hot-swap default model
@@ -238,6 +244,24 @@ E:\Hermes Agent\
   provider chunks. Providers: `OpenAIProvider.stream()` (covers OpenAI,
   llama-server, MiniMax via OpenAI-compat), `MockProvider.stream()`.
 - Used by `/api/chat/start` → `asyncio.Queue` → `/api/chat/stream/{id}` SSE.
+
+### bin/hermes-model-run.{bat,ps1} (NEW 2026-06-07)
+- **Purpose**: dedicated real-time viewer for the llama-server backend
+  (model load progress, offload decisions, HTTP request lines, prompt-eval
+  / generation timing, errors). Window title: "Hermes Model Running".
+- Tails `hermes/data/logs/llm-server.log` + `llm-server.err` (written by
+  `start-llm.ps1` via `RedirectStandardOutput` / `RedirectStandardError`).
+- Smart color highlighting: magenta for model load, green for "HTTP server
+  listening", yellow for eval time / tokens-per-second, red for errors,
+  cyan for HTTP request lines, dark-yellow for warnings.
+- 400ms polling loop, file-locked-safe (skip round on lock error).
+- Boot banner + initial 5-line tail dump of each file.
+- `hermes-all.bat` step 7 launches it; `hermes-stop.bat` step 5 kills its
+  powershell process and step 6 closes the cmd window by title match.
+- **Prerequisite**: `start-llm.ps1` no longer passes `--log-disable` (was
+  silencing everything). With it removed, llama-server streams its internal
+  log to stdout, which gets redirected to `llm-server.log` for the viewer
+  to tail.
 
 ---
 
@@ -389,6 +413,7 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-07  | **Track 6: final-integration** — All 5 tracks verified end-to-end on a live mock-mode server (port 7860). 13 GET/POST endpoints all 200; SSE stream produced 53+ chunks; settings (`theme=sepia`, `display.streaming=false`) + session `e2e-test-session` (5 messages) + kanban default board (6 tasks) all survived `Stop-Process` + restart. Kanban CRUD roundtrip (POST→GET→PATCH→DELETE) verified. Cron CRUD roundtrip (create→list→run→delete) verified. `bin\*.bat` CRLF audit: 9/13 CRLF-OK, 4 still LF-only (`gpu-detect.bat`, `hermes.bat`, `model-manager.bat`, `verify-server.bat`) — pre-existing issue, not introduced by these tracks. AGENTS.md §3/§4/§8/§12/§13 updated; README.md mentions new WebUI features. Full e2e transcript in `deliverable-final.md`.
 | 2026-06-07  | **Hermes WebUI merge (nesquena/hermes-webui)**: replaced the in-house single-file `chat_ui.py` with the upstream three-panel dark UI. Source: `D:\PZS0X\下载\hermes-webui-master\hermes-webui-master\static\` (3.5MB: 18 vanilla-JS files + 366KB CSS with 16 skins + vendored streaming-markdown + KaTeX). Copied to `hermes/static/`, new UI served at `/`; old `chat_ui.py` kept as `/chat` fallback. Adaptation: `hermes/static/api-adapter.js` (23KB) wraps `window.fetch` + `EventSource` to translate the new UI's ~25 expected endpoints onto our existing `/api/chat/*` + `/v1/*` backends; missing endpoints (workspaces, kanban, crons, etc.) return sane empty defaults so the UI continues to boot. server.py: `GET /` serves `hermes/static/index.html` with `__WEBUI_VERSION__` / `__MAX_UPLOAD_BYTES__` / `__CSRF_TOKEN_JSON__` placeholder substitution; added 11 new `/api/webui/*` stub endpoints; added `app.mount("/static", StaticFiles(...))` for the new asset tree. **Two bugs hit and fixed during integration**: (1) `/api/webui/*` registered AFTER the catch-all `/api/{path:path}` got swallowed — moved all webui routes before the catch-all; (2) duplicate `@app.get("/")` returned the legacy DASHBOARD_HTML — removed the old one. **Knowingly not implemented** (UI may show empty panels / "no data" / disabled features): streaming Markdown renders but no real token-by-token SSE (we block on /api/chat/send and emit one fake delta — works but not live), workspaces/file browser, kanban boards, cron jobs, projects, memory editor, voice, OAuth/passkeys, multi-profile, web terminal. Adding these is straightforward but out of scope for v0.1.
 | 2026-06-07  | **Full cutover to Hermes WebUI**: deleted `hermes/chat_ui.py` (336 lines), `bin/hermes-web.bat`, `data/openwebui/` (residual data), and `docker/` (unused). Removed `GET /chat` endpoint, `DASHBOARD_HTML` constant, and the `DASHBOARD_HTML` fallback from `GET /` and `GET /health` — both now 503 if `hermes/static/index.html` is missing (install is broken). `bin/hermes-all.bat` v8: title says "WebUI mode", opens `http://localhost:7860/` (not `/chat`), drops the legacy `:7870` line. **LLM model dropdown fix**: rewrote `GET /v1/models` to **live-proxy** `http://127.0.0.1:8080/v1/models` when llama-server is up (so the UI sees the exact `--alias` model llama-server has loaded), then fall back to scanning `data/models/*.gguf` via `hermes/gguf.py` and exposing filename stems as model ids (matches llama-server's default alias), then empty list. Response now includes `_size_gb` / `_arch` / `_ctx_len` / `_quant` / `_filename` extras on each model entry (the adapter surfaces them in the WebUI's tooltip). Updated AGENTS.md §1, §2, §3, §4, §5, §7, §9, §10, §12 to remove all Open WebUI references and reflect the new architecture (2 processes instead of 3, WebUI at :7860, no `:7870`).
+| 2026-06-07  | **Hermes Model Running window**: new persistent `bin/hermes-model-run.bat` + `.ps1` that tails `data/logs/llm-server.log` + `llm-server.err` with smart color highlighting (model load magenta, HTTP requests cyan, eval-time yellow, errors red). User asked for a way to "see what the LLM is doing" — previously `llm-server.log` was 0 bytes because `start-llm.ps1` passed `--log-disable`. Removed that flag so llama-server now streams its internal log to stdout, which gets redirected to the log file. Step 7 of `hermes-all.bat` launches the window; `hermes-stop.bat` step 5 kills the powershell and step 6 closes the cmd window by title match. Title set via `$Host.UI.RawUI.WindowTitle` with try-catch guard against host-less invocations. Initial 5-line tail dump at boot, 400ms polling loop, file-locked-safe. CRLF verified on both new files. AGENTS.md §3, §4, §8 updated.
 
 ---
 

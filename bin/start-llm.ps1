@@ -23,7 +23,7 @@ param(
     [string]$Alias       = '',
     [string]$ListenHost  = '127.0.0.1',  # NOTE: not -Host, that's a read-only PS var
     [int]   $Port        = 8080,
-    [int]   $CtxSize     = 4096,
+    [int]   $CtxSize     = 65536,
     [int]   $Threads     = 4,
     [string]$LogDir      = 'data\logs',
     [string]$RootDir     = ''  # auto-detected from script location
@@ -88,7 +88,6 @@ $argList = @(
     '--n-gpu-layers',   $NGpuLayers
     '--threads',        $Threads
     '--jinja'
-    '--log-disable'
 )
 
 $proc = Start-Process `

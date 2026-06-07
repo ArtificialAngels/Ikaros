@@ -124,7 +124,7 @@ set /p "MODEL_REL=" < "%TEMP%\hermes_model_rel.txt"
 del "%TEMP%\hermes_model_rel.txt" 2>nul
 echo   [launch] model=!MODEL_REL! ngl=%NGL% alias=!MODEL_ALIAS!
 
-start "Hermes-LLM" /MIN "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\start-llm.ps1" -Binary "%LLAMA_BIN%" -Model "%MODEL%" -NGpuLayers %NGL% -Alias "!MODEL_ALIAS!" -RootDir "%HERMES_ROOT%"
+start "Hermes-LLM" /MIN "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\start-llm.ps1" -Binary "%LLAMA_BIN%" -Model "%MODEL%" -NGpuLayers %NGL% -CtxSize 65536 -Alias "!MODEL_ALIAS!" -RootDir "%HERMES_ROOT%"
 popd
 
 REM ---- Output JSON status for programmatic use ----
