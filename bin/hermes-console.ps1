@@ -105,7 +105,7 @@ function Switch-Model {
         -WorkingDirectory $HERMES_ROOT `
         -WindowStyle Hidden `
         -PassThru
-    Write-Host "  Launched (pid=$($proc.Id)). Waiting for server to be ready..." -ForegroundColor Gray
+    Write-Host "  Launched bat (pid=$($proc.Id)). Waiting for server to be ready..." -ForegroundColor Gray
 
     # Layered liveness probe — /health, /v1/models, /v1/completions.
     # Reports each milestone with a wall-clock timestamp so the user can
@@ -149,8 +149,13 @@ function Switch-Model {
     $configPath = Join-Path $HERMES_ROOT "data\hermes-agent\config.yaml"
 
     if (Test-Path $configPath) {
-        $ctxLen = 32768
-        if ($ModelName -match "7B") { $ctxLen = 65536 }
+        # Context length to declare to hermes-agent in data/hermes-agent/config.yaml.
+        # The agent enforces a 64000 minimum for tool-calling workflows (see
+        # hermes-agent-source/agent/model_metadata.py MINIMUM_CONTEXT_LENGTH).
+        # 3B's n_ctx_train is only 32K, so the actual server will warn+cap to
+        # 32K, but declaring 65536 here passes the pre-flight check and lets
+        # the user override. Larger models use their full training context.
+        $ctxLen = 65536
         if ($ModelName -match "35B") { $ctxLen = 131072 }
 
         $lines = Get-Content $configPath -Encoding UTF8

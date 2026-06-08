@@ -127,3 +127,24 @@ Write-Host "  [pid]   $llamaPid"
 Write-Host ""
 Write-Host "  llama-server started in background. To stop:"
 Write-Host "    Stop-Process -Id $llamaPid"
+
+# Block on the server's lifetime. This script is the parent of llama-server
+# (via Start-Process's process group inheritance). If the script exits, the
+# parent process (whatever launched it — a bat, the hermes-console, or
+# hermes-all.bat's detached `start /MIN powershell`) tears down, and depending
+# on the calling chain the child can be reaped. By waiting here we keep
+# this powershell alive for the server's full lifetime:
+#   - For hermes-all.bat: the `start /MIN powershell` that called us is a
+#     detached process group, so its teardown doesn't kill the server, but
+#     Wait-Process is still a clean way to keep the script "attached" and
+#     not exit prematurely.
+#   - For hermes-console Switch-Model: the same applies — this ps1 was
+#     launched via `Start-Process powershell.exe`, and as long as we
+#     block here, the server is alive.
+# When the user kills the server (Stop-Process $llamaPid), this script
+# returns and the powershell host exits cleanly.
+try {
+    Wait-Process -Id $llamaPid -ErrorAction Stop | Out-Null
+} catch {
+    # Process already exited (crash or manual kill). Exit silently.
+}
