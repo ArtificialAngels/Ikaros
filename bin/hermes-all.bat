@@ -90,9 +90,15 @@ echo [1/8] Environment check...
 call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
 
 REM ---- Step 2: Start llama-server (router mode) ----
+REM Run the ps1 directly (NOT via `start /MIN powershell`). The ps1
+REM prints its banner + pid to stdout and exits in <1s after spawning
+REM llama-server detached. Calling it inline means the user sees the
+REM launch status in this same cmd window — no hidden window with
+REM invisible error output. The ps1 returns before step 3 starts, so
+REM the wait loop below still does its job.
 echo [2/8] Starting llama-server (router mode)...
 cd /d "%HERMES_ROOT%"
-start "Hermes-LLM" /MIN powershell -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\start-llm-router.ps1" -RootDir "%HERMES_ROOT%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\start-llm-router.ps1" -RootDir "%HERMES_ROOT%"
 
 REM ---- Wait for llama-server ----
 echo [3/8] Waiting for llama-server...
@@ -144,17 +150,20 @@ if not errorlevel 1 (
 if %WAITED% GEQ 30 goto :start_console
 goto :wait_webui
 
-REM ---- Step 4: Start Hermes Console (persistent model management) ----
+REM ---- Step 4: (skip) Hermes Console removed in router-mode refactor ----
+REM The console's Switch-Model was a kill+restart flow; in router mode
+REM the WebUI dropdown handles model switching via /v1/models/load, so
+REM the console is redundant. The console is still available as
+REM `bin\hermes-console.bat` for users who want a status-only CLI.
 :start_console
-echo [6/8] Starting Hermes Console...
-start "Hermes-Console" "%HERMES_ROOT%\bin\hermes-console.bat"
+REM (intentionally empty)
 
 REM ---- Step 5: Start Hermes Trace (real-time webui/bridge/agent log viewer) ----
-echo [7/8] Starting Hermes Trace...
+echo [6/8] Starting Hermes Trace...
 start "Hermes-Trace" "%HERMES_ROOT%\bin\hermes-trace.bat"
 
 REM ---- Step 6: Start Hermes Model Running (real-time LLM backend log viewer) ----
-echo [8/8] Starting Hermes Model Running...
+echo [7/8] Starting Hermes Model Running...
 start "Hermes Model Running" "%HERMES_ROOT%\bin\hermes-model-run.bat"
 
 :done
