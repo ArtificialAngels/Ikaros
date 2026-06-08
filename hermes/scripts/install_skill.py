@@ -26,7 +26,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-HERMES_ROOT = Path(r'E:\Hermes Agent')
+HERMES_ROOT = Path(__file__).resolve().parents[2]  # hermes-agent/  (scripts/ -> hermes/ -> root)
 SKILLS_DIR = HERMES_ROOT / 'hermes' / 'data' / 'skills'
 REGISTRY_PATH = SKILLS_DIR / 'registry.json'
 

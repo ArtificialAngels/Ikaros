@@ -21,12 +21,30 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul
 
 set "HERMES_ROOT=%~dp0.."
+for %%I in ("%HERMES_ROOT%") do set "HERMES_ROOT=%%~fI"
 set "APP_DIR=%HERMES_ROOT%\data\webui-new\app"
 set "PY=%HERMES_ROOT%\portable-python\python.exe"
 set "WEBUI_HOME=%HERMES_ROOT%\data\webui-new\data"
 set "HERMES_HOME=%HERMES_ROOT%\data\hermes-agent"
 set "WEBUI_PORT=8648"
 set "LLAMA_URL=http://127.0.0.1:8080/v1"
+
+REM ---- prefer project-local Node (v23+) over system node for portability ----
+REM hermes-web-ui v0.6.11 requires node:sqlite builtin (Node 22.5+).
+REM runtime/node23/node.exe is bundled (v23.11.1). Override via HERMES_NODE env var.
+REM Falls back to PATH's node if local missing.
+set "NODE=%HERMES_ROOT%\runtime\node23\node.exe"
+if not "%HERMES_NODE%"=="" set "NODE=%HERMES_NODE%"
+if exist "!NODE!" goto :node_resolved
+for /f "usebackq tokens=*" %%N in (`where node 2^>nul`) do (
+    set "NODE=%%N"
+    goto :node_resolved
+)
+echo [ERROR] No Node.js found. Expected project-local: !NODE!
+echo         (hermes-web-ui v0.6.11 needs Node 22.5+ for node:sqlite)
+echo         Or install Node.js 22.5+ and ensure it's on PATH.
+exit /b 1
+:node_resolved
 
 REM ---- pick the first arg as command (default: start) ----
 set "CMD=%~1"
@@ -36,8 +54,16 @@ shift
 REM ---- sanity checks ----
 if not exist "%APP_DIR%\bin\hermes-web-ui.mjs" (
     echo [ERROR] webui-new\app junction missing or webui build missing.
-    echo         Run: mklink /J "%APP_DIR%" "E:\hermes-web-ui-main"
-    echo         And:  cd E:\hermes-web-ui-main ^&^& npm install ^&^& npm run build
+    echo         This branch is only for developers rebuilding the WebUI from source.
+    echo         For an end-user install, %APP_DIR% should already be populated
+    echo         with the prebuilt app from the GitHub release.
+    echo.
+    echo         To rebuild from source on this machine:
+    echo             git clone https://github.com/ArtificialAngels/hermes-agent.git
+    echo             cd hermes-agent\data\webui-new\app
+    echo             npm install
+    echo             npm run build
+    echo         Then re-run bin\hermes-all.bat.
     exit /b 1
 )
 if not exist "%PY%" (
@@ -79,6 +105,31 @@ if not exist "%HERMES_HOME%\config.yaml" (
     ) > "%HERMES_HOME%\config.yaml"
 )
 
+REM ---- portability fix-up: any mcp_servers.*.env.HERMES_WEB_UI_HOME /
+REM      HERMES_WEBUI_STATE_DIR that still points at a previous install's
+REM      drive letter gets rewritten to the current HERMES_ROOT. The webui
+REM      writes those keys on first run; if the user later moves the folder
+REM      to a different drive they would otherwise break the mcp server.
+REM      Idempotent: no change when the value is already correct. ----
+if exist "%HERMES_HOME%\config.yaml" (
+    powershell -NoProfile -Command ^
+        "$p = '%HERMES_HOME%\config.yaml'; $r = '%HERMES_ROOT%';" ^
+        "$correctHome = $r + '\data\webui-new\data';" ^
+        "$lines = [System.IO.File]::ReadAllLines($p);" ^
+        "$changed = $false;" ^
+        "for ($i = 0; $i -lt $lines.Count; $i++) {" ^
+        "    if ($lines[$i] -match '^\s*(HERMES_WEB_UI_HOME|HERMES_WEBUI_STATE_DIR):\s*(.+?)\s*$') {" ^
+        "        $val = $matches[2];" ^
+        "        if ($val -ne $correctHome) {" ^
+        "            $lines[$i] = ($lines[$i] -replace ('\S+\s*$'), $correctHome);" ^
+        "            $changed = $true;" ^
+        "        }" ^
+        "    }" ^
+        "}" ^
+        "if ($changed) { $utf8 = New-Object System.Text.UTF8Encoding($false); [System.IO.File]::WriteAllLines($p, $lines, $utf8); Write-Host ('[port] config.yaml paths rewired to ' + $correctHome) -ForegroundColor Yellow }" ^
+        "else { Write-Host '[port] config.yaml paths already correct' -ForegroundColor Gray }"
+)
+
 REM ---- dispatch ----
 cd /d "%APP_DIR%"
 if /i "%CMD%"=="fg" goto :fg
@@ -96,25 +147,26 @@ echo   Port:        http://localhost:%WEBUI_PORT%/
 echo   Data:        %WEBUI_HOME%
 echo   Hermes home: %HERMES_HOME%
 echo   Bridge py:   %PY%
+echo   Node:        %NODE%
 echo ============================================================
-node bin\hermes-web-ui.mjs start %*
+"%NODE%" bin\hermes-web-ui.mjs start %*
 exit /b %ERRORLEVEL%
 
 :stop
-node bin\hermes-web-ui.mjs stop
+"%NODE%" bin\hermes-web-ui.mjs stop
 exit /b %ERRORLEVEL%
 
 :restart
-node bin\hermes-web-ui.mjs stop
+"%NODE%" bin\hermes-web-ui.mjs stop
 timeout /t 2 /nobreak >nul
-node bin\hermes-web-ui.mjs start
+"%NODE%" bin\hermes-web-ui.mjs start
 exit /b %ERRORLEVEL%
 
 :status
-node bin\hermes-web-ui.mjs status
+"%NODE%" bin\hermes-web-ui.mjs status
 exit /b %ERRORLEVEL%
 
 :fg
 echo [fg] starting in foreground (Ctrl+C to stop)
-node bin\hermes-web-ui.mjs %*
+"%NODE%" bin\hermes-web-ui.mjs %*
 exit /b %ERRORLEVEL%

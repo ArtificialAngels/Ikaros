@@ -1,7 +1,25 @@
-# Portable Python (不跟踪整个便携Python环境)
+# ============================================================
+# Hermes Agent .gitignore
+# ============================================================
+# IMPORTANT (2026-06-08 portability audit):
+#   The following heavy blobs are NOT in git because of size:
+#     - portable-python/  (~230 MB, embedded Python 3.12.10)
+#     - runtime/          (~700 MB, llama.cpp + CUDA DLLs + Node 23)
+#     - data/models/*.gguf (multi-GB model files)
+#   A fresh `git clone` therefore does NOT run on its own. The user
+#   must follow the "Fresh install on a new PC" section in README.md
+#   which runs `bin\setup-portable.bat` to fetch these via aria2
+#   (or downloads them from the GitHub release assets).
+#
+#   If you want a single-double-click "plug and play" experience,
+#   publish portable-python + runtime as GitHub release assets and
+#   have setup-portable.bat download from there. See §16 in AGENTS.md.
+# ============================================================
+
+# Portable Python (heavy, downloaded by setup-portable.bat)
 portable-python/
 
-# Runtime 目录
+# Runtime (heavy, downloaded by setup-portable.bat)
 runtime/
 
 # 数据目录

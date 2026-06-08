@@ -54,36 +54,59 @@ if not errorlevel 1 (
 )
 
 REM ---- Step 5: Smart NGL calculation ----
+REM NOTE: every variable read inside these if-blocks uses !VAR! (delayed
+REM expansion), not %VAR%, because VRAM_FREE_MB and MODEL_MB are set by
+REM a `for /f` block above and the immediate-expansion form reads them
+REM as the empty string at this point. Also: we use nested if/else
+REM rather than `if A else if B else if C` because cmd.exe's parser
+REM chokes on the chained form inside a parenthetical block on some
+REM Windows builds (e.g. "Windows 10 22H2" reports `'else' is not
+REM recognized as an internal or external command`).
 if "%LLAMA_NGL%"=="0" (
     set "NGL=0"
     set "MODE=CPU (forced by LLAMA_NGL=0)"
-) else if not "%LLAMA_NGL%"=="" (
-    set "NGL=%LLAMA_NGL%"
-    set "MODE=GPU (forced %LLAMA_NGL% layers)"
-) else if %VRAM_FREE_MB% GTR 0 if %CUDA_RUNTIME_OK%==1 (
-    REM CUDA runtime exists + NVIDIA GPU detected = real GPU acceleration
-    set "GPU_AVAILABLE=1"
-    if %MODEL_MB% LEQ %VRAM_FREE_MB% (
-        REM Model fits entirely in VRAM
-        set "NGL=99"
-        set "MODE=GPU (full offload, !MODEL_MB!MB / !VRAM_FREE_MB!MB free VRAM)"
-    ) else (
-        REM Partial offload: use 70% of free VRAM for model layers
-        set /a "VRAM_FOR_MODEL=VRAM_FREE_MB*7/10"
-        set /a "AVG_LAYER_MB=MODEL_MB/80"
-        if !AVG_LAYER_MB! LSS 1 set "AVG_LAYER_MB=1"
-        set /a "NGLCALC=VRAM_FOR_MODEL/AVG_LAYER_MB"
-        if !NGLCALC! LSS 1 (set "NGL=0" & set "MODE=CPU (model too large: !MODEL_MB!MB needs !VRAM_FREE_MB!MB)")
-        else if !NGLCALC! GTR 99 (set "NGL=99" & set "MODE=GPU (all !NGLCALC! layers fit)")
-        else (set "NGL=!NGLCALC!" & set "MODE=Hybrid (!NGL! GPU layers, rest CPU)")
-    )
-) else if %VRAM_FREE_MB% GTR 0 if %CUDA_RUNTIME_OK%==0 (
-    REM NVIDIA GPU detected but CUDA DLLs missing
-    set "NGL=0"
-    set "MODE=CPU (CUDA runtime DLLs missing - run bin\hermes-firstrun.bat install first)"
 ) else (
-    set "NGL=0"
-    set "MODE=CPU (no NVIDIA GPU detected)"
+    if not "%LLAMA_NGL%"=="" (
+        set "NGL=%LLAMA_NGL%"
+        set "MODE=GPU (forced %LLAMA_NGL% layers)"
+    ) else (
+        if !VRAM_FREE_MB! GTR 0 if !CUDA_RUNTIME_OK!==1 (
+            REM CUDA runtime exists + NVIDIA GPU detected = real GPU acceleration
+            set "GPU_AVAILABLE=1"
+            if !MODEL_MB! LEQ !VRAM_FREE_MB! (
+                REM Model fits entirely in VRAM
+                set "NGL=99"
+                set "MODE=GPU (full offload, !MODEL_MB!MB / !VRAM_FREE_MB!MB free VRAM)"
+            ) else (
+                REM Partial offload: use 70% of free VRAM for model layers
+                set /a "VRAM_FOR_MODEL=VRAM_FREE_MB*7/10"
+                set /a "AVG_LAYER_MB=MODEL_MB/80"
+                if !AVG_LAYER_MB! LSS 1 set "AVG_LAYER_MB=1"
+                set /a "NGLCALC=VRAM_FOR_MODEL/AVG_LAYER_MB"
+                if !NGLCALC! LSS 1 (
+                    set "NGL=0"
+                    set "MODE=CPU (model too large: !MODEL_MB!MB needs !VRAM_FREE_MB!MB)"
+                ) else (
+                    if !NGLCALC! GTR 99 (
+                        set "NGL=99"
+                        set "MODE=GPU (all !NGLCALC! layers fit)"
+                    ) else (
+                        set "NGL=!NGLCALC!"
+                        set "MODE=Hybrid (!NGL! GPU layers, rest CPU)"
+                    )
+                )
+            )
+        ) else (
+            if !VRAM_FREE_MB! GTR 0 if !CUDA_RUNTIME_OK!==0 (
+                REM NVIDIA GPU detected but CUDA DLLs missing
+                set "NGL=0"
+                set "MODE=CPU (CUDA runtime DLLs missing - run bin\hermes-firstrun.bat install first)"
+            ) else (
+                set "NGL=0"
+                set "MODE=CPU (no NVIDIA GPU detected)"
+            )
+        )
+    )
 )
 
 REM ---- Step 6: Derive model alias ----
@@ -104,7 +127,7 @@ echo ============================================================
 echo.
 
 REM ---- Step 7: Warn if CUDA runtime missing ----
-if %VRAM_FREE_MB% GTR 0 if %CUDA_RUNTIME_OK%==0 (
+if !VRAM_FREE_MB! GTR 0 if !CUDA_RUNTIME_OK!==0 (
     echo [WARNING] ==============================================
     echo   NVIDIA GPU detected but CUDA runtime DLLs are MISSING!
     echo   Your GPU WILL NOT be used. Model runs on CPU only.

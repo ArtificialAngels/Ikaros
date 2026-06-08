@@ -90,16 +90,40 @@ $argList = @(
     '--jinja'
 )
 
+# Detach via Start-Process. PowerShell's Start-Process uses ShellExecuteEx
+# by default (UseShellExecute=$true), so the child process is NOT attached
+# to the calling PowerShell session's job object — it survives the parent
+# bat / ps1 exiting. That makes the chain hermes-all.bat → cmd /c →
+# powershell -File start-llm.ps1 → Start-Process → llama-server stable
+# in practice (validated 2026-06-08: server stays up across PS exits).
+#
+# We use the native -RedirectStandardOutput / -RedirectStandardError
+# switches instead of cmd's `> log 2> err` so PowerShell handles the
+# file handles directly. No extra layer of cmd /c quoting needed.
+$logPath = Join-Path $LogDirFull 'llm-server.log'
+$errPath = Join-Path $LogDirFull 'llm-server.err'
+
+# Truncate logs from any previous run so a fresh server boot is unambiguous.
+# Start-Process's redirect switches open the files in Write/Truncate mode,
+# but doing it explicitly here keeps the visible state consistent.
+'' | Set-Content -Path $logPath -Encoding UTF8
+'' | Set-Content -Path $errPath -Encoding UTF8
+
 $proc = Start-Process `
     -FilePath $BinFull `
     -ArgumentList $argList `
     -WorkingDirectory $RuntimeDir `
-    -RedirectStandardOutput (Join-Path $LogDirFull 'llm-server.log') `
-    -RedirectStandardError  (Join-Path $LogDirFull 'llm-server.err') `
+    -RedirectStandardOutput $logPath `
+    -RedirectStandardError  $errPath `
     -WindowStyle Hidden `
     -PassThru
 
-Write-Host "  [pid]   $($proc.Id)"
+# NOTE: avoid the name `$pid` - that is a read-only automatic variable in
+# PowerShell (the current process's own PID). Assigning to it throws
+# `VariableNotWritable` and aborts the script after the child has already
+# been spawned, leaving an orphan llama-server.
+$llamaPid = $proc.Id
+Write-Host "  [pid]   $llamaPid"
 Write-Host ""
 Write-Host "  llama-server started in background. To stop:"
-Write-Host "    Stop-Process -Id $($proc.Id)"
+Write-Host "    Stop-Process -Id $llamaPid"

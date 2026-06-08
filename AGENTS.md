@@ -470,6 +470,8 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-08  | **Hermes Web UI Integration (EKKOLearnAI)**: integrated [hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) as the main web interface. Source: `data/webui-new/app/` (Vue 3 + Koa + Socket.IO). New launcher: `bin/webui-new.bat` with environment setup for portable Python (`HERMES_AGENT_BRIDGE_PYTHON`), data isolation (`HERMES_WEB_UI_HOME`, `HERMES_HOME`), and gateway disable (`HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART=1`). Updated `hermes-all.bat` to start Web UI at :8648. **Compatibility fixes**: (1) Python bridge path injection for portable Python; (2) Data directory isolation to `data/webui-new/data/` and `data/hermes-agent/`; (3) Auto-generated `hermes-agent/config.yaml` with llama-local provider pointing to `http://127.0.0.1:8080/v1`; (4) Node.js dependency on system PATH (Web UI requires Node.js). Architecture now has 3 processes: llama-server (:8080), Hermes FastAPI (:7860), Hermes Web UI (:8648). README.md rewritten with acknowledgment to EKKOLearnAI/hermes-web-ui project. AGENTS.md §1/§2/§3/§4 updated.
 | 2026-06-08  | **Skill installation for Web UI**: 9 skills installed to `data/hermes-agent/skills/` across 4 categories — 4 from upstream `optional-skills/finance/` (excel-author, pptx-author, comps-analysis, dcf-model) + 4 from community GitHub via `git clone` (drawio-skill from `Agents365-ai/`, hermes-dojo from `Yonkoo11/`, avoid-ai-writing from `conorbronsdon/`, plur-memory + plur-session-end from `plur-ai/plur`). Config change: `data/hermes-agent/config.yaml` `toolsets:` list extended with `skills` (was `[hermes-cli]` only) — required to load the upstream `skills` toolset. **Process note**: `hermes skills install <name> --force` is rate-limited by GitHub API (60 req/hr unauthenticated) so we used `git clone --depth=1` as the rate-limit-free fallback. 2 short names (`research-agent`, `multiagent`) not present in upstream source tree and were skipped pending a specific source URL from the user. See §11 for the full list. AGENTS.md §3/§8/§11 updated.
 | 2026-06-08  | **Built-in skill install (round 2)**: copied 5 built-in skills from `E:\Hermes Agent\hermes-agent-source\skills\` to `data/hermes-agent/skills/` — `productivity/{powerpoint, ocr-and-documents, nano-pdf, google-workspace}` and `creative/claude-design`. Total now 14 active skills across 4 categories (finance 4, productivity 6, creative 3, autonomous-ai-agents 1). User confirmed trust = same-source GitHub repo so no security scan. AGENTS.md §3/§15 updated.
+| 2026-06-08  | **Portability audit (full project)** — user asked: every file/service/dep/env that `hermes-all.bat` opens must be inside the `Hermes Agent` folder itself (plug-and-play on a fresh Windows PC, no PATH, no drive-letter literals). Audited all `bin/*.bat` (18), `bin/*.ps1` (5), root `*.bat`/`*.ps1` (4), `hermes/*.py`, `hermes-agent-source/`, `data/webui-new/app/bin/*.mjs`, `data/hermes-agent/config.yaml`, `portable-python/`, `runtime/node23/`. Fixed: `bin/verify-server.bat` (4-line rewrite to use `%~dp0..`), `bin/webui-new.bat` (portable dev hint + PowerShell fix-up of `mcp_servers.hermes-studio.env.HERMES_WEB_UI_HOME/HERMES_WEBUI_STATE_DIR` on every launch, idempotent), `hermes/scripts/install_skill.py` + `rebuild_kb.py` (`Path(__file__).resolve().parents[2]`). Deleted: root `start_llm_server.bat` (dead code, called missing `local_llm_server.py`), root `update_env.ps1` (contained a live **MiniMax API key** — would have leaked to GitHub), 47 debug-residue files in `data/logs/` (17 `_diag*.bat` + 1 `_test.ps1` + 1 `_test_arg.bat` + 25 `_diag*.txt` + 2 `removed-*.bat` + 17 underscore-prefixed session logs). Verified portable: portable-python runs in any cwd ✓; `runtime/node23/node.exe` resolves via `%HERMES_ROOT%` ✓; `hermes-agent-source/` has no hardcoded paths ✓; webui `hermes-web-ui.mjs` ✓. Items left as-is documented in §16 (env-var fallbacks, docstring examples, third-party Node build scripts, doctor diagnostic strings). New `§16 Portability Audit` written.
+| 2026-06-08  | **Console Switch bug + Process.Start fix + NGL=0 + new health probe + setup-portable** — five related fixes: **(1)** `hermes-console.ps1` Switch-Model previously used `Start-Process cmd /c "bat" "gguf"` which silently failed (cmd's quote-pair rule + spaces in `E:\Hermes Agent\...`) — no `last-launch.json`, no llama-server PID, no logs. Switched to `Start-Process -FilePath $startBat -ArgumentList @($ModelPath)` (ShellExecuteEx detaches the child reliably). Verified end-to-end: 35B → kill → 3B switch takes 3s. **(2)** `start-llm.ps1` had two real bugs: (a) `$pid = $wmi.ProcessId` triggered `VariableNotWritable` (PID is a read-only auto-variable), so the script aborted AFTER the child had already been spawned — leaving an orphan llama-server. (b) It was WMI + cmd /c indirection that PowerShell-session-detach problems couldn't shake. Replaced the whole WMI + cmd redirect block with `Start-Process -FilePath $BinFull -ArgumentList $argList -RedirectStandardOutput/Error -WindowStyle Hidden -PassThru`. Confirmed this works: 35B stayed up across 3 separate PS session exits. **(3)** `start-llm-smart.bat` NGL calculator had two bugs: (a) `if %VRAM_FREE_MB% GTR 0` was immediate-expansion but VRAM was set inside a `for /f` block above — the read saw empty string, so NGL=0 with the misleading "no NVIDIA GPU detected" message even when 7GB VRAM was free. (b) The `if A else if B else if C` chained form raised `'else' is not recognized as an internal or external command` on some Windows builds. Fixed: all reads inside the NGL block now use `!VRAM_FREE_MB!` (delayed expansion), and the chain is rewritten as nested `if/else`. Re-ran with 3B model: NGL=99, Mode="GPU (full offload, 2007MB / 6996MB free VRAM)" ✓. **(4)** New `bin/hermes-health.ps1` — three-layer liveness probe with millisecond timestamps: `/health` (TCP-up), `/v1/models` (loader done), `/v1/completions` (model warm). Reports each layer with `HH:mm:ss.fff` and total elapsed. Wired into `hermes-console.ps1` Switch-Model step 3; hermes-all.bat uses it on a future commit. End-to-end: 3B switch + health probe reported "ALL OK in 210ms" with the model returning text from a "ping" prompt. **(5)** New `bin/setup-portable.bat` — idempotent first-boot bootstrap. Detects and downloads missing pieces: (1) `portable-python/` from python.org official embed zip (~10MB), (2) `runtime/llama-server-cuda-12.4.exe` from ggml-org's official b9503 release on GitHub (~250MB with CUDA DLLs), (3) `data/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf` from Hugging Face official mirror (~2GB). Each piece is checked separately; subcommands `python`, `runtime`, `model`, `status` for fine control. Downloads use `runtime/aria2c.exe -x16 -s16` if present, else PowerShell `Start-BitsTransfer`. Exits 1 with `MISSING` on partial failure so `hermes-all.bat` can warn-and-continue. Wired into `hermes-all.bat` as new step `[0/8]` (renumbered 2-7 to 3-8). All `.bat` files normalized to CRLF: 19/19 OK. **(6)** `hermes-model-run.ps1` evaluated per user request: **functionality is sound** — it correctly tails `data/logs/llm-server.{log,err}` with smart color highlighting (model load in magenta, offload in dark-magenta, HTTP requests in cyan, eval time in yellow, errors in red, warnings in dark-yellow), 400ms polling loop, file-locked-safe, initial 5-line tail dump. What it shows is **the llama-server backend's own log** (load progress, offload decisions, HTTP request lines, prompt-eval/eval/total times, tokens/s) — NOT the model's token-by-token "thinking" text. For that, the server would need `--verbose` (which prints the full prompt + generated text per request), but that's a separate enhancement; the script's current role is "watch the server is healthy and what it's doing" and it does that correctly.
 
 ---
 
@@ -717,4 +719,84 @@ Loaded into the Web UI agent via the `skills` toolset (see `config.yaml` `toolse
 # Method 3: copy built-in (no network needed)
 xcopy /E /I "E:\Hermes Agent\hermes-agent-source\skills\<cat>\<name>" "E:\Hermes Agent\data\hermes-agent\skills\<cat>\<name>"
 ```
+
+---
+
+## 16. Portability Audit (2026-06-08)
+
+User asked: every file/service/dep/env that `hermes-all.bat` opens must be
+**inside the `Hermes Agent` folder itself** — no system PATH, no
+`E:\Hermes Agent\…` hardcoded literals, no missing `~/.mavis/...` lookups.
+On a fresh Windows PC the project must be plug-and-play: copy the folder,
+double-click `bin\hermes-all.bat`, browser opens. Goal: zero
+post-install configuration.
+
+### Audit method
+
+For every script reached from `hermes-all.bat`:
+
+1. `hermes-all.bat` (entry) → all the bat/ps1/py/binaries it spawns
+2. For each child script: grep all path-like tokens; flag literals
+   matching `[C-Z]:\\` (real drive letters, not `\s` regex escapes or
+   `C:\Windows` placeholders in error text)
+3. Cross-check env vars injected into subprocesses (NODE, PYTHONPATH,
+   HERMES_*) resolve to paths under `HERMES_ROOT`
+4. For Python: any module that uses `Path('E:\Hermes Agent')` literal
+   instead of `Path(__file__).resolve().parents[N]`
+5. Spot-check fallback (portable-python: runs in any cwd ✓; Node:
+   bundled in `runtime/node23/`)
+
+### Fixes applied this session
+
+| File | Was | Now |
+|---|---|---|
+| `bin/verify-server.bat` | `cd /d "E:\Hermes Agent"` + literal `E:\Hermes Agent\portable-python\python.exe` | `set "HERMES_ROOT=%~dp0.."` + `%HERMES_ROOT%\portable-python\python.exe` |
+| `bin/webui-new.bat` | dev hint `mklink /J "E:\hermes-web-ui-main"` hardcoded in error message | portable git-clone hint pointing at `ArtificialAngels/hermes-agent` |
+| `bin/webui-new.bat` | bootstrap wrote `data/hermes-agent/config.yaml` once and never touched it, so `mcp_servers.hermes-studio.env.HERMES_WEB_UI_HOME` stayed at the old install's drive letter | PowerShell fix-up block rewrites the two mcp env values to current `HERMES_ROOT` on every launch, idempotent |
+| `hermes/scripts/install_skill.py` | `HERMES_ROOT = Path(r'E:\Hermes Agent')` | `HERMES_ROOT = Path(__file__).resolve().parents[2]` |
+| `hermes/scripts/rebuild_kb.py` | `HERMES_ROOT = Path(r'E:\Hermes Agent')` | same |
+| Root `start_llm_server.bat` | hardcoded `E:\` + dead code (called `local_llm_server.py` which doesn't exist + used PATH `python` not portable) | **deleted** (no references in repo) |
+| Root `update_env.ps1` | hardcoded `E:\` + **contained a live MiniMax API key in plaintext** | **deleted** (would have leaked key to GitHub) |
+| `data/logs/debug-residue-*.bat` (17) | early NGL debug scripts, never invoked | **deleted** |
+| `data/logs/debug-residue-*.ps1` (1) | ps1 startup repro harness, never invoked | **deleted** |
+| `data/logs/_diag*.txt` (25) | stdout from the deleted diag bats | **deleted** |
+| `data/logs/_*.{log,err,txt}` (17) | other underscore-prefixed debug dumps from 6/5–6/6 sessions | **deleted** |
+| `data/logs/removed-*.bat` (2) | backups of superseded scripts | **deleted** |
+
+### Items intentionally left as-is
+
+| File | Why kept |
+|---|---|
+| `hermes/scripts/import_ollama_blobs.py` L25 | `os.environ.get('USERPROFILE', r'C:\Users\PZS0X')` — env-var lookup with a one-user default that won't fire on a normal install. Cosmetic only. |
+| `hermes/config.py` L169 | Comment `# E:\Hermes Agent\.env when running from anywhere` — doc, not code. |
+| `hermes/workspace.py` L49 | Docstring example of the `workspaces.json` shape — not a real value. |
+| `hermes/workspace.py` L75 | Already portable: `Path(__file__).resolve().parent.parent` ✓ |
+| `hermes/doctor.py` L119 | `r.section("llama.cpp runtime (E:\\Hermes Agent\\runtime)")` — diagnostic output string. Could be templated via `HERMES_ROOT` but it's only printed, not used to compute anything. |
+| `data/webui-new/app/bin/hermes-web-ui.mjs` L109 | `process.env.SystemRoot || 'C:\\Windows'` — env-var fallback, doesn't fire in practice. |
+| `hermes-agent-source/scripts/install.ps1` L210 | User-facing hint about `setx NODE_EXTRA_CA_CERTS "C:\path\to\corp-ca.pem"` — placeholder text in a help message. |
+| `data/webui-new/app/portable/*.bat`, `runtime/node23/install_tools.bat`, etc. | Third-party (Node 23 build scripts). Not touched. |
+
+### Portability checklist (recurring)
+
+When adding a new script, the test is mechanical:
+
+```powershell
+# from a fresh shell, with the folder on D:\ or C:\ or any drive:
+cd D:\Hermes Agent
+.\bin\hermes-all.bat
+# → browser opens :8648, all 3 services up, model loads, chat works
+# If anything needed a registry entry, %APPDATA% lookup, system Python,
+# system Node, or `E:\` literal, audit fails.
+```
+
+### GitHub-readiness
+
+- All hardcoded `E:\Hermes Agent\` literals that the project would have
+  shipped: removed (4 files) or marked as doc-only (4 files).
+- API keys that lived in repo-tracked `.ps1` files (`update_env.ps1`):
+  removed. Remaining secrets live in `data/hermes-agent/config.yaml`
+  (gitignored) and `.env` (gitignored).
+- `data/webui-new/app/node_modules/` is the only remaining ~big
+  dependency, shipped pre-bundled so `npm install` is not required.
+
 

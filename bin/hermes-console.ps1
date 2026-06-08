@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-Hermes Console — persistent model management shell.
-Display current model, switch models, copy API credentials.
+Hermes Console - persistent model management shell.
 #>
 param()
 
@@ -10,20 +9,21 @@ $Host.UI.RawUI.WindowTitle = "Hermes Console"
 $HERMES_ROOT = Split-Path -Parent $PSScriptRoot
 $MODELS_DIR = Join-Path $HERMES_ROOT "data\models"
 $LLAMA_PORT = 8080
-$API_URL = "http://127.0.0.1:$LLAMA_PORT/v1"
+$API_URL = "http://127.0.0.1:" + $LLAMA_PORT + "/v1"
 $API_KEY = "not-needed"
 
 function Write-Banner {
     Clear-Host
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host "  Hermes Console — Model Management"                      -ForegroundColor Cyan
+    Write-Host "  Hermes Console - Model Management" -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host ""
 }
 
 function Get-CurrentModel {
     try {
-        $r = Invoke-RestMethod -Uri "http://127.0.0.1:$LLAMA_PORT/v1/models" -TimeoutSec 3
+        $modelsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/models"
+        $r = Invoke-RestMethod -Uri $modelsUrl -TimeoutSec 3
         if ($r.data -and $r.data.Count -gt 0) {
             return $r.data[0].id
         }
@@ -60,74 +60,230 @@ function Show-Status {
 
 function Switch-Model {
     param([string]$ModelPath, [string]$ModelName)
-    
+
+    Write-Host ""
+    Write-Host "  ============================================================" -ForegroundColor Cyan
     Write-Host "  Switching to: $ModelName" -ForegroundColor Yellow
-    
-    $python = Join-Path $HERMES_ROOT "portable-python\python.exe"
-    $script = Join-Path $HERMES_ROOT "hermes\scripts\model_manager.py"
-    
-    if (-not (Test-Path $script)) {
-        Write-Host "  ERROR: model_manager.py not found" -ForegroundColor Red
-        return $false
-    }
-    
-    # Phase 1: Switch the running llama-server via model_manager.py
-    Write-Host "  Delegating to model_manager.py..." -ForegroundColor Gray
-    $proc = Start-Process -FilePath $python -ArgumentList "`"$script`"", "switch", "`"$ModelName`"" -NoNewWindow -Wait -PassThru
-    
-    if ($proc.ExitCode -ne 0) {
-        Write-Host "  Switch failed (exit code $($proc.ExitCode))." -ForegroundColor Red
-        return $false
-    }
-    
-    # Phase 2: Get actual model ID from llama-server
-    $actualModel = $null
+    Write-Host "  Path: $ModelPath" -ForegroundColor Gray
+    Write-Host "  ============================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Step 1: Stop old llama-server
+    Write-Host "  [1/5] Stopping llama-server..." -ForegroundColor Gray
     try {
-        $r = Invoke-RestMethod -Uri "http://127.0.0.1:$LLAMA_PORT/v1/models" -TimeoutSec 5
-        if ($r.data) { $actualModel = $r.data[0].id }
+        Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue | Stop-Process -Force
     } catch {}
-    
-    if ($actualModel) {
-        Write-Host "  Now serving: $actualModel" -ForegroundColor Cyan
+    Start-Sleep -Seconds 2
+    try {
+        Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue | Stop-Process -Force
+    } catch {}
+    Start-Sleep -Seconds 1
+    Write-Host "  Stopped." -ForegroundColor Green
+
+    # Step 2: Start new model
+    # Use Start-Process with -FilePath + -ArgumentList. The PowerShell
+    # array-form argument list handles the spaces-in-paths quoting
+    # automatically, and ShellExecuteEx (Start-Process's default) keeps
+    # the child bat (and the llama-server it spawns) detached from this
+    # Console's PowerShell session — so closing Console / pressing [Q]
+    # won't kill the server.
+    #
+    # We pass the model path on the bat's argv (`-ArgumentList $ModelPath`).
+    # start-llm-smart.bat's %~1 already supports this.
+    Write-Host "  [2/5] Starting llama-server with new model..." -ForegroundColor Gray
+    $startBat = Join-Path $HERMES_ROOT "bin\start-llm-smart.bat"
+    $logDir = Join-Path $HERMES_ROOT "data\logs"
+    $logPath = Join-Path $logDir "llm-server.log"
+    $errPath = Join-Path $logDir "llm-server.err"
+    # Truncate the previous run's logs so the new server's startup is unambiguous.
+    "" | Set-Content $logPath -Encoding UTF8
+    "" | Set-Content $errPath -Encoding UTF8
+
+    $proc = Start-Process `
+        -FilePath $startBat `
+        -ArgumentList @($ModelPath) `
+        -WorkingDirectory $HERMES_ROOT `
+        -WindowStyle Hidden `
+        -PassThru
+    Write-Host "  Launched (pid=$($proc.Id)). Waiting for server to be ready..." -ForegroundColor Gray
+
+    # Layered liveness probe — /health, /v1/models, /v1/completions.
+    # Reports each milestone with a wall-clock timestamp so the user can
+    # see exactly how long model load vs warm-up actually took.
+    # . .\bin\hermes-health.ps1
+    . (Join-Path $HERMES_ROOT "bin\hermes-health.ps1")
+    $serverBase = "http://127.0.0.1:" + $LLAMA_PORT
+    $ready = Wait-LlamaReady -Url $serverBase -TimeoutSec 180 -PollIntervalMs 500
+
+    if (-not $ready) {
+        Write-Host "  ERROR: llama-server did not become ready within 180s" -ForegroundColor Red
+        Write-Host "  Tail of data\logs\llm-server.err:" -ForegroundColor Yellow
+        if (Test-Path $errPath) {
+            Get-Content $errPath -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "    $_" -ForegroundColor DarkYellow
+            }
+        }
+        return $false
     }
-    
-    # Phase 3: Sync config.yaml so the bridge picks up the new model
+    $waitMsg = "  llama-server is ready"
+    Write-Host $waitMsg -ForegroundColor Green
+
+    # Step 3: Verify model from server
+    Write-Host "  [3/5] Verifying model from server..." -ForegroundColor Gray
+    $displayModel = [System.IO.Path]::GetFileNameWithoutExtension($ModelName)
+    $serverModel = ""
+    try {
+        $modelsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/models"
+        $r = Invoke-RestMethod -Uri $modelsUrl -TimeoutSec 3
+        if ($r.data -and $r.data.Count -gt 0) {
+            $serverModel = $r.data[0].id
+            $modelMsg = "  Server reports model ID: " + $serverModel
+            Write-Host $modelMsg -ForegroundColor Cyan
+        }
+    } catch {
+        Write-Host "  WARNING: Could not query /v1/models" -ForegroundColor Yellow
+    }
+
+    # Step 4: Update config.yaml
+    Write-Host "  [4/5] Updating config.yaml..." -ForegroundColor Gray
     $configPath = Join-Path $HERMES_ROOT "data\hermes-agent\config.yaml"
+
     if (Test-Path $configPath) {
-        Write-Host "  Updating config.yaml..." -ForegroundColor Gray
-        $ctxLen = 32768  # 32K for 3B
+        $ctxLen = 32768
         if ($ModelName -match "7B") { $ctxLen = 65536 }
         if ($ModelName -match "35B") { $ctxLen = 131072 }
-        
-        # Read, update model.default and context_length
-        $yaml = Get-Content $configPath -Raw -Encoding UTF8
-        $displayModel = if ($actualModel) { $actualModel } else { [System.IO.Path]::GetFileNameWithoutExtension($ModelName) }
-        
-        # Update model section
-        $yaml = $yaml -replace "(?m)^(\s*default:\s*).*$", "`${1}`"$displayModel`""
-        $yaml = $yaml -replace "(?m)^(\s*provider:\s*).*$", "`${1}`"custom:本地-(127.0.0.1:8080)`""
-        
-        # Ensure context_length exists (Windows line endings = \r\n)
-        if ($yaml -match "context_length:") {
-            $yaml = $yaml -replace "(?m)^(\s*context_length:\s*)\d+", "`${1}$ctxLen"
-        } else {
-            $yaml = $yaml -replace "(?m)^(model:\s*\r?\n)", "`${1}  context_length: $ctxLen`r`n"
+
+        $lines = Get-Content $configPath -Encoding UTF8
+        $newLines = @()
+        $inModelSection = $false
+        $inCustomProviders = $false
+
+        foreach ($line in $lines) {
+            if ($line -match "^\s*model:\s*$") {
+                $inModelSection = $true
+                $inCustomProviders = $false
+                $newLines = $newLines + $line
+                continue
+            }
+            if ($line -match "^custom_providers:") {
+                $inModelSection = $false
+                $inCustomProviders = $true
+                $newLines = $newLines + $line
+                continue
+            }
+            if ($line -match "^[a-z_]+:" -and $line -notmatch "^\s+") {
+                if ($inModelSection) { $inModelSection = $false }
+                if ($inCustomProviders) { $inCustomProviders = $false }
+            }
+
+            if ($inModelSection -and $line -match "^\s+default:\s*") {
+                $newLines = $newLines + ("  default: " + $displayModel)
+                continue
+            }
+            if ($inModelSection -and $line -match "^\s+provider:\s*") {
+                $newLines = $newLines + "  provider: custom:localhost"
+                continue
+            }
+            if ($inModelSection -and $line -match "^\s+context_length:\s*") {
+                $newLines = $newLines + ("  context_length: " + $ctxLen)
+                continue
+            }
+            if ($inCustomProviders -and $line -match "model:\s*") {
+                $newLines = $newLines + ("    model: " + $displayModel)
+                continue
+            }
+
+            $newLines = $newLines + $line
         }
-        
-        Set-Content $configPath -Value $yaml -Encoding UTF8 -NoNewline
-        Write-Host "  config.yaml synced (context: $ctxLen)" -ForegroundColor Green
+
+        Set-Content $configPath -Value $newLines -Encoding UTF8
+        $updateMsg = "  config.yaml updated (model: " + $displayModel + ", context: " + $ctxLen + ")"
+        Write-Host $updateMsg -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: config.yaml not found at $configPath" -ForegroundColor Yellow
     }
-    
-    # Phase 4: Restart WebUI to reconnect bridge (prevents websocket errors)
-    Write-Host "  Restarting WebUI..." -ForegroundColor Gray
-    $webuiBat = Join-Path $HERMES_ROOT "bin\webui-new.bat"
-    if (Test-Path $webuiBat) {
-        & cmd /c "call `"$webuiBat`" stop" 2>$null
-        Start-Sleep -Seconds 2
-        & cmd /c "call `"$webuiBat`" start" 2>$null
-        Write-Host "  WebUI restarted — refresh browser if needed." -ForegroundColor Green
+
+    # Step 5: Verify by sending test request
+    Write-Host "  [5/5] Verification: Sending test request to model..." -ForegroundColor Gray
+    $verifyOk = $false
+    $chatUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/chat/completions"
+    $completionsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/completions"
+
+    $reqModel = $displayModel
+    if ($serverModel) { $reqModel = $serverModel }
+
+    try {
+        $msgText = "Please briefly introduce yourself, including your parameter count (e.g. 3B, 7B, 35B). Reply in one short sentence in English."
+        $msg = @{ role = "user"; content = $msgText }
+        $bodyObj = @{
+            model = $reqModel
+            messages = @($msg)
+            max_tokens = 200
+            temperature = 0.7
+        }
+        $body = $bodyObj | ConvertTo-Json
+
+        $resp = Invoke-RestMethod -Uri $chatUrl -Method POST -Body $body -ContentType "application/json" -TimeoutSec 60
+
+        if ($resp.choices -and $resp.choices.Count -gt 0) {
+            $reply = $resp.choices[0].message.content.Trim()
+            Write-Host ""
+            Write-Host "  --- Model Response ---" -ForegroundColor Cyan
+            Write-Host "  $reply" -ForegroundColor Green
+            Write-Host "  ---------------------" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  VERIFICATION OK: Model is responding." -ForegroundColor Green
+            $verifyOk = $true
+
+            # Show memory info for cross-check
+            try {
+                $procList = Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue
+                if ($procList -and $procList.Count -gt 0) {
+                    $memSum = ($procList | Measure-Object WorkingSet64 -Sum).Sum
+                    $memMB = [math]::Round($memSum / 1MB, 0)
+                    $memMsg = "  llama-server memory usage: " + $memMB + " MB"
+                    Write-Host $memMsg -ForegroundColor Gray
+                }
+            } catch {}
+        } else {
+            Write-Host "  WARNING: Empty response from model" -ForegroundColor Yellow
+        }
+    } catch {
+        $errMsg = "  Test request failed: " + $_.Exception.Message
+        Write-Host $errMsg -ForegroundColor Yellow
+
+        # Try direct completion as fallback
+        try {
+            $body2Obj = @{
+                model = $reqModel
+                prompt = "Who are you? Answer in one sentence."
+                max_tokens = 100
+            }
+            $body2 = $body2Obj | ConvertTo-Json
+            $resp2 = Invoke-RestMethod -Uri $completionsUrl -Method POST -Body $body2 -ContentType "application/json" -TimeoutSec 60
+            if ($resp2.choices -and $resp2.choices.Count -gt 0) {
+                $fallbackText = $resp2.choices[0].text.Trim()
+                $fbMsg = "  Fallback response: " + $fallbackText
+                Write-Host $fbMsg -ForegroundColor Cyan
+                $verifyOk = $true
+            }
+        } catch {
+            $fbErr = "  Fallback also failed: " + $_.Exception.Message
+            Write-Host $fbErr -ForegroundColor Red
+        }
     }
-    
+
+    Write-Host ""
+    Write-Host "  ============================================================" -ForegroundColor Cyan
+    if ($verifyOk) {
+        Write-Host "  SUCCESS: Switched to $displayModel (verified)" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Switch may have failed - model not responding correctly" -ForegroundColor Yellow
+        Write-Host "  Please check the llama-server window for errors." -ForegroundColor Yellow
+    }
+    Write-Host "  ============================================================" -ForegroundColor Cyan
+    Write-Host ""
+
     return $true
 }
 
@@ -138,19 +294,21 @@ function Show-Menu {
         Write-Host "  (no .gguf files in data\models\)" -ForegroundColor Red
         return
     }
-    
+
     $currentModelName = Get-CurrentModel
-    
+
     for ($i = 0; $i -lt $models.Count; $i++) {
         $m = $models[$i]
         $num = $i + 1
         $marker = ""
         if ($currentModelName -and $m.Name -like "*$currentModelName*") {
-            $marker = " <-- ACTIVE"
+            $marker = "  [ACTIVE]"
         }
-        Write-Host "  [$num] $($m.Name)  ($($m.SizeGB) GB)$marker"
+        $sizeStr = $m.SizeGB.ToString() + " GB"
+        $line = "  [" + $num + "] " + $m.Name + "  (" + $sizeStr + ")" + $marker
+        Write-Host $line
     }
-    
+
     Write-Host ""
     Write-Host "  [R] Refresh status"
     Write-Host "  [C] Copy API URL to clipboard"
@@ -174,9 +332,9 @@ while (-not $exit) {
     Write-Banner
     Show-Status
     Show-Menu
-    
+
     $choice = Read-Host "  Choice"
-    
+
     switch -Regex ($choice.Trim().ToUpper()) {
         "^[0-9]+$" {
             $models = @(Get-ModelFiles)
@@ -185,23 +343,19 @@ while (-not $exit) {
                 $m = $models[$idx]
                 Switch-Model -ModelPath $m.Path -ModelName $m.Name
                 Write-Host "  Switching complete. Refreshing..." -ForegroundColor Green
-                Start-Sleep -Seconds 1
+                Start-Sleep -Seconds 2
             } else {
                 Write-Host "  Invalid number." -ForegroundColor Red
                 Start-Sleep -Milliseconds 800
             }
         }
         "^R$" {
-            # Refresh — just loops
+            # Refresh - just loops
         }
         "^C$" {
             $model = Get-CurrentModel
             if ($model) {
-                $info = @"
-URL:     $API_URL
-API Key: $API_KEY
-Model:   $model
-"@
+                $info = "URL:     $API_URL`nAPI Key: $API_KEY`nModel:   $model"
                 Copy-ToClipboard -Text $info
             } else {
                 Write-Host "  llama-server not running. Start a model first." -ForegroundColor Red

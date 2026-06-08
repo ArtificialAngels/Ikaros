@@ -77,17 +77,25 @@ echo   GPU:        %GPU_MODE%
 echo ============================================================
 echo.
 
-REM ---- Step 0: Environment check ----
-echo [0/7] Environment check...
+REM ---- Step 0: Environment bootstrap (portable python / runtime / model) ----
+echo [0/8] Checking portable environment (python, runtime, model)...
+call "%HERMES_ROOT%\bin\setup-portable.bat" auto
+if errorlevel 1 (
+    echo [warn] setup-portable had warnings - continuing anyway.
+    echo [warn] Re-run bin\setup-portable.bat later to retry.
+)
+
+REM ---- Step 1: Environment check (GPU / CUDA) ----
+echo [1/8] Environment check...
 call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
 
-REM ---- Step 1: Start llama-server ----
-echo [1/7] Starting llama-server (smart NGL)...
+REM ---- Step 2: Start llama-server ----
+echo [2/8] Starting llama-server (smart NGL)...
 set "LLAMA_MODEL=%MODEL%"
 start "Hermes-LLM" /MIN cmd /c ""%HERMES_ROOT%\bin\start-llm-smart.bat""
 
 REM ---- Wait for llama-server ----
-echo [2/7] Waiting for llama-server...
+echo [3/8] Waiting for llama-server...
 set /a "WAITED=0"
 :wait_llm
 timeout /t 3 /nobreak >nul
@@ -104,7 +112,7 @@ goto :wait_llm
 
 REM ---- Step 2: Start Hermes API ----
 :start_hermes
-echo [3/7] Starting Hermes API...
+echo [4/8] Starting Hermes API...
 start "Hermes-API" /MIN "%PY%" -m hermes serve --host 127.0.0.1 --port %HERMES_PORT%
 set /a "WAITED=0"
 :wait_hermes
@@ -121,7 +129,7 @@ goto :wait_hermes
 
 REM ---- Step 3: Start new Hermes WebUI (:8648) ----
 :start_webui
-echo [4/7] Starting new Hermes WebUI at :%WEBUI_PORT%...
+echo [5/8] Starting new Hermes WebUI at :%WEBUI_PORT%...
 set "HERMES_WEB_UI_NO_BROWSER=1"
 call "%HERMES_ROOT%\bin\webui-new.bat" start
 set /a "WAITED=0"
@@ -138,15 +146,15 @@ goto :wait_webui
 
 REM ---- Step 4: Start Hermes Console (persistent model management) ----
 :start_console
-echo [5/7] Starting Hermes Console...
+echo [6/8] Starting Hermes Console...
 start "Hermes-Console" "%HERMES_ROOT%\bin\hermes-console.bat"
 
 REM ---- Step 5: Start Hermes Trace (real-time webui/bridge/agent log viewer) ----
-echo [6/7] Starting Hermes Trace...
+echo [7/8] Starting Hermes Trace...
 start "Hermes-Trace" "%HERMES_ROOT%\bin\hermes-trace.bat"
 
 REM ---- Step 6: Start Hermes Model Running (real-time LLM backend log viewer) ----
-echo [7/7] Starting Hermes Model Running...
+echo [8/8] Starting Hermes Model Running...
 start "Hermes Model Running" "%HERMES_ROOT%\bin\hermes-model-run.bat"
 
 :done

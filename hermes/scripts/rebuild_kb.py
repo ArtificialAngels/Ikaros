@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-HERMES_ROOT = Path(r'E:\Hermes Agent')
+HERMES_ROOT = Path(__file__).resolve().parents[2]  # hermes-agent/  (scripts/ -> hermes/ -> root)
 sys.path.insert(0, str(HERMES_ROOT))
 os.environ.setdefault("HERMES_DATA_DIR", str(HERMES_ROOT / "hermes" / "data"))
 
