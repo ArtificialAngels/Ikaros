@@ -1378,27 +1378,29 @@ def create_app(agent) -> FastAPI:
 
     @app.post("/launcher/switch")
     async def launcher_switch(req: dict):
-        """Switch active model. Spawns switch-model.bat, returns when llama-server is ready."""
+        """Switch active model. In router mode this just calls
+        POST http://127.0.0.1:8080/models/load to preload the named
+        model into VRAM (LRU evicts whatever was previously resident).
+        No process restart, no kill+start cycle.
+        """
         name = (req.get("name") or "").strip()
         if not name:
             return {"ok": False, "error": "name required"}
-        bat = HERMES_ROOT / "bin" / "switch-model.bat"
-        if not bat.exists():
-            return {"ok": False, "error": f"{bat} not found"}
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "cmd.exe", "/c", str(bat), name,
-                cwd=str(HERMES_ROOT),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            return {
-                "ok": proc.returncode == 0,
-                "rc": proc.returncode,
-                "stdout_tail": (stdout or b"").decode("utf-8", errors="ignore")[-500:],
-                "stderr_tail": (stderr or b"").decode("utf-8", errors="ignore")[-500:],
-            }
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                r = await client.post(
+                    f"http://127.0.0.1:{LLAMA_PORT}/models/load",
+                    json={"model": name},
+                )
+                body = r.text
+                if 200 <= r.status_code < 300:
+                    return {"ok": True, "status": r.status_code, "model": name, "body": body[-500:]}
+                return {
+                    "ok": False,
+                    "status": r.status_code,
+                    "error": f"router returned {r.status_code}",
+                    "body": body[-500:],
+                }
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

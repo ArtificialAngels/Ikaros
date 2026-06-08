@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""Hermes Model Manager - 模型管理工具
+"""Hermes Model Manager - model inspection and switching (router mode).
 
-功能：
-1. 扫描 data/models/ 目录中的所有 GGUF 模型
-2. 显示模型信息（大小、参数量、推荐GPU配置）
-3. 一键切换模型（自动重启 llama-server）
-4. GPU 加速检测和配置
+llama-server b9538+ runs a SINGLE process in router mode that hosts all
+GGUFs in data/models/. Switching "models" no longer needs a kill+restart
+cycle — it just POSTs /v1/models/load to preload the chosen model
+into VRAM, after which the next chat request routes to it. LRU evicts
+whatever was previously resident.
+
+This CLI is now a thin wrapper around that API:
+
+  python model_manager.py list              # list discovered models
+  python model_manager.py load <filename>   # preload via /v1/models/load
+  python model_manager.py info <filename>   # show NGL/ctx from preset INI
+  python model_manager.py gpu               # show GPU info
 """
 
-import os
-import sys
 import json
+import os
+import re
+import sys
 import time
-import subprocess
 import urllib.request
+import urllib.error
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 
 class ModelInfo:
@@ -28,7 +36,6 @@ class ModelInfo:
         self.vram_required = self._estimate_vram()
 
     def _estimate_params(self) -> str:
-        """从文件名估计参数量"""
         name = self.name.lower()
         if "35b" in name:
             return "35B"
@@ -42,7 +49,6 @@ class ModelInfo:
             return "Unknown"
 
     def _estimate_vram(self) -> str:
-        """估计所需显存"""
         params = self.params
         if params == "1.8B":
             return "2-4 GB"
@@ -67,14 +73,24 @@ class ModelInfo:
 
 
 class ModelManager:
-    def __init__(self, hermes_root: Path):
+    """Read-only model info + a thin POST /v1/models/load wrapper.
+
+    The actual LLM lifecycle is owned by llama-server in router mode —
+    this class does not (and must not) start or stop llama-server
+    itself. Use `bin\hermes-all.bat` for that.
+    """
+
+    def __init__(self, hermes_root: Path, llama_port: int = 8080):
         self.hermes_root = hermes_root
         self.models_dir = hermes_root / "data" / "models"
-        self.llama_port = 8080
+        self.preset_path = self.models_dir / "router-preset.ini"
+        self.llama_base = f"http://127.0.0.1:{llama_port}"
+        self.llama_port = llama_port
         self.models: Dict[str, ModelInfo] = {}
 
+    # ---- model discovery ----
+
     def scan_models(self) -> List[ModelInfo]:
-        """扫描所有 GGUF 模型"""
         self.models = {}
         models = []
         for gguf in self.models_dir.glob("*.gguf"):
@@ -83,14 +99,36 @@ class ModelManager:
             models.append(info)
         return sorted(models, key=lambda m: m.size_mb)
 
+    # ---- preset INI parsing (data\models\router-preset.ini) ----
+
+    def preset_for(self, gguf_name: str) -> Dict[str, str]:
+        """Return the INI section for this model, or empty dict if no preset."""
+        if not self.preset_path.exists():
+            return {}
+        section = None
+        out: Dict[str, str] = {}
+        with open(self.preset_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith(";"):
+                    continue
+                m = re.match(r"^\[(.+)\]$", line)
+                if m:
+                    section = m.group(1).strip()
+                    continue
+                if section == gguf_name and "=" in line:
+                    k, _, v = line.partition("=")
+                    out[k.strip()] = v.strip()
+        return out
+
+    # ---- GPU info ----
+
     def get_gpu_info(self) -> dict:
-        """获取 GPU 信息"""
+        import subprocess
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
                 parts = result.stdout.strip().split(", ")
@@ -101,176 +139,174 @@ class ModelManager:
                     "total_gb": round(int(parts[1]) / 1024, 2),
                     "free_gb": round(int(parts[2]) / 1024, 2),
                 }
-        except Exception as e:
+        except Exception:
             pass
         return {"name": "Not detected", "total_mb": 0, "free_mb": 0, "total_gb": 0, "free_gb": 0}
 
-    def calculate_ngl(self, model: ModelInfo, gpu: dict) -> int:
-        """计算 NGL (GPU layers)"""
-        if gpu["free_mb"] == 0:
-            return 0
+    # ---- router API ----
 
-        model_mb = model.size_mb
-        vram_free = gpu["free_mb"]
-
-        # 智能计算策略
-        if model_mb <= vram_free * 0.7:
-            return 99  # 全部 GPU
-        elif model_mb <= vram_free * 1.2:
-            return 99  # 全部 GPU + KV cache
-        else:
-            # 部分卸载（即使模型很大，也尽量使用一些GPU层）
-            vram_for_model = vram_free * 0.7
-            avg_layer_mb = model_mb / 80  # 假设约80层
-            ngl = int(vram_for_model / avg_layer_mb)
-            # 确保至少使用一些GPU层
-            return max(1, min(99, ngl))
-
-    def stop_llama_server(self) -> bool:
-        """Stop llama-server — fire-and-forget like switch-model.bat, then verify."""
-        import subprocess as sp
-
-        # Fire-and-forget: launch kill, don't wait for it
-        for _ in range(3):
-            sp.Popen(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | Stop-Process -Force"],
-                stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-            )
-            time.sleep(2)
-
-            # Check if any still alive
-            result = sp.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "if (Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"],
-                capture_output=True, timeout=5
-            )
-            if result.returncode == 0:
-                return True
-
-        # Last resort: taskkill by PID
-        print("[WARN] Stop-Process failed, trying taskkill...")
-        sp.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name LIKE 'llama-server%'\" | ForEach-Object { & taskkill /F /PID $_.ProcessId /T 2>$null }"],
-            capture_output=True, timeout=10
-        )
-        time.sleep(2)
-        return True  # proceed regardless — new start will fail-fast if port in use
-
-    def start_llama_server(self, model: ModelInfo, ngl: int) -> bool:
-        """Start llama-server."""
-        import subprocess as sp
-
-        # Check port availability first — fail fast if old process still running
-        import socket
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def list_routing_models(self) -> List[str]:
+        """GET /v1/models — what's actually live in the router right now."""
         try:
-            s.bind(("127.0.0.1", self.llama_port))
-            s.close()
-        except OSError:
-            print(f"[ERROR] Port {self.llama_port} still in use — old process not killed")
-            return False
+            with urllib.request.urlopen(f"{self.llama_base}/v1/models", timeout=3) as r:
+                data = json.loads(r.read())
+                return [m["id"] for m in data.get("data", [])]
+        except Exception as e:
+            raise RuntimeError(f"Could not reach llama-server at {self.llama_base}/v1/models: {e}")
 
-        script = self.hermes_root / "bin" / "start-llm-smart.bat"
-        env = os.environ.copy()
-        env["LLAMA_MODEL"] = str(model.path)
-        env["LLAMA_NGL"] = str(ngl)
+    def load_model(self, gguf_name: str, timeout: int = 180) -> bool:
+        """POST /v1/models/load — preload a model into VRAM.
 
-        sp.Popen(
-            ["cmd", "/c", str(script)],
-            env=env,
-            stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-            creationflags=sp.CREATE_NEW_PROCESS_GROUP
+        With --models-max 1, this evicts whatever was previously loaded
+        via LRU and warm-loads the requested one. The next chat
+        request will route to it.
+        """
+        body = json.dumps({"model": gguf_name}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.llama_base}/models/load",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
         )
-
-        for i in range(60):
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{self.llama_port}/health", timeout=2)
-                return True
-            except Exception:
-                time.sleep(2)
-        return False
-
-    def switch_model(self, model_name: str) -> bool:
-        """切换模型"""
-        if model_name not in self.models:
-            print(f"[ERROR] 模型不存在: {model_name}")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return 200 <= r.status < 300
+        except urllib.error.HTTPError as e:
+            print(f"[ERROR] /models/load returned HTTP {e.code}: {e.read().decode('utf-8', 'replace')}")
+            return False
+        except Exception as e:
+            print(f"[ERROR] /models/load failed: {e}")
             return False
 
-        model = self.models[model_name]
-        gpu = self.get_gpu_info()
-        ngl = self.calculate_ngl(model, gpu)
-
-        print(f"\n切换到模型: {model.name}")
-        print(f"  大小: {model.size_gb:.2f} GB")
-        print(f"  参数: {model.params}")
-        print(f"  推荐显存: {model.vram_required}")
-        print(f"  GPU: {gpu['name']}")
-        print(f"  可用显存: {gpu['free_gb']:.2f} GB")
-        print(f"  NGL (GPU layers): {ngl}")
-        print()
-
-        # 停止旧服务
-        print("[1/2] 停止 llama-server...")
-        self.stop_llama_server()
-
-        # 启动新服务
-        print("[2/2] 启动 llama-server...")
-        if not self.start_llama_server(model, ngl):
-            print("[ERROR] 启动失败")
+    def unload_model(self, gguf_name: str) -> bool:
+        """POST /v1/models/unload — evict a model from VRAM."""
+        body = json.dumps({"model": gguf_name}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.llama_base}/models/unload",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return 200 <= r.status < 300
+        except Exception as e:
+            print(f"[ERROR] /models/unload failed: {e}")
             return False
 
-        print("\n模型切换完成！")
-        print(f"  浏览器打开: http://localhost:7860/chat")
-        return True
+    # ---- display ----
 
     def list_models(self):
-        """列出所有模型"""
-        models = self.scan_models()
         gpu = self.get_gpu_info()
 
-        print("\n" + "=" * 60)
-        print("  Hermes Model List")
+        print()
         print("=" * 60)
-        print(f"\nGPU: {gpu['name']}")
-        print(f"Free VRAM: {gpu['free_gb']:.2f} GB / {gpu['total_gb']:.2f} GB")
-        print(f"\nModel directory: {self.models_dir}")
-        print(f"Found {len(models)} models:\n")
+        print("  Hermes Model List (router mode)")
+        print("=" * 60)
+        print()
+        print(f"  GPU:        {gpu['name']}")
+        print(f"  Free VRAM:  {gpu['free_gb']:.2f} GB / {gpu['total_gb']:.2f} GB")
+        print(f"  Models dir: {self.models_dir}")
+        print(f"  Preset:     {self.preset_path} ({'present' if self.preset_path.exists() else 'absent'})")
+        print()
 
-        for i, model in enumerate(models, 1):
-            ngl = self.calculate_ngl(model, gpu)
-            status = "[GPU]" if ngl > 0 else "[CPU]"
-            print(f"{status} [{i}] {model.name}")
-            print(f"    Size: {model.size_gb:.2f} GB  |  Params: {model.params}  |  VRAM req: {model.vram_required}")
-            print(f"    NGL: {ngl} ({'GPU accelerated' if ngl > 0 else 'CPU mode'})")
+        # What does the router actually have registered?
+        try:
+            live = self.list_routing_models()
+            live_set = set(live)
+            print(f"  Router registered: {len(live)} model(s) — {', '.join(live)}")
+        except RuntimeError as e:
+            print(f"  Router: NOT REACHABLE ({e})")
+            live_set = set()
+        print()
+
+        # Local GGUF list
+        models = self.scan_models()
+        print(f"  Local GGUFs: {len(models)} file(s)")
+        print()
+        for i, m in enumerate(models, 1):
+            preset = self.preset_for(m.name)
+            ngl = preset.get("n-gpu-layers", "auto")
+            ctx = preset.get("ctx-size", "auto")
+            in_router = "OK " if m.name in live_set else "-- "
+            in_router = "RT " if m.name in live_set else "   "
+            print(f"  [{i}] {m.name}")
+            print(f"      size {m.size_gb:>6.2f} GB  |  params {m.params}  |  NGL={ngl}  |  ctx={ctx}  |  router={in_router}")
+        print()
+        print("=" * 60)
+        print("  Switch via WebUI dropdown, or:")
+        print(f"    python model_manager.py load <filename>")
+        print("=" * 60)
+        print()
+
+    def show_info(self, gguf_name: str):
+        if gguf_name not in self.models:
+            print(f"[ERROR] model not found locally: {gguf_name}")
+            sys.exit(1)
+        m = self.models[gguf_name]
+        preset = self.preset_for(gguf_name)
+        print()
+        print("=" * 60)
+        print(f"  {gguf_name}")
+        print("=" * 60)
+        print(f"  Path:   {m.path}")
+        print(f"  Size:   {m.size_gb:.2f} GB")
+        print(f"  Params: {m.params}")
+        print(f"  VRAM:   {m.vram_required}")
+        if preset:
             print()
-
+            print("  Preset overrides (data\\models\\router-preset.ini):")
+            for k, v in preset.items():
+                print(f"    {k} = {v}")
+        else:
+            print()
+            print("  No preset entry; using global defaults.")
         print("=" * 60)
+        print()
 
 
 def main():
-    # hermes_root should be the project root, not the hermes package
-    hermes_root = Path(__file__).parent.parent.parent
+    hermes_root = Path(__file__).resolve().parent.parent.parent
     manager = ModelManager(hermes_root)
 
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == "list":
             manager.list_models()
-        elif cmd == "switch" and len(sys.argv) > 2:
-            model_name = sys.argv[2]
-            manager.scan_models()  # populate self.models before lookup
-            ok = manager.switch_model(model_name)
-            sys.exit(0 if ok else 1)
+        elif cmd == "load" and len(sys.argv) > 2:
+            gguf = sys.argv[2]
+            manager.scan_models()
+            if gguf not in manager.models:
+                print(f"[ERROR] not in data/models/: {gguf}")
+                sys.exit(1)
+            print(f"Loading {gguf} via POST /v1/models/load ...")
+            t0 = time.time()
+            ok = manager.load_model(gguf)
+            dt = time.time() - t0
+            if ok:
+                print(f"OK in {dt:.1f}s. Next chat request will route to {gguf}.")
+            else:
+                print("FAILED. The model is still selectable, but the first chat request will be slower (cold start).")
+                sys.exit(1)
+        elif cmd == "unload" and len(sys.argv) > 2:
+            gguf = sys.argv[2]
+            if manager.unload_model(gguf):
+                print(f"OK — {gguf} evicted from VRAM.")
+            else:
+                sys.exit(1)
+        elif cmd == "info" and len(sys.argv) > 2:
+            manager.scan_models()
+            manager.show_info(sys.argv[2])
         elif cmd == "gpu":
             gpu = manager.get_gpu_info()
             print(json.dumps(gpu, indent=2, ensure_ascii=False))
         else:
-            print("用法:")
-            print("  python model_manager.py list              # 列出所有模型")
-            print("  python model_manager.py switch <model>     # 切换模型")
-            print("  python model_manager.py gpu               # 显示 GPU 信息")
+            print("Usage:")
+            print("  python model_manager.py list              # list models + router state")
+            print("  python model_manager.py load <filename>   # POST /v1/models/load")
+            print("  python model_manager.py unload <filename> # POST /v1/models/unload")
+            print("  python model_manager.py info <filename>   # show preset overrides")
+            print("  python model_manager.py gpu               # show GPU info")
     else:
         manager.list_models()
 

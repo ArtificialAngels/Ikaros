@@ -85,11 +85,12 @@
 ```
 启动 Hermes Web UI（需要 llama-server 已运行）
 
-### 方式 4：仅本地 LLM
+### 方式 4：仅本地 LLM（router 模式）
+`bin\hermes-all.bat` 已经用 llama-server 的 **router 模式** 启动一个常驻进程,扫 `data\models\` 注册所有 GGUF,API 请求按 `model` 字段路由、按需加载、LRU 淘汰。要单独跑这个 launcher(比如调试),直接:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File bin\start-llm-router.ps1
 ```
-双击 bin\start-llm-smart.bat
-```
-启动 llama-server，可被任何 OpenAI 客户端调用
+切模型 = WebUI 下拉菜单选一下(或者 `POST /v1/models/load`),**不需要重启任何进程**。
 
 ---
 
@@ -145,7 +146,7 @@ Hermes Agent\                                    ← 这就是 U 盘
 │   ├── hermes-console.bat                       ← 控制台
 │   ├── hermes-trace.bat                         ← 日志追踪
 │   ├── hermes-model-run.bat                     ← LLM 日志查看
-│   └── start-llm-smart.bat                      ← LLM 服务
+│   └── start-llm-router.ps1                     ← ★ llama-server router 模式启动器
 │
 ├── config\                                      ← 配置
 │   ├── hermes.yaml
@@ -156,6 +157,21 @@ Hermes Agent\                                    ← 这就是 U 盘
 ├── README.md                                    ← 本文件
 └── AGENTS.md                                    ← 项目记忆库
 ```
+
+---
+
+## 🆕 2026-06-09 更新：llama-server Router 模式
+
+llama.cpp b9538+ 原生支持多模型 router,启动时扫 `data\models/` 注册所有 GGUF,API 请求按 `model` 字段路由、按需加载、LRU 淘汰。Hermes 全面切到 router 模式:
+
+- **单 llama-server 进程** 常驻,不再 kill+restart 切模型
+- **WebUI 下拉菜单** 选模型 = 下一条 chat 请求自动走该模型,首次加载几秒,后续走 LRU 缓存
+- **Per-model 配置** 在 `data\models/router-preset.ini`(NGL、ctx-size、temperature)
+- **显存保护** `--models-max 1` + LRU:一次只驻留一个模型,8GB 显卡 35B 也能跑(部分 offload)
+- **显式预热** `POST /v1/models/load {model: "Qwen2.5-7B-Instruct-Q4_K_M.gguf"}` 立即加载
+- **显式驱逐** `POST /v1/models/unload {model: ...}` 释放 VRAM
+
+CLI 工具 `python hermes\scripts\model_manager.py list|load|unload|info|gpu` 也接 router API。
 
 ---
 

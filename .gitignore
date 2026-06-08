@@ -28,6 +28,7 @@ hermes/data/nextchat/
 tests/hermes/data/
 data/
 !data/models/
+!data/models/*
 data/models/*.gguf
 
 # 配置文件

@@ -202,7 +202,7 @@ def check_services(r: Report):
             r.ok(f"llama-server (:{DEFAULT_MODEL_PORT})", "responding")
     else:
         r.warn(f"llama-server (:{DEFAULT_MODEL_PORT}) not running",
-               "start with bin/hermes-all.bat or bin/start-llm-smart.bat")
+               "start with bin/hermes-all.bat (uses llama-server router mode)")
     code, body = http_get(f"http://127.0.0.1:{HERMES_API_PORT}/health")
     if code == 200:
         r.ok(f"Hermes API (:{HERMES_API_PORT})", "up")

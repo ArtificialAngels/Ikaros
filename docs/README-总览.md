@@ -33,7 +33,7 @@
 或者分步启动：
 - `bin\webui-new.bat` — 仅 Web UI（需 LLM 服务已运行）
 - `bin\hermes.bat` — CLI 对话
-- `bin\start-llm-smart.bat` — 仅 LLM 服务
+- `bin\hermes-all.bat` — 启动全部（llama-server router 模式 + Hermes API + Hermes WebUI）
 
 ## 文档导航
 

@@ -61,111 +61,70 @@ function Show-Status {
 function Switch-Model {
     param([string]$ModelPath, [string]$ModelName)
 
+    # In router mode, llama-server hosts ALL discovered GGUF files in a
+    # single process. Switching "models" doesn't need a restart — we
+    # just preload the requested one (warm-loads it into VRAM) and
+    # update the WebUI default. LRU evicts whatever was previously
+    # resident when the new model is loaded.
+
+    $displayModel = [System.IO.Path]::GetFileNameWithoutExtension($ModelName)
+    $ggufName     = [System.IO.Path]::GetFileName($ModelPath)
+    # Router-mode identifiers are the GGUF filename (or a subpath within
+    # --models-dir). For our flat layout, that's just the basename.
+    $routerId     = $ggufName
+
     Write-Host ""
     Write-Host "  ============================================================" -ForegroundColor Cyan
-    Write-Host "  Switching to: $ModelName" -ForegroundColor Yellow
+    Write-Host "  Switching to: $ggufName" -ForegroundColor Yellow
     Write-Host "  Path: $ModelPath" -ForegroundColor Gray
+    Write-Host "  (router mode \u2014 no restart, just preloading into VRAM)" -ForegroundColor DarkGray
     Write-Host "  ============================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    # Step 1: Stop old llama-server
-    Write-Host "  [1/5] Stopping llama-server..." -ForegroundColor Gray
+    # Step 1: Verify the model is known to llama-server
+    Write-Host "  [1/4] Verifying model is discovered by router..." -ForegroundColor Gray
+    $discovered = @()
     try {
-        Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue | Stop-Process -Force
-    } catch {}
-    Start-Sleep -Seconds 2
-    try {
-        Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue | Stop-Process -Force
-    } catch {}
-    Start-Sleep -Seconds 1
-    Write-Host "  Stopped." -ForegroundColor Green
-
-    # Step 2: Start new model
-    # Use Start-Process with -FilePath + -ArgumentList. The PowerShell
-    # array-form argument list handles the spaces-in-paths quoting
-    # automatically, and ShellExecuteEx (Start-Process's default) keeps
-    # the child bat (and the llama-server it spawns) detached from this
-    # Console's PowerShell session — so closing Console / pressing [Q]
-    # won't kill the server.
-    #
-    # We pass the model path on the bat's argv (`-ArgumentList $ModelPath`).
-    # start-llm-smart.bat's %~1 already supports this.
-    Write-Host "  [2/5] Starting llama-server with new model..." -ForegroundColor Gray
-    $startBat = Join-Path $HERMES_ROOT "bin\start-llm-smart.bat"
-    $logDir = Join-Path $HERMES_ROOT "data\logs"
-    $logPath = Join-Path $logDir "llm-server.log"
-    $errPath = Join-Path $logDir "llm-server.err"
-    # Truncate the previous run's logs so the new server's startup is unambiguous.
-    "" | Set-Content $logPath -Encoding UTF8
-    "" | Set-Content $errPath -Encoding UTF8
-
-    $proc = Start-Process `
-        -FilePath $startBat `
-        -ArgumentList @($ModelPath) `
-        -WorkingDirectory $HERMES_ROOT `
-        -WindowStyle Hidden `
-        -PassThru
-    Write-Host "  Launched bat (pid=$($proc.Id)). Waiting for server to be ready..." -ForegroundColor Gray
-
-    # Layered liveness probe — /health, /v1/models, /v1/completions.
-    # Reports each milestone with a wall-clock timestamp so the user can
-    # see exactly how long model load vs warm-up actually took.
-    # . .\bin\hermes-health.ps1
-    . (Join-Path $HERMES_ROOT "bin\hermes-health.ps1")
-    $serverBase = "http://127.0.0.1:" + $LLAMA_PORT
-    $ready = Wait-LlamaReady -Url $serverBase -TimeoutSec 180 -PollIntervalMs 500
-
-    if (-not $ready) {
-        Write-Host "  ERROR: llama-server did not become ready within 180s" -ForegroundColor Red
-        Write-Host "  Tail of data\logs\llm-server.err:" -ForegroundColor Yellow
-        if (Test-Path $errPath) {
-            Get-Content $errPath -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object {
-                Write-Host "    $_" -ForegroundColor DarkYellow
-            }
-        }
+        $r = Invoke-RestMethod -Uri "http://127.0.0.1:$LLAMA_PORT/v1/models" -TimeoutSec 3
+        if ($r.data) { $discovered = @($r.data | ForEach-Object { $_.id }) }
+    } catch {
+        Write-Host "  ERROR: Could not reach llama-server at :$LLAMA_PORT. Is hermes-all.bat running?" -ForegroundColor Red
         return $false
     }
-    $waitMsg = "  llama-server is ready"
-    Write-Host $waitMsg -ForegroundColor Green
+    if ($discovered.Count -eq 0) {
+        Write-Host "  ERROR: router reports 0 models. Check --models-dir and that GGUFs exist there." -ForegroundColor Red
+        return $false
+    }
+    if ($discovered -notcontains $routerId) {
+        Write-Host "  ERROR: '$routerId' not in router's discovered list: $($discovered -join ', ')" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "  OK. Router has $($discovered.Count) model(s); '$routerId' is registered." -ForegroundColor Green
 
-    # Step 3: Verify model from server
-    Write-Host "  [3/5] Verifying model from server..." -ForegroundColor Gray
-    $displayModel = [System.IO.Path]::GetFileNameWithoutExtension($ModelName)
-    $serverModel = ""
-    $expectedAlias = $displayModel -replace '[.\s-]+', '_'
-    $modelMatches = $true
+    # Step 2: Preload the model via /models/load so the first chat
+    # request doesn't pay the cold-start cost.
+    Write-Host "  [2/4] Preloading model (POST /models/load)..." -ForegroundColor Gray
+    $loadOk = $false
     try {
-        $modelsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/models"
-        $r = Invoke-RestMethod -Uri $modelsUrl -TimeoutSec 3
-        if ($r.data -and $r.data.Count -gt 0) {
-            $serverModel = $r.data[0].id
-            $modelMsg = "  Server reports model ID: " + $serverModel
-            Write-Host $modelMsg -ForegroundColor Cyan
-            if ($serverModel -ne $expectedAlias) {
-                $modelMatches = $false
-                $mm1 = "  MISMATCH: requested alias '" + $expectedAlias + "' but server has '" + $serverModel + "'"
-                Write-Host $mm1 -ForegroundColor Red
-                Write-Host "  This usually means a previous llama-server was not killed," -ForegroundColor Red
-                Write-Host "  or the LLAMA_MODEL env var from a parent process overrode the requested model." -ForegroundColor Red
-            } else {
-                Write-Host "  Alias matches requested model." -ForegroundColor Green
-            }
-        }
+        $loadUrl = "http://127.0.0.1:$LLAMA_PORT/models/load"
+        $loadBody = @{ model = $routerId } | ConvertTo-Json
+        $loadResp = Invoke-RestMethod -Uri $loadUrl -Method POST -Body $loadBody -ContentType "application/json" -TimeoutSec 180
+        Write-Host "  Preload accepted by router." -ForegroundColor Green
+        $loadOk = $true
     } catch {
-        Write-Host "  WARNING: Could not query /v1/models" -ForegroundColor Yellow
+        Write-Host "  WARNING: /models/load failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  (The first chat request will still work \u2014 just with cold-start latency.)" -ForegroundColor DarkYellow
     }
 
-    # Step 4: Update config.yaml
-    Write-Host "  [4/5] Updating config.yaml..." -ForegroundColor Gray
+    # Step 3: Update data/hermes-agent/config.yaml so the WebUI's
+    # default model is the one we just picked.
+    Write-Host "  [3/4] Updating config.yaml..." -ForegroundColor Gray
     $configPath = Join-Path $HERMES_ROOT "data\hermes-agent\config.yaml"
-
     if (Test-Path $configPath) {
-        # Context length to declare to hermes-agent in data/hermes-agent/config.yaml.
-        # The agent enforces a 64000 minimum for tool-calling workflows (see
-        # hermes-agent-source/agent/model_metadata.py MINIMUM_CONTEXT_LENGTH).
-        # 3B's n_ctx_train is only 32K, so the actual server will warn+cap to
-        # 32K, but declaring 65536 here passes the pre-flight check and lets
-        # the user override. Larger models use their full training context.
+        # Router-mode ctx comes from data\models\router-preset.ini per
+        # model; declare 65536 here to satisfy hermes-agent's 64K minimum
+        # gate (the actual server will warn+cap if the model's n_ctx_train
+        # is smaller).
         $ctxLen = 65536
         if ($ModelName -match "35B") { $ctxLen = 131072 }
 
@@ -193,7 +152,7 @@ function Switch-Model {
             }
 
             if ($inModelSection -and $line -match "^\s+default:\s*") {
-                $newLines = $newLines + ("  default: " + $displayModel)
+                $newLines = $newLines + ("  default: " + $routerId)
                 continue
             }
             if ($inModelSection -and $line -match "^\s+provider:\s*") {
@@ -205,102 +164,52 @@ function Switch-Model {
                 continue
             }
             if ($inCustomProviders -and $line -match "model:\s*") {
-                $newLines = $newLines + ("    model: " + $displayModel)
+                $newLines = $newLines + ("    model: " + $routerId)
                 continue
             }
 
             $newLines = $newLines + $line
         }
-
         Set-Content $configPath -Value $newLines -Encoding UTF8
-        $updateMsg = "  config.yaml updated (model: " + $displayModel + ", context: " + $ctxLen + ")"
-        Write-Host $updateMsg -ForegroundColor Green
+        Write-Host "  config.yaml updated (default: $routerId, context: $ctxLen)" -ForegroundColor Green
     } else {
         Write-Host "  WARNING: config.yaml not found at $configPath" -ForegroundColor Yellow
     }
 
-    # Step 5: Verify by sending test request
-    Write-Host "  [5/5] Verification: Sending test request to model..." -ForegroundColor Gray
+    # Step 4: Warmup test (cheap) \u2014 confirms the model is actually
+    # loadable end-to-end and reports a tiny "I am X" reply.
+    Write-Host "  [4/4] Warmup test (tiny chat request)..." -ForegroundColor Gray
     $verifyOk = $false
-    $chatUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/chat/completions"
-    $completionsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/completions"
-
-    $reqModel = $displayModel
-    if ($serverModel) { $reqModel = $serverModel }
-
     try {
-        $msgText = "Please briefly introduce yourself, including your parameter count (e.g. 3B, 7B, 35B). Reply in one short sentence in English."
-        $msg = @{ role = "user"; content = $msgText }
+        $chatUrl = "http://127.0.0.1:$LLAMA_PORT/v1/chat/completions"
         $bodyObj = @{
-            model = $reqModel
-            messages = @($msg)
-            max_tokens = 200
+            model     = $routerId
+            messages  = @(@{ role = "user"; content = "Reply in 5 words: which model are you?" })
+            max_tokens = 30
             temperature = 0.7
         }
         $body = $bodyObj | ConvertTo-Json
-
-        $resp = Invoke-RestMethod -Uri $chatUrl -Method POST -Body $body -ContentType "application/json" -TimeoutSec 60
-
+        $resp = Invoke-RestMethod -Uri $chatUrl -Method POST -Body $body -ContentType "application/json" -TimeoutSec 120
         if ($resp.choices -and $resp.choices.Count -gt 0) {
             $reply = $resp.choices[0].message.content.Trim()
             Write-Host ""
             Write-Host "  --- Model Response ---" -ForegroundColor Cyan
             Write-Host "  $reply" -ForegroundColor Green
             Write-Host "  ---------------------" -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  VERIFICATION OK: Model is responding." -ForegroundColor Green
             $verifyOk = $true
-
-            # Show memory info for cross-check
-            try {
-                $procList = Get-Process -Name "llama-server*" -ErrorAction SilentlyContinue
-                if ($procList -and $procList.Count -gt 0) {
-                    $memSum = ($procList | Measure-Object WorkingSet64 -Sum).Sum
-                    $memMB = [math]::Round($memSum / 1MB, 0)
-                    $memMsg = "  llama-server memory usage: " + $memMB + " MB"
-                    Write-Host $memMsg -ForegroundColor Gray
-                }
-            } catch {}
-        } else {
-            Write-Host "  WARNING: Empty response from model" -ForegroundColor Yellow
         }
     } catch {
-        $errMsg = "  Test request failed: " + $_.Exception.Message
-        Write-Host $errMsg -ForegroundColor Yellow
-
-        # Try direct completion as fallback
-        try {
-            $body2Obj = @{
-                model = $reqModel
-                prompt = "Who are you? Answer in one sentence."
-                max_tokens = 100
-            }
-            $body2 = $body2Obj | ConvertTo-Json
-            $resp2 = Invoke-RestMethod -Uri $completionsUrl -Method POST -Body $body2 -ContentType "application/json" -TimeoutSec 60
-            if ($resp2.choices -and $resp2.choices.Count -gt 0) {
-                $fallbackText = $resp2.choices[0].text.Trim()
-                $fbMsg = "  Fallback response: " + $fallbackText
-                Write-Host $fbMsg -ForegroundColor Cyan
-                $verifyOk = $true
-            }
-        } catch {
-            $fbErr = "  Fallback also failed: " + $_.Exception.Message
-            Write-Host $fbErr -ForegroundColor Red
-        }
+        Write-Host "  Warmup failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
     Write-Host ""
     Write-Host "  ============================================================" -ForegroundColor Cyan
     if ($verifyOk) {
-        if ($modelMatches) {
-            Write-Host "  SUCCESS: Switched to $displayModel (verified)" -ForegroundColor Green
-        } else {
-            Write-Host "  FAILED: Server is still running a different model ($serverModel)" -ForegroundColor Red
-            Write-Host "  See MISMATCH message above. Try [Q] to quit console and run hermes-stop.bat to clear all server processes." -ForegroundColor Red
-        }
+        Write-Host "  SUCCESS: $ggufName is loaded and responding." -ForegroundColor Green
+        Write-Host "  Next chat request will hit this model directly. No restart needed." -ForegroundColor Green
     } else {
-        Write-Host "  WARNING: Switch may have failed - model not responding correctly" -ForegroundColor Yellow
-        Write-Host "  Please check the llama-server window for errors." -ForegroundColor Yellow
+        Write-Host "  PARTIAL: preloaded + config updated, but warmup test failed." -ForegroundColor Yellow
+        Write-Host "  The model is still selected; the next real chat request may take longer (cold start)." -ForegroundColor Yellow
     }
     Write-Host "  ============================================================" -ForegroundColor Cyan
     Write-Host ""
