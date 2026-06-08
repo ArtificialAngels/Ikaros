@@ -9,30 +9,40 @@
 ## 1. What This Is
 
 A **portable, USB-drive-deployable Hermes Agent** — a hybrid LLM (cloud + local)
-with a modern three-panel chat UI, designed to run on any Windows PC with zero install.
+with a modern full-featured Web UI, designed to run on any Windows PC with zero install.
 
-**One-click UX:** `bin\hermes-all.bat` → browser opens to `http://localhost:7860/` → chat ready.
+**One-click UX:** `bin\hermes-all.bat` → browser opens to `http://localhost:8648/` → chat ready.
+
+**Web UI Source:** [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) — Vue 3 + Koa + Socket.IO
 
 ---
 
 ## 2. Architecture
 
-Two processes, each with a single responsibility:
+Three processes, each with a single responsibility:
 
 | Port  | Process                | Role                                                           |
 |-------|------------------------|----------------------------------------------------------------|
 | :8080 | **llama-server**       | LLM engine. OpenAI-compatible HTTP API. Internal — not exposed. |
-| :7860 | **Hermes FastAPI**     | Memory + knowledge base + RAG embeddings shim + **serves the Hermes WebUI** (nesquena/hermes-webui, three-panel dark UI). Browser opens here. |
+| :7860 | **Hermes FastAPI**     | Memory + knowledge base + RAG embeddings shim + legacy static UI. |
+| :8648 | **Hermes Web UI**      | **Main Web Interface** (EKKOLearnAI/hermes-web-ui). Vue 3 + Koa + Socket.IO. Browser opens here. |
 
 **Data flow:**
 ```
-Browser → :7860 Hermes WebUI (FastAPI serves static/) → :8080 llama-server (chat)
-                                                     → :7860 Hermes FastAPI (embeddings/RAG /api/*)
+Browser → :8648 Hermes Web UI (Koa BFF + Vue 3 SPA)
+                │
+                ├── Socket.IO /chat-run → Hermes Agent Bridge → hermes-agent-source
+                │
+                └── REST API → :7860 Hermes FastAPI (embeddings/RAG /api/*)
+                             → :8080 llama-server (chat /v1/*)
 ```
 
-The WebUI is a static SPA under `hermes/static/`. The client-side `api-adapter.js`
-translates the upstream WebUI's expected endpoints onto our `/api/chat/*` + `/v1/*`
-backends so we don't need to fork the upstream Python BFF.
+**Hermes Web UI** (from [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui)):
+- Full-featured Vue 3 + TypeScript frontend with Koa BFF backend
+- Features: AI chat, platform channels, usage analytics, cron jobs, model management,
+  multi-profile, file browser, group chat, skills, logs, web terminal
+- Communicates with local llama-server via OpenAI-compatible API
+- Uses Hermes Agent Bridge for chat execution
 
 llama-server only loads **one model at a time**; the WebUI shows whichever
 model llama-server exposes via `--alias`). When llama-server is down, `/v1/models`
@@ -101,16 +111,41 @@ E:\Hermes Agent\
 │   │   ├── Qwen1.5-1.8B-Chat-Q4_K_M.gguf
 │   │   ├── Qwen3.5-35B-A3B-Q4_K_M.gguf  (20.5GB, MoE)
 │   │   └── f5ee307a2982.gguf            # Ollama-imported qwen3, 22.8GB
+│   ├── webui-new\                # ★ NEW 2026-06-08 — Hermes Web UI (EKKOLearnAI)
+│   │   ├── app\                  # Web UI application (Vue 3 + Koa)
+│   │   │   ├── packages/client\  # Vue 3 frontend
+│   │   │   ├── packages/server\  # Koa BFF backend
+│   │   │   └── packages/desktop\ # Electron wrapper (optional)
+│   │   └── data\                 # Web UI state (SQLite, auth, sessions)
+│   ├── hermes-agent\             # ★ Hermes Agent data home for Web UI
+│   │   ├── config.yaml           # Agent config (providers, defaults, toolsets)
+│   │   ├── auth.json             # Credential pool
+│   │   ├── state.db              # Agent state
+│   │   ├── sessions\             # per-session chat history (atomic JSON)
+│   │   ├── workspaces.json       # WorkspaceManager whitelist
+│   │   ├── webui_settings.json   # WebUI user prefs (32 keys)
+│   │   ├── kanban\               # boards/tasks/events.json
+│   │   ├── crons\                # jobs.json (croniter-scheduled)
+│   │   └── skills\               # ★ NEW 2026-06-08 — installed skills (see §11)
 │   ├── memory\                   # JSONL memory store
 │   ├── knowledge\                # markdown KB source + index.jsonl
-│   ├── skills\                   # skill registry + custom skills
+│   ├── skills\                   # Hermes FastAPI skill registry (built-in: time/calc/echo/...)
+│   ├── hermes-agent\skills\      # ★ NEW 2026-06-08 — installed skills for Web UI (see §15)
+│   │   ├── finance\              # excel-author, pptx-author, comps-analysis, dcf-model
+│   │   ├── creative\             # avoid-ai-writing, claude-design, drawio-skill
+│   │   ├── productivity\         # google-workspace, nano-pdf, ocr-and-documents,
+│   │   │                         #   plur-memory, plur-session-end, powerpoint
+│   │   └── autonomous-ai-agents\ # hermes-dojo
+│   │   (others: apikey-image-gen, grok-image-to-video, hyperframes,
+│   │    markdown-viewer, remotion — empty legacy stubs)
 │   ├── logs\                     # hermes.log + bootstrap.log
 │   ├── sessions\                 # ★ NEW 2026-06-07 — one JSON file per chat session
 │   ├── kanban\                   # ★ NEW 2026-06-07 — boards.json + tasks.json + events.json
 │   ├── crons\                    # ★ NEW 2026-06-07 — jobs.json (croniter-scheduled)
 │   └── webui_settings.json       # ★ NEW 2026-06-07 — single-file atomic webui prefs
 ├── bin\                          # user-facing launchers (CRLF line endings!)
-│   ├── hermes-all.bat            # ★ MAIN: one-click everything (now opens /)
+│   ├── hermes-all.bat            # ★ MAIN: one-click everything (now opens :8648)
+│   ├── webui-new.bat             # ★ NEW 2026-06-08 — Hermes Web UI launcher
 │   ├── hermes.bat                # CLI agent (`hermes chat`)
 │   ├── hermes-stop.bat           # kill all Hermes processes
 │   ├── hermes-doctor.bat         # 8-section health report
@@ -140,6 +175,24 @@ E:\Hermes Agent\
 ---
 
 ## 4. Components
+
+### Hermes Web UI (EKKOLearnAI/hermes-web-ui) — Main Interface
+- **Source**: [https://github.com/EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui)
+- **Tech Stack**: Vue 3 + TypeScript + Vite + Naive UI (frontend) + Koa 2 (BFF backend)
+- **Port**: 8648 (configurable via `PORT` env var)
+- **Features**:
+  - AI Chat: Real-time streaming via Socket.IO `/chat-run`, multi-session management, Markdown rendering
+  - Platform Channels: Unified config for 8 platforms (Telegram/Discord/Slack/WhatsApp/Matrix/Feishu/WeChat/WeCom)
+  - Usage Analytics: Token tracking, cost estimation, 30-day trends
+  - Cron Jobs: Create/edit/pause/resume scheduled tasks
+  - Model Management: Auto-discover models, provider management, OAuth login
+  - Multi-Profile: Isolated configs, import/export/clone
+  - File Browser: Remote file management (local/Docker/SSH/Singularity)
+  - Group Chat: Multi-agent rooms with @mention routing
+  - Skills & Memory: Browse/search installed skills
+  - Logs: Agent/server/error logs with filtering
+  - Web Terminal: Integrated terminal via node-pty
+- **Integration**: Configured via `bin\webui-new.bat` with portable Python and local llama-server
 
 ### hermes/server.py
 - FastAPI app
@@ -414,6 +467,9 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-07  | **Hermes WebUI merge (nesquena/hermes-webui)**: replaced the in-house single-file `chat_ui.py` with the upstream three-panel dark UI. Source: `D:\PZS0X\下载\hermes-webui-master\hermes-webui-master\static\` (3.5MB: 18 vanilla-JS files + 366KB CSS with 16 skins + vendored streaming-markdown + KaTeX). Copied to `hermes/static/`, new UI served at `/`; old `chat_ui.py` kept as `/chat` fallback. Adaptation: `hermes/static/api-adapter.js` (23KB) wraps `window.fetch` + `EventSource` to translate the new UI's ~25 expected endpoints onto our existing `/api/chat/*` + `/v1/*` backends; missing endpoints (workspaces, kanban, crons, etc.) return sane empty defaults so the UI continues to boot. server.py: `GET /` serves `hermes/static/index.html` with `__WEBUI_VERSION__` / `__MAX_UPLOAD_BYTES__` / `__CSRF_TOKEN_JSON__` placeholder substitution; added 11 new `/api/webui/*` stub endpoints; added `app.mount("/static", StaticFiles(...))` for the new asset tree. **Two bugs hit and fixed during integration**: (1) `/api/webui/*` registered AFTER the catch-all `/api/{path:path}` got swallowed — moved all webui routes before the catch-all; (2) duplicate `@app.get("/")` returned the legacy DASHBOARD_HTML — removed the old one. **Knowingly not implemented** (UI may show empty panels / "no data" / disabled features): streaming Markdown renders but no real token-by-token SSE (we block on /api/chat/send and emit one fake delta — works but not live), workspaces/file browser, kanban boards, cron jobs, projects, memory editor, voice, OAuth/passkeys, multi-profile, web terminal. Adding these is straightforward but out of scope for v0.1.
 | 2026-06-07  | **Full cutover to Hermes WebUI**: deleted `hermes/chat_ui.py` (336 lines), `bin/hermes-web.bat`, `data/openwebui/` (residual data), and `docker/` (unused). Removed `GET /chat` endpoint, `DASHBOARD_HTML` constant, and the `DASHBOARD_HTML` fallback from `GET /` and `GET /health` — both now 503 if `hermes/static/index.html` is missing (install is broken). `bin/hermes-all.bat` v8: title says "WebUI mode", opens `http://localhost:7860/` (not `/chat`), drops the legacy `:7870` line. **LLM model dropdown fix**: rewrote `GET /v1/models` to **live-proxy** `http://127.0.0.1:8080/v1/models` when llama-server is up (so the UI sees the exact `--alias` model llama-server has loaded), then fall back to scanning `data/models/*.gguf` via `hermes/gguf.py` and exposing filename stems as model ids (matches llama-server's default alias), then empty list. Response now includes `_size_gb` / `_arch` / `_ctx_len` / `_quant` / `_filename` extras on each model entry (the adapter surfaces them in the WebUI's tooltip). Updated AGENTS.md §1, §2, §3, §4, §5, §7, §9, §10, §12 to remove all Open WebUI references and reflect the new architecture (2 processes instead of 3, WebUI at :7860, no `:7870`).
 | 2026-06-07  | **Hermes Model Running window**: new persistent `bin/hermes-model-run.bat` + `.ps1` that tails `data/logs/llm-server.log` + `llm-server.err` with smart color highlighting (model load magenta, HTTP requests cyan, eval-time yellow, errors red). User asked for a way to "see what the LLM is doing" — previously `llm-server.log` was 0 bytes because `start-llm.ps1` passed `--log-disable`. Removed that flag so llama-server now streams its internal log to stdout, which gets redirected to the log file. Step 7 of `hermes-all.bat` launches the window; `hermes-stop.bat` step 5 kills the powershell and step 6 closes the cmd window by title match. Title set via `$Host.UI.RawUI.WindowTitle` with try-catch guard against host-less invocations. Initial 5-line tail dump at boot, 400ms polling loop, file-locked-safe. CRLF verified on both new files. AGENTS.md §3, §4, §8 updated.
+| 2026-06-08  | **Hermes Web UI Integration (EKKOLearnAI)**: integrated [hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) as the main web interface. Source: `data/webui-new/app/` (Vue 3 + Koa + Socket.IO). New launcher: `bin/webui-new.bat` with environment setup for portable Python (`HERMES_AGENT_BRIDGE_PYTHON`), data isolation (`HERMES_WEB_UI_HOME`, `HERMES_HOME`), and gateway disable (`HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART=1`). Updated `hermes-all.bat` to start Web UI at :8648. **Compatibility fixes**: (1) Python bridge path injection for portable Python; (2) Data directory isolation to `data/webui-new/data/` and `data/hermes-agent/`; (3) Auto-generated `hermes-agent/config.yaml` with llama-local provider pointing to `http://127.0.0.1:8080/v1`; (4) Node.js dependency on system PATH (Web UI requires Node.js). Architecture now has 3 processes: llama-server (:8080), Hermes FastAPI (:7860), Hermes Web UI (:8648). README.md rewritten with acknowledgment to EKKOLearnAI/hermes-web-ui project. AGENTS.md §1/§2/§3/§4 updated.
+| 2026-06-08  | **Skill installation for Web UI**: 9 skills installed to `data/hermes-agent/skills/` across 4 categories — 4 from upstream `optional-skills/finance/` (excel-author, pptx-author, comps-analysis, dcf-model) + 4 from community GitHub via `git clone` (drawio-skill from `Agents365-ai/`, hermes-dojo from `Yonkoo11/`, avoid-ai-writing from `conorbronsdon/`, plur-memory + plur-session-end from `plur-ai/plur`). Config change: `data/hermes-agent/config.yaml` `toolsets:` list extended with `skills` (was `[hermes-cli]` only) — required to load the upstream `skills` toolset. **Process note**: `hermes skills install <name> --force` is rate-limited by GitHub API (60 req/hr unauthenticated) so we used `git clone --depth=1` as the rate-limit-free fallback. 2 short names (`research-agent`, `multiagent`) not present in upstream source tree and were skipped pending a specific source URL from the user. See §11 for the full list. AGENTS.md §3/§8/§11 updated.
+| 2026-06-08  | **Built-in skill install (round 2)**: copied 5 built-in skills from `E:\Hermes Agent\hermes-agent-source\skills\` to `data/hermes-agent/skills/` — `productivity/{powerpoint, ocr-and-documents, nano-pdf, google-workspace}` and `creative/claude-design`. Total now 14 active skills across 4 categories (finance 4, productivity 6, creative 3, autonomous-ai-agents 1). User confirmed trust = same-source GitHub repo so no security scan. AGENTS.md §3/§15 updated.
 
 ---
 
@@ -593,3 +649,72 @@ turns (in Mavis conversation memory if picked up later):
   model id mismatch, Ollama auto-detect)
 - Smart NGL launcher (overcame: 32-bit int overflow, nvidia-smi in for/f)
 - Memory bank + cleanup (this file)
+
+---
+
+## 15. Installed Skills (NEW 2026-06-08)
+
+14 skills live at `data/hermes-agent/skills/`, organized by upstream category.
+Loaded into the Web UI agent via the `skills` toolset (see `config.yaml` `toolsets:`).
+
+### From upstream `optional-skills/finance/` (copy)
+
+| Skill | Purpose | Has `pip` deps in SKILL.md |
+|---|---|---|
+| `finance/excel-author` | Build .xlsx with named ranges + formula audit trail | `openpyxl>=3.0` |
+| `finance/pptx-author` | Build .pptx with presentation design conventions | `python-pptx>=0.6` |
+| `finance/comps-analysis` | Comparable Company Analysis (Excel model) | `openpyxl` |
+| `finance/dcf-model` | DCF discounted cash flow model (Excel) | `openpyxl` |
+
+### From upstream `skills/` built-in tree (copy, round 2)
+
+| Skill | Purpose | Notes |
+|---|---|---|
+| `productivity/powerpoint` | Build .pptx with comprehensive conventions (1MB, biggest skill) | Full templates + slide-design rules |
+| `productivity/ocr-and-documents` | OCR scanned PDFs / extract text + tables from images | Likely tesseract-based |
+| `productivity/nano-pdf` | Lightweight PDF reading / extraction | Smallest skill (1.4 KB) |
+| `productivity/google-workspace` | Google Docs / Sheets / Slides integration | 83 KB, requires `gcloud` auth |
+| `creative/claude-design` | Visual design system + mockup conventions | 20 KB |
+
+### From community GitHub repos (`git clone --depth=1`)
+
+| Skill | Source | Purpose |
+|---|---|---|
+| `creative/drawio-skill` | `Agents365-ai/drawio-skill` | drawio diagram generation (flowcharts / architecture / ER / UML) |
+| `creative/avoid-ai-writing` | `conorbronsdon/avoid-ai-writing` | Audit + rewrite text to strip AI-isms (multiple voice profiles) |
+| `productivity/plur-memory` | `plur-ai/plur` (`skills/plur-memory/`) | Persistent engram memory across sessions |
+| `productivity/plur-session-end` | `plur-ai/plur` (`skills/plur-session-end/`) | Extract durable learnings at session end |
+| `autonomous-ai-agents/hermes-dojo` | `Yonkoo11/hermes-dojo` | Self-improvement system — analyzes past sessions, auto-patches skills |
+
+### How they get discovered
+
+- Web UI agent spawn-time: scans `~/.hermes/skills/` (= `E:\Hermes Agent\data\hermes-agent\skills/`)
+- Each category dir has subdirs, each subdir has `SKILL.md` with `name:` frontmatter
+- Slash commands (`/excel-author`, `/drawio-skill`, etc.) auto-injected as user messages (not system prompt) — preserves prompt caching
+- Toolset filter: agent must have `skills` toolset enabled in `config.yaml` `toolsets:` list
+
+### Install method (rate-limit-free)
+
+`hermes skills install <name> --force` would route through `unified_search` → GitHub API (60 req/hr). To avoid burning the rate limit we used direct `git clone --depth=1` of each `user/repo` into the staging dir, then `shutil.copytree` into `data/hermes-agent/skills/<category>/<name>/`. For built-ins we just `shutil.copytree` from `E:\Hermes Agent\hermes-agent-source\skills/<cat>/<name>/` directly. The Web UI's skill scanner doesn't care about provenance, only the directory structure.
+
+### Skipped (2 of 6 user-requested, from round 1)
+
+- `research-agent` — not in upstream `skills/` or `optional-skills/`; needs a specific GitHub source URL from the user
+- `multiagent` — same; closest upstream skill is `skills/research/research-paper-writing` but that's not the same thing
+
+### To install more later
+
+```bash
+# Method 1: upstream catalog (uses GitHub API, may rate-limit)
+"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\hermes-agent-source\hermes_cli\skills_hub.py" install <name> --force
+
+# Method 2: direct git clone (no rate limit) — for community skills
+# 1. git clone --depth=1 https://github.com/<user>/<repo>.git to scratchpad
+# 2. find the canonical SKILL.md (root or skills/<name>/)
+# 3. shutil.copytree to data/hermes-agent/skills/<category>/<skill-name>/
+# 4. restart Web UI
+
+# Method 3: copy built-in (no network needed)
+xcopy /E /I "E:\Hermes Agent\hermes-agent-source\skills\<cat>\<name>" "E:\Hermes Agent\data\hermes-agent\skills\<cat>\<name>"
+```
+
