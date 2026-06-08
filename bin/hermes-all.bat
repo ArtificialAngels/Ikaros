@@ -92,7 +92,15 @@ call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
 REM ---- Step 2: Start llama-server ----
 echo [2/8] Starting llama-server (smart NGL)...
 set "LLAMA_MODEL=%MODEL%"
-start "Hermes-LLM" /MIN cmd /c ""%HERMES_ROOT%\bin\start-llm-smart.bat""
+REM Launch the bat. The old form `start "..." /MIN cmd /c ""path""` is
+REM buggy when the path contains spaces: cmd /c strips the outer quotes
+REM and the leading quote of the inner string causes the bat to be
+REM looked up as a literal quoted executable (which doesn't exist), so
+REM cmd /c silently fails and the bat never runs. Use cd /d to switch
+REM to the project root and pass a relative path instead — no quoting
+REM needed around the path, so cmd /c handles it cleanly.
+cd /d "%HERMES_ROOT%"
+start "Hermes-LLM" /MIN cmd /c "bin\start-llm-smart.bat"
 
 REM ---- Wait for llama-server ----
 echo [3/8] Waiting for llama-server...
