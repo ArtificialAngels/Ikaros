@@ -17,7 +17,7 @@ try { $Host.UI.RawUI.WindowTitle = "Hermes Model Running" } catch { }
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 
 $HERMES_ROOT = Split-Path -Parent $PSScriptRoot
-$LLM_DIR = Join-Path $HERMES_ROOT "hermes\data\logs"
+$LLM_DIR = Join-Path $HERMES_ROOT "data\logs"
 
 # Source definitions: label, path, color, prefix
 $sources = @(

@@ -34,15 +34,11 @@ REM ---- 5. Kill Console + Trace + Model Run powershell windows ----
 echo [5/8] Killing Console ^& Trace ^& Model Run windows...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" | Where-Object { $_.CommandLine -match 'hermes-console' -or $_.CommandLine -match 'hermes-trace' -or $_.CommandLine -match 'hermes-model-run' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (console/trace/model-run)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
-REM ---- 6. Kill Hermes shell + Terminal windows (by title) ----
-echo [6/8] Killing shell ^& Terminal windows...
-REM cmd.exe wrappers (Hermes-LLM, Hermes-API, Hermes-Console, Hermes-Trace, Hermes Model Running, etc.)
-powershell -NoProfile -Command ^
-    "Get-Process -Name 'cmd' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like 'Hermes-*' -or $_.MainWindowTitle -eq 'Hermes Model Running' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (shell: ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }" 2>nul
-REM Windows Terminal (Win11)
-powershell -NoProfile -Command ^
-    "Get-Process -Name 'WindowsTerminal','wt' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (Terminal: ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }" 2>nul
-
+REM ---- 6. Kill Hermes shell + Terminal windows (via Win32 EnumWindows) ----
+echo [6/8] Killing shell ^& Terminal windows (via Win32 EnumWindows)...
+REM Use EnumWindows because Get-Process.MainWindowTitle is empty for cmd.exe
+REM subshells hosted by WindowsTerminal (the terminal owns the window).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0hermes-kill-windows.ps1" 2>nul
 REM ---- 7. Kill gopeed-web ----
 echo [7/8] Killing gopeed-web...
 taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
