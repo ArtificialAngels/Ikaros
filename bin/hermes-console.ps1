@@ -132,6 +132,8 @@ function Switch-Model {
     Write-Host "  [3/5] Verifying model from server..." -ForegroundColor Gray
     $displayModel = [System.IO.Path]::GetFileNameWithoutExtension($ModelName)
     $serverModel = ""
+    $expectedAlias = $displayModel -replace '[.\s-]+', '_'
+    $modelMatches = $true
     try {
         $modelsUrl = "http://127.0.0.1:" + $LLAMA_PORT + "/v1/models"
         $r = Invoke-RestMethod -Uri $modelsUrl -TimeoutSec 3
@@ -139,6 +141,15 @@ function Switch-Model {
             $serverModel = $r.data[0].id
             $modelMsg = "  Server reports model ID: " + $serverModel
             Write-Host $modelMsg -ForegroundColor Cyan
+            if ($serverModel -ne $expectedAlias) {
+                $modelMatches = $false
+                $mm1 = "  MISMATCH: requested alias '" + $expectedAlias + "' but server has '" + $serverModel + "'"
+                Write-Host $mm1 -ForegroundColor Red
+                Write-Host "  This usually means a previous llama-server was not killed," -ForegroundColor Red
+                Write-Host "  or the LLAMA_MODEL env var from a parent process overrode the requested model." -ForegroundColor Red
+            } else {
+                Write-Host "  Alias matches requested model." -ForegroundColor Green
+            }
         }
     } catch {
         Write-Host "  WARNING: Could not query /v1/models" -ForegroundColor Yellow
@@ -281,7 +292,12 @@ function Switch-Model {
     Write-Host ""
     Write-Host "  ============================================================" -ForegroundColor Cyan
     if ($verifyOk) {
-        Write-Host "  SUCCESS: Switched to $displayModel (verified)" -ForegroundColor Green
+        if ($modelMatches) {
+            Write-Host "  SUCCESS: Switched to $displayModel (verified)" -ForegroundColor Green
+        } else {
+            Write-Host "  FAILED: Server is still running a different model ($serverModel)" -ForegroundColor Red
+            Write-Host "  See MISMATCH message above. Try [Q] to quit console and run hermes-stop.bat to clear all server processes." -ForegroundColor Red
+        }
     } else {
         Write-Host "  WARNING: Switch may have failed - model not responding correctly" -ForegroundColor Yellow
         Write-Host "  Please check the llama-server window for errors." -ForegroundColor Yellow

@@ -33,9 +33,26 @@ if exist "%RUNTIME%\cudart64_12.dll" if exist "%RUNTIME%\cublas64_12.dll" set "C
 if exist "%RUNTIME%\cudart64_11.dll" if exist "%RUNTIME%\cublas64_11.dll" set "CUDA_RUNTIME_OK=1"
 
 REM ---- Step 3: Determine model ----
-set "MODEL=%~1"
-if "%MODEL%"=="" set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-if not "%LLAMA_MODEL%"=="" set "MODEL=%LLAMA_MODEL%"
+REM Precedence (highest wins):
+REM   1. Command-line arg %~1  — used by hermes-console.ps1 Switch-Model
+REM                                when the user picks a different model at runtime.
+REM   2. LLAMA_MODEL env var  — set by hermes-all.bat L94 so the first launch
+REM                                loads the auto-picked model.
+REM   3. Hard-coded default (3B) — bare invocation fallback.
+REM
+REM BUG FIX 2026-06-09: the previous order was %~1 first, then LLAMA_MODEL
+REM UNCONDITIONALLY overrode it. Because the parent process's LLAMA_MODEL
+REM env var is inherited by the child cmd, every Switch-Model call from
+HERMES-Console would silently reload whatever model hermes-all.bat picked
+at boot — making the model dropdown a no-op.
+set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+if not "%~1"=="" (
+    set "MODEL=%~1"
+) else (
+    if not "%LLAMA_MODEL%"=="" (
+        set "MODEL=%LLAMA_MODEL%"
+    )
+)
 
 if not exist "%MODEL%" (
     echo [ERROR] Model not found: %MODEL%
