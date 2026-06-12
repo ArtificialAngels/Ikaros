@@ -48,12 +48,20 @@ hermes-web-ui/
 hermes/data/
 hermes/data/nextchat/
 tests/hermes/data/
-data/
+# IMPORTANT (2026-06-13 fix): use `data/**` (not `data/`) so the
+# `!data/models/*` negation below can actually re-include files in
+# data/models/. With the old `data/` pattern, git's "parent dir
+# excluded" rule blocks all negations under data/, and *nothing*
+# under data/models/ could be tracked (router-preset.example.ini and
+# 初始模型下载.bat were silently dropped in commit 8e9de8bf).
+data/**
 !data/models/
 !data/models/*
 data/models/*.gguf
 data/models/*.bin
-data/models/router-preset.ini       # user-specific NGL/ctx per model
+# user-specific NGL/ctx per model (do not commit the real one;
+# data/models/router-preset.example.ini is the template)
+data/models/router-preset.ini
 data/hermes-agent/                   # webui state, auth, sessions, kanban
 data/webui/                          # webui home, sqlite, secret key
 data/memory/                         # chat memory store
