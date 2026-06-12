@@ -13,7 +13,66 @@ from pathlib import Path
 from typing import Any
 from dataclasses import dataclass, asdict
 
-from hermes.memory import cosine_similarity
+# Inlined from the deleted hermes/memory.py (which was a duplicate of
+# upstream agent/memory_provider.py). Kept here as a minimal dependency
+# for knowledge-base cosine search — full embedder hierarchy lives in
+# `bridge/adapters/embedder.py` if/when we re-add it.
+import math
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two vectors. Returns 0.0 on empty / mismatch."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+class Embedder:
+    """Base interface for embedders used by KnowledgeBase.
+
+    Concrete impls (HTTPEmbedder for OpenAI-compatible /v1/embeddings,
+    HashEmbedder as offline fallback) can be passed via the `embedder`
+    constructor arg. Upstream hermes-agent has its own embedder hierarchy
+    at `agent/memory_provider.py` — if we want a richer embedder later,
+    import from there instead of inlining.
+    """
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        raise NotImplementedError
+
+
+class HashEmbedder(Embedder):
+    """Deterministic offline pseudo-embedder. NOT semantically meaningful.
+
+    Useful as a fallback when no real embedder is configured. Vectors are
+    384-dimensional word-bag hashes — search quality is poor but indexing
+    still works for keyword overlap.
+    """
+
+    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
+        import hashlib
+        out: list[list[float]] = []
+        for t in texts:
+            vec = [0.0] * 384
+            for word in t.lower().split():
+                h = int(hashlib.md5(word.encode()).hexdigest()[:8], 16)
+                idx = h % 384
+                vec[idx] += 1.0
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            vec = [x / norm for x in vec]
+            out.append(vec)
+        return out
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_sync(texts)
+
+    def embed_sync(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_sync(texts)
 
 logger = logging.getLogger("hermes.knowledge")
 
@@ -252,5 +311,4 @@ class KnowledgeBase:
         }
 
 
-# Re-export
-from hermes.memory import Embedder
+

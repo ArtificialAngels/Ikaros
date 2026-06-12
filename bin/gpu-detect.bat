@@ -1,20 +1,26 @@
 @echo off
 REM ============================================================
-REM Hermes - GPU 检测工具
+REM Hermes - GPU detection helper
+REM
+REM Phase 10: forwards to modules.env_bootstrap.gpu_detect which
+REM supersedes the removed hermes/scripts/gpu_detector.py.
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
 
-set "HERMES_ROOT=%~dp0.."
-set "PY=%HERMES_ROOT%\portable-python\python.exe"
-set "SCRIPT=%HERMES_ROOT%\hermes\scripts\gpu_detector.py"
-
-if not exist "%SCRIPT%" (
-    echo [ERROR] gpu_detector.py not found
-    exit /b 1
+REM ---- Single source of truth: deps\hermes-env.bat ----
+call "%~dp0..\deps\hermes-env.bat"
+if errorlevel 1 (
+    echo [FATAL] could not resolve HERMES_ROOT.
+    exit /b 2
 )
 
-"%PY%" "%SCRIPT%" %*
+if not exist "%HERMES_PYTHON%" (
+    echo [ERROR] python.exe not found at %HERMES_PYTHON%
+    exit /b 2
+)
+
+"%HERMES_PYTHON%" -m modules.env_bootstrap.gpu_detect %*
 
 endlocal
-exit /b 0
+exit /b %ERRORLEVEL%

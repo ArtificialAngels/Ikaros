@@ -1,0 +1,28 @@
+{
+  "name": "llm_engine",
+  "version": "1.0.0",
+  "description": "llama-server router mode — auto-discovers GGUF models and serves them on-demand via LRU eviction.",
+  "type": "service",
+  "runtime": {
+    "kind": "native",
+    "binary": "deps/llamacpp/bin/llama-server.exe",
+    "args": ["--models-dir", "data/models", "--models-max", "1", "--host", "127.0.0.1", "--port", "8080", "--jinja"],
+    "working_directory": "."
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "protocol": "http",
+    "health_endpoint": "/health",
+    "health_timeout_ms": 5000
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "health": "health.ps1",
+    "startup_timeout_s": 90,
+    "shutdown_timeout_s": 10
+  },
+  "depends_on": [],
+  "env": {}
+}

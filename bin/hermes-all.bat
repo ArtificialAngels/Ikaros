@@ -1,186 +1,100 @@
 @echo off
 REM ============================================================
-REM Hermes - One-click Launcher v10
-REM llama-server + Hermes API (:7860) + Hermes WebUI (:8648)
-REM Browser opens to new WebUI at :8648
+REM Hermes - One-click Launcher (v2, uses supervisor orchestrator)
+REM Starts llama-server (:8080) + bridge (:7860) + webui (:8648)
+REM NO persistent cmd / shell windows — everything detached.
+REM Browser opens to webui at :8648.
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
 
-set "HERMES_ROOT=%~dp0.."
-set "LLAMA_PORT=8080"
-set "HERMES_PORT=7860"
-set "WEBUI_PORT=8648"
-set "PY=%HERMES_ROOT%\portable-python\python.exe"
-
-REM ---- Kill previous instances ----
-echo [pre] Stopping old instances...
-taskkill /F /IM "llama-server.exe" /T >nul 2>&1
-taskkill /F /IM "llama-server-cuda-12.4.exe" /T >nul 2>&1
-taskkill /F /IM "llama-server-cuda-11.8.exe" /T >nul 2>&1
-taskkill /F /IM "llama-server-vulkan.exe" /T >nul 2>&1
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
-taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
-timeout /t 2 /nobreak >nul
-
-REM ---- Smart default model selection ----
-if not "%HERMES_MODEL%"=="" set "MODEL=%HERMES_MODEL%"
-if not "%~1"=="" set "MODEL=%~1"
-if "%MODEL%"=="" (
-    set "VRAM_CHECK=0"
-    where nvidia-smi >nul 2>&1
-    if not errorlevel 1 (
-        for /f "usebackq tokens=*" %%V in (`powershell -NoProfile -Command "$f = (& nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null) -split '\n' | Select-Object -First 1; [int]$f"`) do (
-            set "VRAM_CHECK=%%V"
-        )
-    )
-    if !VRAM_CHECK! GEQ 8000 (
-        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - 7B GPU
-    ) else if !VRAM_CHECK! GEQ 3000 (
-        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - 3B GPU
-    ) else (
-        set "MODEL=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-        echo [auto] VRAM=!VRAM_CHECK!MB - 3B (min)
-    )
-)
-if not exist "%MODEL%" (
-    echo [WARN] model not found: %MODEL%
-    for %%F in ("%HERMES_ROOT%\data\models\*.gguf") do (
-        set "MODEL=%%F"
-        echo [auto] fallback: %%~nxf
-        goto :model_found
-    )
-    echo [ERROR] No .gguf model in data\models\
+REM ---- Single source of truth: resolve HERMES_ROOT + 13 derived paths.
+REM      bin\hermes-root.bat handles drive-letter migration, .hermes-root
+REM      cache, and fallback drive scan. We just consume the env block.
+call "%~dp0..\deps\hermes-env.bat"
+if errorlevel 1 (
+    echo [FATAL] deps\hermes-env.bat failed to resolve HERMES_ROOT.
+    echo         See stderr above for details.
     pause
     exit /b 1
 )
-:model_found
 
-REM ---- Auto-pick llama-server binary ----
-set "GPU_MODE=CPU"
-if exist "%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe" set "GPU_MODE=CUDA 12.4"
-if exist "%HERMES_ROOT%\runtime\llama-server-cuda-11.8.exe" set "GPU_MODE=CUDA 11.8"
-if exist "%HERMES_ROOT%\runtime\llama-server-vulkan.exe" set "GPU_MODE=Vulkan"
+set "LLAMA_PORT=8080"
+set "BRIDGE_PORT=7860"
+set "WEBUI_PORT=8648"
 
 echo ============================================================
 echo   Hermes - All-in-One Launcher
 echo.
-echo   New WebUI: http://localhost:%WEBUI_PORT%/
-echo   API:       http://localhost:%HERMES_PORT%/api/status
-echo   LLM:       http://127.0.0.1:%LLAMA_PORT%  (llama-server)
-echo   Console:    bin\hermes-console.bat
-echo   Trace:      bin\hermes-trace.bat
-echo   Model Run:  bin\hermes-model-run.bat
-echo   GPU:        %GPU_MODE%
+echo   Llama-server:  http://127.0.0.1:%LLAMA_PORT%
+echo   Bridge:        http://127.0.0.1:%BRIDGE_PORT%
+echo   WebUI:         http://localhost:%WEBUI_PORT%/
+echo.
+echo   Logs:          %HERMES_ROOT%\data\logs\
+echo   Stop:          bin\hermes-stop.bat
+echo   Status:        bin\hermes-status.bat
 echo ============================================================
 echo.
 
+REM ---- Step 0a: CRLF sanity check (warn only, do not block) ----
+REM      cmd.exe does not parse LF-only .bat files correctly (paths with
+REM      spaces get truncated, scripts fail silently). Catch this BEFORE
+REM      anything tries to launch. To fix: run
+REM      `portable-python\python.exe bin\fix-eol.py --all`.
+echo [0a] Checking bat / ps1 line endings...
+"%HERMES_PYTHON%" "%HERMES_BIN%\fix-eol.py" --check >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Some bat / ps1 files have wrong line endings!
+    echo [WARN] Run: portable-python\python.exe bin\fix-eol.py --all
+    echo [WARN] Continuing anyway - failures may surface later.
+)
+
 REM ---- Step 0: Environment bootstrap (portable python / runtime / model) ----
-echo [0/8] Checking portable environment (python, runtime, model)...
-call "%HERMES_ROOT%\bin\setup-portable.bat" auto
+echo [0/2] Checking portable environment...
+call "%HERMES_ROOT%\bin\setup-portable.bat" auto >nul
 if errorlevel 1 (
     echo [warn] setup-portable had warnings - continuing anyway.
     echo [warn] Re-run bin\setup-portable.bat later to retry.
 )
 
-REM ---- Step 1: Environment check (GPU / CUDA) ----
-echo [1/8] Environment check...
-call "%HERMES_ROOT%\bin\hermes-firstrun.bat" auto 2>nul
-
-REM ---- Step 2: Start llama-server (router mode) ----
-REM Run the ps1 directly (NOT via `start /MIN powershell`). The ps1
-REM prints its banner + pid to stdout and exits in <1s after spawning
-REM llama-server detached. Calling it inline means the user sees the
-REM launch status in this same cmd window — no hidden window with
-REM invisible error output. The ps1 returns before step 3 starts, so
-REM the wait loop below still does its job.
-echo [2/8] Starting llama-server (router mode)...
-cd /d "%HERMES_ROOT%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\start-llm-router.ps1" -RootDir "%HERMES_ROOT%"
-
-REM ---- Wait for llama-server ----
-echo [3/8] Waiting for llama-server...
-set /a "WAITED=0"
-:wait_llm
-timeout /t 3 /nobreak >nul
-set /a "WAITED+=3"
-powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:%LLAMA_PORT%/health' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-if not errorlevel 1 (
-    echo   llama-server ready in %WAITED%s
-    goto :start_hermes
-)
-if %WAITED% GEQ 120 goto :start_hermes
-if %WAITED% EQU 30 echo   still loading...
-if %WAITED% EQU 60 echo   still loading...
-goto :wait_llm
-
-REM ---- Step 2: Start Hermes API ----
-:start_hermes
-echo [4/8] Starting Hermes API...
-start "Hermes-API" /MIN "%PY%" -m hermes serve --host 127.0.0.1 --port %HERMES_PORT%
-set /a "WAITED=0"
-:wait_hermes
+REM ---- Step 1: Kill any stale instances ----
+echo [1/2] Stopping old instances (if any)...
+call "%HERMES_ROOT%\bin\hermes-stop.bat" >nul 2>&1
 timeout /t 2 /nobreak >nul
-set /a "WAITED+=2"
-powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:%HERMES_PORT%/healthz' -UseBasicParsing -TimeoutSec 2).StatusCode } catch { exit 1 }" >nul 2>&1
-if not errorlevel 1 (
-    echo   Hermes API ready in %WAITED%s
-    goto :start_webui
+
+REM ---- Step 2: Start all services via pure-Python supervisor ----
+REM      Was: cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File ..."
+REM      cmd /c's quote parsing eats spaces in paths (the 'M' / '\' chars from
+REM      the old error log prove it), and PowerShell 5.1 -File needs an 8.3
+REM      short path to work around its own path-with-spaces bug. Python's
+REM      subprocess.Popen list args go straight to CreateProcessW, sidestepping
+REM      both layers of fragility.
+echo [2/2] Starting all services via Python supervisor...
+call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --start
+if errorlevel 1 (
+    echo [ERROR] Supervisor failed to start services.
+    echo [hint]  See data\logs\supervisor-state.json and per-module *.err
+    pause
+    exit /b 1
 )
-if %WAITED% GEQ 60 goto :start_webui
-if %WAITED% EQU 30 echo   still loading...
-goto :wait_hermes
 
-REM ---- Step 3: Start new Hermes WebUI (:8648) ----
-:start_webui
-echo [5/8] Starting new Hermes WebUI at :%WEBUI_PORT%...
-set "HERMES_WEB_UI_NO_BROWSER=1"
-call "%HERMES_ROOT%\bin\webui-new.bat" start
-set /a "WAITED=0"
-:wait_webui
-timeout /t 2 /nobreak >nul
-set /a "WAITED+=2"
-powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:%WEBUI_PORT%/health' -UseBasicParsing -TimeoutSec 2).StatusCode } catch { exit 1 }" >nul 2>&1
-if not errorlevel 1 (
-    echo   WebUI ready in %WAITED%s
-    goto :start_console
-)
-if %WAITED% GEQ 30 goto :start_console
-goto :wait_webui
-
-REM ---- Step 4: (skip) Hermes Console removed in router-mode refactor ----
-REM The console's Switch-Model was a kill+restart flow; in router mode
-REM the WebUI dropdown handles model switching via /v1/models/load, so
-REM the console is redundant. The console is still available as
-REM `bin\hermes-console.bat` for users who want a status-only CLI.
-:start_console
-REM (intentionally empty)
-
-REM ---- Step 5: Start Hermes Trace (real-time webui/bridge/agent log viewer) ----
-echo [6/8] Starting Hermes Trace...
-start "Hermes-Trace" "%HERMES_ROOT%\bin\hermes-trace.bat"
-
-REM ---- Step 6: Start Hermes Model Running (real-time LLM backend log viewer) ----
-echo [7/8] Starting Hermes Model Running...
-start "Hermes Model Running" "%HERMES_ROOT%\bin\hermes-model-run.bat"
-
-:done
+REM ---- Done: open browser ----
 echo.
 echo ============================================================
 echo   Ready!
 echo.
-echo   WebUI:  http://localhost:%WEBUI_PORT%/
-echo   API:    http://localhost:%HERMES_PORT%/api/status
+echo   WebUI:    http://localhost:%WEBUI_PORT%/
+echo   Bridge:   http://127.0.0.1:%BRIDGE_PORT%/health
+echo   Llama:    http://127.0.0.1:%LLAMA_PORT%/v1/models
 echo.
-echo   Stop:   bin\hermes-stop.bat
+echo   Logs:     %HERMES_ROOT%\data\logs\
+echo   Stop:     bin\hermes-stop.bat
+echo   Status:   bin\hermes-status.bat
 echo ============================================================
 echo.
 
-REM ---- Open browser to new WebUI ----
-echo [*] Opening http://localhost:%WEBUI_PORT%/...
-powershell -NoProfile -Command "[System.Diagnostics.Process]::Start('http://localhost:%WEBUI_PORT%/')" >nul 2>&1
+REM Open browser (best effort)
+powershell -NoProfile -Command "Start-Process 'http://localhost:%WEBUI_PORT%/'" >nul 2>&1
 if errorlevel 1 explorer "http://localhost:%WEBUI_PORT%/" 2>nul
 
 endlocal

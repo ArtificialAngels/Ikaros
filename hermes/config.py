@@ -166,7 +166,7 @@ def load_config(config_path: str | Path | None = None) -> HermesConfig:
     candidates_env = [
         Path.cwd() / ".env",
         Path.cwd() / ".." / ".env",
-        hermes_pkg.parent / ".env",  # E:\Hermes Agent\.env when running from anywhere
+        hermes_pkg.parent / ".env",  # project root .env (HERMES_ROOT)
         hermes_pkg / ".env",          # .../hermes/.env
         Path("/data/.env"),
     ]
@@ -175,7 +175,14 @@ def load_config(config_path: str | Path | None = None) -> HermesConfig:
             load_dotenv(env_path, override=False)
             break
 
-    # Find config file
+    # Find config file. Search order:
+    #   1. Explicit config_path argument
+    #   2. HERMES_CONFIG env var
+    #   3. ./config/hermes.yaml (cwd-relative)
+    #   4. ./hermes/config/hermes.yaml (cwd-relative)
+    #   5. <HERMES_ROOT>/config/hermes.yaml (portable, no hardcoded drive letter)
+    #   6. /data/config/hermes.yaml (legacy data-dir fallback)
+    #   7. Built-in defaults
     candidates = []
     if config_path:
         candidates.append(Path(config_path))
@@ -184,9 +191,13 @@ def load_config(config_path: str | Path | None = None) -> HermesConfig:
     candidates.extend([
         Path("config/hermes.yaml"),
         Path("hermes/config/hermes.yaml"),
-        Path("/data/config/hermes.yaml"),
-        Path("E:/Hermes Agent/config/hermes.yaml"),
     ])
+    # Portable fallback: derive from HERMES_ROOT env var (set by deps/hermes-env.bat).
+    hermes_root_env = os.getenv("HERMES_ROOT")
+    if hermes_root_env:
+        candidates.append(Path(hermes_root_env) / "config" / "hermes.yaml")
+    # Legacy data-dir fallback (kept for back-compat; not hardcoded to any drive letter).
+    candidates.append(Path("/data/config/hermes.yaml"))
 
     config_file = None
     for c in candidates:
@@ -213,16 +224,13 @@ def resolve_data_paths(cfg: HermesConfig, data_dir: str | Path | None = None) ->
     """Resolve all data paths to absolute Paths."""
     base = Path(data_dir or cfg.data_dir)
     if not base.is_absolute():
-        # Try U盘 fallback
-        for guess in [
-            Path("E:/Hermes Agent/data"),
-            Path("D:/Hermes Agent/data"),
-            base.resolve(),
-        ]:
-            if guess.exists() or guess.parent.exists():
-                base = guess
-                break
+        # Portable resolution: prefer HERMES_ROOT env var (set by deps/hermes-env.bat)
+        # so the project works from any drive letter or directory name.
+        hermes_root_env = os.getenv("HERMES_ROOT")
+        if hermes_root_env:
+            base = Path(hermes_root_env) / "data"
         else:
+            # Final fallback: resolve against cwd. No hardcoded drive letters.
             base = base.resolve()
 
     base.mkdir(parents=True, exist_ok=True)

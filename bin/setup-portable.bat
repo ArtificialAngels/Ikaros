@@ -6,8 +6,7 @@ REM Idempotent: detects and downloads missing pieces:
 REM   1. portable-python/  (Python 3.12.10 embed-amd64, ~10 MB)
 REM   2. runtime/llama-server-*.exe  (llama.cpp b9503 with CUDA 12.4,
 REM                                   cudart/cublas bundled, ~250 MB)
-REM   3. data/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
-REM      (Hugging Face official mirror, ~2 GB)
+REM   3. data/models/*.gguf  (checked for presence, not auto-downloaded)
 REM
 REM Each piece is checked separately. Already-present pieces are
 REM skipped (idempotent re-runs are fast and free). Downloads use
@@ -45,9 +44,10 @@ set "ARIA=%HERMES_ROOT%\runtime\aria2c.exe"
 set "USE_ARIA=0"
 if exist "%ARIA%" set "USE_ARIA=1"
 
-REM ---- Default model URL (Hugging Face Qwen2.5-3B-Instruct Q4_K_M) ----
-set "DEFAULT_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-set "DEFAULT_MODEL_PATH=%HERMES_ROOT%\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+REM No default model download — users place their own .gguf files in data/models/.
+REM The hermes-models.py CLI or the WebUI model manager can download models.
+set "HAS_MODEL=0"
+if exist "%HERMES_ROOT%\data\models\*.gguf" set "HAS_MODEL=1"
 
 REM ============================================================
 REM 1. portable-python
@@ -109,7 +109,7 @@ REM ============================================================
 REM 2. runtime/llama-server
 REM ============================================================
 :check_runtime
-set "LLAMA_CUDA=%HERMES_ROOT%\runtime\llama-server-cuda-12.4.exe"
+set "LLAMA_CUDA=%HERMES_ROOT%\runtime\cuda\12.4\llama-server-cuda-12.4.exe"
 set "LLAMA_CPU=%HERMES_ROOT%\runtime\llama-server.exe"
 if "%MODE%"=="python" goto :check_model
 if "%MODE%"=="model"  goto :check_model
@@ -153,9 +153,19 @@ if errorlevel 1 (
     goto :check_model
 )
 
-REM Move extracted files to runtime/. The official zip puts binaries at root.
+REM Move extracted files to runtime/. Phase 8 multi-version layout:
+REM   runtime/                     -- CPU-only DLLs (ggml-*.dll, llama.dll, llama-server.exe)
+REM   runtime/cuda/12.4/           -- CUDA 12.4 binaries + DLLs
+REM Files matching the CUDA-version pattern go into the cuda/<ver> subdir.
+if not exist "%RUNTIME_DIR%\cuda\12.4" mkdir "%RUNTIME_DIR%\cuda\12.4" >nul 2>&1
 for %%F in ("%TEMP%\hermes-llama-extract\*") do (
-    move /Y "%%F" "%RUNTIME_DIR%\" >nul 2>&1
+    set "FNAME=%%~nxF"
+    echo "%FNAME%" | findstr /I /R "cublas cudart cublasLt ggml-cuda llama-server-cuda" >nul 2>&1
+    if not errorlevel 1 (
+        move /Y "%%F" "%RUNTIME_DIR%\cuda\12.4\" >nul 2>&1
+    ) else (
+        move /Y "%%F" "%RUNTIME_DIR%\" >nul 2>&1
+    )
 )
 rmdir /S /Q "%TEMP%\hermes-llama-extract" 2>nul
 del "%LLAMA_ZIP%" 2>nul
@@ -169,39 +179,80 @@ echo   OK: %LLAMA_CUDA%
 echo.
 
 REM ============================================================
-REM 3. data/models/Qwen2.5-3B (default model)
+REM 2b. Optional CUDA 11.8 / 13.0 runtimes (Phase 8)
+REM Only download when the active driver requires it; otherwise
+REM skip to save disk space (~250 MB per version).
+REM ============================================================
+:check_cuda_extra
+set "CUDA_EXTRA_NEEDED="
+for /f "usebackq tokens=*" %%D in (`"%HERMES_ROOT%\portable-python\python.exe" -m modules.env_bootstrap.gpu_detect recommend 2^>nul`) do (
+    set "CUDA_REC=%%D"
+)
+if /i "%CUDA_REC%"=="12.4" goto :check_model
+if /i "%CUDA_REC%"=="cpu"   goto :check_model
+
+echo.
+echo ============================================================
+echo   [2b] runtime/cuda/%CUDA_REC%/  ^(?^)
+echo   Detected driver recommends CUDA %CUDA_REC% but only
+echo   CUDA 12.4 is bundled. Downloading llama.cpp build for
+echo   CUDA %CUDA_REC% (~250 MB)...
+echo ============================================================
+echo.
+
+set "EXTRA_DIR=%HERMES_ROOT%\runtime\cuda\%CUDA_REC%"
+if not exist "%EXTRA_DIR%" mkdir "%EXTRA_DIR%" >nul 2>&1
+
+REM Map CUDA version -> ggml-org release asset suffix.
+if /i "%CUDA_REC%"=="11.8" set "CUDA_ASSET=cuda-11.8"
+if /i "%CUDA_REC%"=="13.0" set "CUDA_ASSET=cuda-12.6"
+set "EXTRA_URL=https://github.com/ggml-org/llama.cpp/releases/download/%LLAMA_VERSION%/llama-%LLAMA_VERSION%-bin-win-%CUDA_ASSET%-x64.zip"
+set "EXTRA_ZIP=%TEMP%\hermes-llama-%CUDA_REC%.zip"
+
+call :download "%EXTRA_URL%" "%EXTRA_ZIP%"
+if errorlevel 1 (
+    echo [setup-portable] FAIL: CUDA %CUDA_REC% download failed.
+    echo [setup-portable]   Will fall back to bundled CUDA 12.4 runtime.
+    goto :check_model
+)
+
+echo   Extracting to %EXTRA_DIR% ...
+powershell -NoProfile -Command "Expand-Archive -Path '%EXTRA_ZIP%' -DestinationPath '%TEMP%\hermes-llama-extract' -Force" >nul 2>&1
+for %%F in ("%TEMP%\hermes-llama-extract\*") do (
+    set "FNAME=%%~nxF"
+    echo "%FNAME%" | findstr /I /R "cublas cudart cublasLt ggml-cuda llama-server-cuda" >nul 2>&1
+    if not errorlevel 1 (
+        move /Y "%%F" "%EXTRA_DIR%\" >nul 2>&1
+    )
+)
+rmdir /S /Q "%TEMP%\hermes-llama-extract" 2>nul
+del "%EXTRA_ZIP%" 2>nul
+echo   OK: CUDA %CUDA_REC% runtime in %EXTRA_DIR%
+echo.
+
+REM ============================================================
+REM 3. data/models/ (any .gguf)
 REM ============================================================
 :check_model
 if "%MODE%"=="status" (
-    if not exist "%DEFAULT_MODEL_PATH%" (
-        echo [setup-portable] status: default model MISSING
+    if "%HAS_MODEL%"=="0" (
+        echo [setup-portable] status: no .gguf model found in data\models^
         set "MISSING=1"
     ) else (
-        echo [setup-portable] status: default model present
+        echo [setup-portable] status: model present
     )
     goto :summary
 )
 
-if exist "%DEFAULT_MODEL_PATH%" goto :summary
+if "%HAS_MODEL%"=="1" goto :summary
 echo.
 echo ============================================================
-echo   [3/3] data/models/Qwen2.5-3B  ^(?^)
-echo   No .gguf found in data\models\. Downloading the default
-echo   3B model from Hugging Face ~2GB (this is the biggest
-echo   piece; on slow connections it can take 10-30+ minutes).
+echo   [3/3] data/models/  ^(?^)
+echo   No .gguf files found in data\models^. Use hermes-models.py
+echo   or the WebUI model manager to download a model.
 echo ============================================================
 echo.
-
-if not exist "%HERMES_ROOT%\data\models" mkdir "%HERMES_ROOT%\data\models" 2>nul
-
-call :download "%DEFAULT_MODEL_URL%" "%DEFAULT_MODEL_PATH%"
-if errorlevel 1 (
-    echo [setup-portable] FAIL: default model download failed.
-    set "MISSING=1"
-    goto :summary
-)
-echo   OK: %DEFAULT_MODEL_PATH%
-echo.
+set "MISSING=1"
 
 REM ============================================================
 REM Summary

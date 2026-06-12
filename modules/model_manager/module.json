@@ -1,0 +1,20 @@
+{
+  "name": "model_manager",
+  "version": "1.0.0",
+  "description": "GGUF model management — listing, metadata extraction, download, mirror, and VRAM estimation.",
+  "type": "tool",
+  "runtime": {
+    "kind": "python",
+    "python": "portable-python/python.exe",
+    "script": "manager.py",
+    "working_directory": "."
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "startup_timeout_s": 60,
+    "shutdown_timeout_s": 5
+  },
+  "depends_on": [],
+  "env": {}
+}

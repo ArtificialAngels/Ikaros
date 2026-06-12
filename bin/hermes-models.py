@@ -33,10 +33,10 @@ _ROOT = _HERE.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from hermes.gguf import (  # noqa: E402
+from modules.model_manager.gguf import (  # noqa: E402
     list_gguf_models, current_model_from_bat, parse_gguf_meta,
 )
-import hermes.gguf as _gguf  # for back-compat: list_models / print_models
+import modules.model_manager.gguf as _gguf  # for back-compat: list_models / print_models
 
 HERMES_ROOT = _ROOT
 MODELS_DIR = HERMES_ROOT / "data" / "models"

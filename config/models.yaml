@@ -1,16 +1,19 @@
 active: default
 
+# Paths use ${HERMES_ROOT} so this config is portable across drive letters.
+# HERMES_ROOT is set automatically by deps/hermes-env.bat / .ps1.
+
 models:
   default:
-    chat: E:\Hermes Agent\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf
-    embedding: E:\Hermes Agent\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    chat: ${HERMES_ROOT}\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
     context_size: 4096
     threads: 4
     description: Qwen 2.5 3B Instruct (Q4_K_M) - balance
 
   powerful:
-    chat: E:\Hermes Agent\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
-    embedding: E:\Hermes Agent\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    chat: ${HERMES_ROOT}\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
     context_size: 4096
     threads: 8
     description: Qwen 2.5 7B Instruct (Q4_K_M) - quality

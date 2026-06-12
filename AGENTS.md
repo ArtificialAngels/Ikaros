@@ -3,6 +3,55 @@
 > **Read this first** when picking up the project after a break.
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
+>
+> **Last revised:** 2026-06-13 (v3 phase close-out — privacy cleanup,
+> `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh).
+> For the user-facing introduction, see [README.md](README.md).
+
+---
+
+## 0. 2026-06-13 — Phase Close-Out: Privacy, Stability, and Repo Hygiene
+
+This revision is a **soft release** — no behaviour changes, no new
+features, no breaking refactors. The goal is to take the v2 router-mode
+codebase from "works on the author's USB stick" to "ready for a public
+GitHub push". Highlights:
+
+1. **Logs-page ENOENT fix (t8).** `GET /api/hermes/logs/agent` etc. used
+   to fail with `spawn E:\Hermes Agent\bin ENOENT` whenever the user's
+   shell had a stale `HERMES_BIN=<project bin dir>` env var (a relic of
+   the old `supervisor.bat` that did `set "SUPERVISOR=%HERMES_BIN%\…"`).
+   Fixed by pinning `HERMES_AGENT_CLI_PYTHON=%HERMES_PYTHON%` in three
+   places: `deps/hermes-env.bat`, `deps/hermes-env.ps1`, and
+   `modules/webui/start.ps1`. The webui's `bundledCliPythonForWindows()`
+   short-circuits on this var and never even looks at `HERMES_BIN`.
+
+2. **Repo privacy scrub.** Four files were accidentally tracked before
+   `data/` and `hermes/data/` were added to `.gitignore` (in commits
+   `30c716b` and `ce99e4d`):
+   - `data/hermes-agent/config.yaml`  (local config with absolute paths)
+   - `data/models/router-preset.ini`  (per-model NGL/ctx)
+   - `hermes/data/skills/note.py`     (sample skill)
+   - `hermes/data/skills/weather.py`  (sample skill)
+   All four have been `git rm --cached`d. The two skill files were
+   relocated to `docs/examples/skills/` as reference code. A new
+   `data/models/router-preset.example.ini` provides a commented
+   template. `.gitignore` was substantially expanded (see §X.1 below).
+
+3. **`.gitignore` overhaul.** Sections added: data subdirectories
+   (`data/hermes-agent/`, `data/webui/`, `data/memory/`, `data/kanban/`,
+   `data/crons/`, `data/logs/`, `data/skills/`, `data/knowledge/`),
+   per-model NGL config, runtime caches (`.hermes-root`), IDE state
+   (`.qoder/`, `.opencode/`), all backup / dump / corrupt variants
+   (`*.bak`, `*.corrupt.*.bak`, `config.yaml.corrupt.*.bak`),
+   Python/Node build artifacts, and OS / shell litter.
+
+4. **Docs refresh.** `docs/00-速览.md` port numbers were updated
+   (webui 7860 → 8648), `docs/examples/skills/` created with a README,
+   and the README.md rewrite is forthcoming.
+
+The following sections of AGENTS.md (§1-§10) were left **unchanged** —
+they already describe the post-Phase-11 state.
 
 ---
 
@@ -46,8 +95,16 @@ Browser → :8648 Hermes Web UI (Koa BFF + Vue 3 SPA)
 
 llama-server only loads **one model at a time**; the WebUI shows whichever
 model llama-server exposes via `--alias`). When llama-server is down, `/v1/models`
-falls back to scanning `data/models/*.gguf` via `hermes/gguf.py`. See §6 for
-multi-model options.
+falls back to scanning `data/models/*.gguf` via `modules/model_manager/gguf.py`.
+See §6 for multi-model options.
+
+**Module architecture** (Phase 1-13, completed 2026-06-10): each service is a
+self-describing `modules/<name>/` package with its own `module.json` (declares
+port, dependencies, env), `start.ps1` / `stop.ps1` / `health.ps1`. The Python
+`bin/hermes-supervisor.py` does a topological sort by `depends_on` and starts
+them in the right order; `bin/hermes-all.bat` just calls it. New service? Add
+a directory, drop in a `module.json`, and the supervisor picks it up. See
+§5 (Components -> Hermes Supervisor) and §4 (HERMES_ROOT resolution).
 
 ---
 
@@ -58,75 +115,98 @@ E:\Hermes Agent\
 ├── .env                          # runtime env vars (API keys, paths)
 ├── AGENTS.md                     # THIS FILE
 ├── README.md                     # user-facing docs
-├── config\
-│   └── hermes.yaml               # main config (LLM providers, memory, KB)
-├── hermes\                       # Python package (the agent)
-│   ├── __init__.py
-│   ├── __main__.py               # `python -m hermes serve` / chat
-│   ├── agent.py                  # HermesAgent class
-│   ├── config.py                 # config loader (env-aware)
-│   ├── llm.py                    # LLM router + OpenAI/Anthropic/MiniMax providers
-│   ├── memory.py                 # JSONL memory store + embedder
+├── deps\                         # ★ NEW 2026-06-10 — Unified dependency zone
+│   ├── hermes-env.bat            # All scripts call this first (sets PATH, PYTHON, NODE, etc.)
+│   ├── hermes-env.ps1            # PowerShell equivalent
+│   ├── manifest.json             # Version tracking for all dependencies
+│   ├── README.md                 # deps/ documentation
+│   ├── node\                     # Junction → ../runtime/node23 (Node.js 23.11.1)
+│   ├── llamacpp\                 # llama-server + CUDA DLLs
+│   │   └── bin\                  # Junction → ../runtime
+│   └── tools\                    # Junction → ../runtime (aria2c, gopeed-web)
+├── modules\                      # ★ NEW 2026-06-10 — Independent modules with module.json
+│   ├── __init__.py               # Marks modules/ as a Python package
+│   ├── llm_engine\               # llama-server router mode (:8080)
+│   │   ├── module.json           # name="llm_engine"
+│   │   ├── start.ps1             # Multi-version CUDA selection (Phase 8) + launcher
+│   │   ├── stop.ps1
+│   │   └── health.ps1
+│   ├── bridge\                   # FastAPI bridge (:7860)
+│   │   ├── module.json
+│   │   ├── start.ps1
+│   │   ├── stop.ps1
+│   │   └── health.ps1
+│   ├── webui\                    # hermes-web-ui (:8648)
+│   │   ├── module.json
+│   │   ├── start.ps1
+│   │   ├── stop.ps1
+│   │   └── health.ps1
+│   ├── env_bootstrap\            # GPU detection + multi-version CUDA runtime
+│   │   ├── __init__.py           # Marks env_bootstrap/ as a Python package
+│   │   ├── __main__.py           # `python -m modules.env_bootstrap` entrypoint
+│   │   ├── module.json           # name="env_bootstrap"
+│   │   ├── start.ps1             # Verifies Python/Node/llama-server, runs GPU status
+│   │   ├── stop.ps1              # No-op (one-shot tool)
+│   │   └── gpu_detect.py         # Merged from hermes/gpu.py + hermes/firstrun.py
+│   ├── model_manager\            # Model management (GGUF + download + mirror)
+│   │   ├── __init__.py           # Marks model_manager/ as a Python package
+│   │   ├── module.json           # name="model_manager"
+│   │   ├── start.ps1             # Discovers models + runs manager.py list
+│   │   ├── stop.ps1              # No-op (one-shot tool)
+│   │   ├── downloader.py         # Merged from hermes/download.py + hermes/gopeed_client.py
+│   │   ├── gguf.py               # Migrated from hermes/gguf.py (Phase 11)
+│   │   ├── mirror.py             # Migrated from hermes/mirror.py (Phase 11)
+│   │   └── manager.py            # Unified CLI: list/info/download/import-ollama
+│   └── supervisor\               # Process orchestrator (replaces hermes-all.bat core)
+│       ├── module.json
+│       ├── start.ps1
+│       ├── stop.ps1
+│       └── orchestrator.ps1      # Topological sort + health-check lifecycle
+├── hermes\                       # Python package (BRIDGE LAYER — thin glue for bridge/ and bin/)
+│   ├── __init__.py               # Docstring-only: lists what's in the package and what moved to modules/
+│   ├── __main__.py               # `python -m hermes` delegates to upstream hermes_cli.main
+│   ├── config.py                 # config loader (env-aware, bash ${VAR:-default} expansion)
 │   ├── knowledge.py              # markdown KB with chunking
-│   ├── skills.py                 # skill registry (time/calc/echo/...)
+│   ├── memos_client.py           # memory plugin
+│   ├── watchdog.py               # process supervisor (kills orphans on parent exit)
+│   └── workspace.py              # whitelisted file browser (HERMES_ROOT trust boundary)
+│   # (download.py, firstrun.py, gguf.py, mirror.py, gpu.py, gopeed_client.py,
+│   #  skills.py, prompts.py were removed in Phases 5/10/11 — replaced by modules/*)
+├── hermes-agent\                 # ★ upstream v0.16.0 (CLEAN — DO NOT MODIFY)
+├── hermes-web-ui\                # ★ upstream v0.6.12 (CLEAN — DO NOT MODIFY)
+├── bridge\                       # FastAPI app + monkey-patch sitecustomize
 │   ├── server.py                 # FastAPI: /v1/embeddings, /v1/models, /api/*, /static/
-│   ├── sessions.py               # ★ SessionStore (NEW 2026-06-07) — disk-backed chat sessions
-│   ├── workspace.py              # ★ WorkspaceManager (NEW 2026-06-07) — whitelisted file browser
-│   ├── webui_settings.py         # ★ WebUISettingsStore (NEW 2026-06-07) — atomic JSON settings
-│   ├── kanban.py                 # ★ KanbanStore (NEW 2026-06-07) — boards/tasks/events
-│   ├── cron.py                   # ★ CronManager (NEW 2026-06-07) — scheduled jobs (30s loop)
-│   ├── static\                   # ★ Hermes WebUI (nesquena/hermes-webui) — 3.5MB
-│   │   ├── index.html            # three-panel dark UI
-│   │   ├── style.css             # 16 skins, light/dark
-│   │   ├── ui.js / boot.js / sessions.js / messages.js / panels.js / ...
-│   │   ├── api-adapter.js        # OUR adapter: translates upstream endpoints to our /api/*
-│   │   └── vendor\               # streaming-markdown, KaTeX, js-yaml (no build step)
-│   ├── gguf.py                   # GGUF v2/v3 header parser (used by /v1/models + CLI)
-│   ├── embeddings.py             # SBERT / hash embedder
-│   ├── gpu.py                    # GPU detection (nvidia-smi / Vulkan / WMI)
-│   ├── doctor.py                 # bin/hermes-doctor.bat
-│   ├── gopeed_client.py          # gopeed-web API
-│   ├── planner.py                # autonomous task execution
-│   └── scripts\                  # utility scripts (production)
-│       ├── import_ollama_blobs.py   # Ollama blob → GGUF converter
-│       ├── install_skill.py         # skill marketplace
-│       ├── rebuild_kb.py            # KB re-ingest
-│       ├── model_manager.py         # CLI for /api/launcher
-│       ├── model_launcher_gui.py    # GUI for /api/launcher
-│       └── gpu_detector.py          # first-run GPU detection
+│   └── sitecustomize.py          # Windows-only monkey-patches for upstream
 ├── portable-python\              # embedded Python 3.12.10 + pip deps
 │   └── python.exe
-├── runtime\                      # llama.cpp binaries
-│   ├── llama-server.exe          # CPU
-│   ├── llama-server-cuda-12.4.exe  # NVIDIA RTX 20/30/40/50 (driver >= 525)
-│   ├── llama-server-cuda-11.8.exe  # older NVIDIA (GTX 900 / old driver)
+├── runtime\                      # llama.cpp binaries + per-version CUDA runtimes (Phase 8)
+│   ├── llama-server.exe          # CPU build
 │   ├── llama-server-vulkan.exe   # AMD / Intel / NVIDIA fallback
+│   ├── llama-server-impl.dll     # shared by all CPU/Vulkan/CUDA builds
 │   ├── aria2c.exe                # multi-thread downloader
-│   ├── gopeed-web.exe            # download bridge (Python talks HTTP to it)
-│   └── *.dll                     # runtime DLLs (cudart, vulkan, etc.)
+│   ├── gopeed-web.exe            # download bridge
+│   ├── cuda\                     # ★ NEW 2026-06-10 — per-version CUDA runtime (Phase 8)
+│   │   ├── 11.8\                 # NVIDIA driver 470–524; on-demand install (pypi nvidia-cu11)
+│   │   │   ├── llama-server-cuda-11.8.exe
+│   │   │   ├── cudart64_110.dll
+│   │   │   ├── cublas64_11.dll
+│   │   │   ├── cublasLt64_11.dll
+│   │   │   └── manifest.json     # download_on_demand / compatible_driver_min=470.0
+│   │   ├── 12.4\                 # NVIDIA driver 525–554; bundled by default
+│   │   │   ├── llama-server-cuda-12.4.exe
+│   │   │   ├── cudart64_12.dll
+│   │   │   ├── cublas64_12.dll
+│   │   │   ├── cublasLt64_12.dll
+│   │   │   ├── ggml-cuda.dll
+│   │   │   └── manifest.json     # status=bundled
+│   │   └── 13.0\                 # NVIDIA driver 555+; on-demand install
+│   │       └── manifest.json     # uses _12 DLL naming for back-compat
+│   └── *.dll                     # common runtime DLLs (ggml-*, mtmd, llama, etc.)
 ├── data\
 │   ├── models\                   # GGUF files
-│   │   ├── Qwen2.5-3B-Instruct-Q4_K_M.gguf
-│   │   ├── Qwen2.5-7B-Instruct-Q4_K_M.gguf
-│   │   ├── Qwen1.5-1.8B-Chat-Q4_K_M.gguf
-│   │   ├── Qwen3.5-35B-A3B-Q4_K_M.gguf  (20.5GB, MoE)
-│   │   └── f5ee307a2982.gguf            # Ollama-imported qwen3, 22.8GB
-│   ├── webui-new\                # ★ NEW 2026-06-08 — Hermes Web UI (EKKOLearnAI)
-│   │   ├── app\                  # Web UI application (Vue 3 + Koa)
-│   │   │   ├── packages/client\  # Vue 3 frontend
-│   │   │   ├── packages/server\  # Koa BFF backend
-│   │   │   └── packages/desktop\ # Electron wrapper (optional)
-│   │   └── data\                 # Web UI state (SQLite, auth, sessions)
-│   ├── hermes-agent\             # ★ Hermes Agent data home for Web UI
-│   │   ├── config.yaml           # Agent config (providers, defaults, toolsets)
-│   │   ├── auth.json             # Credential pool
-│   │   ├── state.db              # Agent state
-│   │   ├── sessions\             # per-session chat history (atomic JSON)
-│   │   ├── workspaces.json       # WorkspaceManager whitelist
-│   │   ├── webui_settings.json   # WebUI user prefs (32 keys)
-│   │   ├── kanban\               # boards/tasks/events.json
-│   │   ├── crons\                # jobs.json (croniter-scheduled)
-│   │   └── skills\               # ★ NEW 2026-06-08 — installed skills (see §11)
+│   │   └── *.gguf
+│   ├── webui\                    # Web UI state (SQLite, auth, sessions)
+│   ├── hermes-agent\             # Agent state (config.yaml, sessions, skills)
 │   ├── memory\                   # JSONL memory store
 │   ├── knowledge\                # markdown KB source + index.jsonl
 │   ├── skills\                   # Hermes FastAPI skill registry (built-in: time/calc/echo/...)
@@ -145,34 +225,107 @@ E:\Hermes Agent\
 │   └── webui_settings.json       # ★ NEW 2026-06-07 — single-file atomic webui prefs
 ├── bin\                          # user-facing launchers (CRLF line endings!)
 │   ├── hermes-all.bat            # ★ MAIN: one-click everything (now opens :8648)
-│   ├── webui-new.bat             # ★ NEW 2026-06-08 — Hermes Web UI launcher
-│   ├── hermes.bat                # CLI agent (`hermes chat`)
-│   ├── hermes-stop.bat           # kill all Hermes processes
-│   ├── hermes-doctor.bat         # 8-section health report
-│   ├── hermes-firstrun.bat       # first-run GPU detection
-│   ├── hermes-models.py          # CLI model manager (list/switch/download)
-│   ├── hermes-task.bat           # `hermes task "do X"`
-│   ├── hermes-console.bat        # ★ NEW 2026-06-07 — wrapper for console.ps1
-│   ├── hermes-console.ps1        # ★ NEW 2026-06-07 — model management shell
-│   │                                (router mode: Switch-Model = POST /v1/models/load)
-│   ├── hermes-trace.bat          # ★ NEW 2026-06-07 — wrapper for trace.ps1
-│   ├── hermes-trace.ps1          # ★ NEW 2026-06-07 — real-time log viewer (webui/bridge/agent)
-│   ├── hermes-model-run.bat      # ★ NEW 2026-06-07 — wrapper for live LLM log viewer
-│   ├── hermes-model-run.ps1      # ★ NEW 2026-06-07 — tail llm-server.log/err with smart colors
-│   ├── start-llm-router.ps1      # ★ NEW 2026-06-09 — router-mode single-process launcher
-│   │                                (--models-dir + --models-preset + LRU; replaces old kill+restart flow)
-│   ├── model-manager.bat         # quick launcher for hermes/scripts/model_manager.py
-│   ├── install-embeddings.bat    # install sentence-transformers + model
-│   ├── setup-runtime.bat         # download ALL llama.cpp variants + aria2
-│   └── gpu-detect.bat            # one-shot GPU probe
+│   │                                [Phase 3] delegates to modules/supervisor/orchestrator.ps1
+│   ├── hermes-stop.bat           # kill all Hermes processes (delegates to orchestrator -Stop)
+│   ├── hermes-firstrun.bat       # first-run GPU detection → modules/env_bootstrap/
+│   ├── hermes-models.py          # CLI model manager (list/info/download) → modules/model_manager/manager
+│   ├── hermes-console.bat        # wrapper for console.ps1
+│   ├── hermes-console.ps1        # model management shell (router mode: Switch-Model)
+│   ├── hermes-model-run.bat      # wrapper for live LLM log viewer
+│   ├── hermes-model-run.ps1      # tail llm-server.log/err with smart colors
+│   ├── hermes-health.ps1         # 3-layer liveness probe (TCP / /v1/models / /v1/completions)
+│   ├── setup-portable.bat        # one-shot bootstrap: portable-python + runtime + default model
+│   └── gpu-detect.bat            # one-shot GPU probe → modules/env_bootstrap/gpu_detect
+│   # (start-llm-router.ps1, start-bridge-server.ps1, start-webui.ps1 removed in Phase 10;
+│   #  their work is now done by modules/{llm_engine,bridge,webui}/start.ps1 via the supervisor)
 ├── data\models\
 │   └── router-preset.ini         # ★ NEW 2026-06-09 — per-model NGL/ctx/temp for router mode
 ├── tests\                        # functional test scripts (kept clean)
-│   ├── test_hermes.py            # 17-test E2E suite (mock LLM, no GPU needed)
-│   └── verify_smart_ngl.py       # verify NGL calculation logic
-├── scripts\                      # legacy one-off scripts
+│   └── test_hermes.py            # 17-test E2E suite (mock LLM, no GPU needed)
+│   # (verify_smart_ngl.py was removed in router-mode refactor — NGL now lives in router-preset.ini)
+├── .hermes-root                   # ★ NEW 2026-06-10 — Persisted HERMES_ROOT cache (atomic write)
+├── .githooks/                     # ★ NEW 2026-06-10 — Versioned git hooks (tracked in repo)
+│   └── pre-commit                 # bash: blocks commit if .bat/.ps1 are not CRLF
+├── bin/hermes-root.py             # ★ NEW 2026-06-10 — The single source of truth for path resolution
+├── bin/hermes-root.bat            # ★ NEW 2026-06-10 — Thin bat launcher (ASCII-only, CRLF)
+├── bin/fix-eol.py                 # ★ NEW 2026-06-10 — One-shot CRLF normalizer for bat/ps1
+├── bin/install-git-hooks.bat      # ★ NEW 2026-06-10 — One-time: sets core.hooksPath=.githooks
 └── requirements.txt
 ```
+
+### Path Resolution — Single Source of Truth (NEW 2026-06-10)
+
+Hermes is **portable across USB drives** — the project root can live on `E:\`,
+`F:\`, `G:\`, etc. depending on which slot the user plugged the drive into.
+This is solved by a **single source of truth** that every script defers to:
+
+```
+bin/hermes-root.py       — Python resolver (the ONLY place that decides HERMES_ROOT)
+bin/hermes-root.bat      — Thin bat wrapper so cmd / ps1 can call it
+deps/hermes-env.bat      — Consumes the resolver's output and exports 14 HERMES_* vars
+deps/hermes-env.ps1      — PowerShell equivalent
+```
+
+**Resolution priority** (first hit wins, in `bin/hermes-root.py`):
+
+1. `HERMES_ROOT` env var (explicit override from a caller)
+2. `<root>/.hermes-root` cache file (atomic write, written by `init` / `persist`)
+3. `<bin>/..` (one level up from this script: assume `<root>\bin\`)
+4. Scan drive letters `D:\..Z:\` for `<drive>:\Hermes Agent\portable-python\python.exe`
+
+**Every other script** (bat, ps1, py) **MUST NOT** re-implement path resolution.
+The only acceptable call sites are:
+
+```bat
+REM bat (any script in bin/ or elsewhere)
+call "%~dp0..\deps\hermes-env.bat"
+REM then use %HERMES_ROOT%, %HERMES_PYTHON%, %HERMES_BIN%, ...
+```
+
+```powershell
+# PowerShell (any .ps1 module)
+. "$PSScriptRoot\..\deps\hermes-env.ps1"
+# then use $env:HERMES_ROOT, $env:HERMES_PYTHON, $env:HERMES_BIN, ...
+```
+
+```python
+# Python (e.g. hermes-supervisor.py)
+# Use _resolve_hermes_root(HERE) which is defined at the top of the file
+# and delegates to bin/hermes-root.py resolve via subprocess.
+```
+
+**Diagnostic subcommands** of `bin/hermes-root.py`:
+
+| Subcommand  | Purpose                                          |
+|-------------|--------------------------------------------------|
+| `resolve`   | Print absolute HERMES_ROOT path (single line)    |
+| `verify`    | Validate all required markers exist              |
+| `init`      | bat-friendly: print `KEY=VALUE` env block         |
+| `scan`      | Scan all drive letters for candidates            |
+| `persist`   | Write `.hermes-root` cache                       |
+| `clean`     | Remove `.hermes-root` cache                      |
+
+Example:
+
+```
+$ bin\hermes-root.bat verify
+HERMES_ROOT: E:\Hermes Agent
+Source: cache:.hermes-root
+[OK] All required markers present
+```
+
+**CRLF maintenance** — `bin\fix-eol.py` normalizes line endings on every
+`.bat` / `.cmd` / `.ps1` to CRLF. cmd.exe does not parse LF-only bat files
+correctly (paths with spaces get truncated, scripts fail silently). Run
+`portable-python\python.exe bin\fix-eol.py --all` after editing any bat,
+or `bin\hermes-all.bat` will warn you automatically (see §7).
+
+**Why Python and not PowerShell for the resolver** — we previously had
+`modules\supervisor\orchestrator.ps1` doing the orchestration, but it
+relied on `cmd /c "powershell -File ..."` bridges that broke on paths
+with spaces. The Python `subprocess.Popen` with list args goes straight
+to `CreateProcessW`, sidestepping all cmd /c / PowerShell -File fragility.
+See §10 Debugging for the painful history.
 
 ---
 
@@ -346,7 +499,7 @@ llama-server is **single-model per process**. Three options:
 
 1. **Switch model** — kill llama-server, restart with different `--model`:
    ```bat
-   set MODEL=E:/Hermes Agent/data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+   set MODEL=%HERMES_ROOT%\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
    bin\hermes-all.bat
    ```
 
@@ -365,13 +518,42 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 ## 7. Common Gotchas (READ THIS BEFORE EDITING!)
 
 ### Windows / cmd.exe
+- **NEVER hardcode a drive letter** (e.g. `E:\Hermes Agent\...`) in any
+  script. Hermes is portable across USB drives — the slot the user plugs
+  the drive into determines the letter. Always go through the resolver:
+  - bat: `call "%~dp0..\deps\hermes-env.bat"` then use `%HERMES_ROOT%`
+  - ps1: `. "$PSScriptRoot\..\deps\hermes-env.ps1"` then use `$env:HERMES_ROOT`
+  - py: `from bin.hermes_root import resolve` or use `_resolve_hermes_root(HERE)`
+  See §3 (Path Resolution) for the full mechanism. If you see `E:\` in any
+  new file under `bin\` or `deps\`, reject the change.
 - **CRLF for .bat files!** LF-only → cmd can't parse → paths with spaces
-  get truncated, scripts fail silently. **Always run:**
+  get truncated, scripts fail silently. **Don't hand-roll a PowerShell
+  converter** — use the project tool:
+  ```bat
+  portable-python\python.exe bin\fix-eol.py --all
+  ```
+  After every bat edit, verify: `CR=NN, LF=NN` (must be equal). The same
+  tool also fixes `.ps1` (which we keep LF but the tool normalizes anyway —
+  harmless). `bin\hermes-all.bat` calls `fix-eol.py --check` at startup and
+  warns you if any bat is in a bad state.
+- **Pre-commit hook blocks LF-only bat commits.** Run once after cloning:
+  ```bat
+  bin\install-git-hooks.bat
+  ```
+  This sets `core.hooksPath=.githooks` (the versioned hooks directory at the
+  repo root, NOT the per-clone `.git\hooks\`). From then on every
+  `git commit` runs `.githooks\pre-commit`, which calls
+  `portable-python\python.exe bin\fix-eol.py --all --check` and aborts the
+  commit if any of the 17 Hermes-owned scripts (bin/*.bat/*.cmd/*.ps1 +
+  deps/hermes-env.{bat,ps1}) have wrong line endings. To skip in an
+  emergency: `git commit --no-verify`. To uninstall:
+  `bin\install-git-hooks.bat uninstall`. The hook gracefully no-ops on
+  fresh clones where `portable-python/python.exe` is missing yet.
   ```powershell
+  # Legacy hand-rolled conversion (only if fix-eol.py is broken):
   $c = Get-Content file.bat -Raw
   [System.IO.File]::WriteAllText(file.bat, $c -replace "`r`n","`n" -replace "`n","`r`n", [System.Text.UTF8Encoding]::new($false))
   ```
-  After every bat edit, verify: `CR=NN, LF=NN` (must be equal).
 
 - **`cmd /c "path with space"`** — truncates at the space. Workarounds:
   - `cmd /c "bat.bat" arg` (bat is relative, run from its dir)
@@ -462,6 +644,11 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-06  | **C**: `hermes/doctor.py` + `bin/hermes-doctor.bat` — 8-section health report (runtime, models, GPU, services, gopeed, python, disk, env) |
 | 2026-06-06  | **D**: `hermes/gopeed_client.py` — gopeed-web API client (urllib only, no deps). gopeed-web API differs from desktop gopeed (POST body wrapped in `req`, response `data` is task_id string, opts at `meta.opts`) |
 | 2026-06-06  | Memory: 120s bash timeout, gopeed+file-lock download check, gopeed-web API quirks, GGUF v3 type table |
+| 2026-06-10  | **Hot-swap architecture (Phase 14)** — closed WebUI ↔ llama-server disconnect |
+| 2026-06-10  | **bridge/server.py v0.3.0** — added 5 endpoints: `POST /v1/models/swap`, `GET /v1/models/status`, `POST /v1/models/evict`, `POST /v1/models/warmup`, `GET /v1/models/warmup/{id}`. All paths from env vars (HERMES_BRIDGE_URL/HERMES_MODELS_DIR), no hardcoded drives. |
+| 2026-06-10  | **hermes_bridge.py patch** — added `model_swap` / `model_warmup` / `model_status` actions to BOTH worker (line 2589) and broker (line 3808) `handle()`. Broker does NOT auto-forward unknown actions — must mirror. Uses stdlib `urllib.request` (no httpx dep) for portability. |
+| 2026-06-10  | **E2E verified** — `model_swap` HTTP 200 `{"success":true}`; `model_warmup` 2 models in <3s with progress polling; `model_status` returns resident + available list; `/v1/chat/completions` still works after swap (HTTP 200 with valid usage). |
+| 2026-06-10  | **llama-server b9538 router mode placeholder quirk** — when nothing is resident, `/props.model_alias == "llama-server"` and `/props.model_path == "none"`. Used in evict endpoint to return noop instead of triggering reload. |
 | 2026-06-06  | **CRITICAL BUGFIX**: `hermes-stop.bat` v1 used `taskkill /IM llama-server.exe` literal — but the actual binary is `llama-server-cuda-12.4.exe`. Old stop left **stale llama-server processes holding VRAM** (one PID survived 20+ hours, working set -1140MB = leaked kernel handles). v2 fix: use `llama-server*` wildcard + PowerShell-based kill for clean output. |
 | 2026-06-06  | Also fixed: all `bin\*.bat` files were **LF-only** (Edit tool had stripped CRs), causing cmd.exe to mis-parse multi-line `powershell -Command` blocks (visible as random "X 不是内部或外部命令" noise). Restored CRLF on all 9 bat files.
 | 2026-06-07  | **Track 1: streaming-and-sessions** — `hermes/sessions.py` (SessionStore: one JSON per session, atomic write + asyncio.Lock) + `hermes/llm.py` (`stream()` on OpenAI/Mock, `stream_chat`/`collect_stream` on router) + `hermes/server.py` (`/api/chat/start`, `/api/chat/stream/{id}` SSE, `/api/chat/cancel`, `/api/chat/stream/status`, persistent `/api/chat/sessions{,/{id}}`, legacy `/api/chat/send` kept) + `hermes/static/api-adapter.js` (removed EventSource mock, chat/start is passthrough, cancel/status forward to real endpoints). SSE event shape: `{type: starting|delta|done|error|replay, content?, stream_id, session_id, model, provider, ...}`. Persistence path: `data/sessions/<session_id>.json`. Owner had to move the catch-all `@app.api_route('/api/{path:path}')` to the very last position in `create_app` because FastAPI matches routes in registration order; added a multi-line warning comment. |
@@ -477,6 +664,7 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-08  | **Skill installation for Web UI**: 9 skills installed to `data/hermes-agent/skills/` across 4 categories — 4 from upstream `optional-skills/finance/` (excel-author, pptx-author, comps-analysis, dcf-model) + 4 from community GitHub via `git clone` (drawio-skill from `Agents365-ai/`, hermes-dojo from `Yonkoo11/`, avoid-ai-writing from `conorbronsdon/`, plur-memory + plur-session-end from `plur-ai/plur`). Config change: `data/hermes-agent/config.yaml` `toolsets:` list extended with `skills` (was `[hermes-cli]` only) — required to load the upstream `skills` toolset. **Process note**: `hermes skills install <name> --force` is rate-limited by GitHub API (60 req/hr unauthenticated) so we used `git clone --depth=1` as the rate-limit-free fallback. 2 short names (`research-agent`, `multiagent`) not present in upstream source tree and were skipped pending a specific source URL from the user. See §11 for the full list. AGENTS.md §3/§8/§11 updated.
 | 2026-06-08  | **Built-in skill install (round 2)**: copied 5 built-in skills from `E:\Hermes Agent\hermes-agent-source\skills\` to `data/hermes-agent/skills/` — `productivity/{powerpoint, ocr-and-documents, nano-pdf, google-workspace}` and `creative/claude-design`. Total now 14 active skills across 4 categories (finance 4, productivity 6, creative 3, autonomous-ai-agents 1). User confirmed trust = same-source GitHub repo so no security scan. AGENTS.md §3/§15 updated.
 | 2026-06-08  | **Portability audit (full project)** — user asked: every file/service/dep/env that `hermes-all.bat` opens must be inside the `Hermes Agent` folder itself (plug-and-play on a fresh Windows PC, no PATH, no drive-letter literals). Audited all `bin/*.bat` (18), `bin/*.ps1` (5), root `*.bat`/`*.ps1` (4), `hermes/*.py`, `hermes-agent-source/`, `data/webui-new/app/bin/*.mjs`, `data/hermes-agent/config.yaml`, `portable-python/`, `runtime/node23/`. Fixed: `bin/verify-server.bat` (4-line rewrite to use `%~dp0..`), `bin/webui-new.bat` (portable dev hint + PowerShell fix-up of `mcp_servers.hermes-studio.env.HERMES_WEB_UI_HOME/HERMES_WEBUI_STATE_DIR` on every launch, idempotent), `hermes/scripts/install_skill.py` + `rebuild_kb.py` (`Path(__file__).resolve().parents[2]`). Deleted: root `start_llm_server.bat` (dead code, called missing `local_llm_server.py`), root `update_env.ps1` (contained a live **MiniMax API key** — would have leaked to GitHub), 47 debug-residue files in `data/logs/` (17 `_diag*.bat` + 1 `_test.ps1` + 1 `_test_arg.bat` + 25 `_diag*.txt` + 2 `removed-*.bat` + 17 underscore-prefixed session logs). Verified portable: portable-python runs in any cwd ✓; `runtime/node23/node.exe` resolves via `%HERMES_ROOT%` ✓; `hermes-agent-source/` has no hardcoded paths ✓; webui `hermes-web-ui.mjs` ✓. Items left as-is documented in §16 (env-var fallbacks, docstring examples, third-party Node build scripts, doctor diagnostic strings). New `§16 Portability Audit` written.
+| 2026-06-10  | **Modular refactoring (Phase 1-5 complete)** — Three core principles: (1) No reinventing wheels, (2) Bridge don't modify upstream, (3) Keep upstream clean. **Phase 1**: Created `deps/` dependency zone with `hermes-env.bat`+`hermes-env.ps1` (centralized env vars), `manifest.json` (version tracking), and NTFS junctions: `deps/node/`→`runtime/node23`, `deps/llamacpp/bin/`→`runtime`, `deps/tools/`→`runtime`. Python intentionally NOT junctioned (would break `python312._pth` `..` resolution). **Phase 2**: Created `modules/` skeleton with 6 modules: `llm-engine/` (port 8080), `bridge/` (7860), `webui/` (8648), `env-bootstrap/` (GPU detect), `model-manager/` (downloaders), `supervisor/` (orchestrator). Each has `module.json` (self-describing: name, version, type, runtime, network, lifecycle, depends_on, env), `start.ps1`, `stop.ps1`, `health.ps1` (for services). **Phase 3**: `supervisor/orchestrator.ps1` reads all `modules/*/module.json`, topologically sorts by `depends_on`, starts services in order with health checks, stops in reverse order. Supports `--status`, `--stop`, `--dry-run`. Updated `bin/hermes-all.bat` v2 and `bin/hermes-stop.bat` v2 to call orchestrator. **Phase 4**: Merged `hermes/gpu.py`+`hermes/firstrun.py` GPU parts → `modules/env-bootstrap/gpu_detect.py`. Merged `hermes/download.py`+`hermes/gopeed_client.py` → `modules/model-manager/downloader.py`. Implemented `bridge/sitecustomize.py` two monkey-patches: PATCH 1 (Windows path raw-string preprocess, wrapping `tools.code_execution_tool.execute_code`) and PATCH 2 (Windows-cwd terminal wrapper, wrapping `tools.environments.base.BaseEnvironment.execute`). Copied to `portable-python/Lib/site-packages/sitecustomize.py` for auto-load. **Phase 5**: Deleted duplicate files: `hermes/skills.py`, `hermes/prompts.py` (upstream covers), `hermes/gpu.py`, `hermes/gopeed_client.py`, `hermes/scripts/gpu_detector.py` (merged into modules). Kept in `hermes/`: `config.py`, `__init__.py`, `__main__.py`, `workspace.py`, `memos_client.py`, `knowledge.py`, `watchdog.py`, `download.py`, `mirror.py`, `gguf.py`, `firstrun.py` (last 3 to be removed after Phase 6 verification). Updated AGENTS.md §3 project layout + §8. |
 | 2026-06-08  | **Console Switch bug + Process.Start fix + NGL=0 + new health probe + setup-portable** — five related fixes: **(1)** `hermes-console.ps1` Switch-Model previously used `Start-Process cmd /c "bat" "gguf"` which silently failed (cmd's quote-pair rule + spaces in `E:\Hermes Agent\...`) — no `last-launch.json`, no llama-server PID, no logs. Switched to `Start-Process -FilePath $startBat -ArgumentList @($ModelPath)` (ShellExecuteEx detaches the child reliably). Verified end-to-end: 35B → kill → 3B switch takes 3s. **(2)** `start-llm.ps1` had two real bugs: (a) `$pid = $wmi.ProcessId` triggered `VariableNotWritable` (PID is a read-only auto-variable), so the script aborted AFTER the child had already been spawned — leaving an orphan llama-server. (b) It was WMI + cmd /c indirection that PowerShell-session-detach problems couldn't shake. Replaced the whole WMI + cmd redirect block with `Start-Process -FilePath $BinFull -ArgumentList $argList -RedirectStandardOutput/Error -WindowStyle Hidden -PassThru`. Confirmed this works: 35B stayed up across 3 separate PS session exits. **(3)** `start-llm-smart.bat` NGL calculator had two bugs: (a) `if %VRAM_FREE_MB% GTR 0` was immediate-expansion but VRAM was set inside a `for /f` block above — the read saw empty string, so NGL=0 with the misleading "no NVIDIA GPU detected" message even when 7GB VRAM was free. (b) The `if A else if B else if C` chained form raised `'else' is not recognized as an internal or external command` on some Windows builds. Fixed: all reads inside the NGL block now use `!VRAM_FREE_MB!` (delayed expansion), and the chain is rewritten as nested `if/else`. Re-ran with 3B model: NGL=99, Mode="GPU (full offload, 2007MB / 6996MB free VRAM)" ✓. **(4)** New `bin/hermes-health.ps1` — three-layer liveness probe with millisecond timestamps: `/health` (TCP-up), `/v1/models` (loader done), `/v1/completions` (model warm). Reports each layer with `HH:mm:ss.fff` and total elapsed. Wired into `hermes-console.ps1` Switch-Model step 3; hermes-all.bat uses it on a future commit. End-to-end: 3B switch + health probe reported "ALL OK in 210ms" with the model returning text from a "ping" prompt. **(5)** New `bin/setup-portable.bat` — idempotent first-boot bootstrap. Detects and downloads missing pieces: (1) `portable-python/` from python.org official embed zip (~10MB), (2) `runtime/llama-server-cuda-12.4.exe` from ggml-org's official b9503 release on GitHub (~250MB with CUDA DLLs), (3) `data/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf` from Hugging Face official mirror (~2GB). Each piece is checked separately; subcommands `python`, `runtime`, `model`, `status` for fine control. Downloads use `runtime/aria2c.exe -x16 -s16` if present, else PowerShell `Start-BitsTransfer`. Exits 1 with `MISSING` on partial failure so `hermes-all.bat` can warn-and-continue. Wired into `hermes-all.bat` as new step `[0/8]` (renumbered 2-7 to 3-8). All `.bat` files normalized to CRLF: 19/19 OK. **(6)** `hermes-model-run.ps1` evaluated per user request: **functionality is sound** — it correctly tails `data/logs/llm-server.{log,err}` with smart color highlighting (model load in magenta, offload in dark-magenta, HTTP requests in cyan, eval time in yellow, errors in red, warnings in dark-yellow), 400ms polling loop, file-locked-safe, initial 5-line tail dump. What it shows is **the llama-server backend's own log** (load progress, offload decisions, HTTP request lines, prompt-eval/eval/total times, tokens/s) — NOT the model's token-by-token "thinking" text. For that, the server would need `--verbose` (which prints the full prompt + generated text per request), but that's a separate enhancement; the script's current role is "watch the server is healthy and what it's doing" and it does that correctly.
 
 | 2026-06-08  | **`MINIMUM_CONTEXT_LENGTH = 64_000` gate + 3B 32K override** — user hit `Error: Model Qwen2_53BInstructQ4_K_M has a context window of 32,768 tokens, which is below the minimum 64,000 required by Hermes Agent. Choose a model with at least 64K context, or set model.context_length in config.yaml to override.` Root cause: `hermes-agent-source/agent/model_metadata.py:133` hardcodes `MINIMUM_CONTEXT_LENGTH = 64_000` (for tool-calling working memory). `cli.py:5378` rejects `ctx_len < MINIMUM_CONTEXT_LENGTH`; `run_agent.py:661` resolves `target_ctx = max(config_context_length or 0, 64K)`. The **3B model's `n_ctx_train` is only 32K**, so server reports `n_ctx=32768`, agent computes `effective_context_length` from that, and the gate fails. **Fix:** add `context_length: 65536` to `data/hermes-agent/config.yaml` under `model:` — `agent/agent_init.py:1370` reads `_model_cfg.get("context_length")` directly, so this value is honoured and the gate passes. The actual server still runs 32K (n_ctx_train cap) and will warn + cap any request that exceeds 32768, but the chat-run-socket pre-flight check is what was blocking, and it now passes. Also updated `hermes-console.ps1` Switch-Model: `$ctxLen = 65536` for 3B/7B, 131072 for 35B (was 32768 for 3B — would have re-broken the override next time the user switched back to 3B). **Important side-effect:** the WebUI node process caches `_config_context_length` at startup, so changing the value in `config.yaml` (or in the WebUI's own model context window field, which is `model_context_length` and writes back via `hermes-agent-source/hermes_cli/web_server.py:399`) requires restarting the WebUI before the new value is honoured. Sequence used: edit config.yaml → `bin\webui-new.bat stop` (PID 23656 gone) → `bin\webui-new.bat start` (new PID 26460, reads the updated config) → 8648 returns 200 → 3B chat now flows. **Active WebUI session at the time of the fix:** `mq59rjli3ip8yk` (URL `http://localhost:8648/#/hermes/session/mq59rjli3ip8yk`). The desktop app's settings panel exposes this same field at `apps/desktop/src/app/settings/constants.ts:279` (`modelContextLength: 'Context Window'`, default 0 = use server-detected), reachable through the i18n key `modelContextLength` in `zh.ts` ("上下文长度") / `zh-hant.ts` ("上下文長度") / `ja.ts` ("モデルコンテキストウィンドウ") etc.
@@ -489,6 +677,23 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
 | 2026-06-09  | **cmd /c `""<path>""` double-double-quote — silent-fail pattern** — `bin\hermes-all.bat` L95 used `start "Hermes-LLM" /MIN cmd /c ""%HERMES_ROOT%\bin\start-llm-smart.bat""`. The `""path""` is the standard cmd /c escape for paths with spaces, but it has a known silent-fail pattern: cmd /c strips the outer quotes and the leading quote of the inner string, then looks up the bat as a literal quoted executable name (which doesn't exist). cmd /c exits with no error, the parent `start` returns successfully with no child cmd, and the user sees nothing. **Fix:** use `cd /d "%HERMES_ROOT%"` first, then `start "Hermes-LLM" /MIN cmd /c "bin\start-llm-smart.bat"` with a relative path that has no quotes around it. Pushed as `04f626e`.
 | 2026-06-09  | **Refactor: llama-server router mode (b9538+) — abandon kill+restart for multi-model** — user gave up on the kill+restart model-switch flow after multiple rounds of fixes and pointed at llama.cpp's native **router mode** (`--models-dir` + `--models-preset` + `--models-max`). Confirmed via `llama-server.exe --help` that b9538 supports all of it. **New architecture**: SINGLE llama-server process started with `--models-dir data\models`; switches models on demand when an API request arrives with `model="<filename>"`. With `--models-max 1` and LRU eviction, only the most-recently-used model is resident in VRAM at a time — fits 3B/7B/35B-MoE on 8GB GPU (35B uses 16 GPU layers + CPU offload via preset). **New files**: `bin\start-llm-router.ps1` (single launcher, .NET Process.Start for proper detach, --models-max computed from free VRAM), `data\models\router-preset.ini` (per-model NGL/ctx/temp). **Updated**: `bin\hermes-all.bat` step 2 calls the new ps1; `bin\hermes-console.ps1` Switch-Model no longer kill+restarts — it POSTs `/v1/models/load` to preload, updates config.yaml, sends a tiny warmup; `data\hermes-agent/config.yaml` default model id is now the GGUF filename (`Qwen2.5-3B-Instruct-Q4_K_M.gguf`) to match what router exposes; `hermes/scripts/model_manager.py` rewritten to call `/v1/models/load` instead of stop+start. **Deleted**: `bin\start-llm-smart.bat`, `bin\start-llm.ps1`, `bin/switch-model.bat`, `tests/verify_smart_ngl.py`, `test_model_switch.py` — all obsolete with router mode. **.gitignore**: added `!data/models/*` so the preset ini can be tracked. Pushed as `ce99e4d`. README.md §"启动方式" + "目录结构" + new "Router 模式" section updated.
 | 2026-06-09  | **Active state at end of session:** All 5 commits from this session pushed to `origin/main`. Last commit is `ce99e4d` (router mode refactor). `bin\start-llm-router.ps1` is the single source of truth for LLM launch; `data\models\router-preset.ini` is the per-model config. WebUI dropdown → llama-server router → LRU eviction. Zero restart cycles.
+| 2026-06-10 | **stdin inherit bug fix** — `bin/start-llm-router.ps1`, `bin/start-bridge-server.ps1`, `bin/start-webui.ps1` all used `.NET [System.Diagnostics.Process]::Start($psi)` with `RedirectStandardInput=$false` which is a no-op (means INHERIT, not “don't redirect”). With `UseShellExecute=$false + CreateNoWindow=$true`, the child inherited the parent's stdin handle (a pipe from cmd/bat), and llama-server detected non-console stdin and exited immediately with "Input redirection is not supported". **Fix:** wrap each binary in `cmd /c "<bin> <args>" < NUL` — cmd.exe opens NUL device for stdin, the real child inherits cmd's stdin (NUL = valid device, not a pipe). Also fixed PID recovery: since the direct child is now cmd.exe, the real server PID is obtained from `netstat -aon` matching the listening port. **Also:** cleaned `bin/setup-portable.bat` — removed hardcoded 3B model download (`DEFAULT_MODEL_URL` + `DEFAULT_MODEL_PATH`), replaced with a simple `*.gguf` existence check and a message to use `hermes-models.py` or WebUI model manager. Verified: all three services (8080/7860/8648) return 200 OK. |
+
+| 2026-06-09  | **Full upstream cutover — clean hermes-agent v0.16.0 + hermes-web-ui v0.6.12, hermes/*.py dedup, bridge skeleton** — user copied fresh clean copies of both upstream repos into project root (`hermes-agent/` 100.8MB / 2082 .py + 514 .ts v0.16.0; `hermes-web-ui/` 59.6MB / 515 .ts + 126 .vue v0.6.12) and deleted the old `hermes-agent-source/` fork. Decisions confirmed: **1.A** delete `data/webui-new/app/` (EKKOLearnAI 0.6.11 fork); **2.A** try running clean v0.16.0 directly; **3.A** build deps/ + clean 16 duplicate .py + bridge module skeleton. **What was done:** (1) `mavis-trash data/webui-new/app/` ✅ — the 0.6.11 fork with 4 local mods (loadModel/unloadModel controller + .gguf filter + 2 API helpers) is gone; (2) Verified `hermes-agent v0.16.0` imports end-to-end (`hermes_cli.main`, `AIAgent`, `agent`, `cron.jobs`, `hermes_state`, `gateway`, `tools` all importable; `HERMES_HOME=E:\Hermes Agent\data\hermes-agent` honored by upstream `get_hermes_home()`); (3) **Removed broken editable finder** (`__editable___hermes_agent_0_16_0_finder.py` + `.pth`) — both still pointed at deleted `hermes-agent-source/` paths; (4) **Added `../hermes-agent` to `portable-python/python312._pth`** so `hermes_cli`/`run_agent`/`agent`/`tools`/`cron`/`gateway` all resolve from clean source; (5) **Backed up 13 duplicate .py to `data/_backup/hermes_dups_2026-06-09/`** (agent, cron, doctor, embeddings, kanban, llm, memory, planner, sessions, webui_settings, mock + scripts/{install_skill, model_manager}) — upstream v0.16.0 has equivalent or richer implementations; (6) **`mavis-trash hermes/server.py`** (97KB) — broken imports of the 11 deleted modules; replaced with `bridge/server.py` skeleton (FastAPI app, `/health` returns 200 with version + endpoint manifest, 8 endpoints planned: `/v1/models`, `/v1/models/load`, `/v1/chat/completions`, `/api/chat/sessions`, `/api/workspaces`, `/api/kanban`, `/api/crons`, `/api/webui/settings`); (7) **Rewrote `hermes/__init__.py`** as thin shim (re-export doc only, no eager imports — upstream is authoritative); (8) **Rewrote `hermes/__main__.py`** as thin CLI delegate (`from hermes_cli.main import main as upstream_main; sys.exit(upstream_main())`); (9) **Fixed `hermes/knowledge.py`** — it imported deleted `hermes.memory.cosine_similarity` and `hermes.memory.Embedder`; inlined a minimal `cosine_similarity` + `Embedder` base class + `HashEmbedder` fallback (deterministic 384-dim hash-based pseudo-embedder for offline use). All 13 truly-independent hermes/*.py modules now import cleanly (`config`, `skills`, `gguf`, `gpu`, `workspace`, `watchdog`, `knowledge`, `mirror`, `prompts`, `download`, `firstrun`, `gopeed_client`, `memos_client`). (10) **Built `bridge/` skeleton**: `__init__.py` (version `0.1.0-skeleton`), `README.md` (architecture diagram + what's-in/where/why), `server.py` (FastAPI app with TODO imports for upstream `AIAgent`/`SessionDB`/`JobStore`/`KanbanDB`/our `WorkspaceManager`/`list_gguf_models`), `sitecustomize.py` (monkey-patch template for `c8d1e0ea8` + `d59d06c2d` — both documented with original-commit context, ready for `portable-python/Lib/site-packages/sitecustomize.py` install); (11) **Built `deps/README.md`** documenting the layout (`hermes-agent/` and `hermes-web-ui/` at root are upstream deps; not moved to `deps/` because PYTHONPATH and `_pth` already point at root, and moving would force every ref to update). **Smoke tests pass**: `python -m hermes --help` delegates to upstream and shows 50+ subcommands (`chat, model, fallback, gateway, proxy, setup, kanban, cron, doctor, security, skills, plugins, memory, mcp, sessions, claw, version, update, acp, profile, dashboard, desktop, logs, ...`); `from bridge.server import app` → FastAPI title="Hermes Bridge" v0.1.0-skeleton; `TestClient(app).get('/health')` → 200 with `{"status":"ok","version":"0.1.0-skeleton","upstream":"hermes-agent-0.16.0","endpoints_implemented":["/health"],...}`. **KNOWN BROKEN — launcher chain needs next-session fix**: (a) `bin/hermes-all.bat` L122 calls `python -m hermes serve --port 7860` — **upstream's CLI has NO `serve` subcommand** (closest is `dashboard` which starts upstream's own FastAPI at a different port); (b) `bin/webui-new.bat` L9 references deleted `data\webui-new\app`, L63 `cd hermes-agent\data\webui-new\app` (wrong), L80 `set "HERMES_AGENT_ROOT=%HERMES_ROOT%\hermes-agent-source"` (deleted). The launcher needs to either (i) call `python -m bridge.server` directly (with our FastAPI as :7860), or (ii) call upstream's `hermes dashboard` and let it own :7860. Decision deferred to user. **Also known**: `data/webui-new/` (parent dir) still contains upstream hermes-agent's old state files (`auth.json`, `config.yaml`, `kanban.db`, `state.db`, `crons/`, `kanban/`, `memory/`, `sessions/`, `skills/`, `logs/`, etc.) — this was the OLD `HERMES_HOME` before `bin/webui-new.bat` was changed to point at `data/hermes-agent/`. NOT deleted (real data, may contain valuable sessions) — user decides whether to back up + clean. **Decision not yet made**: PR `c8d1e0ea8` (sandbox pin + raw-string) and `d59d06c2d` (Windows-cwd terminal) back to upstream NousResearch, or keep as monkey-patch in `bridge/sitecustomize.py` forever.
+| 2026-06-10  | **★ Path-management reform — single source of truth for HERMES_ROOT (USB-portable)** — user raised the "project is plug-and-play, drive letter changes" concern. The old setup had each .bat / .ps1 re-deriving `HERMES_ROOT` independently (`set "HERMES_ROOT=%~dp0.."`), and one hardcoded `HERMES_DATA_DIR=E:/Hermes Agent/hermes/data` in `.env`. Replaced with: **(1)** `bin/hermes-root.py` — Python resolver with 4-tier priority (env var → `.hermes-root` cache → script-location inference → drive-letter scan across D:..Z: for `\Hermes Agent\portable-python\python.exe`); 6 subcommands (`resolve`, `verify`, `init`, `scan`, `persist`, `clean`); `init` outputs a bat-parseable `KEY=VALUE` env block. **(2)** `bin/hermes-root.bat` — thin bat launcher (ASCII-only, CRLF). **(3)** `deps\hermes-env.bat` / `.ps1` — completely rewritten to consume `init`'s output (down from 69 lines of hand-rolled env to 36 lines of consumption + cuda/PATH tweaks). **(4)** Refactored 8 bat files (`hermes-all`, `hermes-stop`, `hermes-supervisor`, `hermes-firstrun`, `hermes-model-run`, `hermes-console`, `gpu-detect`, `install-embeddings`) to all go through `deps\hermes-env.bat` first. Removed the old 8.3 short-path workaround (`HERMES_ROOT_S=%%~sI`) since we no longer bridge through PowerShell `-File`. **(5)** `bin/hermes-supervisor.py` — added `_resolve_hermes_root(HERE)` helper that delegates to `bin/hermes-root.py resolve` via subprocess (env-var fast-path, then subprocess, then `here.parent.parent` fallback). **(6)** `bin\fix-eol.py` — permanent CRLF maintenance tool (replaces ad-hoc PowerShell conversions in AGENTS.md §7); accepts file list or `--all`; `--check` mode for CI/hooks. **(7)** `.env` — removed the hardcoded `HERMES_DATA_DIR=E:/Hermes Agent/hermes/data`; `hermes/config.py` already uses `load_dotenv(override=False)` so it honors the process env (set by `deps\hermes-env.bat` from `HERMES_ROOT`) over .env. **(8)** Deleted the entire `modules\supervisor\` directory (`module.json`, `orchestrator.ps1`, `start.ps1`, `stop.ps1`) — superseded by Python supervisor. **E2E verified** — corrupted `.hermes-root` to `Z:\NonExistent\Fake\Path`, `hermes-root.py verify` correctly reported `Source: inferred:script-location` (downgrade), `init` auto-repaired the cache, full env block produced 14 vars with `HERMES_STATUS=ok`. AGENTS.md §2/§3/§4/§7/§8 (this entry) updated. |
+| 2026-06-10  | **★ Pre-commit hook + versioned git hooks** — make the CRLF check permanent at the git level so LF-only .bat / .ps1 files can never enter the repo. **(1)** `.githooks/pre-commit` — bash script (LF-only, 1376 bytes) that calls `portable-python\python.exe bin\fix-eol.py --all --check` and exits 1 on any failure. Skips gracefully if `portable-python` is missing (fresh clone). **(2)** `bin\install-git-hooks.bat` — one-shot installer that runs `git config core.hooksPath .githooks` (relative to repo root), with `uninstall` arg to revert. **(3)** Updated `bin\fix-eol.py` `--all` mode to scan ONLY Hermes-owned scripts (`bin/*.bat/*.cmd/*.ps1` one level + `deps/hermes-env.{bat,ps1}`) — 17 files total — instead of all 177 bat/ps1 under `deps/` (which would falsely fail on third-party node_modules with LF line endings). **(4)** Verified end-to-end: `git commit --allow-empty` triggers the hook and prints `[pre-commit] OK: all .bat / .ps1 files are CRLF.`; with a synthetic LF-only test file, `fix-eol.py --check` returns exit 1 as expected. **Phase 1 hook installed**: `core.hooksPath=.githooks`. AGENTS.md §3 / §7 / §8 updated. |
+
+| 2026-06-10 | **Phase 7-13 收尾：硬路径消除 + CUDA 11/12/13 多版本 + 模块回归 + 文档同步** — 6 个 Phase 一气完成, 最终验证全绿. 逐项摘要:
+  - **Phase 7 (硬路径消除)**: 修复 `hermes/scripts/import_ollama_blobs.py:21` (`Path('E:/Hermes Agent')` → `Path(__file__).resolve().parents[2]`); `hermes/workspace.py:49` (`'E:\\Hermes Agent'` → `str(self.root)`); `hermes/config.py:188/217-219` (删掉 `E:/D:` fallback, 改用 `HERMES_ROOT` env); AGENTS.md 3 处文档示例 (`E:\Hermes Agent` → `%HERMES_ROOT%`). **二次扫描**: 在 modules/bin/bridge 全量 grep `'[EeDdCc]:[\\/][Hh]ermes'` 返回 **0 匹配**.
+  - **Phase 8 (CUDA 11-13 多版本)**: 新建 `runtime/cuda/{11.8,12.4,13.0}/` 目录结构 + `manifest.json` (描述版本 + 包含的 DLL). 扩展 `modules/env_bootstrap/gpu_detect.py` 5 个新函数: `detect_driver_version()` / `driver_to_cuda_version()` / `find_cuda_runtime()` / `install_cuda_runtime()` / `recommend_cuda_version()` (driver→CUDA 映射表: ≥555→13.0, ≥525→12.4, ≥470→11.8, ≥450→11.0, <450→None). 修改 `modules/llm_engine/start.ps1` 调用 `recommend` 动态选 CUDA, 不存在则触发 `install`. 修改 `deps/hermes-env.bat`+`.ps1` 加 `CUDA_VERSION`/`LLAMACPP_BIN_CUDA` 变量. `setup-portable.bat` 增加多版本下载步骤.
+  - **Phase 9 (修复 breakage)**: `tests/test_hermes.py` 删掉已死引用 `from hermes.gpu import detect_gpu`, 注释指向新模块; `modules/model_manager/manager.py` 创建 (统一 CLI: list/info/download/import-ollama), module.json `script` 字段保持不变; `hermes/__init__.py` 重写 docstring, 移除 9 个已删/待迁移条目 (skills/prompts/gpu/gopeed_client/gguf/mirror/download/firstrun), 保留 5 个真独立的 (config/knowledge/memos_client/watchdog/workspace).
+  - **Phase 10 (删除重复)**: `bin/hermes-firstrun.bat` 改为调用 `python -m modules.env_bootstrap %*`; 删除 `hermes/download.py` (47KB, 已被 modules/model_manager/downloader.py 取代) + `hermes/firstrun.py` (32KB, 已被 modules/env_bootstrap/gpu_detect.py 取代); 删除 `bin/start-llm-router.ps1` + `start-bridge-server.ps1` + `start-webui.ps1` (3 个旧启动脚本, 已被 modules/*/start.ps1 取代). `hermes/scripts/rebuild_kb.py` 改用新下载器.
+  - **Phase 11 (迁移 bridge 依赖)**: `hermes/gguf.py` → `modules/model_manager/gguf.py` (含 import path 调整); `hermes/mirror.py` → `modules/model_manager/mirror.py`; `modules/model_manager/__init__.py` 暴露 `list_gguf_models`/`parse_gguf_meta`/`DownloadManager`/`GopeedClient`/`mirror_url`; `bridge/server.py:120` 和 `bin/hermes-models.py:36` 更新 import 为 `from modules.model_manager.gguf import ...`. `modules/model_manager/manager.py` 把所有子模块通过 `__all__` 统一暴露.
+  - **Phase 12 (清理废弃)**: 删除整个 `hermes/scripts/` 目录 (import_ollama_blobs.py 已迁到 model_manager); 删除 `hermes/data/webui_settings.json` + `hermes/data/workspaces.json` (旧 HERMES_HOME 残留); 删除 `runtime/node/` 旧版 Node (junction `deps/node` 已指向 `runtime/node23`). `hermes/data/logs/hermes-download.ps1` 残留日志也被清掉.
+  - **Phase 13 (最终验证)**: (a) 路径扫描 0 匹配 ✓; (b) `runtime/cuda/{11.8,12.4,13.0}/manifest.json` 全部就位 ✓; (c) `python -m modules.env_bootstrap status` → GPU NVIDIA RTX 3070 8192MB 驱动 610.47 ✓; `recommend` → `12.4` ✓; `check` → `[check] OK: CUDA 12.4 ready` ✓; `python -m modules.model_manager.manager list` → 2 个 GGUF 模型列出 ✓; `modules\llm_engine\start.ps1` 实际启动 llama-server (PID 37232) ✓; `modules\supervisor\orchestrator.ps1 -Status` 显示 6 个模块 ✓; `-DryRun` 显示拓扑排序 ✓; `bin\gpu-detect.bat` 返回 JSON ✓.
+  - **🚨 Phase 13.3 期间发现的关键 BUG 并已修复**: `modules/env-bootstrap/`/`model-manager/`/`llm-engine/` 三个目录用 **连字符 (hyphen)** 命名, 但 Python `import modules.env_bootstrap.gpu_detect` 需要 **下划线 (underscore)** — 连字符在 Python 包名里是 **非法的标识符**, 所有 `python -m modules.X.Y` 入口都因此 ImportError. 修复: 三个目录全部重命名为下划线版本 (`env_bootstrap`/`model_manager`/`llm_engine`), 同步更新 `module.json` 的 `name` 字段、`start.ps1`/`stop.ps1`/`health.ps1` 头注释、`bridge/module.json` 和 `webui/module.json` 的 `depends_on` 字段、AGENTS.md §3 + `hermes/__init__.py` 文档. **原理记录**: NTFS 支持连字符文件名, 但 Python `importlib` 只接受 PEP 508 标识符 (`[A-Za-z_][A-Za-z0-9_]*`), 这是隐性陷阱 (目录可见但 import 失败, 错误信息是 `ModuleNotFoundError: No module named 'modules.env-bootstrap'` 容易误判为 "包不存在").
+  - **Phase 13.4 (文档同步)**: AGENTS.md §2 加 "Module architecture (Phase 1-13, completed 2026-06-10)" 说明; §3 项目布局反映重命名后的目录 (`env_bootstrap`/`model_manager`/`llm_engine`), 移除 `hermes/` 包里已删的 download.py/firstrun.py/gguf.py/mirror.py 4 个条目, runtime/ 树改为 `cuda/{11.8,12.4,13.0}/manifest.json` 多版本结构, bin/ 树移除 3 个 start-*.ps1; `deps/manifest.json` 加 3 条 CUDA 运行时记录 (11.8/12.4/13.0, 物理路径 `runtime/cuda/<ver>/`); `tests/test_hermes.py` 顶部 SyntaxWarning (行 6 `\\` 转义) 顺手修掉; `deps/hermes-env.bat`+`.ps1` 注释里 "llm-engine" → "llm_engine"; `bin/hermes-firstrun.bat` 注释 "env-bootstrap" → "env_bootstrap".
+  - **Active state at end of session**: 6 个模块全部就绪 (`env_bootstrap`/`model_manager`/`llm_engine`/`bridge`/`webui`/`supervisor`), 拓扑依赖正确解析, `python -m modules.<name>.<script>` 全通, llm-engine 实测能拉起 llama-server. 整个项目现在可以 `xcopy /E /I` 到任意盘符/目录后 `bin\hermes-all.bat` 即用 (plug-and-play).
 
 ---
 
@@ -535,16 +740,16 @@ To install a different GGUF, drop it in `data\models\`, then either:
 ### Reset to clean state
 ```bash
 # Wipe Hermes in-memory chat session cache (only sessions created in this process lifetime)
-"E:\Hermes Agent\portable-python\python.exe" -c "from hermes.agent import HermesAgent; from hermes.config import load_config; a = HermesAgent(load_config(), use_mock=True); a._chat_sessions.clear(); print('cleared')"
+"%HERMES_ROOT%\portable-python\python.exe" -c "from hermes.agent import HermesAgent; from hermes.config import load_config; a = HermesAgent(load_config(), use_mock=True); a._chat_sessions.clear(); print('cleared')"
 
 # Run E2E test (no GPU needed)
-"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\tests\test_hermes.py"
+"%HERMES_ROOT%\portable-python\python.exe" "%HERMES_ROOT%\tests\test_hermes.py"
 
 # Verify NGL math
-"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\tests\verify_smart_ngl.py"
+"%HERMES_ROOT%\portable-python\python.exe" "%HERMES_ROOT%\tests\verify_smart_ngl.py"
 
 # Verify GGUF scan works
-"E:\Hermes Agent\portable-python\python.exe" -c "from hermes.gguf import list_gguf_models; from pathlib import Path; import json; print(json.dumps(list_gguf_models(Path('E:/Hermes Agent/data/models')), indent=2, default=str))"
+"%HERMES_ROOT%\portable-python\python.exe" -c "from modules.model_manager.gguf import list_gguf_models; from pathlib import Path; import json; print(json.dumps(list_gguf_models(Path(os.environ['HERMES_ROOT']) / 'data' / 'models'), indent=2, default=str))"
 ```
 
 ### Verify GPU is actually used
@@ -788,7 +993,7 @@ For every script reached from `hermes-all.bat`:
 | `hermes/config.py` L169 | Comment `# E:\Hermes Agent\.env when running from anywhere` — doc, not code. |
 | `hermes/workspace.py` L49 | Docstring example of the `workspaces.json` shape — not a real value. |
 | `hermes/workspace.py` L75 | Already portable: `Path(__file__).resolve().parent.parent` ✓ |
-| `hermes/doctor.py` L119 | `r.section("llama.cpp runtime (E:\\Hermes Agent\\runtime)")` — diagnostic output string. Could be templated via `HERMES_ROOT` but it's only printed, not used to compute anything. |
+| (removed) | `hermes/doctor.py` was deleted in an earlier cleanup phase; no portable rewrite needed. |
 | `data/webui-new/app/bin/hermes-web-ui.mjs` L109 | `process.env.SystemRoot || 'C:\\Windows'` — env-var fallback, doesn't fire in practice. |
 | `hermes-agent-source/scripts/install.ps1` L210 | User-facing hint about `setx NODE_EXTRA_CA_CERTS "C:\path\to\corp-ca.pem"` — placeholder text in a help message. |
 | `data/webui-new/app/portable/*.bat`, `runtime/node23/install_tools.bat`, etc. | Third-party (Node 23 build scripts). Not touched. |

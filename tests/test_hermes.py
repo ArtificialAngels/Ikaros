@@ -3,7 +3,7 @@ Hermes - Clean E2E Test Suite
 
 Tests core hermes components without requiring GPU/llama-server.
 Run from project root:
-    portable-python\python.exe tests\\test_hermes.py
+    portable-python\\python.exe tests\\test_hermes.py
 
 Covers:
   1. GPU detection (via hermes.gpu)
@@ -64,9 +64,12 @@ def record(name, ok, detail=""):
 # ============================================
 print("\n[1/8] GPU Detection")
 try:
-    from hermes.gpu import detect_gpu
+    # hermes.gpu was removed in Phase 1-6. The replacement lives in
+    # modules/env_bootstrap/gpu_detect.py (also callable as
+    # `python -m modules.env_bootstrap.gpu_detect recommend`).
+    from modules.env_bootstrap.gpu_detect import detect_all_gpus as detect_gpu
     g = detect_gpu()
-    has_gpu = g.get("primary") in ("nvidia", "amd", "intel")
+    has_gpu = g.get("primary") in ("nvidia", "amd", "intel", "cuda", "vulkan", "hip")
     if g.get("primary") == "nvidia":
         nv = g["nvidia"]
         gpu_name = nv["gpus"][0]["name"] if nv.get("gpus") else "?"

@@ -1,0 +1,33 @@
+{
+  "name": "bridge",
+  "version": "1.0.0",
+  "description": "FastAPI bridge — proxies OpenAI-compatible endpoints to llama-server, wraps AIAgent, exposes /api/* for webui.",
+  "type": "service",
+  "runtime": {
+    "kind": "python",
+    "python": "portable-python/python.exe",
+    "module": "bridge.server:app",
+    "args": ["--host", "127.0.0.1", "--port", "7860", "--log-level", "info"],
+    "working_directory": "."
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 7860,
+    "protocol": "http",
+    "health_endpoint": "/health",
+    "health_timeout_ms": 5000
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "health": "health.ps1",
+    "startup_timeout_s": 60,
+    "shutdown_timeout_s": 10
+  },
+  "depends_on": [
+    { "module": "llm_engine", "required": false, "reason": "proxies /v1/chat/completions to llama-server" }
+  ],
+  "env": {
+    "HERMES_LLAMA_URL": "http://127.0.0.1:8080"
+  }
+}

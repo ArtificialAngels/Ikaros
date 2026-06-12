@@ -134,6 +134,9 @@ class WorkspaceManager:
             "workspaces": [
                 {
                     "name": "default",
+                    # Always use the resolved trust root, never a hardcoded path —
+                    # this keeps the workspace portable across drive letters and
+                    # project directory renames.
                     "path": str(self.root),
                     "added_at": time.time(),
                 }

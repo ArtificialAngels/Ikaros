@@ -1,0 +1,674 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Hermes Supervisor — Pure Python 进程编排器
+==========================================
+
+**Why this file exists**
+    The legacy `modules/supervisor/orchestrator.ps1` was launched from a bat
+    via `cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File ..."`.
+    That bridge dies on paths with spaces (e.g. ``E:\\Hermes Agent``): cmd's
+    quote parser treats `M` and `\\` as command names, and PowerShell 5.1
+    `-File` itself has a path-with-spaces bug that forced the 8.3 short
+    path workaround. The old error log showed it plainly::
+
+        'M' is not recognized as an internal or external command
+        \\ : The term '\\' is not recognized ...
+
+**Design rules**
+    1. **No cmd /c** — Python's ``subprocess.Popen`` list args go straight
+       to ``CreateProcessW`` on Windows. The cmd interpreter never sees
+       the command line, so quotes / paths / spaces cannot break parsing.
+    2. **No short path** — PowerShell `-File` is what needs the 8.3
+       workaround. Python handles long paths, spaces, and Unicode natively.
+    3. **DETACHED_PROCESS** — children are fully detached from the
+       supervisor; closing the launching terminal does not kill them.
+    4. **Socket health check** — no urllib / requests dependency.
+    5. **Reuse existing start.ps1** — we do not rewrite the complex
+       per-module launch logic (llama-server CUDA selection, bridge
+       env injection, webui Node args); PowerShell still owns that.
+       Python only orchestrates: launch + health-check + shutdown.
+
+**Usage**
+    python bin/hermes-supervisor.py              # start all services
+    python bin/hermes-supervisor.py --stop       # stop all in reverse order
+    python bin/hermes-supervisor.py --status     # port health check
+    python bin/hermes-supervisor.py --dry-run    # show start order
+    python bin/hermes-supervisor.py --ports      # show every module's IO port contract
+    python bin/hermes-supervisor.py --inspect <name>   # dump one module's full module.json
+    python bin/hermes-supervisor.py --only llm_engine bridge webui
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+# ============================================================
+# 常量
+# ============================================================
+
+# HERMES_ROOT: single source of truth is bin\hermes-root.py.
+# Resolution priority (delegated to that module):
+#   1. HERMES_ROOT env var (set by callers like deps\hermes-env.bat)
+#   2. <bin/..>/.hermes-root cache
+#   3. <bin/..> (one level up from this script: assume <root>/bin/)
+#   4. Drive letter scan across D:/..Z:/
+# If all four fail, we fall back to the inferred location so the
+# user at least gets a clear error rather than a silent crash.
+HERE = Path(__file__).resolve()
+
+
+def _resolve_hermes_root(here: Path) -> Path:
+    """Resolve HERMES_ROOT via the single-source-of-truth resolver.
+
+    See the module docstring at the top of bin/hermes-root.py for the
+    full resolution algorithm. This wrapper:
+      - honors an explicit HERMES_ROOT env var (so callers that already
+        resolved it don't pay for a second resolver invocation)
+      - shells out to bin/hermes-root.py resolve as the canonical path
+      - falls back to <bin/..> if both fail (so error messages stay useful)
+    """
+    env_root = os.environ.get("HERMES_ROOT", "").strip()
+    if env_root:
+        p = Path(env_root).resolve()
+        if (p / "portable-python" / "python.exe").is_file():
+            return p
+    resolver = here.parent / "hermes-root.py"
+    py = here.parent / "portable-python" / "python.exe"
+    if resolver.is_file() and py.is_file():
+        try:
+            r = subprocess.run(
+                [str(py), str(resolver), "resolve"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                p = Path(r.stdout.strip()).resolve()
+                if p.is_dir():
+                    return p
+        except Exception:
+            pass
+    return here.parent.parent
+
+
+HERMES_ROOT = _resolve_hermes_root(HERE)
+MODULES_DIR = HERMES_ROOT / "modules"
+LOG_DIR = HERMES_ROOT / "data" / "logs"
+PYTHON_EXE = HERMES_ROOT / "portable-python" / "python.exe"
+
+# Windows 进程创建标志
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
+
+# Windows ANSI (Unicode 输出到 console)
+ENABLE_VIRTUAL_TERMINAL = 0x00000004
+
+# ============================================================
+# 颜色
+# ============================================================
+
+
+class C:
+    """ANSI 颜色 (Windows 10+ 启用 ENABLE_VIRTUAL_TERMINAL 后可用)"""
+    RST = "\x1b[0m"
+    GRN = "\x1b[32m"
+    RED = "\x1b[31m"
+    YEL = "\x1b[33m"
+    CYN = "\x1b[36m"
+    DIM = "\x1b[90m"
+    BLD = "\x1b[1m"
+
+
+def enable_vt() -> None:
+    """Windows 10+ 启用 ANSI 颜色 (失败也不致命)"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL)
+    except Exception:
+        pass
+
+
+# ============================================================
+# 数据模型
+# ============================================================
+
+
+@dataclass
+class Module:
+    name: str
+    path: Path
+    type: str                      # 'service' | 'tool'
+    depends: List[str] = field(default_factory=list)
+    requires: Dict[str, bool] = field(default_factory=dict)  # name -> required
+    depends_detail: List[dict] = field(default_factory=list)  # raw {module, required, reason}
+    port: Optional[int] = None
+    host: str = "127.0.0.1"
+    protocol: str = "http"
+    health_endpoint: str = "/health"
+    health_timeout_ms: int = 5000
+    startup_timeout_s: int = 60
+    shutdown_timeout_s: int = 10
+    start_script: str = "start.ps1"
+    stop_script: str = "stop.ps1"
+    health_script: str = "health.ps1"
+    description: str = ""
+    version: str = ""
+    runtime_kind: str = ""         # 'native' | 'python' | 'node' | ''
+    runtime_args: List[str] = field(default_factory=list)
+    env: Dict[str, str] = field(default_factory=dict)
+
+
+# ============================================================
+# 模块发现
+# ============================================================
+
+
+def discover_modules() -> Dict[str, Module]:
+    """扫描 modules/*/module.json,返回 name -> Module 字典。"""
+    modules: Dict[str, Module] = {}
+    for entry in sorted(MODULES_DIR.iterdir()):
+        if not entry.is_dir():
+            continue
+        json_path = entry / "module.json"
+        if not json_path.is_file():
+            continue
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  [WARN] {entry.name}: bad module.json: {e}", file=sys.stderr)
+            continue
+
+        name = data.get("name", entry.name)
+        net = data.get("network") or {}
+        depends = []
+        requires = {}
+        for dep in data.get("depends_on", []) or []:
+            depends.append(dep["module"])
+            requires[dep["module"]] = bool(dep.get("required", False))
+
+        lifecycle = data.get("lifecycle", {}) or {}
+        runtime = data.get("runtime", {}) or {}
+
+        modules[name] = Module(
+            name=name,
+            path=entry,
+            type=data.get("type", "service"),
+            depends=depends,
+            requires=requires,
+            depends_detail=list(data.get("depends_on", []) or []),
+            port=net.get("port"),
+            host=net.get("host", "127.0.0.1"),
+            protocol=net.get("protocol", "http"),
+            health_endpoint=net.get("health_endpoint", "/health"),
+            health_timeout_ms=int(net.get("health_timeout_ms", 5000)),
+            startup_timeout_s=int(lifecycle.get("startup_timeout_s", 60)),
+            shutdown_timeout_s=int(lifecycle.get("shutdown_timeout_s", 10)),
+            start_script=lifecycle.get("start", "start.ps1"),
+            stop_script=lifecycle.get("stop", "stop.ps1"),
+            health_script=lifecycle.get("health", "health.ps1"),
+            description=data.get("description", ""),
+            version=str(data.get("version", "")),
+            runtime_kind=runtime.get("kind", ""),
+            runtime_args=list(runtime.get("args", []) or []),
+            env=dict(data.get("env", {}) or {}),
+        )
+    return modules
+
+
+# ============================================================
+# 拓扑排序 (Kahn 算法)
+# ============================================================
+
+
+def topo_sort(modules: Dict[str, Module], reverse: bool = False) -> List[str]:
+    """拓扑排序。可选 reverse=True 用于 stop 顺序。"""
+    in_deg: Dict[str, int] = {n: 0 for n in modules}
+    adj: Dict[str, List[str]] = {n: [] for n in modules}
+    for n, m in modules.items():
+        for d in m.depends:
+            if d in modules:
+                adj[d].append(n)
+                in_deg[n] += 1
+
+    # 稳定:按名字排序入度 0 的节点
+    queue = sorted([n for n, d in in_deg.items() if d == 0])
+    order: List[str] = []
+    while queue:
+        cur = queue.pop(0)
+        order.append(cur)
+        for nxt in sorted(adj[cur]):
+            in_deg[nxt] -= 1
+            if in_deg[nxt] == 0:
+                queue.append(nxt)
+                queue.sort()
+
+    if len(order) != len(modules):
+        cycle = set(modules) - set(order)
+        raise RuntimeError(f"Dependency cycle detected, missing: {sorted(cycle)}")
+    if reverse:
+        order.reverse()
+    return order
+
+
+# ============================================================
+# 端口健康检查
+# ============================================================
+
+
+def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
+    """非阻塞地检测 TCP 端口是否可连接 (服务已起)。"""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return False
+
+
+def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
+    """轮询直到端口就绪或超时。"""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if check_port(host, port, timeout_s=1.0):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+# ============================================================
+# 进程管理
+# ============================================================
+
+
+def start_module(m: Module) -> Optional[subprocess.Popen]:
+    """
+    用 subprocess.Popen (列表参数) 启动模块的 start.ps1。
+    返回 Popen;如果 start.ps1 立即退出 (HasExited=True) 则返回 None。
+    """
+    script = m.path / m.start_script
+    if not script.is_file():
+        print(f"  {C.YEL}[SKIP]{C.RST} {m.name} — no {m.start_script}")
+        return None
+
+    log_path = LOG_DIR / f"{m.name}.log"
+    err_path = LOG_DIR / f"{m.name}.err"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+    err_path.write_text("", encoding="utf-8")
+
+    log_f = open(log_path, "a", encoding="utf-8", buffering=1)
+    err_f = open(err_path, "a", encoding="utf-8", buffering=1)
+
+    # 关键:列表参数直接进 CreateProcessW,绕过 cmd / c 的引号解析。
+    # 不需要 8.3 短路径 —— Python 内部已正确处理空格 / 中文 / Unicode。
+    # 注:DETACHED_PROCESS (0x8) 看上去很诱人(让子进程与 supervisor 脱钩),
+    # 但实测发现它会让 PowerShell 启动后立刻 exit 0 且没有任何输出
+    # (start.ps1 的 banner 都来不及打印)。用 CREATE_NEW_PROCESS_GROUP 即可:
+    # 子进程仍是新进程组,Ctrl-C 不会传过去;同时 stdio 重定向到文件
+    # 也会让子进程在 supervisor 退出后继续运行(文件句柄已 detach)。
+    creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    try:
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            cwd=str(m.path),
+            stdin=subprocess.DEVNULL,
+            stdout=log_f,
+            stderr=err_f,
+            creationflags=creationflags,
+            close_fds=True,
+        )
+    except FileNotFoundError:
+        print(f"  {C.RED}[FAIL]{C.RST} {m.name} — powershell.exe not found")
+        log_f.close()
+        err_f.close()
+        return None
+    except Exception as e:
+        print(f"  {C.RED}[FAIL]{C.RST} {m.name} — Popen error: {e}")
+        log_f.close()
+        err_f.close()
+        return None
+
+    # tool 类型(瞬时任务)立即返回 Popen,稍后再 check
+    if m.type == "tool":
+        return proc
+
+    # service 类型:等几秒看是否启动脚本立即崩了
+    time.sleep(2)
+    if proc.poll() is not None:
+        rc = proc.returncode
+        print(f"  {C.RED}[FAIL]{C.RST} {m.name} — start.ps1 exited (rc={rc})")
+        tail = read_tail(err_path, 12)
+        for line in tail:
+            print(f"    {C.DIM}| {line}{C.RST}")
+        log_f.close()
+        err_f.close()
+        return None
+
+    # 端口健康检查
+    if m.port:
+        if wait_for_port(m.host, m.port, m.startup_timeout_s):
+            print(f"  {C.GRN}[OK]{C.RST}   {m.name} (:{m.port})")
+        else:
+            print(f"  {C.RED}[TIMEOUT]{C.RST} {m.name} — port {m.port} not ready in {m.startup_timeout_s}s")
+            tail = read_tail(err_path, 12)
+            for line in tail:
+                print(f"    {C.DIM}| {line}{C.RST}")
+            stop_module(m)
+            log_f.close()
+            err_f.close()
+            return None
+    else:
+        print(f"  {C.GRN}[OK]{C.RST}   {m.name} (no port)")
+
+    log_f.close()
+    err_f.close()
+    return proc
+
+
+def stop_module(m: Module) -> None:
+    """调用 stop.ps1 优雅停止模块。"""
+    script = m.path / m.stop_script
+    if not script.is_file():
+        return
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            timeout=15,
+            capture_output=True,
+            cwd=str(m.path),
+        )
+    except Exception as e:
+        print(f"  {C.YEL}[WARN]{C.RST} {m.name} stop.ps1 error: {e}")
+
+
+def read_tail(path: Path, n: int) -> List[str]:
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return [ln.rstrip("\r\n") for ln in lines[-n:]]
+    except Exception:
+        return []
+
+
+# ============================================================
+# 主流程
+# ============================================================
+
+
+def cmd_dry_run(modules: Dict[str, Module], only: List[str]) -> int:
+    print(f"{C.BLD}Hermes Supervisor — dry-run{C.RST}")
+    print(f"  Root:   {HERMES_ROOT}")
+    print(f"  Python: {PYTHON_EXE}")
+    print(f"  Modules discovered: {len(modules)}")
+    print()
+    order = topo_sort(modules, reverse=False)
+    if only:
+        order = [n for n in order if n in only]
+    print("  Start order:")
+    for n in order:
+        m = modules[n]
+        deps = ", ".join(m.depends) if m.depends else "none"
+        kind = f"service :{m.port}" if m.port else m.type
+        print(f"    {C.CYN}{n:20}{C.RST} [{kind:18}] depends: {deps}")
+    return 0
+
+
+def cmd_ports(modules: Dict[str, Module], only: List[str]) -> int:
+    """Print the IO-port contract table for every module (the 'signal map').
+
+    This is the -help-style view the operator types to inspect what each
+    module listens on, what /health endpoint to probe, and what it depends
+    on. It is also the offline counterpart to `GET /v1/modules` on the
+    bridge, so a service that is DOWN can still be introspected.
+    """
+    print(f"{C.BLD}Hermes Supervisor — IO port contract{C.RST}")
+    print(f"  Root:   {HERMES_ROOT}")
+    print(f"  Modules: {len(modules)}")
+    print()
+
+    targets = only or list(modules.keys())
+    headers = ("MODULE", "KIND", "RUNTIME", "ENDPOINT", "HEALTH", "DEPENDS")
+    rows = []
+    for n in targets:
+        m = modules.get(n)
+        if m is None:
+            rows.append((n, "?", "?", "?", "?", f"{C.RED}unknown module{C.RST}"))
+            continue
+        endpoint = (
+            f"{m.protocol}://{m.host}:{m.port}" if m.port else f"({m.type}, no port)"
+        )
+        health = (
+            f"{m.host}:{m.port}{m.health_endpoint}"
+            if m.port else "(one-shot tool)"
+        )
+        runtime = (
+            f"{m.runtime_kind} {(' '.join(m.runtime_args)[:40] + ('…' if len(' '.join(m.runtime_args)) > 40 else ''))}"
+            if m.runtime_kind else "-"
+        )
+        deps_disp = "none"
+        if m.depends_detail:
+            bits = []
+            for d in m.depends_detail:
+                tag = "!" if d.get("required") else "~"
+                bits.append(f"{tag}{d['module']}")
+            deps_disp = ", ".join(bits)
+        rows.append((n, m.type, runtime.strip(), endpoint, health, deps_disp))
+
+    # ASCII table
+    col_w = [max(len(str(r[i])) for r in rows + [tuple(headers)]) for i in range(len(headers))]
+    line = "  " + " | ".join(headers[i].ljust(col_w[i]) for i in range(len(headers)))
+    sep  = "  " + "-+-".join("-" * col_w[i] for i in range(len(headers)))
+    print(line)
+    print(sep)
+    for r in rows:
+        # Highlight module name in cyan; rest is plain text
+        print(f"  {C.CYN}{str(r[0]).ljust(col_w[0])}{C.RST} | "
+              f"{str(r[1]).ljust(col_w[1])} | "
+              f"{str(r[2]).ljust(col_w[2])} | "
+              f"{str(r[3]).ljust(col_w[3])} | "
+              f"{str(r[4]).ljust(col_w[4])} | "
+              f"{str(r[5]).ljust(col_w[5])}")
+
+    print()
+    print(f"  Legend: ! = required dependency,  ~ = soft dependency")
+    print(f"  Live liveness probe (TCP-level): see --status")
+    print(f"  Online counterpart: GET http://127.0.0.1:7860/v1/modules (bridge)")
+    return 0
+
+
+def cmd_inspect(modules: Dict[str, Module], name: str) -> int:
+    """Dump the full module.json (decoded) of a single module."""
+    m = modules.get(name)
+    if m is None:
+        print(f"{C.RED}[FAIL]{C.RST} unknown module: {name}", file=sys.stderr)
+        print(f"  known: {', '.join(sorted(modules.keys()))}")
+        return 1
+    raw_path = m.path / "module.json"
+    try:
+        raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"{C.RED}[FAIL]{C.RST} cannot read {raw_path}: {e}", file=sys.stderr)
+        return 1
+
+    print(f"{C.BLD}Module: {name}{C.RST}  ({raw_path})")
+    print()
+    print(json.dumps(raw, indent=2, ensure_ascii=False))
+    print()
+    # Live probe
+    if m.port:
+        alive = check_port(m.host, m.port, timeout_s=0.5)
+        tag = f"{C.GRN}UP{C.RST}" if alive else f"{C.RED}DOWN{C.RST}"
+        print(f"  Live probe:  {tag}  tcp://{m.host}:{m.port}")
+        print(f"  Health URL:  http://{m.host}:{m.port}{m.health_endpoint}  "
+              f"(timeout {m.health_timeout_ms}ms)")
+    else:
+        print(f"  Live probe:  {C.DIM}no port (tool / one-shot){C.RST}")
+    print(f"  Lifecycle:   start={m.start_script}  stop={m.stop_script}  "
+          f"health={m.health_script}")
+    print(f"  Timeouts:    start<={m.startup_timeout_s}s  stop<={m.shutdown_timeout_s}s")
+    return 0
+
+
+def cmd_status(modules: Dict[str, Module], only: List[str]) -> int:
+    print(f"{C.BLD}Hermes Supervisor — status{C.RST}")
+    print()
+    name_w = max((len(n) for n in modules), default=10)
+    rc = 0
+    targets = only or list(modules.keys())
+    for n in targets:
+        m = modules.get(n)
+        if m is None:
+            print(f"  {C.YEL}?{C.RST}  {n} (unknown module)")
+            rc = 1
+            continue
+        if not m.port:
+            print(f"  {C.DIM}-{C.RST}  {n:<{name_w}}  (no port)")
+            continue
+        if check_port(m.host, m.port, timeout_s=0.5):
+            print(f"  {C.GRN}UP{C.RST}    {n:<{name_w}}  http://{m.host}:{m.port}")
+        else:
+            print(f"  {C.RED}DOWN{C.RST}  {n:<{name_w}}  http://{m.host}:{m.port}")
+            rc = 1
+    return rc
+
+
+def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
+    print(f"{C.BLD}Hermes Supervisor — start{C.RST}")
+    print(f"  Root:   {HERMES_ROOT}")
+    print(f"  Python: {PYTHON_EXE}")
+    if not PYTHON_EXE.is_file():
+        print(f"  {C.RED}[FATAL]{C.RST} portable-python not found: {PYTHON_EXE}")
+        return 2
+
+    order = topo_sort(modules, reverse=False)
+    if only:
+        order = [n for n in order if n in only]
+    print(f"  Order:  {' -> '.join(order)}")
+    print()
+
+    started: List[str] = []
+    procs: Dict[str, Optional[subprocess.Popen]] = {}
+    failed: List[str] = []
+
+    for n in order:
+        m = modules[n]
+        print(f"  {C.CYN}>{C.RST} {n} ({m.type})")
+        proc = start_module(m)
+        procs[n] = proc
+        if proc is None and m.type == "service":
+            failed.append(n)
+        else:
+            started.append(n)
+
+    # 持久化状态
+    state = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "started": started,
+        "failed": failed,
+        "order": order,
+    }
+    (LOG_DIR / "supervisor-state.json").write_text(
+        json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    print()
+    print(f"{C.BLD}============================================================{C.RST}")
+    if failed:
+        print(f"  {C.RED}FAILED{C.RST}: {len(failed)} module(s): {', '.join(failed)}")
+        return 1
+    print(f"  {C.GRN}STARTED{C.RST}: {len(started)} module(s)")
+    print(f"{C.BLD}============================================================{C.RST}")
+    return 0
+
+
+def cmd_stop(modules: Dict[str, Module], only: List[str]) -> int:
+    print(f"{C.BLD}Hermes Supervisor — stop{C.RST}")
+    order = topo_sort(modules, reverse=True)
+    if only:
+        order = [n for n in order if n in only]
+    print(f"  Reverse order: {' -> '.join(order)}")
+    print()
+    for n in order:
+        m = modules[n]
+        if m.type == "service":
+            print(f"  {C.YEL}x{C.RST} {n}")
+            stop_module(m)
+    print()
+    print(f"  {C.GRN}Done.{C.RST}")
+    return 0
+
+
+# ============================================================
+# 入口
+# ============================================================
+
+
+def main() -> int:
+    enable_vt()
+    parser = argparse.ArgumentParser(
+        description="Hermes 进程编排器 (纯 Python 实现,无 cmd / c 引号问题)\n\n"
+                    "Examples:\n"
+                    "  --status     TCP-level liveness probe of every module\n"
+                    "  --dry-run    show topological start order\n"
+                    "  --ports      print every module's IO port contract (signal map)\n"
+                    "  --inspect N  dump one module's full module.json\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument("--start", action="store_true", help="启动所有 service (默认)")
+    grp.add_argument("--stop", action="store_true", help="反向停止所有 service")
+    grp.add_argument("--status", action="store_true", help="端口健康检查 (TCP)")
+    grp.add_argument("--dry-run", action="store_true", help="只显示启动顺序")
+    grp.add_argument("--ports", action="store_true",
+                     help="列出每个模块的 IO 端口契约(信号映射表)")
+    grp.add_argument("--inspect", metavar="MODULE",
+                     help="导出指定模块的完整 module.json")
+    parser.add_argument("--only", nargs="+", default=[], help="只处理指定模块")
+    args = parser.parse_args()
+
+    if not HERMES_ROOT.is_dir():
+        print(f"{C.RED}[FATAL]{C.RST} HERMES_ROOT not found: {HERMES_ROOT}")
+        return 2
+    if not MODULES_DIR.is_dir():
+        print(f"{C.RED}[FATAL]{C.RST} modules/ not found: {MODULES_DIR}")
+        return 2
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    modules = discover_modules()
+    if not modules:
+        print(f"{C.RED}[FATAL]{C.RST} no modules found in {MODULES_DIR}")
+        return 2
+
+    if args.stop:
+        return cmd_stop(modules, set(args.only))
+    if args.status:
+        return cmd_status(modules, set(args.only))
+    if args.dry_run:
+        return cmd_dry_run(modules, args.only)
+    if args.ports:
+        return cmd_ports(modules, args.only)
+    if args.inspect:
+        return cmd_inspect(modules, args.inspect)
+    return cmd_start(modules, set(args.only))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        sys.exit(130)

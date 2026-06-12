@@ -12,8 +12,12 @@ REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
 
-set "HERMES_ROOT=%~dp0.."
-set "PY=%HERMES_ROOT%\portable-python\python.exe"
+REM ---- Single source of truth: deps\hermes-env.bat ----
+call "%~dp0..\deps\hermes-env.bat"
+if errorlevel 1 (
+    echo [FATAL] could not resolve HERMES_ROOT.
+    exit /b 2
+)
 set "CACHE_DIR=%HERMES_ROOT%\hermes\data\models\embedding"
 
 if not exist "%CACHE_DIR%" mkdir "%CACHE_DIR%"
@@ -37,23 +41,23 @@ if /i not "%CONFIRM%"=="y" (
 
 echo.
 echo [1/2] Installing sentence-transformers (this can take 1-2 min)...
-"%PY%" -m pip install --quiet sentence-transformers
+"%HERMES_PYTHON%" -m pip install --quiet sentence-transformers
 if errorlevel 1 (
     echo   [WARN] pip install failed - trying with output
-    "%PY%" -m pip install sentence-transformers
+    "%HERMES_PYTHON%" -m pip install sentence-transformers
 )
 
 echo.
 echo [2/2] Pre-downloading model to %CACHE_DIR%...
 set "HF_HOME=%CACHE_DIR%"
-"%PY%" -c "import os; os.environ['HF_HOME'] = r'%CACHE_DIR%'; from sentence_transformers import SentenceTransformer; m = SentenceTransformer('all-MiniLM-L6-v2', cache_folder=r'%CACHE_DIR%'); print('OK dim=', m.get_sentence_embedding_dimension())"
+"%HERMES_PYTHON%" -c "import os; os.environ['HF_HOME'] = r'%CACHE_DIR%'; from sentence_transformers import SentenceTransformer; m = SentenceTransformer('all-MiniLM-L6-v2', cache_folder=r'%CACHE_DIR%'); print('OK dim=', m.get_sentence_embedding_dimension())"
 
 echo.
 echo ============================================================
 echo   Done!
 echo.
 echo   To verify:
-echo     "%PY%" -c "from sentence_transformers import SentenceTransformer; print(SentenceTransformer('all-MiniLM-L6-v2', cache_folder=r'%CACHE_DIR%').encode(['test']).shape)"
+echo     "%HERMES_PYTHON%" -c "from sentence_transformers import SentenceTransformer; print(SentenceTransformer('all-MiniLM-L6-v2', cache_folder=r'%CACHE_DIR%').encode(['test']).shape)"
 echo.
 echo   To use it, restart bin\hermes-all.bat. The v1/embeddings
 echo   endpoint will return real semantic vectors.

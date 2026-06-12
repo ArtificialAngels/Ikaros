@@ -1,57 +1,32 @@
 @echo off
 REM ============================================================
-REM Hermes - Stop all running Hermes processes
+REM Hermes - Stop all background processes (v2, uses supervisor)
 REM ============================================================
 setlocal
 chcp 65001 >nul
-echo Stopping Hermes processes...
 
-REM ---- 1. Graceful WebUI stop (first, so bridge can flush DB) ----
-echo [1/8] Stopping WebUI gracefully...
-if exist "%~dp0webui-new.bat" (
-    call "%~dp0webui-new.bat" stop >nul 2>&1
-    echo   WebUI stopped.
-) else (
-    echo   webui-new.bat not found, skipping.
+REM ---- Single source of truth for HERMES_ROOT ----
+call "%~dp0..\deps\hermes-env.bat"
+if errorlevel 1 (
+    echo [FATAL] could not resolve HERMES_ROOT.
+    exit /b 1
 )
 
-REM ---- 2. Kill llama-server (GPU process) ----
-echo [2/8] Killing llama-server...
-powershell -NoProfile -Command ^
-    "Get-Process -Name 'llama-server*' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (' + $_.ProcessName + ')'); $_ } | Stop-Process -Force -ErrorAction SilentlyContinue"
-timeout /t 2 /nobreak >nul
+echo Stopping Hermes processes via Python supervisor...
 
-REM ---- 3. Kill Hermes python processes ----
-echo [3/8] Killing Hermes python...
-powershell -NoProfile -Command ^
-    "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (hermes)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+REM ---- Pure-Python supervisor: stop all services in reverse topo order ----
+call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --stop
 
-REM ---- 4. Kill WebUI node process (fallback if graceful stop failed) ----
-echo [4/8] Killing WebUI node (fallback)...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -match 'hermes-web-ui' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (webui)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-
-REM ---- 5. Kill Console + Trace + Model Run powershell windows ----
-echo [5/8] Killing Console ^& Trace ^& Model Run windows...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" | Where-Object { $_.CommandLine -match 'hermes-console' -or $_.CommandLine -match 'hermes-trace' -or $_.CommandLine -match 'hermes-model-run' } | ForEach-Object { Write-Host ('   PID ' + $_.ProcessId + ' (console/trace/model-run)'); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-
-REM ---- 6. Kill Hermes shell + Terminal windows (via Win32 EnumWindows) ----
-echo [6/8] Killing shell ^& Terminal windows (via Win32 EnumWindows)...
-REM Use EnumWindows because Get-Process.MainWindowTitle is empty for cmd.exe
-REM subshells hosted by WindowsTerminal (the terminal owns the window).
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0hermes-kill-windows.ps1" 2>nul
-REM ---- 7. Kill gopeed-web ----
-echo [7/8] Killing gopeed-web...
+REM ---- Fallback: kill by image name (catches stragglers) ----
+taskkill /F /IM "llama-server.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-cuda-12.4.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-cuda-11.8.exe" /T >nul 2>&1
+taskkill /F /IM "llama-server-vulkan.exe" /T >nul 2>&1
 taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
 
-REM ---- 8. Close browser tabs showing Hermes (by title match on browser process) ----
-echo [8/8] Closing Hermes browser tabs...
-powershell -NoProfile -Command ^
-    "$browsers = @('msedge','chrome','firefox','brave','opera'); foreach ($b in $browsers) { Get-Process -Name $b -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Hermes' } | ForEach-Object { Write-Host ('   PID ' + $_.Id + ' (' + $b + ': ' + $_.MainWindowTitle + ')'); Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } }" 2>nul
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'bridge\\.server' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" 2>nul
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -match 'hermes-web-ui' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" 2>nul
 
-echo.
-echo ============================================================
-echo   Hermes stopped.
-echo ============================================================
-timeout /t 1 /nobreak >nul
+echo Done.
 endlocal
 exit /b 0

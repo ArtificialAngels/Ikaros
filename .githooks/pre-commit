@@ -1,0 +1,39 @@
+#!/usr/bin/env sh
+# .githooks/pre-commit -- block commit if any Hermes-owned .bat/.ps1 has wrong
+# line endings. See AGENTS.md SS7: cmd.exe does NOT parse LF-only .bat files
+# correctly (paths with spaces get truncated, scripts fail silently).
+#
+# Install once with:  bin\install-git-hooks.bat
+# Uninstall with:     bin\install-git-hooks.bat uninstall
+#
+# On unix-like (WSL/macOS/Linux):  chmod +x .githooks/pre-commit
+# (Windows: git ignores executable bit, but set it anyway for cross-platform use.)
+
+set -e
+
+HERMES_ROOT="$(git rev-parse --show-toplevel)"
+PY="$HERMES_ROOT/portable-python/python.exe"
+FIX_EOL="$HERMES_ROOT/bin/fix-eol.py"
+
+# Skip gracefully if portable-python is missing (fresh clone, CI, etc.).
+if [ ! -f "$PY" ]; then
+    echo "[pre-commit] SKIP: portable-python/python.exe not found, cannot verify CRLF."
+    exit 0
+fi
+if [ ! -f "$FIX_EOL" ]; then
+    echo "[pre-commit] SKIP: bin/fix-eol.py not found."
+    exit 0
+fi
+
+echo "[pre-commit] Checking Hermes-owned .bat / .ps1 line endings..."
+if ! "$PY" "$FIX_EOL" --all --check; then
+    echo ""
+    echo "[pre-commit] ABORTED: some .bat / .ps1 files have wrong line endings."
+    echo "[pre-commit] Fix with:"
+    echo "    portable-python\python.exe bin\fix-eol.py --all"
+    echo "[pre-commit] Then re-stage and commit again."
+    exit 1
+fi
+
+echo "[pre-commit] OK: all .bat / .ps1 files are CRLF."
+exit 0
