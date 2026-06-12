@@ -84,7 +84,7 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 ### 在一台全新 Windows 电脑上(刚 git clone)
 
 ```
-1. git clone https://github.com/ArtificialAngels/hermes-agent.git
+1. git clone https://github.com/ArtificialAngels/hermes-agent-portable.git
 2. cd "hermes-agent"
 3. bin\setup-portable.bat          ← 下载 portable-python + runtime(~1 GB)
 4. 把 GGUF 放到 data\models\
@@ -298,7 +298,7 @@ hermes-agent\
 
 | 项目 | 链接 |
 |------|------|
-| **本仓库** | https://github.com/ArtificialAngels/hermes-agent |
+| **本仓库** | https://github.com/ArtificialAngels/hermes-agent-portable |
 | Hermes Web UI(上游) | https://github.com/EKKOLearnAI/hermes-web-ui |
 | Hermes Agent(上游) | https://github.com/NousResearch/hermes-agent |
 | llama.cpp | https://github.com/ggml-org/llama.cpp |

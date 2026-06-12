@@ -5,7 +5,10 @@
 > debugging tips, and the gotchas we hit along the way.
 >
 > **Last revised:** 2026-06-13 (v3 phase close-out — privacy cleanup,
-> `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh).
+> `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh;
+> repo **renamed** `hermes-agent` → `hermes-agent-portable` on 2026-06-13,
+> origin updated, all live doc URLs refreshed; §10 historical log
+> entries retain the pre-rename URL for accuracy).
 > For the user-facing introduction, see [README.md](README.md).
 
 ---
