@@ -72,16 +72,6 @@ $psi.EnvironmentVariables['CORS_ORIGINS']                            = '*'
 $psi.EnvironmentVariables['PYTHONIOENCODING']                        = 'utf-8'
 $psi.EnvironmentVariables['PYTHONUTF8']                              = '1'
 $psi.EnvironmentVariables['HERMES_AGENT_BRIDGE_PYTHON']              = $PYTHON
-
-# Pin the python interpreter for hermes-web-ui's hermes-cli.ts.
-# hermes-web-ui's bundledCliPythonForWindows() short-circuits on this
-# env var. Without it, the function falls back to basename(HERMES_BIN)
-# === 'hermes.exe', which fails whenever HERMES_BIN is a directory
-# (e.g. a stale user-level `setx HERMES_BIN=E:\Hermes Agent\bin` from
-# the old supervisor.bat era, which surfaces as "spawn ... ENOENT"
-# on every API call that touches the Hermes CLI -- including the Logs
-# page). Pinning the portable-python here means webui can never spawn
-# a directory by accident, regardless of what HERMES_BIN is.
 $psi.EnvironmentVariables['HERMES_AGENT_CLI_PYTHON']                 = $PYTHON
 
 $proc = [System.Diagnostics.Process]::Start($psi)

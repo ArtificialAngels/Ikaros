@@ -52,6 +52,7 @@ class SignalBus:
         self._subs: Dict[str, List[Callable[[str, dict], None]]] = {}
         self._lock = threading.Lock()
         self._history: Deque[dict] = deque(maxlen=max_history)
+        self._topic_index: Dict[str, Deque[dict]] = {}  # per-topic index for fast lookup
 
     def subscribe(self, topic: str, fn: Callable[[str, dict], None]) -> Callable[[], None]:
         with self._lock:
@@ -73,8 +74,13 @@ class SignalBus:
             "payload": payload or {},
             "source": os.environ.get("HERMES_MODULE", "bridge"),
         }
+        # Collect subscribers without holding lock during callback execution
         with self._lock:
             self._history.append(envelope)
+            # Update per-topic index
+            if topic not in self._topic_index:
+                self._topic_index[topic] = deque(maxlen=100)
+            self._topic_index[topic].append(envelope)
             subs = list(self._subs.get(topic, [])) + list(self._subs.get("*", []))
         for fn in subs:
             try:
@@ -84,10 +90,20 @@ class SignalBus:
         return envelope
 
     def recent(self, topic: Optional[str] = None, limit: int = 50) -> List[dict]:
+        if topic:
+            # Use per-topic index for O(1) lookup instead of scanning all history
+            with self._lock:
+                idx = self._topic_index.get(topic)
+                if idx:
+                    items = list(idx)
+                else:
+                    items = []
+            # Also include wildcard-matched topics
+            with self._lock:
+                items = items + [e for e in self._history if e["topic"] != topic and e["topic"].startswith(topic + ".")]
+            return items[-limit:]
         with self._lock:
             items = list(self._history)
-        if topic:
-            items = [e for e in items if e["topic"] == topic or e["topic"].startswith(topic + ".")]
         return items[-limit:]
 
 class RequestLog:
@@ -155,23 +171,30 @@ class RequestLog:
             "by_path": dict(sorted(by_path.items())),
         }
 
-    def flush(self, path: Optional[Path] = None) -> None:
-        target = path or _telemetry_path()
-        snapshot = {
-            "ts": time.time(),
-            "stats": self.stats(),
-            "recent": self.recent(limit=100),
-        }
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        try:
-            tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(tmp, target)
-        except OSError:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
+    def flush(self, path: Optional[Path] = None, background: bool = False) -> None:
+        """Flush telemetry to disk. Use background=True for non-blocking I/O."""
+        def _do_flush():
+            target = path or _telemetry_path()
+            snapshot = {
+                "ts": time.time(),
+                "stats": self.stats(),
+                "recent": self.recent(limit=100),
+            }
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            try:
+                tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(tmp, target)
+            except OSError:
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+
+        if background:
+            threading.Thread(target=_do_flush, daemon=True, name="telemetry-flush").start()
+        else:
+            _do_flush()
 
 
 # ---- Module-level singletons ----

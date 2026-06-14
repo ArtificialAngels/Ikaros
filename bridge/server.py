@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from bridge import telemetry
@@ -71,6 +71,7 @@ _http = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
     limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
+_warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
 
 
 @asynccontextmanager
@@ -84,7 +85,7 @@ async def lifespan(app: FastAPI):
     yield
     telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
     try:
-        telemetry.log().flush()
+        telemetry.log().flush(background=True)
     except Exception:
         pass
     _warmup_http_client.close()
@@ -160,7 +161,7 @@ async def _telemetry_middleware(request: Request, call_next):
             if now - _last_flush[0] >= _TELEMETRY_FLUSH_EVERY_S:
                 with _flush_lock:
                     if now - _last_flush[0] >= _TELEMETRY_FLUSH_EVERY_S:
-                        telemetry.log().flush()
+                        telemetry.log().flush(background=True)
                         _last_flush[0] = now
         except Exception:
             pass
@@ -225,6 +226,10 @@ async def health() -> dict[str, Any]:
 
 # ---- /v1/signals (telemetry aggregation) ----
 
+_signals_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_SIGNALS_CACHE_TTL_S = 1.0  # cache for 1 second to avoid hammering llama-server
+
+
 @app.get("/v1/signals")
 async def signals_snapshot() -> dict[str, Any]:
     """Single-source aggregated telemetry snapshot.
@@ -233,6 +238,11 @@ async def signals_snapshot() -> dict[str, Any]:
     /v1/models status, and runtime env (PID, ports). This is the primary
     endpoint the signal panel reads from.
     """
+    # Return cached data if fresh
+    now = time.time()
+    if _signals_cache["data"] and now - _signals_cache["ts"] < _SIGNALS_CACHE_TTL_S:
+        return _signals_cache["data"]
+
     # Probe llama-server in parallel-style (sequential async is fine — both
     # calls have short timeouts).
     llama_alive = False
@@ -251,7 +261,7 @@ async def signals_snapshot() -> dict[str, Any]:
 
     stats = telemetry.log().stats()
     recent = telemetry.bus().recent(limit=20)
-    return {
+    result = {
         "ts": time.time(),
         "module": "bridge",
         "pid": os.getpid(),
@@ -290,6 +300,9 @@ async def signals_snapshot() -> dict[str, Any]:
         "recent_signals": recent,
         "warmup_queue_size": len(_warmup_tasks),
     }
+    _signals_cache["ts"] = now
+    _signals_cache["data"] = result
+    return result
 
 
 @app.get("/v1/signals/recent")
@@ -324,10 +337,53 @@ async def signals_emit(request: Request) -> dict[str, Any]:
     env = telemetry.bus().emit(topic, payload)
     if persist:
         try:
-            telemetry.log().flush()
+            telemetry.log().flush(background=True)
         except Exception:
             pass
     return {"ok": True, "envelope": env}
+
+
+# ---- WebSocket: real-time signal push ----
+
+_ws_clients: set[WebSocket] = set()
+_ws_lock = threading.Lock()
+
+
+@app.websocket("/v1/signals/ws")
+async def signals_ws(websocket: WebSocket, topic: str = ""):
+    """WebSocket endpoint for real-time signal push.
+
+    Query param: ?topic=model.loaded (optional, defaults to all topics)
+    Sends JSON envelopes as they are emitted. Client can send "ping" to keep alive.
+    """
+    await websocket.accept()
+    with _ws_lock:
+        _ws_clients.add(websocket)
+
+    # Subscribe to bus for real-time forwarding
+    def _on_signal(sig_topic: str, envelope: dict):
+        if topic and sig_topic != topic and not sig_topic.startswith(topic + "."):
+            return
+        msg = json.dumps(envelope, ensure_ascii=False)
+        try:
+            asyncio.get_event_loop().create_task(websocket.send_text(msg))
+        except Exception:
+            pass
+
+    unsub = telemetry.bus().subscribe("*", _on_signal)
+
+    try:
+        while True:
+            # Keep connection alive, receive pings
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsub()
+        with _ws_lock:
+            _ws_clients.discard(websocket)
 
 
 # ---- /v1/modules (online mirror of `hermes-supervisor.py --ports`) ----
@@ -715,7 +771,6 @@ async def evict_model(request: Request) -> dict[str, Any]:
 # is sufficient. Keys are warmup_id (uuid4), values are {state, models, results}.
 _warmup_tasks: dict[str, dict[str, Any]] = {}
 _warmup_lock = threading.Lock()
-_warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
 _WARMUP_TASK_TTL_S = 3600  # 1 hour
 
 

@@ -32,7 +32,7 @@ Write-Host ""
 
 $argList = @('-m', 'bridge.server', '--host', '127.0.0.1', '--port', "$Port", '--log-level', 'info')
 
-# Launch via cmd /c wrapper
+# Launch via cmd /c wrapper (detached via CREATE_NEW_PROCESS_GROUP in supervisor)
 $innerCmd = '"' + ($PYTHON -replace '"','\"') + '"'
 $innerArgs = ($argList | ForEach-Object {
     if ($_ -match '\s|"') { '"' + ($_ -replace '"','\"') + '"' }
