@@ -86,8 +86,8 @@ echo   Stop:     bin\hermes-stop.bat
 echo   Status:   bin\hermes-status.bat
 echo ============================================================
 echo.
-echo   This window will close in 3 seconds...
-timeout /t 3 /nobreak >nul
+echo   Window will close now (watchdog is detached, will keep services alive).
+echo   To stop everything: bin\hermes-stop.bat
 
 endlocal
 exit /b 0

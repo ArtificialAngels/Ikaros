@@ -4,7 +4,16 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15e (retired the 3 unused `data/knowledge`,
+> **Last revised:** 2026-06-15f (extracted auto-restart watchdog out of
+> `bin/hermes-supervisor.py` into a standalone detached
+> `bin/hermes-watchdog.py` daemon. supervisor `cmd_start` no longer hangs
+> in a `while True: sleep(10)` loop — it spawns the watchdog via
+> `DETACHED_PROCESS` then returns, so `hermes-all.bat` exits cleanly.
+> Watchdog writes its PID to `data/logs/hermes-watchdog.pid` and is
+> killed by `hermes-stop.bat` (or `supervisor --watchdog-stop`) before
+> the supervisor stops services. See §0.7f).
+>
+> Previous: 2026-06-15e (retired the 3 unused `data/knowledge`,
 > `data/memory`, `data/skills` directories — all empty (or near-empty
 > with stale debug payload); the real KB / memory / skills live under
 > `hermes/data/`. Synced `hermes/config.py` (drop 3 path defaults),
@@ -696,6 +705,99 @@ upstream clean copy,没有 `hermes-agent/__init__.py` 把它包成 Python packag
 * `from hermes.config import HermesConfig, MemoryConfig, KnowledgeConfig, SkillsConfig; HermesConfig()` 实例化 OK;`MemoryConfig` / `KnowledgeConfig` / `SkillsConfig` 没有 `path` / `custom_dir` 字段了(只保留 `backend` / `recency_decay` / `max_results` / `chunk_size` / `chunk_overlap` / `builtin` / `hot_reload`)。
 * `tests\smoke_node_path.ps1` 通过。
 * `git diff --stat` 报告 `5 files changed, 76 insertions(+), 21 deletions(-)`。
+
+---
+
+## 0.7f. 2026-06-15f — Extract Auto-Restart Watchdog as Detached Process
+
+### What the problem was
+
+`bin/hermes-supervisor.py` 的 `cmd_start` 末尾有一段 `while True: time.sleep(10)` 的 watchdog loop
+(L596-617 旧位置),用来监控 services 死了就 restart。问题是 **supervisor 永远 hang**:
+
+* `bin/hermes-all.bat` L67 调 `hermes-supervisor.bat --start` 之后,supervisor 永远不 return。
+* 用户看到启动窗口"卡住"——以为失败了。
+* 临时 hack:在 `hermes-all.bat` 末尾加 `timeout /t 3 /nobreak >nul` 强行关窗口(L89-90),
+  但 supervisor 进程仍在前台跑,只是窗口关了,console 占用也不释放。
+* 另一个问题:watchdog 跟 supervisor 共享一个 console handle,如果 supervisor 异常退出
+  (e.g. Ctrl-C),watchdog 也跟着死,失去守护意义。
+
+### What changed — Architecture
+
+把 watchdog **从 supervisor 内部** 拆出来,做成独立的 detached 进程:
+
+```
+旧:hermes-all.bat → supervisor (含 while True watchdog) → 关窗口(超时强制)
+                         ↓
+                         services (无 watchdog 守护)
+新:hermes-all.bat → supervisor --start → spawn detached watchdog → return → 关闭窗口
+                              ↓                ↓
+                              services ←──── restart if DOWN
+                              ↑
+                  watchdog (独立 PID,parent 退出不影响它)
+```
+
+具体改动:
+
+* **新文件** `bin/hermes-watchdog.py` (266 行) — 独立 watchdog 守护进程
+  - 自己 `discover_modules()` + `check_port()`,每 10s 扫描所有 service
+  - service DOWN → 调 `supervisor --restart <name>` 重启
+  - 单例检查:`data/logs/hermes-watchdog.pid` 写自己的 PID
+    + 启动时检查 stale / alive,避免 fork 多个
+  - 优雅退出:KeyboardInterrupt / SIGTERM → 删 PID 文件 → exit 0
+  - 冷却:同一 service 30s 内不重复重启(防 start.ps1 自身 bug 导致疯狂 fork)
+* **新文件** `bin/hermes-watchdog.bat` — bat 启动器(供手动调试,正常情况 supervisor 自动 spawn)
+* **`bin/hermes-supervisor.py` 改**:
+  - **移除** `cmd_start` 末尾 `while True: sleep(10)` 的 watchdog loop (-25 行)
+  - **新增** `cmd_watchdog_start()` — detached 启动 watchdog(`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`,
+    stdout/stderr 重定向到 `data/logs/hermes-watchdog.{log,err}`)
+  - **新增** `cmd_watchdog_stop()` — 通过 PID 文件 taskkill watchdog
+  - **新增** `cmd_restart(name)` — 重启单个 service(供 watchdog 调用)
+  - **`cmd_start` 末尾**:`cmd_watchdog_start(modules)` 然后 `return 0`(不再 hang)
+  - **`cmd_stop` 开头**:`cmd_watchdog_stop()` 在 stop services 之前(防 watchdog 在 stop 期间重启某个 service)
+  - **新增** argparse: `--watchdog` / `--watchdog-stop` / `--restart <name>`
+* **`bin/hermes-all.bat` 改**:移除 `timeout /t 3 /nobreak >nul` 强制关闭窗口的 hack
+  (-2 行),改成正常 exit(supervisor 现在能正常 return,不再 hang)
+* **`bin/hermes-stop.bat` 改**:在 `hermes-supervisor.bat --stop` 之前,
+  先读 `data/logs/hermes-watchdog.pid` + `taskkill /F /PID`,
+  fallback 用 `Get-CimInstance Win32_Process | Where CommandLine match 'hermes-watchdog.py'`
+  兜底抓任何 stray 进程(+14 行)
+
+### What is NOT changed — and why
+
+* **supervisor 的拓扑排序 / port health check / start.ps1 调度逻辑** 全部保留。
+  watchdog 不重复这些逻辑,它只是"发现 DOWN → 调 supervisor --restart"。
+* **services 自身不知道有 watchdog 在守护**。start.ps1 / stop.ps1 完全 unchanged。
+  这是有意的:服务应该尽量 dumb,所有 lifecycle 决策交给 supervisor / watchdog。
+* **modules/ 目录结构 unchanged**。没新增 `modules/watchdog/module.json`,
+  因为 watchdog 是 meta-level 进程(它监管别的服务,本身没 port),跟
+  llm_engine / bridge / webui 不是一类。强行塞进 modules/ 反而模糊了边界。
+* **没新增 systemd / Windows Service 抽象**。DETACHED_PROCESS + PID 文件足够,
+  上 NSSM / sc.exe 反而增加依赖。Hermes 是 portable USB 项目,能少一个依赖少一个。
+
+### Acceptance
+
+* `git status` 显示 6 changed(2 新文件 + 4 modified):`bin/hermes-watchdog.py` /
+  `bin/hermes-watchdog.bat` / `bin/hermes-supervisor.py` / `bin/hermes-all.bat` /
+  `bin/hermes-stop.bat` / `AGENTS.md`。
+* `portable-python\python.exe bin/hermes-supervisor.py --dry-run` 输出 5 个模块的 start order,
+  跟改动前一致。
+* `portable-python\python.exe bin/hermes-supervisor.py --watchdog` 启动 watchdog,
+  `data/logs/hermes-watchdog.pid` 出现且 PID 是 python.exe 进程的 PID;
+  再跑一次同样的命令 → 输出 `[skip] watchdog already running (pid N)`。
+* `portable-python\python.exe bin/hermes-supervisor.py --watchdog-stop` kill watchdog,
+  PID 文件被删除。
+* `portable-python\python.exe bin/hermes-supervisor.py --start` 启动 services + watchdog,
+  **supervisor 立即 return 0**(从 L96 `cmd_start` 函数 return 0 退出)——**不再 hang 在
+  `while True`**。可以用 `echo $LASTEXITCODE` 验证返回码。
+* `bin/hermes-all.bat` 启动后**正常 exit 0**,不需要 `timeout /t 3` 强制关窗口。
+  `cmd /c "bin\hermes-all.bat & echo done"` 立即打印 `done`(改动前会等 3 秒)。
+* `bin/hermes-stop.bat` 先 kill watchdog 再 stop services。
+  在 watchdog 跑着的情况下 `bin\hermes-stop.bat` 后,`data/logs/hermes-watchdog.pid` 不存在,
+  且没有 python.exe 进程 cmdline 包含 `hermes-watchdog.py`。
+* `tests\test_hermes.py` 仍然 12/12 passed(没动测试逻辑,只是 hermes-watchdog.py 是新模块不进入 test)。
+* `bin\fix-eol.py --all --check` 通过(`.bat` 文件全部 CRLF,新增的 `hermes-watchdog.bat` 也是 CRLF)。
+* `git diff --stat` 报告约 `6 files changed, ~250 insertions(+), ~28 deletions(-)`。
 
 ---
 

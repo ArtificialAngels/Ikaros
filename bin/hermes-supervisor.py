@@ -546,6 +546,110 @@ def cmd_status(modules: Dict[str, Module], only: List[str]) -> int:
     return rc
 
 
+def cmd_watchdog_start(modules: Dict[str, Module]) -> int:
+    """Detached 启动 watchdog 守护进程,然后立即 return。
+
+    Why detached:
+        supervisor 退出时 watchdog 必须继续运行(它是 services 的
+        守护者,supervisor 死了它也得活)。DETACHED_PROCESS 让父进程
+        退出不影响子进程,stdout/stderr 重定向到文件,parent 退出后
+        watchdog 仍持有文件句柄。
+    Why idempotent:
+        hermes-stop.bat 之后立刻 hermes-all.bat 会再次启动 watchdog。
+        PID 文件存在 + 进程还活着 → skip,避免 fork 多个 watchdog。
+    """
+    pid_file = LOG_DIR / "hermes-watchdog.pid"
+    # 单例检查:如果已有 watchdog 在跑,skip
+    if pid_file.is_file():
+        try:
+            old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+            # 跨平台 check:Windows 用 tasklist,Linux 用 /proc
+            if os.name == "nt":
+                r = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {old_pid}", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if str(old_pid) in r.stdout:
+                    print(f"  {C.DIM}[skip]{C.RST} watchdog already running (pid {old_pid})")
+                    return 0
+        except (ValueError, subprocess.TimeoutExpired, Exception):
+            pass
+        # stale pid file:删除重建
+        pid_file.unlink(missing_ok=True)
+
+    script = HERE.parent / "hermes-watchdog.py"
+    if not script.is_file():
+        print(f"  {C.RED}[FAIL]{C.RST} watchdog script not found: {script}")
+        return 1
+
+    creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    try:
+        proc = subprocess.Popen(
+            [str(PYTHON_EXE), str(script)],
+            cwd=str(HERMES_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=open(LOG_DIR / "hermes-watchdog.log", "a", encoding="utf-8", buffering=1),
+            stderr=open(LOG_DIR / "hermes-watchdog.err", "a", encoding="utf-8", buffering=1),
+            creationflags=creationflags,
+            close_fds=True,
+        )
+    except Exception as e:
+        print(f"  {C.RED}[FAIL]{C.RST} cannot launch watchdog: {e}")
+        return 1
+
+    # 写 PID 文件(给 hermes-stop.bat 用)
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
+    print(f"  {C.GRN}[OK]{C.RST}   watchdog detached (pid {proc.pid})")
+    print(f"         log: {LOG_DIR / 'hermes-watchdog.log'}")
+    print(f"         pid: {pid_file}")
+    return 0
+
+
+def cmd_restart(modules: Dict[str, Module], name: str) -> int:
+    """重启单个 service。被 watchdog 用,也可手动调试。"""
+    m = modules.get(name)
+    if m is None:
+        print(f"{C.RED}[FAIL]{C.RST} unknown module: {name}", file=sys.stderr)
+        return 1
+    if m.type != "service":
+        print(f"  {C.DIM}[skip]{C.RST} {name} is type={m.type}, not a service")
+        return 0
+    print(f"  {C.CYN}>{C.RST} restarting {name} (:{m.port})")
+    proc = start_module(m)
+    return 0 if proc is not None else 1
+
+
+def cmd_watchdog_stop() -> int:
+    """通过 PID 文件 + cmdline grep 优雅停 watchdog。
+
+    比直接 taskkill python.exe 精确,不会误杀别的 Python 进程。
+    """
+    pid_file = LOG_DIR / "hermes-watchdog.pid"
+    if not pid_file.is_file():
+        print(f"  {C.DIM}[skip]{C.RST} no watchdog pid file")
+        return 0
+
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (ValueError, FileNotFoundError):
+        pid_file.unlink(missing_ok=True)
+        print(f"  {C.DIM}[skip]{C.RST} stale pid file removed")
+        return 0
+
+    print(f"  {C.YEL}x{C.RST} watchdog (pid {pid})")
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/PID", str(pid), "/T"],
+                       capture_output=True, timeout=10)
+    else:
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+    pid_file.unlink(missing_ok=True)
+    print(f"  {C.GRN}Done.{C.RST}")
+    return 0
+
+
 def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     print(f"{C.BLD}Hermes Supervisor — start{C.RST}")
     print(f"  Root:   {HERMES_ROOT}")
@@ -561,14 +665,12 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     print()
 
     started: List[str] = []
-    procs: Dict[str, Optional[subprocess.Popen]] = {}
     failed: List[str] = []
 
     for n in order:
         m = modules[n]
         print(f"  {C.CYN}>{C.RST} {n} ({m.type})")
         proc = start_module(m)
-        procs[n] = proc
         if proc is None and m.type == "service":
             failed.append(n)
         else:
@@ -593,29 +695,13 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     print(f"  {C.GRN}STARTED{C.RST}: {len(started)} module(s)")
     print(f"{C.BLD}============================================================{C.RST}")
 
-    # Watchdog: monitor services and restart crashed ones
-    try:
-        while True:
-            time.sleep(10)
-            for name, proc in list(procs.items()):
-                if proc is None:
-                    continue
-                m = modules[name]
-                if m.type != "service" or not m.port:
-                    continue
-                # Check if service is actually listening on its port
-                alive = check_port(m.host, m.port, timeout_s=1.0)
-                if not alive:
-                    print(f"  {C.RED}✗{C.RST} {name} (:{m.port}) not responding, restarting...")
-                    new_proc = start_module(m)
-                    if new_proc is not None:
-                        procs[name] = new_proc
-                        print(f"  {C.GRN}✓{C.RST} {name} restarted")
-                    else:
-                        print(f"  {C.RED}✗{C.RST} {name} restart failed")
-    except KeyboardInterrupt:
-        pass
-
+    # Detached 启动 watchdog 然后 return — supervisor 不再 hang
+    print()
+    print(f"  {C.CYN}>{C.RST} starting watchdog...")
+    rc = cmd_watchdog_start(modules)
+    if rc != 0:
+        print(f"  {C.YEL}[WARN]{C.RST} watchdog failed to start (services still up, "
+              f"will not auto-restart on crash)")
     return 0
 
 
@@ -649,18 +735,27 @@ def main() -> int:
                     "  --status     TCP-level liveness probe of every module\n"
                     "  --dry-run    show topological start order\n"
                     "  --ports      print every module's IO port contract (signal map)\n"
-                    "  --inspect N  dump one module's full module.json\n",
+                    "  --inspect N  dump one module's full module.json\n"
+                    "  --restart N  restart one service module (used by watchdog)\n"
+                    "  --watchdog   start the auto-restart watchdog as a detached process\n"
+                    "  --watchdog-stop  kill the watchdog via PID file",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     grp = parser.add_mutually_exclusive_group()
-    grp.add_argument("--start", action="store_true", help="启动所有 service (默认)")
-    grp.add_argument("--stop", action="store_true", help="反向停止所有 service")
+    grp.add_argument("--start", action="store_true", help="启动所有 service (默认) + detached watchdog")
+    grp.add_argument("--stop", action="store_true", help="反向停止所有 service + kill watchdog")
     grp.add_argument("--status", action="store_true", help="端口健康检查 (TCP)")
     grp.add_argument("--dry-run", action="store_true", help="只显示启动顺序")
     grp.add_argument("--ports", action="store_true",
                      help="列出每个模块的 IO 端口契约(信号映射表)")
     grp.add_argument("--inspect", metavar="MODULE",
                      help="导出指定模块的完整 module.json")
+    grp.add_argument("--restart", metavar="MODULE",
+                     help="重启单个 service (供 watchdog 使用)")
+    grp.add_argument("--watchdog", action="store_true",
+                     help="独立 detached 启动 watchdog 守护进程")
+    grp.add_argument("--watchdog-stop", action="store_true",
+                     help="通过 PID 文件停止 watchdog")
     parser.add_argument("--only", nargs="+", default=[], help="只处理指定模块")
     args = parser.parse_args()
 
@@ -678,6 +773,8 @@ def main() -> int:
         return 2
 
     if args.stop:
+        # 先停 watchdog 再停 services(watchdog 启动中可能正在重启某个 service)
+        cmd_watchdog_stop()
         return cmd_stop(modules, set(args.only))
     if args.status:
         return cmd_status(modules, set(args.only))
@@ -687,6 +784,12 @@ def main() -> int:
         return cmd_ports(modules, args.only)
     if args.inspect:
         return cmd_inspect(modules, args.inspect)
+    if args.restart:
+        return cmd_restart(modules, args.restart)
+    if args.watchdog:
+        return cmd_watchdog_start(modules)
+    if args.watchdog_stop:
+        return cmd_watchdog_stop()
     return cmd_start(modules, set(args.only))
 
 

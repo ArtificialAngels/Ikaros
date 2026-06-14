@@ -14,6 +14,20 @@ if errorlevel 1 (
 
 echo Stopping Hermes processes via Python supervisor...
 
+REM ---- Kill watchdog first (so it does not race us to restart a service) ----
+set "WD_PID_FILE=%HERMES_DATA%\logs\hermes-watchdog.pid"
+set "WD_PID="
+if exist "%WD_PID_FILE%" (
+    for /f "usebackq delims=" %%P in ("%WD_PID_FILE%") do set "WD_PID=%%P"
+)
+if defined WD_PID (
+    echo Stopping watchdog (pid %WD_PID%)...
+    taskkill /F /PID %WD_PID% /T >nul 2>&1
+    if exist "%WD_PID_FILE%" del "%WD_PID_FILE%" >nul 2>&1
+)
+REM Fallback: catch any stray python.exe whose cmdline is the watchdog
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" | Where-Object { $_.CommandLine -match 'hermes-watchdog\.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" 2>nul
+
 REM ---- Pure-Python supervisor: stop all services in reverse topo order ----
 call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --stop
 
