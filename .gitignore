@@ -100,6 +100,12 @@ config.yaml.corrupt.*.bak
 .opencode/
 .opencode/tmp/
 
+# --- Local agent plans / specs (workspace artifacts, never commit) ---
+# mavis agent plan workspace
+.mavis/
+# trae AI assistant rules/specs
+.trae/
+
 # --- Python build artifacts ---
 __pycache__/
 *.pyc
