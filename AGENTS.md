@@ -4,17 +4,16 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15 (Node.js download step added to
-> `bin/setup-portable.bat`; the script now bootstraps Node.js 23.11.1
-> into `runtime/node23/` so a fresh `git clone` + `setup-portable.bat`
-> is enough to run the WebUI on any machine — see §0.7. Previous:
-> 2026-06-14 (junction audit — every remaining
-> `deps/node/`, `deps/llamacpp/bin/`, `deps/tools/` reference in
-> tracked code was hunted down and replaced with the canonical
-> `runtime/node23/node.exe` / `runtime/llama-server.exe` paths; the
-> stray `deps/llamacpp/lib/` stub from a half-completed refactor was
-> removed; `bin/fix-eol.py` comments now point at the right
-> third-party LF locations — see §0.6).
+> **Last revised:** 2026-06-15b (browser tab was being opened twice
+> on every `hermes-all.bat` run; the WebUI package's own health-check
+> hook already opens the browser, so the redundant
+> `powershell -NoProfile -Command "Start-Process ..."` in
+> `bin/hermes-all.bat` was removed — see §0.7b). Previous:
+> 2026-06-15a (retired the `.\hermes-web-ui\` dev source; the npm
+> global install at `runtime/node23/node_modules/hermes-web-ui/` is
+> now the only path; `.gitignore` no longer carries a
+> `hermes-web-ui/` rule and the misleading `git clone ... hermes-web-ui`
+> line is gone; `README.md` attribution updated — see §0.7a).
 >
 > Previous: 2026-06-13 (v3 phase close-out — privacy cleanup,
 > `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh;
@@ -412,6 +411,72 @@ Two copies of the same package on disk also created confusion
   the same 4 pieces; `python` and `node` subcommands are unchanged.
 * `runtime/node23/node_modules/hermes-web-ui/` is the single
   authoritative source for the WebUI runtime.
+
+---
+
+## 0.7b. 2026-06-15b — Remove duplicate browser open in `hermes-all.bat`
+
+### Symptom
+
+Running `bin\hermes-all.bat` opened the WebUI in two browser tabs
+(or, on machines that dedupe tabs, showed a brief flash of two
+load attempts). The user would see a `localhost:8648` page load,
+then a second `localhost:8648` page load a couple of seconds later.
+
+### Root cause
+
+Two places in the launch chain were independently opening the
+browser to `http://localhost:8648/`:
+
+1. **`bin/hermes-all.bat` (lines 96-98, pre-fix)** — after the
+   supervisor returned successfully, the launcher spawned a
+   PowerShell one-liner to call `Start-Process` on the URL, with
+   an `explorer` fallback if PowerShell was unhappy.
+
+2. **`runtime/node23/node_modules/hermes-web-ui/bin/hermes-web-ui.mjs`
+   (line 454-456)** — the npm package's `poll`-loop runs a
+   `fetch(healthUrl)`; when the server returns 200, it calls
+   `execSync(isWin ? 'start ' + url : 'xdg-open ' + url)` to open
+   the browser itself.
+
+   (See [EKKOLearnAI/hermes-web-ui README](https://github.com/EKKOLearnAI/hermes-web-ui#scripts):
+   `- Opens browser on successful startup` is a documented feature.)
+
+   Sequence: supervisor → webui module → node → hermes-web-ui.mjs
+   polls health → `mjs` opens browser (1st) → control returns to
+   supervisor → supervisor returns to `hermes-all.bat` → `hermes-all`
+   opens browser (2nd).
+
+### What changed
+
+* **`bin/hermes-all.bat`**: removed the two-line `Start-Process` /
+  `explorer` block. Replaced with a 4-line comment pointing at
+  `hermes-web-ui.mjs` line ~454 and explaining the deliberate
+  non-action. Header still says "Browser opens to webui at :8648"
+  because that promise is still kept — just by a different layer
+  of the stack.
+
+### What is NOT changed
+
+* `hermes-web-ui.mjs` is left untouched. It lives in
+  `runtime/node23/node_modules/` (gitignored, user-managed npm
+  package) and its auto-open-on-health-check behaviour is a
+  documented upstream feature we want to keep.
+* `bin/hermes-supervisor.bat` (used standalone) still does NOT
+  open the browser — supervisors that are not full-stack launchers
+  shouldn't open windows. Only the user-facing one-click launcher
+  had the redundant block.
+* No cmd, ps1, or .py logic was added; this is purely a deletion.
+
+### Acceptance
+
+* `grep -n 'Start-Process' bin/hermes-all.bat` returns no matches
+  for the URL (the comment contains the phrase "Start-Process" as
+  a string, which is expected and intentional).
+* `bin\hermes-all.bat` exits 0 and the user sees exactly one
+  browser tab at `http://localhost:8648/`.
+* `bin/hermes-supervisor.bat --start` (standalone, not via
+  `hermes-all`) still does NOT open any browser tab.
 
 ---
 

@@ -93,9 +93,10 @@ echo   Status:   bin\hermes-status.bat
 echo ============================================================
 echo.
 
-REM Open browser (best effort)
-powershell -NoProfile -Command "Start-Process 'http://localhost:%WEBUI_PORT%/'" >nul 2>&1
-if errorlevel 1 explorer "http://localhost:%WEBUI_PORT%/" 2>nul
+REM Browser opens automatically when hermes-web-ui's health check passes
+REM (see runtime/node23/node_modules/hermes-web-ui/bin/hermes-web-ui.mjs,
+REM around line 454 -- it does `execSync('start <url>')` on Windows).
+REM Doing it here too would open a duplicate tab, so we deliberately do NOT.
 
 endlocal
 exit /b 0
