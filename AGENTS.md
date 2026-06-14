@@ -4,11 +4,26 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-13 (v3 phase close-out — privacy cleanup,
+> **Last revised:** 2026-06-14 (junction audit — every remaining
+> `deps/node/`, `deps/llamacpp/bin/`, `deps/tools/` reference in
+> tracked code was hunted down and replaced with the canonical
+> `runtime/node23/node.exe` / `runtime/llama-server.exe` paths; the
+> stray `deps/llamacpp/lib/` stub from a half-completed refactor was
+> removed; `bin/fix-eol.py` comments now point at the right
+> third-party LF locations — see §0.6).
+>
+> Previous: 2026-06-13 (v3 phase close-out — privacy cleanup,
 > `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh;
 > repo **renamed** `hermes-agent` → `hermes-agent-portable` on 2026-06-13,
 > origin updated, all live doc URLs refreshed; §10 historical log
-> entries retain the pre-rename URL for accuracy).
+> entries retain the pre-rename URL for accuracy; **2026-06-13 (junction
+> fix)** — first commit of `deps/` to git (previously local-only),
+> refactored `deps/hermes-env.{bat,ps1}` to resolve `%HERMES_RUNTIME%`
+> / `runtime\node23` directly instead of via four `deps\node\tools\
+> llamacpp\bin\python-test` directory junctions whose absolute
+> reparse-point targets broke the project when it was moved to a
+> new drive letter (E: -> F:), and added an auto-heal step that
+> rmdir's any leftover junction on startup — see §0.5).
 > For the user-facing introduction, see [README.md](README.md).
 
 ---
@@ -55,6 +70,201 @@ GitHub push". Highlights:
 
 The following sections of AGENTS.md (§1-§10) were left **unchanged** —
 they already describe the post-Phase-11 state.
+
+---
+
+## 0.5. 2026-06-13 — Junction De-coupling: Drive-Letter Portability
+
+**Symptom (F: drive failure):** `bin\hermes-all.bat` on a copy of the
+project moved from `E:\Hermes Agent` to `F:\Hermes Agent` failed with:
+
+```
+[2/2] Starting all services via Python supervisor...
+  > llm_engine (service)    [TIMEOUT] llm_engine — port 8080 not ready in 90s
+  > bridge (service)        [OK]   bridge (:7860)
+  > webui (service)         [FAIL] webui — start.ps1 exited (rc=1)
+  FAILED: 2 module(s): llm_engine, webui
+```
+
+`bridge` (which only needs `HERMES_PYTHON`) started fine, but
+`llm_engine` and `webui` — both of which call `deps/hermes-env.{bat,ps1}`
+and depend on the env-block's PATH entries for `llama-server` and
+`node.exe` — failed silently.
+
+**Root cause:** `deps/` used to expose `runtime/`, `node23/`, and
+`portable-python/` to consumers via four NTFS **directory junctions**
+(`mklink /J`):
+
+| Junction              | Target (reparse point)              |
+|-----------------------|--------------------------------------|
+| `deps\node`           | `E:\Hermes Agent\runtime\node23`     |
+| `deps\tools`          | `E:\Hermes Agent\runtime`            |
+| `deps\llamacpp\bin`   | `E:\Hermes Agent\runtime`            |
+| `deps\python-test`    | `E:\Hermes Agent\portable-python`    |
+
+NTFS junctions **store the target as an absolute path** in their
+reparse-point data. They cannot hold a relative target — `mklink /J`
+will silently absolutize the path you give it. When the project folder
+was copied from `E:\` to `F:\` (USB slot change, drive letter
+remap, etc.) the junction targets still said `E:\...` so any consumer
+that touched `deps\node\...` got "file not found" (or, depending on
+the access method, a misleading "success" with empty content).
+
+`deps/hermes-env.{bat,ps1}` referenced the junctions via
+`Join-Path $HERMES_DEPS 'node'` / `'tools'` / `'llamacpp\bin'` to
+build the runtime PATH — which made the env block useless on any
+non-E: drive. And, critically, **`deps/` was never committed to git**
+in the first place — the env files, manifest, and README all lived as
+local-only artifacts. So a fresh `git clone` on F: would have been
+even more broken (no env setup at all). The whole `deps/` directory
+is now first-time-committed in the same change.
+
+**Fix (applied in follow-up commit to `1b06b139`):**
+
+1. **First commit of `deps/` to git** — `hermes-env.bat`,
+   `hermes-env.ps1`, `manifest.json`, `README.md`. Without this, a
+   fresh clone on F: would have no env setup at all and the auto-heal
+   below wouldn't even run.
+2. **Refactored `deps/hermes-env.bat` and `deps/hermes-env.ps1`** to
+   resolve `%HERMES_RUNTIME%` and `Join-Path $HERMES_RUNTIME 'node23'`
+   directly, bypassing the junctions entirely.
+3. **Added a defensive self-heal step** in both env files: on every
+   invocation, walk the four historical junction paths under `deps\`
+   and `rmdir /Q` anything that still shows up as a reparse point
+   (the user may be running an old checkout of the project on a
+   different drive). `rmdir /Q` on a reparse point does NOT recurse
+   into the target — the real on-disk content in `runtime\`,
+   `node23\`, and `portable-python\` is untouched.
+4. **Kept the existing `.gitignore` lines** (`deps/node/`,
+   `deps/tools/`, `deps/llamacpp/`, `deps/python-test/`) so even if
+   someone accidentally recreates a junction or stubs the directory,
+   the resulting reparse point can't be committed.
+
+**Why not recreate the junctions on startup?** Two reasons:
+* `mklink /J` requires either admin privileges or the user to have
+  "Create Symbolic Link" rights; we'd be adding a UAC prompt or a
+  silent failure to the most common startup path.
+* Relative targets are not supported by `mklink /J`, so we'd have
+  to compute the absolute path first — at which point the env file
+  is just as well off using that absolute path directly (and we
+  sidestep the whole junction layer).
+
+**Tested:** `call deps\hermes-env.bat` now sets `PATH` to include
+`E:\Hermes Agent\runtime` and `E:\Hermes Agent\runtime\node23`
+(bat) / their PowerShell equivalents (ps1) regardless of the
+`HERMES_DEPS\node` junction's presence. The self-heal logs
+`[hermes-env] removed stale junction: deps\X` on first run of a
+project copy whose junctions still point at a different drive.
+
+**Files changed:**
+* `deps/hermes-env.bat` — replaced junction-based PATH, added self-heal
+* `deps/hermes-env.ps1` — same
+* `deps/manifest.json` — first commit; documents the runtime/CUDA
+  asset layout
+* `deps/README.md` — first commit; explains the junction refactor
+* `AGENTS.md` — this section + §0 header + §3 directory-layout update
+* (no other consumer of the junctions was found in tracked code;
+  `modules\*/start.ps1` and `bin\*.bat` all go through `hermes-env.*`
+  for the env block and never reference `deps\node\...` directly)
+
+---
+
+## 0.6. 2026-06-14 — Junction Sweep: Module Manifests + Doc Comments
+
+The §0.5 fix in the previous revision removed the dependency on the
+four `deps/node/` / `deps/llamacpp/bin/` / `deps/tools/` /
+`deps/python-test/` NTFS junctions from the *runtime path*
+(`deps/hermes-env.{bat,ps1}` now resolves `%HERMES_RUNTIME%` and
+`runtime\node23` directly). But three tracked files still contained
+**documentation / config-level references** to those junction paths,
+which would silently mislead anyone debugging a future F:-drive-style
+failure:
+
+| File                                | Line | Old (junction path)                          |
+|-------------------------------------|------|----------------------------------------------|
+| `modules/webui/module.json`         | 8    | `"node": "deps/node/node.exe"`               |
+| `modules/llm_engine/module.json`    | 8    | `"binary": "deps/llamacpp/bin/llama-server.exe"` |
+| `bin/fix-eol.py`                    | 17,77 | docstring + comment listing the four junctions |
+
+The supervisor itself doesn't read those `binary` / `node` fields
+(it just `subprocess.Popen()`s the corresponding `start.ps1`), so the
+failure was cosmetic — but the inconsistency was a footgun for
+anyone reading the manifest to figure out "where does the Node exe
+actually live?". Worse, **on the user's F: drive the runtime was
+present but `webui/start.ps1` still said `Node missing: F:\Hermes
+Agent\deps\node\node.exe`** in `data/logs/webui.log` — meaning the
+F: copy was running on an older `deps/hermes-env.ps1` that pre-dated
+the §0.5 fix.
+
+**Fix (this revision):**
+
+1. **`modules/webui/module.json`** — `"node": "deps/node/node.exe"`
+   → `"node": "runtime/node23/node.exe"`. Same path that
+   `deps/hermes-env.ps1` now resolves to at runtime, so the manifest
+   is now self-consistent with the actual launch path.
+2. **`modules/llm_engine/module.json`** — `"binary": "deps/llamacpp/bin/llama-server.exe"`
+   → `"binary": "runtime/llama-server.exe"`. The `start.ps1` does its
+   own CUDA-aware picker (`%LLAMACPP_BIN%\llama-server-cuda-<v>.exe`
+   preferred, `llama-server.exe` fallback), so the manifest field is
+   documentation — but it should match the reality on disk.
+3. **`bin/fix-eol.py`** — Updated the "What `--all` does NOT cover"
+   section: previously said "skip `deps/node/`, `deps/llamacpp/`,
+   `deps/tools/`, `deps/python-test/` because those are third-party
+   LF scripts". That was true *when* those dirs were junction targets
+   of `runtime/node_modules/` and `runtime/cuda/<v>/` — they no
+   longer exist. The new comment points at the correct third-party
+   locations: `runtime/node_modules/` (Node.js packages, LF) and
+   `runtime/cuda/<v>/` (bundled CUDA build, LF).
+4. **`deps/README.md`** — Rewrote the "no junctions in this
+   directory" paragraph to explicitly *forbid* recreating the
+   legacy junctions and to spell out the canonical paths
+   (`runtime\node23\node.exe` / `runtime\llama-server.exe`).
+   The `.gitignore` block was also relaxed — the four `deps/*`
+   ignore lines are kept (so any accidental `mklink /J` is still
+   blocked from committing), but the comments no longer call them
+   "third-party LF scripts".
+5. **`deps/manifest.json`** — Bumped version to `2026.06.14`. Added a
+   new top-level `canonical_paths` section that pins the one true
+   location of `node.exe` + `llama-server.exe` + `python.exe` +
+   `cuda/<v>/bin/`. Auditing consumers can `jq .canonical_paths` to
+   see what the project *actually* depends on, with no ambiguity.
+   Changelog gains a new entry.
+6. **Cleaned `deps/llamacpp/`** — the directory still contained a
+   leftover empty `lib/` subdirectory from a half-completed
+   refactor (the rmdir auto-heal had materialized the empty target
+   directory when it removed the junction). Removed; `deps/llamacpp/`
+   is now a truly empty directory (and excluded by `.gitignore`
+   regardless).
+7. **New smoke test `tests/smoke_hermes_env.py`** — exercises
+   `bin/hermes-root.py resolve` + `init`, then walks `deps/`
+   asserting that no entry is a directory reparse point. Anyone
+   who runs the test on a future checkout that *does* have a
+   stale junction will get a clear failure pointing at the culprit.
+   Plus `tests/smoke_node_path.ps1` — dot-sources
+   `deps/hermes-env.ps1` in a fresh PowerShell session and asserts
+   that `$NODE == E:\Hermes Agent\runtime\node23\node.exe`
+   (NOT `deps\node\node.exe`). This is the exact assertion that
+   would have caught the F: drive failure in the user's report.
+
+**Why this matters beyond cosmetics:**
+- A reader scanning `module.json` to find "where is the Node exe?"
+  no longer gets a misleading pointer.
+- An operator debugging the supervisor logs sees manifest fields
+  matching the actual `start.ps1` behaviour.
+- A fresh clone on a new drive letter is now provably
+  junction-free by both `smoke_hermes_env.py` (Python side) and
+  `smoke_node_path.ps1` (PowerShell side) — any regression will
+  fail loudly.
+
+**Files changed:**
+* `modules/webui/module.json` — junction path → runtime/* path
+* `modules/llm_engine/module.json` — same
+* `bin/fix-eol.py` — updated third-party LF locations comment
+* `deps/README.md` — forbids recreating junctions; documents canonical paths
+* `deps/manifest.json` — version bump + `canonical_paths` section
+* `tests/smoke_hermes_env.py` — NEW: junction-detection smoke test
+* `tests/smoke_node_path.ps1` — NEW: dot-source + alias assertion
+* `AGENTS.md` — this section + header bump
 
 ---
 
@@ -118,15 +328,19 @@ E:\Hermes Agent\
 ├── .env                          # runtime env vars (API keys, paths)
 ├── AGENTS.md                     # THIS FILE
 ├── README.md                     # user-facing docs
-├── deps\                         # ★ NEW 2026-06-10 — Unified dependency zone
-│   ├── hermes-env.bat            # All scripts call this first (sets PATH, PYTHON, NODE, etc.)
-│   ├── hermes-env.ps1            # PowerShell equivalent
-│   ├── manifest.json             # Version tracking for all dependencies
-│   ├── README.md                 # deps/ documentation
-│   ├── node\                     # Junction → ../runtime/node23 (Node.js 23.11.1)
-│   ├── llamacpp\                 # llama-server + CUDA DLLs
-│   │   └── bin\                  # Junction → ../runtime
-│   └── tools\                    # Junction → ../runtime (aria2c, gopeed-web)
+├── deps\                         # ★ 2026-06-13 — FIRST commit to git (was local-only)
+│   ├── hermes-env.bat            # ★ Every .bat in the project calls this first
+│   ├── hermes-env.ps1            #   PowerShell equivalent (every .ps1 dot-sources this)
+│   ├── manifest.json             #   Version tracking for runtime assets (downloaded by bin/setup-portable.bat)
+│   ├── README.md                 #   deps/ documentation
+│   # (No junctions here, by design. Earlier Hermes versions used
+│   #  `mklink /J` to expose runtime/ and node23/ under deps\ as
+│   #  deps\node / tools / llamacpp\bin / python-test, but junctions
+│   #  store absolute reparse-point targets and break when the
+│   #  project is moved to a new drive letter. hermes-env.{bat,ps1}
+│   #  now resolves %HERMES_RUNTIME% directly and auto-rmdir's any
+│   #  leftover junction an old copy might still be carrying — see
+│   #  §0.5 for the full story.)
 ├── modules\                      # ★ NEW 2026-06-10 — Independent modules with module.json
 │   ├── __init__.py               # Marks modules/ as a Python package
 │   ├── llm_engine\               # llama-server router mode (:8080)

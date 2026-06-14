@@ -14,9 +14,19 @@ What --all covers (project-owned only, ~16 files):
     deps/hermes-env.bat, deps/hermes-env.ps1    (2 dep env scripts)
 
 What --all does NOT cover (intentional):
-    deps/node/, deps/llamacpp/, deps/tools/, deps/python-test/
-        These are third-party (Node.js, llama.cpp, greenlet) -- their
-        scripts stay LF because they are not interpreted by cmd.exe.
+    runtime/node_modules/, runtime/cuda/<v>/    -- third-party LF scripts
+        (Node.js packages, bundled CUDA build, etc.). Their scripts stay
+        LF because they are not interpreted by cmd.exe.
+
+    Historical note (2026-06-13):
+        Earlier Hermes builds exposed runtime/ + node23/ + portable-python/
+        under deps/ as `mklink /J` directory junctions (deps/node/,
+        deps/llamacpp/bin/, deps/tools/, deps/python-test/). Those junctions
+        stored their target as an absolute NTFS reparse-point blob, so they
+        broke when the project moved to a new drive letter. They were
+        abandoned; deps/ now hosts only the env entry points + manifest.
+        Any leftover junction is auto-rmdir'd by deps/hermes-env.{bat,ps1}
+        Step 3 on first run.
 
 Exit codes:
     0 = all files already CRLF (or successfully converted)
@@ -74,8 +84,8 @@ def main() -> int:
         #    bin/ has no subdirs today, but glob() (not rglob) keeps it future-proof.
         for ext in ("*.bat", "*.cmd", "*.ps1"):
             files.extend(bin_dir.glob(ext))
-        # 2. Project-owned dep env scripts. Skip deps/node/, deps/llamacpp/,
-        #    deps/tools/, deps/python-test/ -- those are third-party LF scripts.
+        # 2. Project-owned dep env scripts. Third-party runtime content
+        #    (runtime/node_modules/, runtime/cuda/<v>/) stays LF.
         deps_dir = bin_dir.parent / "deps"
         if deps_dir.is_dir():
             for name in ("hermes-env.bat", "hermes-env.ps1"):

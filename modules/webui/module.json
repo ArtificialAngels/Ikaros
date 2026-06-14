@@ -5,7 +5,7 @@
   "type": "service",
   "runtime": {
     "kind": "node",
-    "node": "deps/node/node.exe",
+    "node": "runtime/node23/node.exe",
     "entry": "hermes-web-ui.mjs",
     "args": ["start", "8648"],
     "working_directory": "."

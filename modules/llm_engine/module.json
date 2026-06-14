@@ -5,7 +5,7 @@
   "type": "service",
   "runtime": {
     "kind": "native",
-    "binary": "deps/llamacpp/bin/llama-server.exe",
+    "binary": "runtime/llama-server.exe",
     "args": ["--models-dir", "data/models", "--models-max", "1", "--host", "127.0.0.1", "--port", "8080", "--jinja"],
     "working_directory": "."
   },
