@@ -89,7 +89,8 @@ secrets/
 *.dump
 *.corrupt.*.bak
 config.yaml.corrupt.*.bak
-.hermes-root                          # HERMES_ROOT cache (atomic)
+# HERMES_ROOT cache (atomic write, written by bin/hermes-root.py persist)
+.hermes-root
 # NOTE: .githooks/ is intentionally NOT ignored here -- the versioned
 #       git hooks in this directory are meant to be tracked so they
 #       ship with the repo (see bin/install-git-hooks.bat).

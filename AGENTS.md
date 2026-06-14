@@ -4,12 +4,15 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15d (compressed the rest of the
-> revision-log-style comments in 13 .bat / .ps1 / .py files —
-> "Phase 8 multi-version layout", "(Phase 11: migrated from hermes.X)",
-> "Re-exports (Phase X ready)", "Phase 12: legacy helper removed",
-> "Inlined from the deleted hermes/memory.py", etc. Net −19 lines
-> in source comments / docstrings with no behavioural change — see §0.7d).
+> **Last revised:** 2026-06-15e (retired the 3 unused `data/knowledge`,
+> `data/memory`, `data/skills` directories — all empty (or near-empty
+> with stale debug payload); the real KB / memory / skills live under
+> `hermes/data/`. Synced `hermes/config.py` (drop 3 path defaults),
+> `hermes/workspace.py` (drop 3 `WHITELIST_DIRS` entries), and
+> `config/hermes.yaml` (drop 2 explicit `path:` fields). Net −3 dirs +
+> −6 source lines. `hermes-agent/` (116 MB upstream source) and
+> `data/hermes-agent/` (47 MB upstream runtime state) are **not**
+> touched — see §0.7e for the "why two dirs both matter" explainer).
 > Previous: 2026-06-15b (removed duplicate browser open in
 > `hermes-all.bat`; the npm package's own health-check hook already
 > opens the browser — see §0.7b).
@@ -636,6 +639,63 @@ upstream clean copy,没有 `hermes-agent/__init__.py` 把它包成 Python packag
 * `tests\smoke_node_path.ps1` 仍然 OK。
 * 头部 "Last revised" 升级到 2026-06-15d。
 * `git diff --stat` 报告 `13 files changed, 24 insertions(+), 43 deletions(-)`。
+
+## 0.7e. 2026-06-15e — Retire Dead `data/{knowledge,memory,skills}` Directories
+
+### What the problem was
+
+三个顶层 `data/` 子目录一直存在但从未被任何代码实际读取:
+
+* `data/knowledge/` (0 文件, 0 字节) — 空壳,active KB 在 `hermes/data/knowledge/`。
+* `data/memory/` (1 文件, 443 字节 debug payload) — 几乎空,active memory 在 `hermes/data/memory/` (149 KB)。
+* `data/skills/` (0 文件, 0 字节) — 空壳,active skills 已迁到 `docs/examples/skills/`(见 §0.6)。
+
+这三个目录是早期版本的副产物。后来所有真正的 KB / memory / skills
+都搬到 `hermes/data/` 下了,但旧 shell 入口(`hermes/config.py` 里的
+`MemoryConfig.path` / `KnowledgeConfig.path` / `SkillsConfig.custom_dir`
+默认值,以及 `hermes/workspace.py` 里的 `WHITELIST_DIRS` WebUI 文件浏览白名单)
+却还停留在引用 `data/...` 的状态。grep 全仓 0 命中 — 完全是死代码,
+但每次新人 `ls data/` 都会误以为是真目录然后困惑。
+
+### What changed
+
+* 删 `data/knowledge/`、`data/memory/`、`data/skills/` 三个目录(.gitignore 排除,不影响 commit)。
+* `hermes/config.py` 删 `MemoryConfig.path` / `KnowledgeConfig.path` / `SkillsConfig.custom_dir` 三个 dead path 默认值(grep 0 引用)。
+* `hermes/workspace.py` 删 `WHITELIST_DIRS` 里 `data/knowledge`、`data/memory`、`data/skills` 三个 entry,并修两处 docstring 示例(从 `data/knowledge` 改为 `data/models`)。
+* `config/hermes.yaml` 删 `memory.path` 和 `skills.custom_dir` 两个 explicit `path:` 字段,加 2 行注释说明 KB / memory / skills 路径全部从 `HERMES_DATA_DIR` 经 `resolve_data_paths()` 派生,不需要 explicit path。
+* `.gitignore` L92 `.hermes-root` rule 的 inline `# ...` 注释导致 git 把它当字面 pattern 而**没**忽略此文件(`git check-ignore -v .hermes-root` 一直 rc=1)—— 把注释移到独立行后才生效。把 inline 注释 + 大量 trailing space 换成独立注释行,顺手清理。
+* 头部 "Last revised" 升级到 2026-06-15e。
+
+### What is NOT changed — and why
+
+`Hermes Agent\hermes-agent\` (116 MB upstream source) 和 `Hermes Agent\data\hermes-agent\`
+(47 MB upstream runtime state) **两个都不删**。它们名字一样、都在
+`hermes-agent` 这个名字下,但角色完全不同,看起来像 duplicates 其实不是:
+
+| 目录 | 大小 | 角色 | 来源 |
+|---|---|---|---|
+| `hermes-agent/` (root) | 116 MB / 5682 文件 | upstream 源码 (`agent/`、`hermes_cli/`、`tools/`、...) | `git clone https://github.com/.../hermes-agent`(clean,不要改) |
+| `data/hermes-agent/` | 47 MB / 720 文件 | upstream runtime state = `HERMES_HOME` | `config.yaml` / sessions / skills / caches / vector stores |
+
+关键证据:
+
+* `hermes/__main__.py` L19: `from hermes_cli.main import main` — 我们的薄 wrapper delegate 到 **upstream** `hermes_cli/` 模块,这个模块在 `hermes-agent/hermes_cli/` 下,所以 `hermes-agent/` 必须存在。
+* `bridge/README.md` L40: "**Upstream hermes-agent code** → `../hermes-agent/` (do not edit; PR upstream)";L45: "**State** → `../data/hermes-agent/` (= `HERMES_HOME`)";L66: "`HERMES_HOME = ../data/hermes-agent` so all upstream state lands inside"。
+* `hermes-agent/.gitignore` 在我们 `.gitignore` L39 被排除,所以 116 MB 源码不会污染我们的 commit。
+* `data/hermes-agent/` 里的 state 在 `HERMES_HOME` 下写入,我们 own 它的内容但不改 upstream 代码。
+
+删任何一边都会破坏 upstream 链路:
+
+* 删 `hermes-agent/` → `from hermes_cli.main import main` 立刻 ImportError,所有 chat / tool / skills 全瘫。
+* 删 `data/hermes-agent/` → upstream 把 state 写到默认 `~/.hermes-agent/`,下次启动发现 state 不在,会重新 bootstrap,丢失所有 sessions / skills 配置 / 缓存。
+
+### Acceptance
+
+* `git status` 显示 5 modified:`AGENTS.md` / `config/hermes.yaml` / `hermes/config.py` / `hermes/workspace.py` / `.gitignore`(无 untracked,因为 `.hermes-root` 重新被 ignore)。
+* `data/{knowledge,memory,skills}` 在磁盘上消失,但 `hermes/data/{knowledge,memory,skills}/` 完好(`resolve_data_paths()` 用的就是这条)。
+* `from hermes.config import HermesConfig, MemoryConfig, KnowledgeConfig, SkillsConfig; HermesConfig()` 实例化 OK;`MemoryConfig` / `KnowledgeConfig` / `SkillsConfig` 没有 `path` / `custom_dir` 字段了(只保留 `backend` / `recency_decay` / `max_results` / `chunk_size` / `chunk_overlap` / `builtin` / `hot_reload`)。
+* `tests\smoke_node_path.ps1` 通过。
+* `git diff --stat` 报告 `5 files changed, 76 insertions(+), 21 deletions(-)`。
 
 ---
 

@@ -103,9 +103,10 @@ embedding:
 # ============================================================
 # 长期记忆
 # ============================================================
+# KB / memory / skills paths are derived from $HERMES_DATA_DIR via
+# hermes/config.py::resolve_data_paths() — no explicit path field needed.
 memory:
   backend: chroma                     # chroma | lancedb | faiss
-  path: /data/memory/chroma
   recency_decay: 0.95
   max_results: 10
 
@@ -118,7 +119,6 @@ skills:
     - file-ops
     - shell-exec
     - code-review
-  custom_dir: /data/skills
   hot_reload: true
 
 # ============================================================

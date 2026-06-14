@@ -14,9 +14,9 @@ Trust model
   user has registered. The default workspace is ``HERMES_ROOT`` itself.
 - Within a workspace, only **whitelisted sub-paths** are reachable:
 
-      data/knowledge   data/memory   data/models   data/skills
-      data/logs        docs          tests
-      README.md        AGENTS.md     (root files)
+      data/models   data/logs
+      docs          tests
+      README.md     AGENTS.md     (root files)
 
   Any other path — even if it exists on disk and is inside the workspace —
   returns ``403`` from the public API. This is defense in depth: even if a
@@ -78,10 +78,7 @@ HERMES_ROOT: Path = Path(__file__).resolve().parent.parent
 # Anything outside this set is 403, even if it exists on disk. The keys
 # are display labels; the values are the relative paths.
 WHITELIST_DIRS: dict[str, str] = {
-    "knowledge": "data/knowledge",
-    "memory":    "data/memory",
     "models":    "data/models",
-    "skills":    "data/skills",
     "logs":      "data/logs",
     "docs":      "docs",
     "tests":     "tests",
@@ -330,8 +327,8 @@ class WorkspaceManager:
         The whitelist is interpreted relative to the trust root
         (``HERMES_ROOT``) so adding a sub-workspace like
         ``HERMES_ROOT/data`` still works — the caller can browse
-        ``data/knowledge`` from there because the resolved absolute path
-        still lives under ``HERMES_ROOT/data/knowledge`` which is in the
+        ``data/models`` from there because the resolved absolute path
+        still lives under ``HERMES_ROOT/data/models`` which is in the
         allowed set.
 
         ``allow_root=True`` lets the workspace root itself pass the check
@@ -386,7 +383,7 @@ class WorkspaceManager:
         if rel_path is None:
             rel_path = ""
         # Normalize and strip a leading slash so the caller can pass
-        # either ``data/knowledge`` or ``/data/knowledge`` interchangeably.
+        # either ``data/models`` or ``/data/models`` interchangeably.
         cleaned = rel_path.replace("\\", "/").lstrip("/")
         ws_root = self._resolve_workspace(workspace_path)
         # Empty / "." means "list the workspace root"; we permit that as

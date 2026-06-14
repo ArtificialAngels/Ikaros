@@ -65,13 +65,11 @@ class EmbeddingConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     backend: str = "simple"  # simple | chroma
-    path: str = "/data/memory"
     recency_decay: float = 0.95
     max_results: int = 5
 
 
 class KnowledgeConfig(BaseModel):
-    path: str = "/data/knowledge"
     chunk_size: int = 500
     chunk_overlap: int = 50
     max_results: int = 5
@@ -79,7 +77,6 @@ class KnowledgeConfig(BaseModel):
 
 class SkillsConfig(BaseModel):
     builtin: list[str] = Field(default_factory=lambda: ["time", "calc"])
-    custom_dir: str = "/data/skills"
     hot_reload: bool = False
 
 
