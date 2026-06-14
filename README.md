@@ -223,7 +223,7 @@ hermes-agent\
 | **llama.cpp** | [ggerganov/llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 LLM 推理 | MIT |
 | **Qwen** | [QwenLM/Qwen](https://github.com/QwenLM/Qwen) | 默认本地模型 | Apache 2.0 |
 
-`hermes-agent\` 和 `hermes-web-ui\` 是上游的干净副本(Phase 11 锁定版本),本项目所有二次开发放在 `modules\` 下。
+`hermes-agent\` 是上游的干净副本(Phase 11 锁定版本),本项目所有二次开发放在 `modules\` 下。WebUI 不再是 sibling clone —— 它通过 `cd runtime\node23 && npm install -g hermes-web-ui` 装到 `runtime/node23/node_modules/hermes-web-ui/`(见 [docs/14-维护与升级.md](docs/14-维护与升级.md))。
 
 ---
 

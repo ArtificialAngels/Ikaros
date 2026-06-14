@@ -25,21 +25,23 @@ deps/tools/               # symlink to runtime tools (aria2c, gopeed)
 deps/node/                # symlink to runtime/node23 (Node.js)
 deps/llamacpp/            # mostly empty stub; junction content is in runtime/
 
-# --- Upstream clean copies (clone separately; tracked upstream) ---
-# These are giant clean copies of upstream projects. They are tracked
-# upstream (NousResearch/hermes-agent and EKKOLearnAI/hermes-web-ui)
-# and we just clone them into our workspace. The local copies are
-# NEVER committed here because:
-#   1. They would be ~5000 + 2600 = ~7600 files
-#   2. They are READ-ONLY for us (we modify in `modules/` not here)
+# --- Upstream clean copy: hermes-agent (clone separately; tracked upstream) ---
+# `hermes-agent/` is a giant clean copy of the NousResearch/hermes-agent
+# upstream (Agent core / CLI). It is tracked upstream and we just clone
+# it into our workspace. The local copy is NEVER committed here because:
+#   1. It is ~5000 files
+#   2. It is READ-ONLY for us (we modify in `modules/` not here)
 #   3. Upstream `git pull` would conflict with our local edits
-#   4. They are versioned upstream; pinning them in this repo would
+#   4. It is versioned upstream; pinning it in this repo would
 #      duplicate state that is already canonically versioned elsewhere.
-# If you need a working hermes-agent / hermes-web-ui, run:
+# To get a working copy, run:
 #     git clone https://github.com/NousResearch/hermes-agent.git hermes-agent
-#     git clone https://github.com/EKKOLearnAI/hermes-web-ui.git hermes-web-ui
 hermes-agent/
-hermes-web-ui/
+
+# Note: the EKKOLearnAI/hermes-web-ui WebUI is NOT a sibling clone anymore
+# (2026-06-15a). The runtime copy lives at runtime/node23/node_modules/
+# hermes-web-ui/ and is installed via `npm install -g hermes-web-ui` from
+# runtime/node23/. No dev-source folder is needed.
 
 # --- Data directories (user state; never commit) ---
 # All per-user state lives under data/ and hermes/data/. Even though

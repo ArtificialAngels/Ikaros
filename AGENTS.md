@@ -379,7 +379,13 @@ Two copies of the same package on disk also created confusion
   no longer mentions the dev source. §3 (Project Layout) no longer
   lists `hermes-web-ui\` as a directory.
 * **`README.md`**: removed the `hermes-web-ui\ ← 上游 EKKOLearnAI/hermes-web-ui(只读)`
-  line from the directory cheat sheet.
+  line from the directory cheat sheet. The "致谢" section no longer
+  claims `hermes-web-ui\` is a sibling clone — it now points to the
+  npm install command.
+* **`.gitignore`**: the "Upstream clean copies" section now only
+  covers `hermes-agent/`. The `hermes-web-ui/` ignore rule and the
+  `git clone ... hermes-web-ui` instructions are gone; a new note
+  explains that the WebUI now ships as an npm global install.
 
 ### What is NOT changed
 
@@ -397,6 +403,11 @@ Two copies of the same package on disk also created confusion
   the `elseif (Test-Path ... 'hermes-web-ui/...')` branch.
 * `bin\setup-portable.bat` does not contain `HERMES_ROOT%\hermes-web-ui`
   in any echo line.
+* `.gitignore` no longer contains a `hermes-web-ui/` ignore pattern.
+  The "Upstream clean copies" section now only covers `hermes-agent/`
+  (line 39). The `git clone ... hermes-web-ui` instructions are
+  removed; a 4-line note (lines 41-44) explains the WebUI ships
+  via `npm install -g hermes-web-ui`.
 * `bin\setup-portable.bat` still works as before: `status` reports
   the same 4 pieces; `python` and `node` subcommands are unchanged.
 * `runtime/node23/node_modules/hermes-web-ui/` is the single
