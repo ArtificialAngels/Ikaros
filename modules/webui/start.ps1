@@ -10,24 +10,18 @@ $errPath     = Join-Path $LogDir 'webui.err'
 $WebuiHome   = Join-Path $HERMES_ROOT 'data\webui'
 $HermesHome  = Join-Path $HERMES_ROOT 'data\hermes-agent'
 
-# Resolve hermes-web-ui package (npm global or dev source)
-$GlobalInstall = Join-Path $HERMES_ROOT 'runtime\node23\node_modules\hermes-web-ui'
-$DevSource     = Join-Path $HERMES_ROOT 'hermes-web-ui'
+# Resolve hermes-web-ui package (npm global install only -- the dev source
+# under .\hermes-web-ui\ was retired in 2026-06-15; see AGENTS.md §0.7a).
+$WebuiDir  = Join-Path $HERMES_ROOT 'runtime\node23\node_modules\hermes-web-ui'
+$Launcher  = Join-Path $WebuiDir  'bin\hermes-web-ui.mjs'
 
-$WebuiDir = $null; $Launcher = $null; $Source = $null
-if (Test-Path (Join-Path $GlobalInstall 'bin\hermes-web-ui.mjs')) {
-    $WebuiDir = $GlobalInstall
-    $Launcher = Join-Path $GlobalInstall 'bin\hermes-web-ui.mjs'
-    $Source   = 'runtime/node23 (npm global)'
-} elseif (Test-Path (Join-Path $DevSource 'bin\hermes-web-ui.mjs')) {
-    Write-Host "[WARN] Falling back to dev source." -ForegroundColor Yellow
-    $WebuiDir = $DevSource
-    $Launcher = Join-Path $DevSource 'bin\hermes-web-ui.mjs'
-    $Source   = 'hermes-web-ui/ (dev)'
-} else {
-    Write-Host "[ERROR] hermes-web-ui not found." -ForegroundColor Red
+if (-not (Test-Path $Launcher)) {
+    Write-Host "[ERROR] hermes-web-ui not found at $Launcher" -ForegroundColor Red
+    Write-Host "        Run this from the project root to install it:" -ForegroundColor Red
+    Write-Host "          cd runtime\node23 ^&^& npm install -g hermes-web-ui" -ForegroundColor Red
     exit 1
 }
+$Source    = 'runtime/node23 (npm global)'
 
 if (-not (Test-Path $NODE)) {
     Write-Host "[ERROR] Node missing: $NODE" -ForegroundColor Red

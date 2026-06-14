@@ -183,7 +183,6 @@ hermes-agent\
 ├── bridge\               ← FastAPI 后端(:7860)
 ├── hermes\               ← Python 桥接层
 ├── hermes-agent\         ← 上游 NousResearch/hermes-agent(只读)
-├── hermes-web-ui\        ← 上游 EKKOLearnAI/hermes-web-ui(只读)
 ├── docs\                 ← 用户文档(中文)
 ├── config\               ← hermes.yaml / models.yaml
 ├── data\                 ← ★ 运行时数据(全部 git ignored)

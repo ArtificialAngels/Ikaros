@@ -317,13 +317,13 @@ everything works" promise.
 ### What is NOT changed
 
 * The `hermes-web-ui` npm package is **intentionally not** installed
-  by setup-portable.bat. It lives in a sibling private repo
-  ([EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui))
-  that users must clone into `.\hermes-web-ui\` themselves.
-  `modules/webui/start.ps1` already falls back to that dev source
-  if the global `runtime/node23/node_modules/hermes-web-ui` install
-  is absent. The download step also prints a `[WARN]` if neither
-  is present, with copy-pasteable remediation instructions.
+  by setup-portable.bat. Users must install it manually with:
+  ```bat
+  cd runtime\node23
+  npm install -g hermes-web-ui
+  ```
+  The download step prints a `[WARN]` if the npm global install is
+  absent, with the same copy-pasteable remediation command.
 
 * No new python dependencies, no new config, no breaking changes.
   Re-running `bin/setup-portable.bat` is safe and idempotent.
@@ -334,6 +334,73 @@ everything works" promise.
   portable-python, runtime/llama-server, runtime/node23/, model.
 * On a fresh checkout, after `bin\setup-portable.bat`, the
   `hermes-supervisor` can start `llm_engine` and `webui` modules.
+
+---
+
+## 0.7a. 2026-06-15a — Remove `.\hermes-web-ui\` dev source (npm global is the only path)
+
+### Why
+
+The `.\hermes-web-ui\` folder at the repo root was a gitignored
+clone of the [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui)
+repo, intended as a dev-source fallback for the WebUI.
+
+In practice it was **dead code**:
+* `modules/webui/start.ps1` always preferred the npm global install
+  at `runtime/node23/node_modules/hermes-web-ui/`.
+* The dev source was only used if the npm global install was absent,
+  which never happened on any working setup.
+* The local clone was also perpetually 2 patches behind the npm
+  install (e.g. v0.6.12 vs v0.6.14), so it would have masked real
+  fixes if it ever was used.
+
+Two copies of the same package on disk also created confusion
+("which one is authoritative?") and cost ~80 MB of unused disk.
+
+### What changed
+
+* **Removed the folder**: `e:\Hermes Agent\hermes-web-ui\` is gone
+  (gitignored, so no git impact; on F: drive users will simply have
+  the stale folder too — they can `rmdir /S /Q hermes-web-ui` on
+  next `git pull`).
+* **`modules/webui/start.ps1`** (lines 13-30): collapsed the
+  if/elseif/else dev-source fallback into a single npm-global check.
+  If the launcher is missing, the script now prints a one-liner
+  remediation command and exits 1. The dev-source branch and its
+  `[WARN] Falling back to dev source.` message are gone.
+* **`bin/setup-portable.bat`**: the post-Node.js `[WARN]` now only
+  fires when `runtime/node23/node_modules/hermes-web-ui/` is absent
+  (previously it required both global AND dev source to be absent).
+  The remediation command is now a single `cd runtime\node23 ^&^& npm install -g hermes-web-ui`.
+* **`deps/manifest.json`** (`runtime_node23.notes` + new 2026-06-15
+  `2026.06.15a` changelog entry): updated to reference the npm
+  install command instead of the dev source.
+* **`AGENTS.md` §0.7 (this file)**: the "What is NOT changed" section
+  no longer mentions the dev source. §3 (Project Layout) no longer
+  lists `hermes-web-ui\` as a directory.
+* **`README.md`**: removed the `hermes-web-ui\ ← 上游 EKKOLearnAI/hermes-web-ui(只读)`
+  line from the directory cheat sheet.
+
+### What is NOT changed
+
+* The `hermes-web-ui` npm package itself is still NOT bundled by
+  `bin/setup-portable.bat` — it remains a manual
+  `cd runtime\node23 && npm install -g hermes-web-ui` step.
+* The upstream project URL ([EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui))
+  is still referenced in §1 ("What This Is") and §4 ("Components")
+  as the canonical source of the WebUI code.
+
+### Acceptance
+
+* `Test-Path 'hermes-web-ui'` returns `False` (folder deleted).
+* `modules/webui/start.ps1` does not contain `$DevSource` or
+  the `elseif (Test-Path ... 'hermes-web-ui/...')` branch.
+* `bin\setup-portable.bat` does not contain `HERMES_ROOT%\hermes-web-ui`
+  in any echo line.
+* `bin\setup-portable.bat` still works as before: `status` reports
+  the same 4 pieces; `python` and `node` subcommands are unchanged.
+* `runtime/node23/node_modules/hermes-web-ui/` is the single
+  authoritative source for the WebUI runtime.
 
 ---
 
@@ -459,7 +526,6 @@ E:\Hermes Agent\
 │   # (download.py, firstrun.py, gguf.py, mirror.py, gpu.py, gopeed_client.py,
 │   #  skills.py, prompts.py were removed in Phases 5/10/11 — replaced by modules/*)
 ├── hermes-agent\                 # ★ upstream v0.16.0 (CLEAN — DO NOT MODIFY)
-├── hermes-web-ui\                # ★ upstream v0.6.12 (CLEAN — DO NOT MODIFY)
 ├── bridge\                       # FastAPI app + monkey-patch sitecustomize
 │   ├── server.py                 # FastAPI: /v1/embeddings, /v1/models, /api/*, /static/
 │   └── sitecustomize.py          # Windows-only monkey-patches for upstream

@@ -311,16 +311,15 @@ if not exist "%NODE_EXE%" (
 echo   OK: %NODE_EXE%
 echo.
 
-REM Warn if hermes-web-ui global install + dev source both missing.
+REM Warn if the hermes-web-ui npm global install is missing.
+REM We retired the .\hermes-web-ui\ dev-source fallback in 2026-06-15
+REM (see AGENTS.md §0.7a); the npm global install is the only supported path.
 if not exist "%NODE_DIR%\node_modules\hermes-web-ui\bin\hermes-web-ui.mjs" (
-    if not exist "%HERMES_ROOT%\hermes-web-ui\bin\hermes-web-ui.mjs" (
-        echo   [WARN] hermes-web-ui NOT detected. The webui module will
-        echo          fail unless you provide one of:
-        echo            - Clone EKKOLearnAI/hermes-web-ui into .\hermes-web-ui\
-        echo            - Or after cloning: cd runtime\node23 ^&^& npm install -g
-        echo              .\hermes-web-ui
-        echo.
-    )
+    echo   [WARN] hermes-web-ui npm global install NOT detected at
+    echo          %NODE_DIR%\node_modules\hermes-web-ui\
+    echo          The webui module will fail unless you install it:
+    echo            cd runtime\node23 ^&^& npm install -g hermes-web-ui
+    echo.
 )
 
 REM ============================================================

@@ -1,6 +1,6 @@
 {
   "name": "hermes-deps",
-  "version": "2026.06.15",
+  "version": "2026.06.15a",
   "description": "Hermes Agent unified dependency zone. Hosts the bat/ps1 env entry points that every script dot-sources first, plus the version manifest for the runtime assets that bin/setup-portable.bat downloads. See README.md for layout. NOTE: this directory MUST NOT contain any directory junctions -- earlier versions did (deps/node/, deps/tools/, deps/llamacpp/bin/, deps/python-test/) but those stored absolute reparse-point targets and broke when the project was moved to a new drive letter (E: -> F:). The canonical paths are runtime/node23/ and runtime/llama-server.exe; modules/*/module.json was updated to reference those directly. Any leftover junction is auto-rmdir'd by deps/hermes-env.{bat,ps1} Step 3.",
   "entry_points": {
     "bat": "hermes-env.bat",
@@ -38,9 +38,9 @@
         "required_by": ["modules/webui/"],
         "notes": [
           "Node.js 23.11.1 win-x64 zip is downloaded (no npm install -g is run).",
-          "The hermes-web-ui npm package is NOT bundled -- it is a sibling private repo",
-          "that the user must clone into .\\hermes-web-ui\\ or install manually. If absent,",
-          "modules/webui/start.ps1 falls back to the dev source under .\\hermes-web-ui\\."
+          "The hermes-web-ui npm package is NOT bundled -- install it manually with:",
+          "  cd runtime\\node23 && npm install -g hermes-web-ui",
+          "The legacy .\\hermes-web-ui\\ dev-source fallback was retired in 2026-06-15."
         ]
       },
       "runtime_cuda": {
@@ -74,6 +74,16 @@
   },
   "changelog": [
     {
+      "date": "2026-06-15",
+      "version": "2026.06.15a",
+      "changes": [
+        "Removed the legacy .\\hermes-web-ui\\ dev-source folder (gitignored clone of EKKOLearnAI/hermes-web-ui). It was never actually used: modules/webui/start.ps1 always preferred runtime/node23/node_modules/hermes-web-ui/ (npm global install) over the dev source.",
+        "Simplified modules/webui/start.ps1: removed the elseif dev-source branch; webui launcher is now resolved solely as runtime/node23/node_modules/hermes-web-ui/bin/hermes-web-ui.mjs. If missing, start.ps1 exits 1 with a one-liner remediation (cd runtime\\node23 && npm install -g hermes-web-ui).",
+        "Simplified bin/setup-portable.bat: removed the dev-source fallback in the post-Node.js WARN. The WARN now only fires when runtime/node23/node_modules/hermes-web-ui/ is absent.",
+        "Updated runtime_node23.notes + 2026-06-14 changelog entry to remove all references to the .\\hermes-web-ui\\ dev source."
+      ]
+    },
+    {
       "date": "2026-06-14",
       "version": "2026.06.15",
       "changes": [
@@ -82,7 +92,7 @@
         "Added status-mode check for runtime/node23/node.exe (now reports present/MISSING in status output).",
         "Fixed cmd.exe chained IF bug in :check_runtime status block: 'if not exist A if not exist B (else)' silently fell through; rewrote as nested IF so the status branch correctly reports 'present' vs 'MISSING'.",
         "Moved 'node23/' from runtime.components into its own manifest_schema section 'runtime_node23' (with source URL + required_by + notes), since Node.js is now an independent download step rather than part of the runtime/ llama bundle.",
-        "hermes-web-ui npm package is intentionally NOT bundled by setup-portable.bat; users clone it into .\\hermes-web-ui\\ and the webui module falls back to that dev source if the global install is absent."
+        "hermes-web-ui npm package is intentionally NOT bundled by setup-portable.bat; install it with 'npm install -g hermes-web-ui' from runtime/node23/ (see AGENTS.md §0.7a)."
       ]
     },
     {
