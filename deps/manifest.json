@@ -1,6 +1,6 @@
 {
   "name": "hermes-deps",
-  "version": "2026.06.14",
+  "version": "2026.06.15",
   "description": "Hermes Agent unified dependency zone. Hosts the bat/ps1 env entry points that every script dot-sources first, plus the version manifest for the runtime assets that bin/setup-portable.bat downloads. See README.md for layout. NOTE: this directory MUST NOT contain any directory junctions -- earlier versions did (deps/node/, deps/tools/, deps/llamacpp/bin/, deps/python-test/) but those stored absolute reparse-point targets and broke when the project was moved to a new drive letter (E: -> F:). The canonical paths are runtime/node23/ and runtime/llama-server.exe; modules/*/module.json was updated to reference those directly. Any leftover junction is auto-rmdir'd by deps/hermes-env.{bat,ps1} Step 3.",
   "entry_points": {
     "bat": "hermes-env.bat",
@@ -26,8 +26,21 @@
           "llama-server-vulkan.exe (AMD / Intel / NVIDIA fallback)",
           "llama-server-impl.dll (shared by all CPU/Vulkan/CUDA builds)",
           "aria2c.exe (multi-thread downloader)",
-          "gopeed-web.exe (download bridge)",
-          "node23/ (Node.js 23.11.1 + global hermes-web-ui install)"
+          "gopeed-web.exe (download bridge)"
+        ]
+      },
+      "runtime_node23": {
+        "path": "runtime/node23/",
+        "tracked_in_git": false,
+        "downloaded_by": "bin/setup-portable.bat (mode=node or auto)",
+        "version": "23.11.1",
+        "source": "https://nodejs.org/dist/v23.11.1/node-v23.11.1-win-x64.zip",
+        "required_by": ["modules/webui/"],
+        "notes": [
+          "Node.js 23.11.1 win-x64 zip is downloaded (no npm install -g is run).",
+          "The hermes-web-ui npm package is NOT bundled -- it is a sibling private repo",
+          "that the user must clone into .\\hermes-web-ui\\ or install manually. If absent,",
+          "modules/webui/start.ps1 falls back to the dev source under .\\hermes-web-ui\\."
         ]
       },
       "runtime_cuda": {
@@ -60,6 +73,18 @@
     }
   },
   "changelog": [
+    {
+      "date": "2026-06-14",
+      "version": "2026.06.15",
+      "changes": [
+        "bin/setup-portable.bat: added [3/4] Node.js download step. Downloads node-v23.11.1-win-x64.zip from nodejs.org (~30 MB) into runtime/node23/.",
+        "Added 'bin/setup-portable.bat node' subcommand for node-only installs.",
+        "Added status-mode check for runtime/node23/node.exe (now reports present/MISSING in status output).",
+        "Fixed cmd.exe chained IF bug in :check_runtime status block: 'if not exist A if not exist B (else)' silently fell through; rewrote as nested IF so the status branch correctly reports 'present' vs 'MISSING'.",
+        "Moved 'node23/' from runtime.components into its own manifest_schema section 'runtime_node23' (with source URL + required_by + notes), since Node.js is now an independent download step rather than part of the runtime/ llama bundle.",
+        "hermes-web-ui npm package is intentionally NOT bundled by setup-portable.bat; users clone it into .\\hermes-web-ui\\ and the webui module falls back to that dev source if the global install is absent."
+      ]
+    },
     {
       "date": "2026-06-14",
       "version": "2026.06.14",

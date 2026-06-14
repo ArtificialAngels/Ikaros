@@ -4,7 +4,11 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-14 (junction audit — every remaining
+> **Last revised:** 2026-06-15 (Node.js download step added to
+> `bin/setup-portable.bat`; the script now bootstraps Node.js 23.11.1
+> into `runtime/node23/` so a fresh `git clone` + `setup-portable.bat`
+> is enough to run the WebUI on any machine — see §0.7. Previous:
+> 2026-06-14 (junction audit — every remaining
 > `deps/node/`, `deps/llamacpp/bin/`, `deps/tools/` reference in
 > tracked code was hunted down and replaced with the canonical
 > `runtime/node23/node.exe` / `runtime/llama-server.exe` paths; the
@@ -265,6 +269,71 @@ the §0.5 fix.
 * `tests/smoke_hermes_env.py` — NEW: junction-detection smoke test
 * `tests/smoke_node_path.ps1` — NEW: dot-source + alias assertion
 * `AGENTS.md` — this section + header bump
+
+---
+
+## 0.7. 2026-06-15 — Node.js Download Step in setup-portable.bat
+
+Prior to this revision, `bin/setup-portable.bat` downloaded two
+runtime pieces (portable-python + llama.cpp) but **did not download
+Node.js**, even though `modules/webui/module.json` declared Node.js
+23.11.1 as bundled and `runtime/node23/` was in `.gitignore`. The
+result was a setup-portable script that claimed "ALL OK" yet left
+the user with a non-functional WebUI on a fresh clone.
+
+This revision adds a third download step that bootstraps Node.js
+from nodejs.org, completing the "fresh clone + setup-portable =
+everything works" promise.
+
+### Changes
+
+* `bin/setup-portable.bat`:
+  - New section `[3/4] runtime/node23/` between llama.cpp and model
+    sections. Downloads `node-v23.11.1-win-x64.zip` (~30 MB) from
+    `https://nodejs.org/dist/v23.11.1/` and extracts to
+    `runtime/node23/`. Idempotent — re-runs skip the download if
+    `node.exe` already exists.
+  - New `node` subcommand: `bin\setup-portable.bat node` installs
+    only the Node.js piece.
+  - Status subcommand now reports `runtime/node23/ present` or
+    `MISSING` (previously it was silently skipped — see bug fix below).
+  - Bug fix: the `:check_runtime` status block used
+    `if not exist A if not exist B (then) else (else)`, which is a
+    well-known cmd.exe broken-syntax combination (chained IF + else
+    silently falls through in non-trivial truth tables). Rewrote as
+    a nested IF so the status branch correctly reports
+    "present" vs "MISSING".
+
+* `deps/manifest.json`:
+  - Bumped `version` to `2026.06.15`.
+  - Moved `node23/` out of `runtime.components` into a new
+    `runtime_node23` section with explicit `source` URL,
+    `required_by: ["modules/webui/"]`, and notes about the
+    hermes-web-ui npm package not being auto-installed.
+  - Added 2026-06-15 changelog entry.
+
+* `AGENTS.md` — header bump + this §0.7 section.
+
+### What is NOT changed
+
+* The `hermes-web-ui` npm package is **intentionally not** installed
+  by setup-portable.bat. It lives in a sibling private repo
+  ([EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui))
+  that users must clone into `.\hermes-web-ui\` themselves.
+  `modules/webui/start.ps1` already falls back to that dev source
+  if the global `runtime/node23/node_modules/hermes-web-ui` install
+  is absent. The download step also prints a `[WARN]` if neither
+  is present, with copy-pasteable remediation instructions.
+
+* No new python dependencies, no new config, no breaking changes.
+  Re-running `bin/setup-portable.bat` is safe and idempotent.
+
+### Acceptance
+
+* `bin\setup-portable.bat status` now reports all four pieces:
+  portable-python, runtime/llama-server, runtime/node23/, model.
+* On a fresh checkout, after `bin\setup-portable.bat`, the
+  `hermes-supervisor` can start `llm_engine` and `webui` modules.
 
 ---
 

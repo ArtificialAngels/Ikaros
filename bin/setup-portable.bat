@@ -1,18 +1,27 @@
 @echo off
 REM ============================================================
-REM Hermes - Portable environment bootstrap (v1, 2026-06-08)
+REM Hermes - Portable environment bootstrap (v2, 2026-06-14)
 REM
 REM Idempotent: detects and downloads missing pieces:
 REM   1. portable-python/  (Python 3.12.10 embed-amd64, ~10 MB)
 REM   2. runtime/llama-server-*.exe  (llama.cpp b9503 with CUDA 12.4,
 REM                                   cudart/cublas bundled, ~250 MB)
-REM   3. data/models/*.gguf  (checked for presence, not auto-downloaded)
+REM   2b. runtime/cuda/<v>/  (extra CUDA 11.8 / 13.0, on-demand)
+REM   3. runtime/node23/    (Node.js 23.11.1 win-x64, ~30 MB)
+REM                                   Required by the webui module (modules/webui/).
+REM                                   The npm global install (hermes-web-ui) is NOT
+REM                                   auto-downloaded -- it lives in a sibling
+REM                                   private repo. If runtime/node23/node_modules/
+REM                                   hermes-web-ui is absent, webui will fall back
+REM                                   to the dev source under .\hermes-web-ui\
+REM                                   (which the user must clone separately).
+REM   4. data/models/*.gguf  (checked for presence, not auto-downloaded)
 REM
 REM Each piece is checked separately. Already-present pieces are
 REM skipped (idempotent re-runs are fast and free). Downloads use
 REM aria2c when present (16-thread parallel), else PowerShell
 REM BITS. Both go to the OS temp dir, then a final .NET Expand-
-REM Archive / Expand-7Zip step drops them under %HERMES_ROOT%.
+REM Archive step drops them under %HERMES_ROOT%.
 REM
 REM Exit codes:
 REM   0 = all pieces present or successfully installed
@@ -22,7 +31,8 @@ REM Usage:
 REM   bin\setup-portable.bat           (check + install missing)
 REM   bin\setup-portable.bat status    (check only, no install)
 REM   bin\setup-portable.bat python    (just the python piece)
-REM   bin\setup-portable.bat runtime   (just the runtime piece)
+REM   bin\setup-portable.bat runtime   (just the llama.cpp pieces)
+REM   bin\setup-portable.bat node      (just the Node.js piece)
 REM   bin\setup-portable.bat model     (just the model piece)
 REM ============================================================
 setlocal enabledelayedexpansion
@@ -69,7 +79,7 @@ if "%MODE%"=="status" (
 if exist "%PY%" goto :check_runtime
 echo.
 echo ============================================================
-echo   [1/3] portable-python  ^(?^)
+echo   [1/4] portable-python  ^(?^)
 echo   Python embed-amd64 is missing. Downloading from python.org...
 echo ============================================================
 echo.
@@ -113,21 +123,26 @@ set "LLAMA_CUDA=%HERMES_ROOT%\runtime\cuda\12.4\llama-server-cuda-12.4.exe"
 set "LLAMA_CPU=%HERMES_ROOT%\runtime\llama-server.exe"
 if "%MODE%"=="python" goto :check_model
 if "%MODE%"=="model"  goto :check_model
+if "%MODE%"=="node"   goto :check_node
 if "%MODE%"=="status" (
-    if not exist "%LLAMA_CUDA%" if not exist "%LLAMA_CPU%" (
-        echo [setup-portable] status: runtime/llama-server MISSING
-        set "MISSING=1"
-    ) else (
+    if exist "%LLAMA_CUDA%" (
         echo [setup-portable] status: runtime/llama-server present
+    ) else (
+        if exist "%LLAMA_CPU%" (
+            echo [setup-portable] status: runtime/llama-server present
+        ) else (
+            echo [setup-portable] status: runtime/llama-server MISSING
+            set "MISSING=1"
+        )
     )
-    goto :check_model
+    goto :check_node
 )
 
 if exist "%LLAMA_CUDA%" goto :check_model
 if exist "%LLAMA_CPU%" goto :check_model
 echo.
 echo ============================================================
-echo   [2/3] runtime/llama-server  ^(?^)
+echo   [2/4] runtime/llama-server  ^(?^)
 echo   llama.cpp b9503 (with CUDA 12.4) is missing. Downloading
 echo   from the official ggml-org release ~250MB...
 echo ============================================================
@@ -188,8 +203,8 @@ set "CUDA_EXTRA_NEEDED="
 for /f "usebackq tokens=*" %%D in (`"%HERMES_ROOT%\portable-python\python.exe" -m modules.env_bootstrap.gpu_detect recommend 2^>nul`) do (
     set "CUDA_REC=%%D"
 )
-if /i "%CUDA_REC%"=="12.4" goto :check_model
-if /i "%CUDA_REC%"=="cpu"   goto :check_model
+if /i "%CUDA_REC%"=="12.4" goto :check_node
+if /i "%CUDA_REC%"=="cpu"   goto :check_node
 
 echo.
 echo ============================================================
@@ -213,7 +228,7 @@ call :download "%EXTRA_URL%" "%EXTRA_ZIP%"
 if errorlevel 1 (
     echo [setup-portable] FAIL: CUDA %CUDA_REC% download failed.
     echo [setup-portable]   Will fall back to bundled CUDA 12.4 runtime.
-    goto :check_model
+    goto :check_node
 )
 
 echo   Extracting to %EXTRA_DIR% ...
@@ -231,7 +246,85 @@ echo   OK: CUDA %CUDA_REC% runtime in %EXTRA_DIR%
 echo.
 
 REM ============================================================
-REM 3. data/models/ (any .gguf)
+REM 3. runtime/node23/  (Node.js 23.11.1 -- webui runtime)
+REM ============================================================
+:check_node
+set "NODE_DIR=%HERMES_ROOT%\runtime\node23"
+set "NODE_EXE=%NODE_DIR%\node.exe"
+if "%MODE%"=="python" goto :check_model
+if "%MODE%"=="model"  goto :check_model
+if "%MODE%"=="status" (
+    if not exist "%NODE_EXE%" (
+        echo [setup-portable] status: runtime/node23/ MISSING
+        set "MISSING=1"
+    ) else (
+        echo [setup-portable] status: runtime/node23/ present
+    )
+    goto :check_model
+)
+
+if exist "%NODE_EXE%" goto :check_model
+echo.
+echo ============================================================
+echo   [3/4] runtime/node23/  ^(?^)
+echo   Node.js 23.11.1 is missing (required for the webui module).
+echo   Downloading from nodejs.org (~30 MB)...
+echo ============================================================
+echo.
+
+set "NODE_VERSION=23.11.1"
+set "NODE_URL=https://nodejs.org/dist/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip"
+set "NODE_ZIP=%TEMP%\hermes-node-%NODE_VERSION%.zip"
+set "NODE_EXTRACT=%TEMP%\hermes-node-extract"
+
+if not exist "%HERMES_ROOT%\runtime" mkdir "%HERMES_ROOT%\runtime" 2>nul
+if not exist "%NODE_DIR%" mkdir "%NODE_DIR%" 2>nul
+
+call :download "%NODE_URL%" "%NODE_ZIP%"
+if errorlevel 1 (
+    echo [setup-portable] FAIL: Node.js download failed.
+    echo [setup-portable]   webui will be unable to start; other modules OK.
+    set "MISSING=1"
+    goto :check_model
+)
+
+echo   Extracting to %NODE_DIR% ...
+powershell -NoProfile -Command "Expand-Archive -Path '%NODE_ZIP%' -DestinationPath '%NODE_EXTRACT%' -Force" >nul 2>&1
+if errorlevel 1 (
+    echo [setup-portable] FAIL: Node.js extract failed.
+    set "MISSING=1"
+    goto :check_model
+)
+
+REM Move node-v23.11.1-win-x64\* into runtime/node23\.
+for %%F in ("%NODE_EXTRACT%\node-v%NODE_VERSION%-win-x64\*") do (
+    move /Y "%%F" "%NODE_DIR%\" >nul 2>&1
+)
+rmdir /S /Q "%NODE_EXTRACT%" 2>nul
+del "%NODE_ZIP%" 2>nul
+
+if not exist "%NODE_EXE%" (
+    echo [setup-portable] FAIL: node.exe still missing after extract.
+    set "MISSING=1"
+    goto :check_model
+)
+echo   OK: %NODE_EXE%
+echo.
+
+REM Warn if hermes-web-ui global install + dev source both missing.
+if not exist "%NODE_DIR%\node_modules\hermes-web-ui\bin\hermes-web-ui.mjs" (
+    if not exist "%HERMES_ROOT%\hermes-web-ui\bin\hermes-web-ui.mjs" (
+        echo   [WARN] hermes-web-ui NOT detected. The webui module will
+        echo          fail unless you provide one of:
+        echo            - Clone EKKOLearnAI/hermes-web-ui into .\hermes-web-ui\
+        echo            - Or after cloning: cd runtime\node23 ^&^& npm install -g
+        echo              .\hermes-web-ui
+        echo.
+    )
+)
+
+REM ============================================================
+REM 4. data/models/ (any .gguf)
 REM ============================================================
 :check_model
 if "%MODE%"=="status" (
@@ -247,7 +340,7 @@ if "%MODE%"=="status" (
 if "%HAS_MODEL%"=="1" goto :summary
 echo.
 echo ============================================================
-echo   [3/3] data/models/  ^(?^)
+echo   [4/4] data/models/  ^(?^)
 echo   No .gguf files found in data\models^. Use hermes-models.py
 echo   or the WebUI model manager to download a model.
 echo ============================================================
