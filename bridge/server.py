@@ -42,6 +42,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -71,9 +72,29 @@ _http = httpx.AsyncClient(
     limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    telemetry.bus().emit(telemetry.Topics.MODULE_BOOT, {
+        "module": "bridge",
+        "version": "0.4.0",
+        "port": BRIDGE_PORT,
+        "pid": os.getpid(),
+    })
+    yield
+    telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
+    try:
+        telemetry.log().flush()
+    except Exception:
+        pass
+    _warmup_http_client.close()
+    await _http.aclose()
+
+
 app = FastAPI(
     title="Hermes Bridge",
     version="0.4.0",
+    lifespan=lifespan,
     description=(
         "Thin glue layer between EKKOLearnAI hermes-web-ui (port :8648) and "
         "our local llama-server (port :8080) + upstream NousResearch "
@@ -143,25 +164,6 @@ async def _telemetry_middleware(request: Request, call_next):
                         _last_flush[0] = now
         except Exception:
             pass
-
-
-@app.on_event("startup")
-async def _on_startup() -> None:
-    telemetry.bus().emit(telemetry.Topics.MODULE_BOOT, {
-        "module": "bridge",
-        "version": "0.4.0",
-        "port": BRIDGE_PORT,
-        "pid": os.getpid(),
-    })
-
-
-@app.on_event("shutdown")
-async def _on_shutdown() -> None:
-    telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
-    try:
-        telemetry.log().flush()
-    except Exception:
-        pass
 
 
 # ---- /health ----
@@ -336,22 +338,27 @@ async def signals_emit(request: Request) -> dict[str, Any]:
 # bus, so this is where every panel / dashboard / upstream caller asks.
 
 import socket as _socket
+import asyncio as _asyncio
 import time as _time
 
 _modules_cache: dict[str, Any] = {"ts": 0.0, "modules": []}
 _MODULES_TTL_S = 2.0
 
 
-def _tcp_alive(host: str, port: int, timeout_s: float = 0.5) -> bool:
-    """Non-blocking TCP probe (kept inline so bridge/server.py has no extra deps)."""
+async def _tcp_alive(host: str, port: int, timeout_s: float = 0.5) -> bool:
+    """Non-blocking async TCP probe."""
     try:
-        with _socket.create_connection((host, port), timeout=timeout_s):
-            return True
+        reader, writer = await _asyncio.wait_for(
+            _asyncio.open_connection(host, port), timeout=timeout_s
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True
     except Exception:
         return False
 
 
-def _scan_module_json() -> list[dict[str, Any]]:
+async def _scan_module_json() -> list[dict[str, Any]]:
     """Read modules/*/module.json and return a flat list of port-contract dicts.
 
     Mirrors (but does not import) bin/hermes-supervisor.py discover_modules().
@@ -389,6 +396,7 @@ def _scan_module_json() -> list[dict[str, Any]]:
         port = net.get("port")
         host = net.get("host", "127.0.0.1")
         depends = data.get("depends_on") or []
+        alive = bool(port) and await _tcp_alive(host, int(port)) if port else False
         out.append({
             "name": data.get("name", entry.name),
             "version": str(data.get("version", "")),
@@ -404,7 +412,7 @@ def _scan_module_json() -> list[dict[str, Any]]:
             "health_timeout_ms": int(net.get("health_timeout_ms", 5000)),
             "depends_on": depends,
             "env": data.get("env", {}),
-            "alive": bool(port) and _tcp_alive(host, int(port)),
+            "alive": alive,
         })
     _modules_cache["ts"] = now
     _modules_cache["modules"] = out
@@ -421,7 +429,7 @@ async def list_modules() -> dict[str, Any]:
     the supervisor (`--ports`) and the bridge (`/v1/modules`) always tell
     the same story.
     """
-    mods = _scan_module_json()
+    mods = await _scan_module_json()
     up = sum(1 for m in mods if m.get("alive"))
     down = sum(1 for m in mods if m.get("port") and not m.get("alive"))
     tools = sum(1 for m in mods if not m.get("port"))
@@ -441,6 +449,9 @@ async def inspect_module(name: str) -> dict[str, Any]:
     Returns the full decoded module.json (verbatim) plus a live TCP probe
     and the derived /health URL. Used by the WebUI module-detail panel.
     """
+    import re
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        raise HTTPException(status_code=400, detail=f"invalid module name: {name}")
     root = Path(__file__).resolve().parent.parent
     json_path = root / "modules" / name / "module.json"
     if not json_path.is_file():
@@ -455,7 +466,7 @@ async def inspect_module(name: str) -> dict[str, Any]:
     host = net.get("host", "127.0.0.1")
     probe: dict[str, Any] = {"port": port}
     if port:
-        probe["alive"] = _tcp_alive(host, int(port))
+        probe["alive"] = await _tcp_alive(host, int(port))
         probe["health_url"] = f"http://{host}:{port}{net.get('health_endpoint', '/health')}"
     else:
         probe["alive"] = None
@@ -704,6 +715,20 @@ async def evict_model(request: Request) -> dict[str, Any]:
 # is sufficient. Keys are warmup_id (uuid4), values are {state, models, results}.
 _warmup_tasks: dict[str, dict[str, Any]] = {}
 _warmup_lock = threading.Lock()
+_warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
+_WARMUP_TASK_TTL_S = 3600  # 1 hour
+
+
+def _cleanup_warmup_tasks() -> None:
+    """Evict completed warmup tasks older than _WARMUP_TASK_TTL_S."""
+    now = time.time()
+    with _warmup_lock:
+        expired = [
+            wid for wid, t in _warmup_tasks.items()
+            if t.get("state") == "completed" and now - t.get("finished_at", 0) > _WARMUP_TASK_TTL_S
+        ]
+        for wid in expired:
+            del _warmup_tasks[wid]
 
 
 def _run_warmup(warmup_id: str, models: list[str]) -> None:
@@ -718,10 +743,9 @@ def _run_warmup(warmup_id: str, models: list[str]) -> None:
     for m in models:
         t0 = time.time()
         try:
-            r = httpx.post(
+            r = _warmup_http_client.post(
                 f"{LLAMA_BASE_URL}/models/load",
                 json={"model": m},
-                timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
             )
             elapsed = time.time() - t0
             results.append({
@@ -779,6 +803,8 @@ async def warmup_models(request: Request) -> dict[str, Any]:
     models = body.get("models")
     if not isinstance(models, list) or not models:
         raise HTTPException(status_code=400, detail="`models` must be a non-empty list")
+
+    _cleanup_warmup_tasks()
 
     warmup_id = uuid.uuid4().hex
     started_at = time.time()
@@ -969,6 +995,11 @@ async def agent_run(request: Request) -> dict[str, Any]:
     message = body.get("message")
     if not message:
         raise HTTPException(status_code=400, detail="`message` field is required")
+    if len(message) > 32768:
+        raise HTTPException(status_code=400, detail="`message` exceeds 32K char limit")
+    max_iter = int(body.get("max_iterations", 1))
+    if max_iter < 1 or max_iter > 10:
+        raise HTTPException(status_code=400, detail="`max_iterations` must be between 1 and 10")
 
     try:
         from run_agent import AIAgent  # type: ignore
@@ -1000,7 +1031,7 @@ async def agent_run(request: Request) -> dict[str, Any]:
             quiet_mode=True,
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
-            max_iterations=int(body.get("max_iterations", 1)),
+            max_iterations=max_iter,
         )
         response = agent.chat(message)
         return {
@@ -1014,10 +1045,6 @@ async def agent_run(request: Request) -> dict[str, Any]:
 
 
 # ---- Lifecycle ----
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    await _http.aclose()
 
 
 if __name__ == "__main__":

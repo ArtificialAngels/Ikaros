@@ -142,9 +142,9 @@ behavior:
 # 服务器
 # ============================================================
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 7860
-  cors_origins: ["*"]
+  cors_origins: ["http://127.0.0.1:8648", "http://localhost:8648"]
 
   # 健康检查端点（Docker HEALTHCHECK 用）
   healthz:

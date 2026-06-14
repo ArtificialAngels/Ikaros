@@ -10,7 +10,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from dotenv import load_dotenv
 
 
@@ -30,6 +30,17 @@ class RouterConfig(BaseModel):
     on_timeout_ms: int = 8000
     on_network_error: bool = True
     max_retries: int = 1
+
+    @model_validator(mode='before')
+    @classmethod
+    def flatten_failover(cls, data):
+        if isinstance(data, dict) and 'failover' in data:
+            failover = data.pop('failover')
+            if isinstance(failover, dict):
+                for k, v in failover.items():
+                    if k not in data:
+                        data[k] = v
+        return data
 
 
 class CloudProviderConfig(BaseModel):
@@ -81,9 +92,9 @@ class SkillsConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 7860
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:8648", "http://localhost:8648"])
 
 
 class NetworkConfig(BaseModel):

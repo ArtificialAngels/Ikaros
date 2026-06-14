@@ -123,8 +123,8 @@ if (Test-Path $PresetPath) {
 $logPath = Join-Path $LogDir 'llm-engine.log'
 $errPath = Join-Path $LogDir 'llm-engine.err'
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-'' | Set-Content -Path $logPath -Encoding UTF8
-'' | Set-Content -Path $errPath -Encoding UTF8
+[System.IO.File]::WriteAllText($logPath, '', [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($errPath, '', [System.Text.UTF8Encoding]::new($false))
 
 # ---- Launch via cmd /c wrapper (stdin bug fix) ----
 $innerCmd = '"' + ($Bin -replace '"','\"') + '"'

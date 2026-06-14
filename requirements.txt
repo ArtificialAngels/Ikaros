@@ -20,7 +20,6 @@ websockets==13.1
 openai==1.54.3           # OpenAI / OpenAI-compatible (llama-server, ollama, vllm)
 anthropic==0.39.0        # Anthropic Claude
 google-generativeai==0.8.3
-httpx==0.27.2
 
 # ---- Embedding & 向量库 ----
 chromadb==0.5.20

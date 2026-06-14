@@ -200,14 +200,10 @@ class KnowledgeBase:
                     if hasattr(self.embedder, 'embed_sync'):
                         result = self.embedder.embed_sync([chunk_text])
                     else:
-                        # Fallback for embedders without sync method
+                        # Fallback: use asyncio.run() which always works from sync context
                         import asyncio
                         coro = self.embedder.embed([chunk_text])
-                        try:
-                            loop = asyncio.get_running_loop()
-                            result = loop.run_until_complete(coro)
-                        except RuntimeError:
-                            result = asyncio.run(coro)
+                        result = asyncio.run(coro)
                     embedding = result[0]
                 except Exception as e:
                     logger.debug(f"Embedding failed for chunk: {e}")

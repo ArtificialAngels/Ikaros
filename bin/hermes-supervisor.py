@@ -592,6 +592,30 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
         return 1
     print(f"  {C.GRN}STARTED{C.RST}: {len(started)} module(s)")
     print(f"{C.BLD}============================================================{C.RST}")
+
+    # Watchdog: monitor services and restart crashed ones
+    try:
+        while True:
+            time.sleep(10)
+            for name, proc in list(procs.items()):
+                if proc is None:
+                    continue
+                m = modules[name]
+                if m.type != "service" or not m.port:
+                    continue
+                # Check if service is actually listening on its port
+                alive = check_port(m.host, m.port, timeout_s=1.0)
+                if not alive:
+                    print(f"  {C.RED}✗{C.RST} {name} (:{m.port}) not responding, restarting...")
+                    new_proc = start_module(m)
+                    if new_proc is not None:
+                        procs[name] = new_proc
+                        print(f"  {C.GRN}✓{C.RST} {name} restarted")
+                    else:
+                        print(f"  {C.RED}✗{C.RST} {name} restart failed")
+    except KeyboardInterrupt:
+        pass
+
     return 0
 
 

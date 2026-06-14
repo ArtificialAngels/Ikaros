@@ -11,7 +11,7 @@ If memos is running (locally at :5230 or remote), Hermes can:
 - Browse memories in memos' web UI
 
 This module is a client; the memos server is separate.
-Run `bin\setup-memos.bat` (or download from usememos.com) to install.
+Run ``bin\\setup-memos.bat`` (or download from usememos.com) to install.
 """
 from __future__ import annotations
 import json
@@ -38,6 +38,15 @@ class MemosClient:
         self.token = token
         self._client = httpx.AsyncClient(timeout=30.0)
         self._available = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     @property
     def available(self) -> bool:

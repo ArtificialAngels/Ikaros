@@ -31,9 +31,9 @@ if (-not (Test-Path $NODE)) {
 if (-not (Test-Path $LogDir))    { New-Item -ItemType Directory -Path $LogDir    -Force | Out-Null }
 if (-not (Test-Path $WebuiHome)) { New-Item -ItemType Directory -Path $WebuiHome -Force | Out-Null }
 
-# Truncate logs
-'' | Set-Content -Path $logPath -Encoding UTF8
-'' | Set-Content -Path $errPath -Encoding UTF8
+# Truncate logs (use .NET to avoid file locks)
+[System.IO.File]::WriteAllText($logPath, '', [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($errPath, '', [System.Text.UTF8Encoding]::new($false))
 
 Write-Host "============================================================"
 Write-Host "  Hermes - webui (hermes-web-ui)"

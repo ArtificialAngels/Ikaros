@@ -86,11 +86,8 @@ echo   Stop:     bin\hermes-stop.bat
 echo   Status:   bin\hermes-status.bat
 echo ============================================================
 echo.
-
-REM Browser opens automatically when hermes-web-ui's health check passes
-REM (see runtime/node23/node_modules/hermes-web-ui/bin/hermes-web-ui.mjs,
-REM around line 454 -- it does `execSync('start <url>')` on Windows).
-REM Doing it here too would open a duplicate tab, so we deliberately do NOT.
+echo   This window will close in 3 seconds...
+timeout /t 3 /nobreak >nul
 
 endlocal
 exit /b 0
