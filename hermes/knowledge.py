@@ -13,10 +13,7 @@ from pathlib import Path
 from typing import Any
 from dataclasses import dataclass, asdict
 
-# Inlined from the deleted hermes/memory.py (which was a duplicate of
-# upstream agent/memory_provider.py). Kept here as a minimal dependency
-# for knowledge-base cosine search — full embedder hierarchy lives in
-# `bridge/adapters/embedder.py` if/when we re-add it.
+# Cosine search uses a minimal in-tree dep (was previously in hermes/memory.py).
 import math
 
 

@@ -1,9 +1,7 @@
 @echo off
 REM ============================================================
 REM Hermes - GPU detection helper
-REM
-REM Phase 10: forwards to modules.env_bootstrap.gpu_detect which
-REM supersedes the removed hermes/scripts/gpu_detector.py.
+REM (forwards to modules.env_bootstrap.gpu_detect; see AGENTS.md §0.4 modules).
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul

@@ -30,7 +30,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-# Re-exports from the downloader submodule (Phase 10 ready).
+# Re-exports from the downloader submodule.
 from modules.model_manager.downloader import (  # noqa: E402
     DownloadManager,
     GopeedClient,
@@ -38,13 +38,13 @@ from modules.model_manager.downloader import (  # noqa: E402
     find_aria2c,
 )
 
-# Re-exports from the GGUF submodule (migrated in Phase 11).
+# Re-exports from the GGUF submodule.
 from modules.model_manager.gguf import (  # noqa: E402
     list_gguf_models,
     parse_gguf_meta,
 )
 
-# Re-exports from the mirror submodule (migrated in Phase 11).
+# Re-exports from the mirror submodule.
 from modules.model_manager.mirror import (  # noqa: E402
     mirror_url,
     get_mirror_config,
@@ -90,12 +90,8 @@ def _cmd_download(args: list[str]) -> int:
 
 
 def _cmd_import_ollama(_args: list[str]) -> int:
-    # Phase 12: the legacy helper script was removed. Future versions can
-    # either re-implement this in-tree or point users at the official
-    # Ollama `ollama cp` workflow.
-    print("[manager] import-ollama is no longer supported.")
-    print("[manager] use `ollama cp <source-model> <dest-model>` then point")
-    print("[manager] the WebUI at the resulting GGUF under data/models/.")
+    # Stub -- use `ollama cp` upstream and drop the resulting GGUF in data/models/.
+    print("[manager] import-ollama is no longer supported; use `ollama cp`.")
     return 0
 
 

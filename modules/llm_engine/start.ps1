@@ -9,7 +9,7 @@ $PresetPath = Join-Path $ModelsDir 'router-preset.ini'
 $LogDir     = Join-Path $HERMES_ROOT 'data\logs'
 $CudaBase   = Join-Path $HERMES_ROOT 'runtime\cuda'
 
-# ---- Detect recommended CUDA version (multi-version support, Phase 8) ----
+# ---- Detect recommended CUDA version (multi-version: 11.8 / 12.4 / 13.0) ----
 $CudaVer = 'cpu'
 try {
     $CudaVer = (& $PYTHON -m modules.env_bootstrap.gpu_detect recommend 2>$null).Trim()

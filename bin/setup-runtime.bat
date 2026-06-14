@@ -15,7 +15,6 @@ REM Uses aria2 (16 connections) for parallel download.
 REM Falls back to curl on slow / broken links.
 REM
 REM Re-runnable: resumes partial downloads.
-REM Updated 2026-06-06: bump to b9538 (Qwen3 MoE / Qwen3.5 MoE support).
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -95,9 +94,7 @@ for %%V in (!TARGETS!) do (
         goto :next_variant
     )
 
-    REM === Migrate legacy llama-cuda.zip to the current naming scheme ===
-    REM      Some pre-2026-06-09 setups left an `llama-cuda.zip` with no
-    REM      version suffix; rename so the resume path below can find it.
+    REM Migrate pre-2026-06-09 llama-cuda.zip -> llama-<VER>-bin-win-cuda-12.4-x64.zip for resume.
     if exist "!RUNTIME!\llama-cuda.zip" (
         if "!ZIP_NAME!"=="llama-!VER!-bin-win-cuda-12.4-x64.zip" (
             echo   [MIGRATE] found legacy llama-cuda.zip, renaming to new name for resume

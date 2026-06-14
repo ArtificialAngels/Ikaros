@@ -4,11 +4,12 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15c (cleaned up revision-log-style
-> comments from 7 .bat / .ps1 files — header CHANGELOG blocks, "Was:",
-> "Why:", "Phase 10 legacy", "(NOT the legacy ...)" prose — and
-> compressed them to short "see AGENTS.md §X.Y" pointers. Net −44
-> lines in the source tree with no behavioural change — see §0.7c).
+> **Last revised:** 2026-06-15d (compressed the rest of the
+> revision-log-style comments in 13 .bat / .ps1 / .py files —
+> "Phase 8 multi-version layout", "(Phase 11: migrated from hermes.X)",
+> "Re-exports (Phase X ready)", "Phase 12: legacy helper removed",
+> "Inlined from the deleted hermes/memory.py", etc. Net −19 lines
+> in source comments / docstrings with no behavioural change — see §0.7d).
 > Previous: 2026-06-15b (removed duplicate browser open in
 > `hermes-all.bat`; the npm package's own health-check hook already
 > opens the browser — see §0.7b).
@@ -552,6 +553,89 @@ the reader can find the rationale in one click.
   rewritten).
 * `git diff --stat` reports `7 files changed, 36 insertions(+),
   80 deletions(-)` (a net reduction of 44 comment lines).
+
+## 0.7d. 2026-06-15d — Compress remaining revision-log-style comments (Python + extras)
+
+### What the problem was
+
+§0.7c swept the 7 worst offenders in `bin/`, `deps/`, and `tests/`
+(header CHANGELOG blocks, "Was:" / "Why:" / "Phase 10 legacy" prose),
+but several Python files (mostly in `modules/`, `hermes/`) plus a few
+stray `bin/*.bat` lines still carried smaller bits of revision-log noise:
+
+* `modules/env_bootstrap/gpu_detect.py` docstring had a 4-line
+  "Multi-version CUDA support (Phase 8):" block — the version list is
+  the design doc; "Phase 8" was history.
+* `modules/model_manager/manager.py` had three "Re-exports from the X
+  submodule (Phase 10 ready / migrated in Phase 11)" comments above
+  the import blocks.
+* `modules/model_manager/gguf.py` and `mirror.py` each had a
+  "(Phase 11: migrated from hermes.X)" tag in their module docstring.
+* `bin/setup-portable.bat` had a 4-line "Move extracted files to
+  runtime/. Phase 8 multi-version layout: runtime/ ... runtime/cuda/12.4/ ..."
+  block — the most repetitive of the lot.
+* `bin/setup-runtime.bat` had a "Updated 2026-06-06: bump to b9538"
+  line and a 3-line "Migrate legacy llama-cuda.zip" block.
+* `bin/gpu-detect.bat` had a "Phase 10: forwards to ..." 2-line block.
+* `hermes/knowledge.py` had a 4-line "Inlined from the deleted
+  hermes/memory.py" comment whose first half is just provenance.
+* `tests/test_hermes.py` had 3 lines saying "hermes.gpu was removed in
+  Phase 1-6. The replacement lives in modules/env_bootstrap/gpu_detect.py
+  (also callable as `python -m modules.env_bootstrap.gpu_detect recommend`)".
+
+### What changed
+
+13 files, +24 / −43 = **net −19 lines** (all comment / docstring):
+
+| File | Net | Notes |
+|------|----:|-------|
+| `bin/setup-runtime.bat`                 | −3 | dropped "Updated 2026-06-06" header + rewrote 3-line "Migrate legacy" block to 1 line |
+| `bin/setup-portable.bat`                | −3 | collapsed 4-line Phase 8 layout block + "2b. (Phase 8)" header |
+| `bin/gpu-detect.bat`                    | −2 | "Phase 10: forwards to ..." 2-line block → 1 line |
+| `bin/hermes-all.bat`                    | −2 | "Single source of truth: resolve HERMES_ROOT + 13 derived paths" header collapsed |
+| `modules/llm_engine/start.ps1`          |  0 | "(multi-version support, Phase 8)" → "(multi-version: 11.8 / 12.4 / 13.0)" |
+| `modules/env_bootstrap/gpu_detect.py`   |  0 | docstring re-aligned (no length change); legacy-section header shortened |
+| `modules/model_manager/manager.py`      | −4 | 3 "Re-exports (Phase X)" comments + 5-line "Phase 12: legacy helper removed" |
+| `modules/model_manager/gguf.py`         |  0 | "(Phase 11: migrated ...)" stripped from docstring |
+| `modules/model_manager/mirror.py`       |  0 | same |
+| `hermes/knowledge.py`                   | −3 | 4-line "Inlined from the deleted hermes/memory.py" → 1 line |
+| `hermes/config.py`                      |  0 | "Legacy data-dir fallback (kept for back-compat; ...)" shortened |
+| `tests/test_hermes.py`                  | −2 | 3-line "hermes.gpu was removed in Phase 1-6" → 1 line |
+| `docs/15-故障排查.md`                   |  0 | "这是 Phase 13 之前的老 bug / **v3 已修**" → "详见 `AGENTS.md §0` (env-loader gotcha)" |
+
+**Pre-existing test breakage (NOT in scope of this commit):**
+`tests/test_hermes.py` 跑时 6/12 失败 (Agent / Memory / KB / LLM router /
+Skills / Planner 都报 `No module named 'hermes.agent'` 等) — 这是
+pre-existing 的 import 路径问题:测试 `from hermes.agent import HermesAgent`
+试图 import `hermes-agent/agent/`,但 `hermes-agent/` 是 .gitignore 排除的
+upstream clean copy,没有 `hermes-agent/__init__.py` 把它包成 Python package,
+所以 `import hermes.agent` 找不到。**与本次注释清理无关**,不在本 commit 修。
+
+### What is NOT changed
+
+* `hermes/static/*.js` (前端 Vue/Socket.IO 代码) 中也有 "Phase X" /
+  "v0.5 changes (Phase 5 of the kanban plan)" 字样 — 但这些是 feature
+  / version marker,**不计入**修订日志;它们在浏览器侧运行,不是 Hermes
+  自身的历史。
+* `bin/hermes-supervisor.bat` L38-39 "Hand off to Python directly. No
+  cmd /c layer ..." 是设计意图解释,不是修订历史,保留。
+* `hermes/config.py` L184 `/data/config/hermes.yaml (legacy data-dir fallback)`
+  是 candidate 列表的文档行,属于"为什么有这个 fallback",保留。
+* `modules/env_bootstrap/gpu_detect.py` L303 "Back-compat shims
+  (single-version CUDA layout, pre-multi-version)" — back-compat 函数
+  段头,不是修订历史,保留 (只把 "Legacy single-version CUDA runtime
+  checks" 改成 "Back-compat shims")。
+
+### Acceptance
+
+* `git diff` 显示净减 19 行注释/docstring,无任何 logic 变化。
+* `bin\fix-eol.py --all --check` 通过(.bat/.ps1 全部 CRLF 不变)。
+* 4 个 .py 文件被 SearchReplace 工具在 Windows 下写成了 CRLF,
+  用一行 Python (`open(f,'rb').read().replace(b'\r\n',b'\n')` + write) LF-normalize
+  修回;`.gitattributes` 强制 `*.py text eol=lf` 提交时会再过一遍 LF。
+* `tests\smoke_node_path.ps1` 仍然 OK。
+* 头部 "Last revised" 升级到 2026-06-15d。
+* `git diff --stat` 报告 `13 files changed, 24 insertions(+), 43 deletions(-)`。
 
 ---
 

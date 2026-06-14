@@ -1,5 +1,5 @@
 r"""
-Hermes Agent - GGUF model metadata parser (Phase 11: migrated from hermes.gguf).
+Hermes Agent - GGUF model metadata parser.
 
 Pure-Python GGUF v2/v3 header parser. No external dependencies.
 

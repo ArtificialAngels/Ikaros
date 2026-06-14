@@ -64,9 +64,7 @@ def record(name, ok, detail=""):
 # ============================================
 print("\n[1/8] GPU Detection")
 try:
-    # hermes.gpu was removed in Phase 1-6. The replacement lives in
-    # modules/env_bootstrap/gpu_detect.py (also callable as
-    # `python -m modules.env_bootstrap.gpu_detect recommend`).
+    # hermes.gpu was removed; see modules/env_bootstrap/gpu_detect.py.
     from modules.env_bootstrap.gpu_detect import detect_all_gpus as detect_gpu
     g = detect_gpu()
     has_gpu = g.get("primary") in ("nvidia", "amd", "intel", "cuda", "vulkan", "hip")

@@ -8,9 +8,7 @@ REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
 
-REM ---- Single source of truth: resolve HERMES_ROOT + 13 derived paths.
-REM      bin\hermes-root.bat handles drive-letter migration, .hermes-root
-REM      cache, and fallback drive scan. We just consume the env block.
+REM ---- Single source of truth: deps\hermes-env.bat resolves HERMES_ROOT + 13 derived paths. ----
 call "%~dp0..\deps\hermes-env.bat"
 if errorlevel 1 (
     echo [FATAL] deps\hermes-env.bat failed to resolve HERMES_ROOT.

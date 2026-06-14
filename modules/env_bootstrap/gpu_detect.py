@@ -5,10 +5,10 @@ Merged from hermes/gpu.py + hermes/firstrun.py (GPU detection parts).
 Detects NVIDIA / AMD / Intel / Vulkan GPUs and recommends llama.cpp binary.
 Also handles CUDA runtime installation via pip.
 
-Multi-version CUDA support (Phase 8):
-  - runtime/cuda/11.8/   -- legacy drivers (470.x-525.x)
-  - runtime/cuda/12.4/   -- modern drivers (525.x-555.x) [bundled]
-  - runtime/cuda/13.0/   -- newest drivers (555.x+) [download on demand]
+Multi-version CUDA support (runtime/cuda/<ver>/):
+  - 11.8  -- legacy drivers (470.x-525.x)            [download on demand]
+  - 12.4  -- modern drivers (525.x-555.x)            [bundled]
+  - 13.0  -- newest drivers (555.x+)                 [download on demand]
 
 The bootstrapper picks the correct version based on nvidia-smi driver version
 and auto-downloads the matching pip packages if missing.
@@ -300,7 +300,7 @@ def recommend_cuda_version() -> str:
     return "cpu"
 
 
-# ---- Legacy single-version CUDA runtime checks (kept for back-compat) ----
+# ---- Back-compat shims (single-version CUDA layout, pre-multi-version) ----
 
 def has_cudart() -> bool:
     """Legacy: check if cudart64_12.dll or cublas64_12.dll is in the runtime root."""

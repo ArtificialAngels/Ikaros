@@ -1,5 +1,5 @@
 r"""
-Hermes Agent - Mirror / proxy configuration (Phase 11: migrated from hermes.mirror).
+Hermes Agent - Mirror / proxy configuration.
 
 Inspired by ComfyUI-aki-v3.
 

@@ -168,10 +168,8 @@ if errorlevel 1 (
     goto :check_model
 )
 
-REM Move extracted files to runtime/. Phase 8 multi-version layout:
-REM   runtime/                     -- CPU-only DLLs (ggml-*.dll, llama.dll, llama-server.exe)
-REM   runtime/cuda/12.4/           -- CUDA 12.4 binaries + DLLs
-REM Files matching the CUDA-version pattern go into the cuda/<ver> subdir.
+REM Move CUDA-versioned files (cublas*, cudart*, ggml-cuda*, llama-server-cuda*) to runtime/cuda/12.4/,
+REM everything else (ggml-cpu*, llama-server.exe, ...) to runtime/. See AGENTS.md §0.4 module_layout.
 if not exist "%RUNTIME_DIR%\cuda\12.4" mkdir "%RUNTIME_DIR%\cuda\12.4" >nul 2>&1
 for %%F in ("%TEMP%\hermes-llama-extract\*") do (
     set "FNAME=%%~nxF"
@@ -194,9 +192,8 @@ echo   OK: %LLAMA_CUDA%
 echo.
 
 REM ============================================================
-REM 2b. Optional CUDA 11.8 / 13.0 runtimes (Phase 8)
-REM Only download when the active driver requires it; otherwise
-REM skip to save disk space (~250 MB per version).
+REM 2b. Optional CUDA 11.8 / 13.0 runtimes (downloaded only when the active
+REM driver requires them; ~250 MB per version). See AGENTS.md §0.4 modules.
 REM ============================================================
 :check_cuda_extra
 set "CUDA_EXTRA_NEEDED="

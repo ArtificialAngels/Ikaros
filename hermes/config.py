@@ -196,7 +196,7 @@ def load_config(config_path: str | Path | None = None) -> HermesConfig:
     hermes_root_env = os.getenv("HERMES_ROOT")
     if hermes_root_env:
         candidates.append(Path(hermes_root_env) / "config" / "hermes.yaml")
-    # Legacy data-dir fallback (kept for back-compat; not hardcoded to any drive letter).
+    # Legacy data-dir fallback (back-compat; no hardcoded drive letter).
     candidates.append(Path("/data/config/hermes.yaml"))
 
     config_file = None
