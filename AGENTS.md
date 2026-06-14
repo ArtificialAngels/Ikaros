@@ -4,16 +4,14 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15b (browser tab was being opened twice
-> on every `hermes-all.bat` run; the WebUI package's own health-check
-> hook already opens the browser, so the redundant
-> `powershell -NoProfile -Command "Start-Process ..."` in
-> `bin/hermes-all.bat` was removed — see §0.7b). Previous:
-> 2026-06-15a (retired the `.\hermes-web-ui\` dev source; the npm
-> global install at `runtime/node23/node_modules/hermes-web-ui/` is
-> now the only path; `.gitignore` no longer carries a
-> `hermes-web-ui/` rule and the misleading `git clone ... hermes-web-ui`
-> line is gone; `README.md` attribution updated — see §0.7a).
+> **Last revised:** 2026-06-15c (cleaned up revision-log-style
+> comments from 7 .bat / .ps1 files — header CHANGELOG blocks, "Was:",
+> "Why:", "Phase 10 legacy", "(NOT the legacy ...)" prose — and
+> compressed them to short "see AGENTS.md §X.Y" pointers. Net −44
+> lines in the source tree with no behavioural change — see §0.7c).
+> Previous: 2026-06-15b (removed duplicate browser open in
+> `hermes-all.bat`; the npm package's own health-check hook already
+> opens the browser — see §0.7b).
 >
 > Previous: 2026-06-13 (v3 phase close-out — privacy cleanup,
 > `HERMES_BIN` ENOENT fix, full `.gitignore` overhaul, docs refresh;
@@ -477,6 +475,83 @@ browser to `http://localhost:8648/`:
   browser tab at `http://localhost:8648/`.
 * `bin/hermes-supervisor.bat --start` (standalone, not via
   `hermes-all`) still does NOT open any browser tab.
+
+---
+
+## 0.7c. 2026-06-15c — Compress revision-log-style comments in .bat / .ps1
+
+### What the problem was
+
+Over 2026-06-13 → 2026-06-15 the project accumulated a few
+mini "changelogs" hidden inside .bat / .ps1 header comments. They
+were useful when written (the author wanted to capture *why* a
+decision was made, not just *what* it does), but once AGENTS.md
+became the canonical project memory bank, the in-file copies
+became drift hazards:
+
+* `deps/hermes-env.ps1` had a 10-line `CHANGELOG (2026-06-13):` block
+  in its header explaining the junction-heal step — but §0.6 already
+  documents the same migration in 70+ lines.
+* `bin/hermes-all.bat` Step 2 had a 7-line "Was: `cmd /c
+  'powershell -File ...'`" block describing a fragility the current
+  Python supervisor already comments on at its own header.
+* `bin/hermes-firstrun.bat` had a "Phase 10: now delegates to the
+  env_bootstrap module" line pointing at a long-since-deleted
+  `hermes.firstrun` script.
+* `bin/setup-runtime.bat` had a one-line "Migrate old-style
+  llama-cuda.zip (legacy from previous setup)" with no date or
+  context.
+* `tests/smoke_node_path.ps1` had two "(NOT the legacy deps/*
+  junctions)" hedges that confused more than they informed.
+* `deps/hermes-env.bat` had a 7-line "Why this file is so small"
+  explanation that just paraphrased the line above it.
+
+### What changed
+
+7 files, −80 / +36 = **net −44 lines** (and every line removed
+was a comment, so behaviour is bit-for-bit unchanged):
+
+| File | Old header | New header |
+|------|-----------:|-----------:|
+| `deps/hermes-env.ps1`      | 23 | 5 |
+| `deps/hermes-env.bat`      | 36 | 13 |
+| `bin/hermes-all.bat`       | 14 | 9 |
+| `bin/hermes-firstrun.bat`  | 25 | 18 |
+| `bin/hermes-supervisor.bat`| 12 | 6 |
+| `bin/setup-runtime.bat`    |  1 | 3 (a real new explanatory comment) |
+| `tests/smoke_node_path.ps1`|  5 | 5 (rewritten, no length change) |
+
+Compression strategy: replace the verbose block with a single
+"see AGENTS.md §X.Y" pointer, where X.Y is the existing memory
+section that already covers the topic (§0.4 for the cmd /c
+fragility, §0.6 / §3 for the junction audit, §0.7a for the
+hermes-web-ui dev source, etc.). The "see §" links are the actual
+code-comment equivalent of a paper's "see Appendix B" — terse, but
+the reader can find the rationale in one click.
+
+### What is NOT changed
+
+* No logic was touched. `git diff` shows only comment lines
+  (line-context-wise: only lines whose first non-whitespace char
+  is `REM`, `#`, or `--`).
+* The `bin/setup-runtime.bat` migration step itself (the
+  `move /Y "!RUNTIME!\llama-cuda.zip" "!ZIP_PATH!"` block) was
+  kept; only the comment above it was rewritten.
+* AGENTS.md structure (the `## 0.7a. / 0.7b. / 0.7c.` series) is
+  preserved — these sections *are* the project's "what changed
+  and why" log; the .bat / .ps1 headers should not duplicate it.
+
+### Acceptance
+
+* `git diff` on the 7 files shows only comment-line changes.
+* `bin\fix-eol.py --all --check` still passes (no CRLF drift).
+* `tests\smoke_hermes_env.py` still passes (the env file's
+  actual logic was untouched).
+* `bin\hermes-supervisor.bat --dry-run` still produces the same
+  start order (only the comment block above the call was
+  rewritten).
+* `git diff --stat` reports `7 files changed, 36 insertions(+),
+  80 deletions(-)` (a net reduction of 44 comment lines).
 
 ---
 

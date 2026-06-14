@@ -1,13 +1,11 @@
 @echo off
 REM ============================================================
-REM Hermes - Pure Python supervisor launcher
+REM Hermes - Pure Python supervisor launcher.
 REM
-REM Why: bin\hermes-all.bat's `cmd /c "powershell -File ..."` bridge
-REM      breaks on paths with spaces (e.g. "E:\Hermes Agent"): cmd / c's
-REM      quote parser eats the path, and PowerShell 5.1 -File needs an
-REM      8.3 short path to dodge its own path-with-spaces bug. Python's
-REM      subprocess.Popen list args go straight to CreateProcessW, so we
-REM      sidestep both layers of fragility.
+REM Python instead of cmd /c "powershell -File ..." because the cmd
+REM bridge dies on paths with spaces; see AGENTS.md §0.4 gotcha
+REM ("PowerShell -File must use a quoted absolute path") and
+REM the module-level note in bin\hermes-supervisor.py docstring.
 REM
 REM Usage:
 REM   bin\hermes-supervisor.bat           # start all services

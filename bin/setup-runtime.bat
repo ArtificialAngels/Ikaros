@@ -95,7 +95,9 @@ for %%V in (!TARGETS!) do (
         goto :next_variant
     )
 
-    REM === Migrate old-style llama-cuda.zip (legacy from previous setup) ===
+    REM === Migrate legacy llama-cuda.zip to the current naming scheme ===
+    REM      Some pre-2026-06-09 setups left an `llama-cuda.zip` with no
+    REM      version suffix; rename so the resume path below can find it.
     if exist "!RUNTIME!\llama-cuda.zip" (
         if "!ZIP_NAME!"=="llama-!VER!-bin-win-cuda-12.4-x64.zip" (
             echo   [MIGRATE] found legacy llama-cuda.zip, renaming to new name for resume

@@ -1,26 +1,8 @@
-# deps/hermes-env.ps1 -- Hermes unified env setup (PowerShell entry point)
-#
-# Dot-source this file from any .ps1 module:
-#     . "$PSScriptRoot\hermes-env.ps1"
-#
-# After dot-sourcing, all 14 HERMES_* env vars are set in the current
-# process, and PowerShell-scope aliases ($HERMES_ROOT etc.) are
-# available for terse reference in the same scope.
-#
-# Why this file is so small: the heavy lifting (drive-letter resolution,
-# folder-name detection, drive scan) lives in bin\hermes-root.py.
-# This file just consumes the env block, auto-heals stale junctions,
-# and layers on cuda/PATH tweaks.
-#
-# CHANGELOG (2026-06-13):
-#   - Replaced `Join-Path $HERMES_DEPS 'node' / 'tools' / 'llamacpp\bin'`
-#     with $HERMES_RUNTIME and Join-Path $HERMES_RUNTIME 'node23'. The old
-#     deps\* paths were directory junctions whose absolute targets broke
-#     when the project was moved to a new drive letter (E: -> F:).
-#   - Added an auto-heal step that rmdir's any leftover junction under
-#     deps\ (rmdir /Q on a reparse point does NOT recurse into the
-#     target — the real content in runtime\, node23\, portable-python\
-#     is untouched).
+# deps/hermes-env.ps1 -- Hermes unified env setup (PowerShell entry point).
+# Dot-source from any module.ps1; sets 14 HERMES_* env vars and script-scope
+# aliases ($HERMES_ROOT, $HERMES_PYTHON, ...). Heavy lifting lives in
+# bin/hermes-root.py; see AGENTS.md §3 for the 2026-06-13 junction audit
+# that motivated the auto-heal step (Step 3 below).
 
 # ---- Step 1: resolve via single-source-of-truth (bat subprocess) ----
 $envBlock = & "$PSScriptRoot\..\bin\hermes-root.bat" init

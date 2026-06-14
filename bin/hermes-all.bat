@@ -1,9 +1,9 @@
 @echo off
 REM ============================================================
-REM Hermes - One-click Launcher (v2, uses supervisor orchestrator)
-REM Starts llama-server (:8080) + bridge (:7860) + webui (:8648)
-REM NO persistent cmd / shell windows — everything detached.
-REM Browser opens to webui at :8648.
+REM Hermes - One-click Launcher.
+REM Starts llama-server (:8080) + bridge (:7860) + webui (:8648).
+REM All processes detached; webui opens browser via its own
+REM health-check hook (no Start-Process here; see AGENTS.md §0.7b).
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -62,13 +62,9 @@ echo [1/2] Stopping old instances (if any)...
 call "%HERMES_ROOT%\bin\hermes-stop.bat" >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-REM ---- Step 2: Start all services via pure-Python supervisor ----
-REM      Was: cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File ..."
-REM      cmd /c's quote parsing eats spaces in paths (the 'M' / '\' chars from
-REM      the old error log prove it), and PowerShell 5.1 -File needs an 8.3
-REM      short path to work around its own path-with-spaces bug. Python's
-REM      subprocess.Popen list args go straight to CreateProcessW, sidestepping
-REM      both layers of fragility.
+REM ---- Step 2: Start all services via the pure-Python supervisor ----
+REM      Why Python: see bin\hermes-supervisor.bat header for the
+REM      `cmd /c "powershell -File ..."` fragility this replaced.
 echo [2/2] Starting all services via Python supervisor...
 call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --start
 if errorlevel 1 (

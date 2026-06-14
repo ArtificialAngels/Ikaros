@@ -1,38 +1,21 @@
 @echo off
 REM ============================================================
-REM deps\hermes-env.bat -- Hermes unified env setup (bat entry point)
+REM deps\hermes-env.bat -- Hermes unified env setup (bat entry point).
 REM
-REM This is the **single entry point** every other .bat / .ps1 in the
-REM project must call first to get a consistent Hermes environment:
-REM
+REM Call this first from any .bat / .ps1 in the project:
 REM   call "%~dp0hermes-env.bat"      (from bat)
 REM   . "$PSScriptRoot\hermes-env.ps1" (from ps1)
 REM
-REM Root resolution (drive letter, folder name, scan) lives in
-REM bin\hermes-root.py. This file only:
+REM Root resolution lives in bin\hermes-root.py. This file:
 REM   1. Pulls the 14-var env block from `bin\hermes-root.bat init`
-REM   2. Reads cuda-active.json (if present) to pick the active CUDA bin
-REM   3. Auto-heals any stale `deps\node\`, `deps\tools\`, `deps\llamacpp\bin\`,
-REM      or `deps\python-test\` directory junctions left over from older
-REM      Hermes installs. Junctions store absolute reparse-point targets,
-REM      so when the project is moved to a new drive letter (e.g. E: -> F:)
-REM      they point at the wrong path. rmdir /Q on a reparse point does
-REM      NOT recurse into the target, so the real content in runtime\,
-REM      node23\, and portable-python\ is untouched.
-REM   4. Sets Python env vars (PYTHONIOENCODING, PYTHONPATH, etc.)
-REM   5. Pins the WebUI's HERMES_AGENT_CLI_PYTHON to %HERMES_PYTHON% so
-REM      hermes-web-ui's bundledCliPythonForWindows() can never spawn a
-REM      stale HERMES_BIN directory by accident.
-REM   6. Augments PATH with the active CUDA bin, %HERMES_RUNTIME%,
-REM      %HERMES_RUNTIME%\node23, and %HERMES_ROOT%\portable-python\Scripts.
-REM
-REM CHANGELOG (2026-06-13):
-REM   - Replaced `Join-Path $HERMES_DEPS 'node' / 'tools' / 'llamacpp\bin'`
-REM     with %HERMES_RUNTIME% and %HERMES_RUNTIME%\node23. The old deps\*
-REM     paths were directory junctions whose absolute targets broke when
-REM     the project was moved to a new drive letter.
-REM   - Added the auto-heal step (#3 above) so old copies of the repo
-REM     self-repair on first run.
+REM   2. Reads cuda-active.json to pick the active CUDA bin
+REM   3. Auto-heals any leftover deps\* directory junctions (see
+REM      AGENTS.md §3, 2026-06-13 junction audit)
+REM   4. Sets Python env vars (PYTHONIOENCODING, PYTHONPATH, ...)
+REM   5. Pins HERMES_AGENT_CLI_PYTHON (prevents webui's stale
+REM      HERMES_BIN-dir spawn bug; see AGENTS.md §0.4 gotcha)
+REM   6. Augments PATH with active CUDA bin, runtime/, node23/,
+REM      and portable-python\Scripts
 REM ============================================================
 REM NOTE: This file intentionally does NOT use `setlocal`. All variable
 REM assignments below are exported directly to the caller. Earlier versions

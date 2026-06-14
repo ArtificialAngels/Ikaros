@@ -1,5 +1,6 @@
-# Smoke test: dot-source deps/hermes-env.ps1 and verify the resolved vars
-# match the canonical runtime/* paths (NOT the legacy deps/* junctions).
+# Smoke test: dot-source deps/hermes-env.ps1 and verify the resolved
+# vars match the canonical runtime/* paths (see AGENTS.md §3, 2026-06-13
+# junction audit for why the legacy deps/* junctions are gone).
 
 . "E:\Hermes Agent\deps\hermes-env.ps1"
 

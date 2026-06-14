@@ -1,13 +1,10 @@
 @echo off
 REM ============================================================
-REM Hermes - First-run / startup environment check
+REM Hermes - First-run / startup environment check.
 REM
 REM Detects GPU, downloads missing GPU runtime (cudart/cublas) via
 REM the pip-installed nvidia-* packages, and reports back. Idempotent -
-REM re-runs are no-ops.
-REM
-REM Phase 10: now delegates to the env_bootstrap module instead of
-REM the legacy `hermes.firstrun` script (which was deleted).
+REM re-runs are no-ops. Delegates to modules\env_bootstrap\gpu_detect.
 REM
 REM Exit codes:
 REM   0 = OK (GPU ready OR pure CPU)
@@ -19,9 +16,6 @@ REM   bin\hermes-firstrun.bat                (auto: status + install if needed)
 REM   bin\hermes-firstrun.bat status
 REM   bin\hermes-firstrun.bat check
 REM   bin\hermes-firstrun.bat install
-REM
-REM v3: 2026-06-10, switched from `hermes.firstrun` to
-REM `modules.env_bootstrap.gpu_detect`.
 REM ============================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
