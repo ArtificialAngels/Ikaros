@@ -34,7 +34,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from modules.model_manager.gguf import (  # noqa: E402
-    list_gguf_models, current_model_from_bat, parse_gguf_meta,
+    list_gguf_models, parse_gguf_meta,
 )
 import modules.model_manager.gguf as _gguf  # for back-compat: list_models / print_models
 
@@ -49,7 +49,8 @@ def list_models() -> list[dict]:
     return list_gguf_models(MODELS_DIR)
 
 def current_model_from_bat() -> Optional[str]:
-    return _gguf.current_model_from_bat(HERMES_ROOT)
+    """Router mode has no default model — llama-server picks via LRU."""
+    return None
 
 def parse_gguf_meta(path: Path) -> dict:
     return _gguf.parse_gguf_meta(path)

@@ -1,33 +1,110 @@
 # ============================================================
-# Hermes Agent — Mavis 配置
-# 支持：云端 LLM（online） + 本地 LLM（offline fallback）
+# Hermes Agent — 智能路由配置（客户可定制）
+# ============================================================
+# 核心理念：
+#   - 有网络 → 本地模型做简单对话，云端模型跑 toolsets
+#   - 无网络 → 本地模型 + 精简工具集
+#   - 模型热切换 → llama.cpp router 模式，无需重启
 # ============================================================
 
 agent:
   name: hermes
-  version: 2.0.0
+  version: 3.0.0
   persona: |
-    你是 Hermes——一个被深度调教的赛博游民数字管家。
-    你的运行环境可能随时切换（云端 / 本地模型 / 离线），
+    你是 Hermes——一个多引擎智能数字管家。
+    你运行在"本地模型 + 云端模型"双引擎架构上：
+    - 简单对话由本地模型处理（快速、隐私）
+    - 复杂工具调用由云端模型处理（强大、准确）
+    - 离线时自动降级到本地模型 + 精简工具集
     保持冷静、高效、富有判断力。优先用工具解决实际问题。
 
 # ============================================================
-# LLM 路由：双引擎 + 智能 fallback
+# 智能路由 — 核心策略
+# ============================================================
+routing:
+  enabled: true                     # 是否启用智能路由
+  network_check_interval_sec: 30    # 网络检测间隔（秒）
+
+  # ---- 离线模式（无网络时自动激活）----
+  offline:
+    model_source: local             # 固定使用本地模型
+    model_profile: medium           # 配置 models.yaml 中的 profile 名
+    toolsets:                       # 精简工具集（不需要网络）
+      - terminal                    # 终端命令
+      - file                        # 文件读写
+      - todo                        # 任务规划
+      - memory                      # 记忆管理
+      - skills                      # 技能管理
+      - code_execution              # Python 代码执行
+    behavior:
+      max_response_tokens: 2048
+      prefer_concise: true
+
+  # ---- 在线模式（有网络时） ----
+  online:
+    # 简单对话 → 本地模型（快速、省钱、隐私）
+    simple:
+      model_source: local
+      model_profile: medium         # 本地对话用哪个模型
+      toolsets:                     # 简单工具（允许轻量网络查询）
+        - terminal
+        - file
+        - todo
+        - memory
+        - skills
+        - web                        # 仅允许搜索，不允许浏览器
+    # 复杂工具调用 → 云端模型（准确、能力强）
+    tool_routing:
+      model_source: cloud
+      cloud_provider: openai        # 优先使用的云端 provider
+      fallback_providers: [anthropic, openrouter, minimax]
+      toolsets:                     # 全量工具集（云端能力强）
+        - hermes-cloud               # 完整核心工具集
+
+  # 意图分类阈值（决定路由到 local.simple 还是 cloud.tool_routing）
+  intent:
+    # 以下关键词触发 tool_routing（走云端）
+    tool_triggers:
+      - 帮我写
+      - 帮我查
+      - 帮我做
+      - 分析
+      - 总结
+      - 翻译
+      - 生成代码
+      - 调试
+      - 搜索
+      - 浏览网页
+      - 爬取
+      - 下载
+      - 部署
+      - 配置
+      - git
+      - docker
+    # 以下走 local.simple（本地快速响应）
+    simple_triggers:
+      - 你好
+      - 谢谢
+      - 什么是
+      - 为什么
+      - 介绍一下
+
+# ============================================================
+# LLM 双引擎配置
 # ============================================================
 llm:
   # ---- 路由器配置 ----
   router:
-    strategy: fallback_chain       # fallback_chain | race | cost_optimized
-    primary: cloud                 # 首选 cloud
+    strategy: routing_aware         # routing_aware | fallback_chain | race | cost_optimized
+    primary: auto                   # auto = 由 routing 模块决定
     fallback_order: [cloud, local]
-    # 失败后切换的触发条件
     failover:
       on_status: [429, 500, 502, 503, 504]
-      on_timeout_ms: 8000
+      on_timeout_ms: 15000          # 云端超时 15s
       on_network_error: true
-      max_retries: 1                # 失败 1 次就切换
+      max_retries: 1
 
-  # ---- 云端 LLM 列表（按优先级）----
+  # ---- 云端 LLM（按优先级排列）----
   cloud:
     - name: openai
       provider: openai
@@ -37,28 +114,28 @@ llm:
         default: gpt-4o
         fast: gpt-4o-mini
         vision: gpt-4o
-      enabled_if: ${HERMES_CLOUD_OK}    # 由路由器动态决定
+      enabled_if: ${HERMES_CLOUD_OK}
 
     - name: anthropic
       provider: anthropic
       base_url: https://api.anthropic.com
       api_key: ${ANTHROPIC_API_KEY}
       models:
-        default: claude-3-5-sonnet-20241022
+        default: claude-sonnet-4-20250514
         fast: claude-3-5-haiku-20241022
       enabled_if: ${HERMES_CLOUD_OK}
 
     - name: openrouter
-      provider: openai                # OpenAI 兼容协议
+      provider: openai
       base_url: https://openrouter.ai/api/v1
       api_key: ${OPENROUTER_API_KEY}
       models:
-        default: anthropic/claude-3.5-sonnet
-        fast: meta-llama/llama-3.1-8b-instruct:free
+        default: anthropic/claude-sonnet-4
+        fast: meta-llama/llama-4-maverick:free
       enabled_if: ${HERMES_CLOUD_OK}
 
     - name: minimax
-      provider: openai                # MiniMax 使用 OpenAI 兼容协议
+      provider: openai
       base_url: ${MINIMAX_BASE_URL:-https://api.minimaxi.chat/v1}
       api_key: ${MINIMAX_API_KEY}
       models:
@@ -66,18 +143,21 @@ llm:
         fast: abab6.5s-chat
       enabled_if: ${HERMES_CLOUD_OK}
 
-  # ---- 本地 LLM（llama-server，OpenAI 兼容）----
+  # ---- 本地 LLM（llama-server router 模式）----
   local:
-    provider: openai                  # 假装是 OpenAI，走 OpenAI 协议
-    base_url: ${HERMES_LOCAL_LLM_URL}/v1     # http://127.0.0.1:8080/v1
-    api_key: not-needed               # 本地服务不校验
+    provider: openai
+    base_url: ${HERMES_LOCAL_LLM_URL:-http://127.0.0.1:8080}/v1
+    api_key: not-needed
     models:
-      default: ${LOCAL_MODEL_NAME:-qwen2.5-3b-instruct}
-      fast: ${LOCAL_MODEL_NAME:-qwen2.5-3b-instruct}
-    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE}
+      default: ${LOCAL_MODEL_NAME:-auto}
+      fast: ${LOCAL_MODEL_NAME:-auto}
+    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE:-true}
+    # 模型热切换 — 通过 POST /v1/models/load 动态切换
+    # 命令：portable-python\python.exe bin\hermes-models.py switch <name>
+    hot_swap: true
 
 # ============================================================
-# Embedding（同样支持双源）
+# Embedding（双源）
 # ============================================================
 embedding:
   router:
@@ -93,18 +173,16 @@ embedding:
     enabled_if: ${HERMES_CLOUD_OK}
 
   local:
-    provider: openai                  # llama.cpp 也提供 /v1/embeddings
-    base_url: ${HERMES_LOCAL_LLM_URL}/v1
+    provider: openai
+    base_url: ${HERMES_LOCAL_LLM_URL:-http://127.0.0.1:8080}/v1
     api_key: not-needed
     model: ${LOCAL_EMBED_MODEL:-nomic-embed-text-v1.5}
     dimensions: 768
-    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE}
+    enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE:-true}
 
 # ============================================================
 # 长期记忆
 # ============================================================
-# KB / memory / skills paths are derived from $HERMES_DATA_DIR via
-# hermes/config.py::resolve_data_paths() — no explicit path field needed.
 memory:
   backend: chroma                     # chroma | lancedb | faiss
   recency_decay: 0.95
@@ -129,14 +207,15 @@ behavior:
   log_level: info
   max_iterations: 50
 
-  # 离线降级策略（可选）
+  # 离线降级策略
   offline_mode:
     enabled: true
-    max_response_tokens: 1024         # 本地模型上下文小，限制输出
-    prefer_concise: true             # 自动切换简洁风格
+    max_response_tokens: 2048
+    prefer_concise: true
     disable_tools:
-      - web-search                    # 离线时无网
+      - web-search
       - http-fetch
+      - browser
 
 # ============================================================
 # 服务器
@@ -146,24 +225,20 @@ server:
   port: 7860
   cors_origins: ["http://127.0.0.1:8648", "http://localhost:8648"]
 
-  # 健康检查端点（Docker HEALTHCHECK 用）
   healthz:
     enabled: true
     path: /healthz
 
 # ============================================================
-# 网络偏好 — 镜像与代理（参考 ComfyUI-aki-v3）
+# 网络偏好 — 镜像与代理
 # ============================================================
 network:
-  # HTTP/HTTPS 代理（国内用户如用 Clash/SS 填 http://127.0.0.1:7890）
   proxy_address: ""
 
-  # 国内镜像开关（慢网用户建议全部开启）
-  mirror_pypi: false              # PyPI 镜像（aliyun / tsinghua）
-  mirror_huggingface: false       # HuggingFace 镜像（hf-mirror.com）
-  mirror_git: false               # GitHub 镜像（gh-proxy.com）
+  mirror_pypi: false
+  mirror_huggingface: false
+  mirror_git: false
 
-  # 镜像站点选择
-  pypi_mirror: aliyun             # aliyun | tsinghua | ustc
-  hf_mirror: hf-mirror            # hf-mirror
-  git_mirror: gh-proxy            # gh-proxy | gitclone | fastgit
+  pypi_mirror: aliyun
+  hf_mirror: hf-mirror
+  git_mirror: gh-proxy

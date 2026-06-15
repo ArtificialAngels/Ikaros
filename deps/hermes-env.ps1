@@ -99,6 +99,12 @@ if (Test-Path $cudaActiveJson) {
 # directory by accident, regardless of what HERMES_BIN happens to be.
 [Environment]::SetEnvironmentVariable('HERMES_AGENT_CLI_PYTHON', $HERMES_PYTHON, 'Process')
 
+# ---- Step 5c: HERMES_GIT_BASH_PATH for hermes-agent's terminal backend ----
+# hermes-agent's tools/environments/local.py::_find_bash() needs bash.exe
+# for POSIX shell command execution. Our bundled MinGit lives at
+# runtime\git\ (installed by setup-portable.bat step 3b).
+[Environment]::SetEnvironmentVariable('HERMES_GIT_BASH_PATH', (Join-Path $HERMES_ROOT 'runtime\git\bin\bash.exe'), 'Process')
+
 # ---- Step 6: PATH augmentation ----
 # Prepend the active CUDA bin first (so its cudart/cublas DLLs win the
 # DLL search order) followed by the other deps.

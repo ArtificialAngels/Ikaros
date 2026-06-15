@@ -15,6 +15,10 @@ REM                                   private repo. If runtime/node23/node_modul
 REM                                   hermes-web-ui is absent, webui will fall back
 REM                                   to the dev source under .\hermes-web-ui\
 REM                                   (which the user must clone separately).
+REM   3b. runtime/git/      (PortableGit 2.54.0 win-x64, ~56 MB)
+REM                                   Required by hermes-agent's terminal backend
+REM                                   (tools/environments/local.py). Provides
+REM                                   bash.exe for POSIX shell command execution.
 REM   4. data/models/*.gguf  (checked for presence, not auto-downloaded)
 REM
 REM Each piece is checked separately. Already-present pieces are
@@ -33,6 +37,7 @@ REM   bin\setup-portable.bat status    (check only, no install)
 REM   bin\setup-portable.bat python    (just the python piece)
 REM   bin\setup-portable.bat runtime   (just the llama.cpp pieces)
 REM   bin\setup-portable.bat node      (just the Node.js piece)
+REM   bin\setup-portable.bat git       (just the MinGit piece)
 REM   bin\setup-portable.bat model     (just the model piece)
 REM ============================================================
 setlocal enabledelayedexpansion
@@ -248,8 +253,9 @@ REM ============================================================
 :check_node
 set "NODE_DIR=%HERMES_ROOT%\runtime\node23"
 set "NODE_EXE=%NODE_DIR%\node.exe"
-if "%MODE%"=="python" goto :check_model
+if "%MODE%"=="python" goto :check_git
 if "%MODE%"=="model"  goto :check_model
+if "%MODE%"=="git"    goto :check_git
 if "%MODE%"=="status" (
     if not exist "%NODE_EXE%" (
         echo [setup-portable] status: runtime/node23/ MISSING
@@ -257,10 +263,10 @@ if "%MODE%"=="status" (
     ) else (
         echo [setup-portable] status: runtime/node23/ present
     )
-    goto :check_model
+    goto :check_git
 )
 
-if exist "%NODE_EXE%" goto :check_model
+if exist "%NODE_EXE%" goto :check_git
 echo.
 echo ============================================================
 echo   [3/4] runtime/node23/  ^(?^)
@@ -282,7 +288,7 @@ if errorlevel 1 (
     echo [setup-portable] FAIL: Node.js download failed.
     echo [setup-portable]   webui will be unable to start; other modules OK.
     set "MISSING=1"
-    goto :check_model
+    goto :check_git
 )
 
 echo   Extracting to %NODE_DIR% ...
@@ -290,7 +296,7 @@ powershell -NoProfile -Command "Expand-Archive -Path '%NODE_ZIP%' -DestinationPa
 if errorlevel 1 (
     echo [setup-portable] FAIL: Node.js extract failed.
     set "MISSING=1"
-    goto :check_model
+    goto :check_git
 )
 
 REM Move node-v23.11.1-win-x64\* into runtime/node23\.
@@ -303,7 +309,7 @@ del "%NODE_ZIP%" 2>nul
 if not exist "%NODE_EXE%" (
     echo [setup-portable] FAIL: node.exe still missing after extract.
     set "MISSING=1"
-    goto :check_model
+    goto :check_git
 )
 echo   OK: %NODE_EXE%
 echo.
@@ -318,6 +324,69 @@ if not exist "%NODE_DIR%\node_modules\hermes-web-ui\bin\hermes-web-ui.mjs" (
     echo            cd runtime\node23 ^&^& npm install -g hermes-web-ui
     echo.
 )
+
+REM ============================================================
+REM 3b. runtime/git/  (PortableGit 2.54.0 -- POSIX shell for hermes-agent)
+REM ============================================================
+:check_git
+set "GIT_DIR=%HERMES_ROOT%\runtime\git"
+set "GIT_BASH=%GIT_DIR%\bin\bash.exe"
+if "%MODE%"=="python" goto :check_model
+if "%MODE%"=="model"  goto :check_model
+if "%MODE%"=="node"   goto :check_model
+if "%MODE%"=="status" (
+    if not exist "%GIT_BASH%" (
+        echo [setup-portable] status: runtime/git/ MISSING
+        set "MISSING=1"
+    ) else (
+        echo [setup-portable] status: runtime/git/ present
+    )
+    goto :check_model
+)
+
+if exist "%GIT_BASH%" goto :check_model
+echo.
+echo ============================================================
+echo   [3b/4] runtime/git/  ^(?^)
+echo   PortableGit 2.54.0 is missing (required by hermes-agent's
+echo   terminal backend for POSIX shell commands).
+echo   Downloading from git-for-windows (~56 MB)...
+echo ============================================================
+echo.
+
+set "GIT_VERSION=2.54.0"
+set "GIT_URL=https://github.com/git-for-windows/git/releases/download/v%GIT_VERSION%.windows.1/PortableGit-%GIT_VERSION%-64-bit.7z.exe"
+set "GIT_EXE=%TEMP%\hermes-portablegit-%GIT_VERSION%.7z.exe"
+
+if not exist "%HERMES_ROOT%\runtime" mkdir "%HERMES_ROOT%\runtime" 2>nul
+if not exist "%GIT_DIR%" mkdir "%GIT_DIR%" 2>nul
+
+call :download "%GIT_URL%" "%GIT_EXE%"
+if errorlevel 1 (
+    echo [setup-portable] FAIL: PortableGit download failed.
+    echo [setup-portable]   hermes-agent terminal will be unable to execute
+    echo [setup-portable]   shell commands; install Git for Windows manually
+    echo [setup-portable]   or set HERMES_GIT_BASH_PATH to bash.exe.
+    set "MISSING=1"
+    goto :check_model
+)
+
+echo   Extracting to %GIT_DIR% (self-extracting 7z, may take 1-2 min)...
+"%GIT_EXE%" -o"%GIT_DIR%" -y >nul 2>&1
+if errorlevel 1 (
+    echo [setup-portable] FAIL: PortableGit extract failed.
+    set "MISSING=1"
+    goto :check_model
+)
+del "%GIT_EXE%" 2>nul
+
+if not exist "%GIT_BASH%" (
+    echo [setup-portable] FAIL: bash.exe still missing after extract.
+    set "MISSING=1"
+    goto :check_model
+)
+echo   OK: %GIT_BASH%
+echo.
 
 REM ============================================================
 REM 4. data/models/ (any .gguf)

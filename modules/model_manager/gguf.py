@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 import struct
 from pathlib import Path
-from typing import Optional
 
 
 # GGUF v3 type table (per llama.cpp gguf.h)
@@ -124,16 +123,3 @@ def list_gguf_models(models_dir: Path) -> list[dict]:
     for f in sorted(models_dir.glob("*.gguf")):
         out.append(parse_gguf_meta(f))
     return out
-
-
-def current_model_from_bat(hermes_root: Path) -> Optional[str]:
-    """Parse bin/hermes-all.bat to find the default MODEL setting."""
-    bat = hermes_root / "bin" / "hermes-all.bat"
-    if not bat.exists():
-        return None
-    try:
-        txt = bat.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return None
-    m = re.search(r'set\s+"MODEL=[^"]*\\([^"\\]+\.gguf)"', txt)
-    return m.group(1) if m else None

@@ -39,6 +39,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import threading
 import time
 import uuid
@@ -51,6 +52,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from bridge import telemetry
+from bridge.health import registry as health_registry
 
 logger = logging.getLogger("hermes.bridge")
 
@@ -64,6 +66,115 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path(__file__).resolve().pa
 MODELS_DIR = Path(os.environ.get("HERMES_MODELS_DIR", str(Path(__file__).resolve().parent.parent / "data" / "models")))
 BRIDGE_PORT = int(os.environ.get("HERMES_BRIDGE_PORT", "7860"))
 
+# ---- Retry & resilience ----
+_MAX_RETRIES = int(os.environ.get("HERMES_BRIDGE_MAX_RETRIES", "3"))
+_RETRY_BASE_DELAY_MS = float(os.environ.get("HERMES_BRIDGE_RETRY_BASE_MS", "200"))
+_RETRY_MAX_DELAY_MS = float(os.environ.get("HERMES_BRIDGE_RETRY_MAX_MS", "5000"))
+_RETRYABLE_STATUSES = frozenset({502, 503, 504})
+
+
+async def _retry_call(coro_factory, label: str = "request") -> Any:
+    """Call *coro_factory* with exponential-backoff retry on transient errors.
+
+    *coro_factory* must be an async callable that returns an httpx Response.
+    Retries on connection errors, timeouts, and 502/503/504 status codes.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = await coro_factory()
+            if resp.status_code not in _RETRYABLE_STATUSES:
+                return resp
+            if attempt < _MAX_RETRIES:
+                delay = min(_RETRY_BASE_DELAY_MS * (2 ** attempt) / 1000.0 + random.uniform(0, 0.1), _RETRY_MAX_DELAY_MS / 1000.0)
+                logger.warning("bridge %s retry %d/%d (HTTP %d), waiting %.1fs", label, attempt + 1, _MAX_RETRIES, resp.status_code, delay)
+                await asyncio.sleep(delay)
+            else:
+                return resp  # return last 5xx on final attempt
+        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+            last_exc = e
+            if attempt < _MAX_RETRIES:
+                delay = min(_RETRY_BASE_DELAY_MS * (2 ** attempt) / 1000.0 + random.uniform(0, 0.05), _RETRY_MAX_DELAY_MS / 1000.0)
+                logger.warning("bridge %s retry %d/%d (%s), waiting %.1fs", label, attempt + 1, _MAX_RETRIES, type(e).__name__, delay)
+                await asyncio.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
+# ---- Connection health tracking ----
+_llama_health: dict[str, Any] = {
+    "alive": False,
+    "last_check": 0.0,
+    "last_success": 0.0,
+    "consecutive_failures": 0,
+    "latency_ms": 0.0,
+}
+_health_lock = threading.Lock()
+
+
+def _get_llama_health() -> dict[str, Any]:
+    with _health_lock:
+        return dict(_llama_health)
+
+
+async def _check_llama_health() -> bool:
+    """Probe llama-server and update the shared health state."""
+    t0 = time.perf_counter()
+    try:
+        r = await _http.get("/health", timeout=3.0)
+        alive = r.status_code == 200
+        latency = (time.perf_counter() - t0) * 1000.0
+    except Exception as e:
+        alive = False
+        latency = 0.0
+
+    now = time.time()
+    with _health_lock:
+        _llama_health["last_check"] = now
+        if alive:
+            _llama_health["alive"] = True
+            _llama_health["last_success"] = now
+            _llama_health["consecutive_failures"] = 0
+            _llama_health["latency_ms"] = round(latency, 1)
+        else:
+            _llama_health["consecutive_failures"] += 1
+            _llama_health["latency_ms"] = 0.0
+            # Only mark dead after 2 consecutive failures (avoid flapping)
+            if _llama_health["consecutive_failures"] >= 2:
+                _llama_health["alive"] = False
+
+    # Also update the shared health registry for cross-component visibility
+    health_registry.report("llama_server", alive=alive, latency_ms=round(latency, 1))
+    health_registry.report("bridge", alive=True, extra={"port": BRIDGE_PORT, "pid": os.getpid()})
+
+    return alive
+
+
+# ---- Background health monitor ----
+_health_monitor_stop = threading.Event()
+_health_monitor_interval = float(os.environ.get("HERMES_BRIDGE_HEALTH_INTERVAL_SEC", "10"))
+
+
+def _start_health_monitor() -> None:
+    """Background thread that periodically probes llama-server health."""
+    async def _probe_loop():
+        while not _health_monitor_stop.is_set():
+            try:
+                await _check_llama_health()
+            except Exception:
+                pass
+            _health_monitor_stop.wait(_health_monitor_interval)
+
+    def _run():
+        asyncio.run(_probe_loop())
+
+    t = threading.Thread(target=_run, daemon=True, name="bridge-health-monitor")
+    t.start()
+
+
+def _stop_health_monitor() -> None:
+    _health_monitor_stop.set()
+
+
 # Single shared HTTP client for proxying to llama-server (keeps the connection
 # pool warm and makes streaming responses efficient).
 _http = httpx.AsyncClient(
@@ -73,16 +184,28 @@ _http = httpx.AsyncClient(
 )
 _warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
 
+# ---- Bridge-to-WebUI heartbeat ----
+# The WebUI can poll /health to verify the bridge is alive, and the bridge
+# self-reports its own component health in the response. This keeps the
+# WebUI's topology panel accurate even when the supervisor process is gone.
+_heartbeat_sequence: int = 0
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     telemetry.bus().emit(telemetry.Topics.MODULE_BOOT, {
         "module": "bridge",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "port": BRIDGE_PORT,
         "pid": os.getpid(),
     })
+    # Start background health monitor
+    _start_health_monitor()
+    # Do an initial health check immediately
+    await _check_llama_health()
+    logger.info("bridge v0.5.0 started — llama=%s", _get_llama_health()["alive"])
     yield
+    _stop_health_monitor()
     telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
     try:
         telemetry.log().flush(background=True)
@@ -94,12 +217,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Hermes Bridge",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
     description=(
-        "Thin glue layer between EKKOLearnAI hermes-web-ui (port :8648) and "
+        "Robust glue layer between EKKOLearnAI hermes-web-ui (port :8648) and "
         "our local llama-server (port :8080) + upstream NousResearch "
-        "hermes-agent v0.16.0. See bridge/README.md."
+        "hermes-agent v0.16.0. Features: health monitoring, retry logic, "
+        "graceful degradation. See bridge/README.md."
     ),
 )
 
@@ -171,57 +295,127 @@ async def _telemetry_middleware(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    """Liveness + readiness probe. Three signals in one response."""
-    llama_alive = False
-    try:
-        r = await _http.get("/health", timeout=2.0)
-        llama_alive = r.status_code == 200
-    except Exception:
-        pass
+    """Liveness + readiness probe with full component health.
+
+    Returns bridge self-health, llama-server status, hermes-agent
+    availability, and disk state. The WebUI polls this every few
+    seconds to maintain its topology view.
+    """
+    # Use cached health to avoid hammering llama-server on every poll.
+    # The background monitor keeps this fresh every ~10s.
+    llama_health = _get_llama_health()
+
+    # Check hermes-agent importability (memoized — only runs once).
+    agent_importable = _check_agent_importable()
 
     hermes_home_writable = HERMES_HOME.exists() and os.access(HERMES_HOME, os.W_OK)
+    models_dir_exists = MODELS_DIR.is_dir()
+    gguf_count = len(list(MODELS_DIR.glob("*.gguf"))) if models_dir_exists else 0
+
+    global _heartbeat_sequence
+    _heartbeat_sequence += 1
 
     payload = {
-        "status": "ok" if llama_alive else "degraded",
-        "version": "0.4.0",
-        "upstream": {
-            "hermes_agent": "0.16.0",
+        "status": "ok" if llama_health["alive"] else "degraded",
+        "version": "0.5.0",
+        "heartbeat_seq": _heartbeat_sequence,
+        "pid": os.getpid(),
+        "uptime_sec": round(time.time() - telemetry.log()._start_time if hasattr(telemetry.log(), "_start_time") else 0, 1),
+        "components": {
             "llama_server": {
                 "url": LLAMA_BASE_URL,
-                "alive": llama_alive,
+                "alive": llama_health["alive"],
+                "latency_ms": llama_health["latency_ms"],
+                "consecutive_failures": llama_health["consecutive_failures"],
+                "last_success_ago_sec": round(time.time() - llama_health["last_success"], 1) if llama_health["last_success"] else None,
             },
-            "hermes_home": {
-                "path": str(HERMES_HOME),
-                "exists": HERMES_HOME.exists(),
-                "writable": hermes_home_writable,
+            "hermes_agent": {
+                "importable": agent_importable,
+                "home_path": str(HERMES_HOME),
+                "home_exists": HERMES_HOME.exists(),
+                "home_writable": hermes_home_writable,
+                "config_exists": (HERMES_HOME / "config.yaml").exists(),
             },
-            "models_dir": str(MODELS_DIR),
+            "models": {
+                "dir": str(MODELS_DIR),
+                "exists": models_dir_exists,
+                "gguf_count": gguf_count,
+            },
+            "bridge": {
+                "alive": True,
+                "port": BRIDGE_PORT,
+                "websocket_clients": len(_ws_clients),
+            },
         },
         "endpoints": [
             "/health",
             "/v1/signals", "/v1/signals/recent", "/v1/signals/stats",
-            "/v1/signals/emit",
-            "/v1/models",
-            "/v1/models/load",
-            "/v1/models/swap",
-            "/v1/models/status",
-            "/v1/models/evict",
-            "/v1/models/warmup",
-            "/v1/models/warmup/{warmup_id}",
-            "/v1/chat/completions",
-            "/v1/chat/completions/sse",
-            "/api/chat/sessions",
-            "/api/agent/run",
+            "/v1/signals/emit", "/v1/signals/ws",
+            "/v1/modules", "/v1/inspect/{name}",
+            "/v1/models", "/v1/models/load", "/v1/models/swap",
+            "/v1/models/status", "/v1/models/evict",
+            "/v1/models/warmup", "/v1/models/warmup/{warmup_id}",
+            "/v1/chat/completions", "/v1/chat/completions/sse",
+            "/api/chat/sessions", "/api/agent/run",
+            "/api/bridge/health",
         ],
     }
-    # Side-effect: emit a PORT_LISTEN-style signal on every health probe so
-    # downstream consumers can build a heartbeat timeline.
-    if llama_alive:
+    # Side-effect: emit PORT_LISTEN signal on every health probe.
+    if llama_health["alive"]:
         telemetry.bus().emit(telemetry.Topics.PORT_LISTEN, {
             "module": "llm_engine",
             "url": LLAMA_BASE_URL,
         })
     return payload
+
+
+# ---- Agent importability cache ----
+_agent_importable_cache: dict[str, Any] = {"checked": False, "importable": False, "error": ""}
+
+
+def _check_agent_importable() -> bool:
+    """Memoized check: can we import AIAgent from run_agent?"""
+    if _agent_importable_cache["checked"]:
+        return _agent_importable_cache["importable"]
+    _agent_importable_cache["checked"] = True
+    try:
+        from run_agent import AIAgent  # noqa: F401
+        _agent_importable_cache["importable"] = True
+    except ImportError as e:
+        _agent_importable_cache["importable"] = False
+        _agent_importable_cache["error"] = str(e)
+    return _agent_importable_cache["importable"]
+
+
+# ---- Dedicated bridge health endpoint (lighter than /health) ----
+@app.get("/api/bridge/health")
+async def bridge_health() -> dict[str, Any]:
+    """Lightweight health check for the WebUI's heartbeat poller.
+
+    Returns only bridge + llama alive status. Faster than /health
+    because it skips hermes-agent import and disk checks.
+    """
+    h = _get_llama_health()
+    return {
+        "bridge": "ok",
+        "llama_server": "ok" if h["alive"] else "degraded",
+        "latency_ms": h["latency_ms"],
+        "heartbeat_seq": _heartbeat_sequence,
+        "ts": time.time(),
+    }
+
+
+@app.get("/api/bridge/health/snapshot")
+async def health_snapshot() -> dict[str, Any]:
+    """Full health snapshot of all registered components.
+
+    Uses the shared HealthRegistry singleton. Any module that imports
+    ``bridge.health.registry`` can report its status and appear here.
+    """
+    return {
+        "ts": time.time(),
+        "components": health_registry.snapshot(),
+    }
 
 
 # ---- /v1/signals (telemetry aggregation) ----
@@ -244,20 +438,20 @@ async def signals_snapshot() -> dict[str, Any]:
         return _signals_cache["data"]
 
     # Probe llama-server in parallel-style (sequential async is fine — both
-    # calls have short timeouts).
-    llama_alive = False
+    # calls have short timeouts). Use cached health when available.
+    llama_health = _get_llama_health()
+    llama_alive = llama_health["alive"]
     llama_models_count = 0
     try:
-        r = await _http.get("/health", timeout=2.0)
-        llama_alive = r.status_code == 200
-    except Exception:
-        pass
-    try:
-        r = await _http.get("/v1/models", timeout=2.0)
+        r = await _retry_call(
+            lambda: _http.get("/v1/models", timeout=2.0),
+            label="signals-models",
+        )
         if r.status_code == 200:
             llama_models_count = len(r.json().get("data", []) or [])
     except Exception:
-        pass
+        # Fall back to local scan for models count
+        llama_models_count = len(list(MODELS_DIR.glob("*.gguf"))) if MODELS_DIR.is_dir() else 0
 
     stats = telemetry.log().stats()
     recent = telemetry.bus().recent(limit=20)
@@ -572,25 +766,74 @@ async def debug_config() -> dict[str, Any]:
 
 # ---- /v1/models ----
 
+# Model IDs that are not standalone chat models (vision encoders, embeddings, etc.)
+_MODEL_ID_BLOCKLIST = {
+    "mmproj",  # vision projector
+}
+
+
+def _normalize_model_id(model_id: str) -> str:
+    """Strip .gguf suffix for deduplication. 'Qwen3-8B-Q4_K_M.gguf' → 'Qwen3-8B-Q4_K_M'."""
+    return model_id.removesuffix(".gguf").removesuffix(".GGUF")
+
+
+def _is_chat_model(model_id: str) -> bool:
+    """Return True if model_id looks like a standalone chat model (not mmproj/embedding)."""
+    base = _normalize_model_id(model_id).lower()
+    return not any(blocked in base for blocked in _MODEL_ID_BLOCKLIST)
+
+
 @app.get("/v1/models")
 async def list_models() -> dict[str, Any]:
     """List available models. Live-proxies llama-server's /v1/models.
 
-    Falls back to scanning `data/models/*.gguf` via
-    `modules.model_manager.gguf` if llama-server is unreachable (so the
-    WebUI's model dropdown still works during cold boot).
+    Deduplicates llama-server's router-mode output (which returns both
+    ``name`` and ``name.gguf`` for the same file) and filters out
+    non-chat models (mmproj vision encoders). Models whose .gguf file
+    no longer exists on disk (stale router-preset.ini sections) are
+    also dropped.
+
+    Falls back to scanning ``data/models/*.gguf`` via
+    ``modules.model_manager.gguf`` if llama-server is unreachable (so
+    the WebUI's model dropdown still works during cold boot).
     """
     try:
-        r = await _http.get("/v1/models", timeout=5.0)
+        r = await _retry_call(
+            lambda: _http.get("/v1/models", timeout=5.0),
+            label="models-list",
+        )
         if r.status_code == 200:
-            return r.json()
+            raw = r.json()
+            data = raw.get("data", [])
+            # Deduplicate: keep one entry per base name, preferring .gguf IDs.
+            # Also filter out ghost models (no file on disk) and non-chat models.
+            seen: dict[str, dict] = {}
+            for m in data:
+                mid = m.get("id", "")
+                if not _is_chat_model(mid):
+                    continue
+                base = _normalize_model_id(mid)
+                existing = seen.get(base)
+                if existing is None:
+                    seen[base] = m
+                else:
+                    # Prefer the .gguf variant (canonical for /models/load).
+                    if mid.endswith(".gguf") and not existing.get("id", "").endswith(".gguf"):
+                        seen[base] = m
+            # Drop ghosts: model whose .gguf file is not on disk
+            on_disk = {f.name for f in MODELS_DIR.glob("*.gguf")} if MODELS_DIR.is_dir() else set()
+            filtered = [
+                m for m in seen.values()
+                if (m.get("id", "") + ".gguf" if not m.get("id", "").endswith(".gguf") else m["id"]) in on_disk
+            ]
+            return {"object": "list", "data": filtered}
     except Exception as e:
         logger.warning("llama-server /v1/models unreachable (%s); falling back to local scan", e)
 
     # Fallback: scan GGUF directory using our own parser
     try:
         from modules.model_manager.gguf import list_gguf_models  # type: ignore
-        models = list_gguf_models(MODELS_DIR)
+        models = [m for m in list_gguf_models(MODELS_DIR) if _is_chat_model(m["name"])]
         return {"object": "list", "data": models}
     except Exception as e:
         logger.warning("modules.model_manager.gguf fallback also failed: %s", e)
@@ -614,7 +857,10 @@ async def load_model(request: Request) -> dict[str, Any]:
 
     # llama-server exposes /models/load (not /v1/models/load) per b9538 docs
     try:
-        r = await _http.post("/models/load", json={"model": model}, timeout=30.0)
+        r = await _retry_call(
+            lambda: _http.post("/models/load", json={"model": model}, timeout=30.0),
+            label="model-load",
+        )
         ok = 200 <= r.status_code < 300
         # Signal: model loaded (or failed) — distinguish by HTTP status.
         telemetry.bus().emit(
@@ -680,7 +926,10 @@ async def models_status() -> dict[str, Any]:
 
     # 2. Augment with /v1/models (full declared list under --models-dir)
     try:
-        r = await _http.get("/v1/models", timeout=5.0)
+        r = await _retry_call(
+            lambda: _http.get("/v1/models", timeout=5.0),
+            label="models-list",
+        )
         if r.status_code == 200:
             data = r.json().get("data", [])
             out["available"] = [
@@ -897,34 +1146,111 @@ async def warmup_status(warmup_id: str) -> dict[str, Any]:
     return public
 
 
-# ---- /v1/chat/completions ----
+# ---- /v1/chat/completions (smart routing enabled) ----
+#
+# Every chat request first passes through the RoutingEngine. Based on
+# the user's message content and network status, the request is either:
+#   - proxied to llama-server (:8080) for local/privacy tasks
+#   - forwarded to a cloud provider (OpenAI/Anthropic/etc.) for complex tool work
+#
+# The routing decision is logged and attached to response headers.
+
+from hermes.routing import RoutingEngine as _RoutingEngine
+from bridge.cloud_client import CloudClient as _CloudClient, CloudClientError as _CloudClientError
+
+_routing_engine: _RoutingEngine | None = None
+_cloud_client: _CloudClient | None = None
+
+
+def _get_routing_engine() -> _RoutingEngine:
+    global _routing_engine
+    if _routing_engine is None:
+        try:
+            _routing_engine = _RoutingEngine.from_config()
+        except Exception:
+            _routing_engine = _RoutingEngine()
+        logger.info("routing engine initialized")
+    return _routing_engine
+
+
+def _get_cloud_client() -> _CloudClient:
+    global _cloud_client
+    if _cloud_client is None:
+        _cloud_client = _CloudClient()
+        logger.info("cloud client initialized")
+    return _cloud_client
+
+
+def _extract_user_message(messages: list[dict]) -> str:
+    """Extract the last user message from the chat messages list."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # multimodal: extract text parts
+                parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+                return " ".join(parts)
+            return str(content)
+    return ""
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Any:
-    """OpenAI-compatible chat completion endpoint.
+    """OpenAI-compatible chat completion with smart routing.
 
-    Proxies the request body verbatim to llama-server's /v1/chat/completions.
-    Non-streaming: returns the full JSON response.
-    Streaming (stream=true): forwards chunks as SSE.
+    - Privacy-sensitive / local-skill requests → llama-server (:8080)
+    - Complex tool-use requests → cloud API (OpenAI / etc.)
+    - Simple conversation → local model (fast + private)
+    - Network offline → local model fallback
 
-    The bridge adds value beyond raw proxy:
-    - Centralised logging of every request (see data/logs/bridge.log)
-    - Future: model-id alias resolution (e.g. "3b" -> "Qwen2.5-3B-Instruct-...")
-    - Future: per-request budget / context-length enforcement
+    Set ``X-Hermes-Routing: local`` or ``X-Hermes-Routing: cloud`` header
+    to bypass the routing engine.
     """
     body = await request.json()
     is_stream = bool(body.get("stream"))
 
+    # ---- Smart routing ----
+    routing_override = request.headers.get("X-Hermes-Routing", "").strip().lower()
+    # Also check global env var (HERMES_ROUTING_MODE in .env)
+    if not routing_override:
+        routing_override = os.environ.get("HERMES_ROUTING_MODE", "auto").strip().lower()
+    routing_decision = None
+
+    if routing_override not in ("local", "cloud"):
+        user_msg = _extract_user_message(body.get("messages", []))
+        if user_msg:
+            try:
+                engine = _get_routing_engine()
+                routing_decision = engine.decide(user_msg)
+                logger.info(
+                    "routing: target=%s reason=%s query=%.60s",
+                    routing_decision.route_target,
+                    routing_decision.reason,
+                    user_msg,
+                )
+            except Exception:
+                logger.debug("routing engine failed, falling back to llama-server", exc_info=True)
+        else:
+            routing_decision = None
+    elif routing_override == "local":
+        routing_decision = type("D", (), {"route_target": "llama_server", "reason": "X-Hermes-Routing header"})()
+
+    # ---- Route ----
+    if routing_decision is not None and routing_decision.route_target == "cloud_api":
+        return await _handle_cloud_chat(body, routing_decision, is_stream)
+
+    # Default: proxy to llama-server
     logger.info(
         "chat.completions model=%s stream=%s messages=%d",
         body.get("model", "?"), is_stream, len(body.get("messages", [])),
     )
 
-    # Signal: chat request received (before upstream call).
+    # Signal: chat request received.
     telemetry.bus().emit(telemetry.Topics.CHAT_REQUEST, {
         "model": body.get("model", "?"),
         "messages": len(body.get("messages", []) or []),
         "stream": is_stream,
+        "routing_target": getattr(routing_decision, "route_target", "llama_server") if routing_decision else "llama_server",
     })
 
     if is_stream:
@@ -935,24 +1261,120 @@ async def chat_completions(request: Request) -> Any:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-Hermes-Routing-Target": "llama_server",
             },
         )
 
     # Non-streaming
     try:
-        r = await _http.post("/v1/chat/completions", json=body, timeout=300.0)
-        # Signal: chat succeeded.
+        r = await _retry_call(
+            lambda: _http.post("/v1/chat/completions", json=body, timeout=300.0),
+            label="chat",
+        )
         telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
             "model": body.get("model", "?"),
             "status": r.status_code,
         })
-        return JSONResponse(content=r.json(), status_code=r.status_code)
+        return JSONResponse(
+            content=r.json(),
+            status_code=r.status_code,
+            headers={"X-Hermes-Routing-Target": "llama_server"},
+        )
     except httpx.HTTPError as e:
         telemetry.bus().emit(telemetry.Topics.CHAT_ERROR, {
             "model": body.get("model", "?"),
             "error": str(e),
         })
         raise HTTPException(status_code=502, detail=f"llama-server unreachable: {e}")
+
+
+async def _handle_cloud_chat(
+    body: dict[str, Any],
+    decision: Any,
+    is_stream: bool,
+) -> Any:
+    """Handle a chat request routed to a cloud provider."""
+    provider = getattr(decision, "cloud_provider", "") or "openai"
+    model = body.get("model", "")
+
+    # Use the body's model if specified, otherwise let the cloud client pick
+    if not model or model == "auto":
+        model = "gpt-4o"  # sensible default
+
+    messages = body.get("messages", [])
+    max_tokens = body.get("max_tokens", 4096)
+    temperature = body.get("temperature", 0.7)
+
+    logger.info(
+        "cloud chat: provider=%s model=%s messages=%d reason=%s",
+        provider, model, len(messages), getattr(decision, "reason", ""),
+    )
+
+    telemetry.bus().emit(telemetry.Topics.CHAT_REQUEST, {
+        "model": model,
+        "provider": provider,
+        "messages": len(messages),
+        "stream": is_stream,
+        "routing_target": "cloud_api",
+        "routing_reason": getattr(decision, "reason", ""),
+    })
+
+    client = _get_cloud_client()
+
+    try:
+        if is_stream:
+            return StreamingResponse(
+                client.chat_stream(provider, model, messages, max_tokens=max_tokens, temperature=temperature),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "X-Hermes-Routing-Target": f"cloud:{provider}",
+                },
+            )
+
+        resp = await client.chat(
+            provider, model, messages,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+        telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
+            "model": model,
+            "provider": provider,
+        })
+        return JSONResponse(
+            content=resp,
+            headers={"X-Hermes-Routing-Target": f"cloud:{provider}"},
+        )
+    except _CloudClientError as e:
+        telemetry.bus().emit(telemetry.Topics.CHAT_ERROR, {
+            "model": model,
+            "provider": provider,
+            "error": str(e),
+        })
+        logger.warning("cloud API failed: %s — falling back to local", e)
+        # Fallback to local model
+        if is_stream:
+            return StreamingResponse(
+                _stream_chat(body),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "X-Hermes-Routing-Target": "llama_server(fallback)",
+                },
+            )
+        try:
+            r = await _retry_call(
+                lambda: _http.post("/v1/chat/completions", json=body, timeout=300.0),
+                label="chat-fallback",
+            )
+            return JSONResponse(
+                content=r.json(),
+                status_code=r.status_code,
+                headers={"X-Hermes-Routing-Target": "llama_server(fallback)"},
+            )
+        except httpx.HTTPError as e2:
+            raise HTTPException(status_code=502, detail=f"Cloud + local both failed: {e} | {e2}")
 
 
 async def _stream_chat(body: dict[str, Any]) -> AsyncIterator[bytes]:

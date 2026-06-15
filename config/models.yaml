@@ -1,26 +1,122 @@
-active: default
+# ============================================================
+# Hermes Agent — 多模型配置（客户可定制）
+# ============================================================
+# 支持 llama.cpp router 模式热切换，无需重启服务。
+# 切换命令：portable-python\python.exe bin\hermes-models.py switch <name>
+#
+# Profile 命名约定（能力从低到高）：
+#   tiny     ~0.5-3B   极速、低 VRAM
+#   small    ~3-8B     日常轻量对话
+#   medium   ~8-14B    平衡型，推荐默认
+#   large    ~30-35B   高质量推理
+#   huge     ~70-236B  最强能力，需大显存
+#
+# 如何添加新模型：
+#   1. 将 .gguf 文件放入 data/models/
+#   2. 在下方 models 段添加或修改对应 profile
+#   3. 运行 bin\hermes-models.py list 确认识别
+#   4. 运行 bin\hermes-models.py switch <name> 热切换
+# ============================================================
 
-# Paths use ${HERMES_ROOT} so this config is portable across drive letters.
-# HERMES_ROOT is set automatically by deps/hermes-env.bat / .ps1.
+active: auto          # auto = 由路由器自动选择 | 手动指定 profile 名
 
+# ---- 模型 Profile（按需启用/修改）----
 models:
-  default:
+  # ------ 轻量级 ------
+  tiny:
+    # 适用于：极低显存、纯 CPU 推理
+    chat: ${HERMES_ROOT}\data\models\Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 4096
+    threads: 2
+    n_gpu_layers: 0
+    description: Qwen2.5 0.5B (Q4_K_M) — 极速轻量
+
+  small:
+    # 适用于：低显存、快速响应
     chat: ${HERMES_ROOT}\data\models\Qwen2.5-3B-Instruct-Q4_K_M.gguf
     embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
-    context_size: 4096
+    context_size: 8192
     threads: 4
-    description: Qwen 2.5 3B Instruct (Q4_K_M) - balance
+    n_gpu_layers: 8
+    description: Qwen2.5 3B (Q4_K_M) — 日常轻量
 
-  powerful:
+  # ------ 平衡型（推荐默认）------
+  medium:
+    # 适用于：日常开发、通用对话
     chat: ${HERMES_ROOT}\data\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
     embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
-    context_size: 4096
-    threads: 8
-    description: Qwen 2.5 7B Instruct (Q4_K_M) - quality
+    context_size: 16384
+    threads: 6
+    n_gpu_layers: 16
+    description: Qwen2.5 7B (Q4_K_M) — 平衡推荐
 
+  medium_8b:
+    # 适用于：更强推理、代码生成
+    chat: ${HERMES_ROOT}\data\models\Llama-3.1-8B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 16384
+    threads: 8
+    n_gpu_layers: 24
+    description: Llama 3.1 8B (Q4_K_M) — 强推理
+
+  # ------ 高质量 ------
+  large:
+    # 适用于：复杂推理、长文档、Agent 工具调用（推荐 16GB+ 显存）
+    chat: ${HERMES_ROOT}\data\models\Qwen3-35B-A3B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 32768
+    threads: 8
+    n_gpu_layers: 32
+    description: Qwen3 35B MoE (Q4_K_M) — 高质量推理
+
+  large_32b:
+    # 适用于：长上下文、复杂代码
+    chat: ${HERMES_ROOT}\data\models\Qwen2.5-32B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 32768
+    threads: 8
+    n_gpu_layers: 40
+    description: Qwen2.5 32B (Q4_K_M) — 强大推理
+
+  # ------ 旗舰级（需大显存）------
+  huge:
+    # 适用于：最强 Agent 能力、复杂多步骤任务（推荐 24GB+ 显存）
+    chat: ${HERMES_ROOT}\data\models\Qwen3-235B-A22B-Instruct-Q3_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 32768
+    threads: 8
+    n_gpu_layers: 32
+    description: Qwen3 235B MoE (Q3_K_M) — 旗舰级推理
+
+  huge_70b:
+    # 适用于：最强单模型推理
+    chat: ${HERMES_ROOT}\data\models\Llama-3.3-70B-Instruct-Q4_K_M.gguf
+    embedding: ${HERMES_ROOT}\data\models\nomic-embed-text-v1.5.Q4_K_M.gguf
+    context_size: 32768
+    threads: 8
+    n_gpu_layers: 40
+    description: Llama 3.3 70B (Q4_K_M) — 旗舰级
+
+# ---- llama-server 全局参数 ----
 llama_server:
-  n_gpu_layers: 0
+  n_gpu_layers: 16
   batch_size: 512
   ubatch_size: 128
   host: 127.0.0.1
   port: 8080
+
+# ---- Router 预设（自动生成，也可手动覆写）----
+# llama-server --models-preset 读取此段为每个模型设置独立的
+# context_size / n_gpu_layers / temperature。
+# 如果某个模型在上面 models 段有对应 profile，其参数会自动映射。
+# 无 profile 的模型将使用下方 global 默认值。
+router_preset:
+  default_ctx_size: 32768
+  default_ngl: 16
+  default_temp: 0.7
+  # 以下为可选的手动覆写（按 .gguf 文件名精确匹配）
+  # per_model:
+  #   "Qwen3-235B-A22B-Instruct-Q3_K_M.gguf":
+  #     ctx_size: 16384
+  #     ngl: 16

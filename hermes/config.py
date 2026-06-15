@@ -109,6 +109,8 @@ class NetworkConfig(BaseModel):
 
 
 class HermesConfig(BaseModel):
+    model_config = {"extra": "allow"}  # allow routing / future sections
+
     agent: PersonaConfig = Field(default_factory=PersonaConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)

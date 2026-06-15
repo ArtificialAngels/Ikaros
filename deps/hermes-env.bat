@@ -100,6 +100,13 @@ REM Pinning the portable-python here means webui can never spawn a
 REM directory by accident, regardless of what HERMES_BIN happens to be.
 set "HERMES_AGENT_CLI_PYTHON=%HERMES_PYTHON%"
 
+REM ---- Step 5c: HERMES_GIT_BASH_PATH for hermes-agent's terminal backend ----
+REM hermes-agent's tools/environments/local.py::_find_bash() needs bash.exe
+REM for POSIX shell command execution. It checks HERMES_GIT_BASH_PATH first,
+REM then %LOCALAPPDATA%\hermes\git\, then system Git. Our bundled MinGit
+REM lives at runtime\git\ (installed by setup-portable.bat step 3b).
+set "HERMES_GIT_BASH_PATH=%HERMES_ROOT%\runtime\git\bin\bash.exe"
+
 REM ---- Step 6: PATH augmentation ----
 REM Prepend runtime deps so they take precedence. CUDA bin goes first
 REM if active so its DLLs win the DLL search order. We reference
