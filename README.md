@@ -29,10 +29,16 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│             Hermes Web UI  (:8648)   ← 主入口                    │
-│         (EKKOLearnAI/hermes-web-ui 上游干净副本)                  │
-│              Vue 3 SPA + Koa BFF + Socket.IO                     │
-│   聊天 / 会话 / 看板 / 定时任务 / 模型管理 / 文件浏览器 / 终端     │
+│  webui_proxy  (:8648, Python 薄反代, 拦截 /api/hermes/usage/stats)│
+│       ← 修正 npm 包 SQL bug, 其他路径透传到 :8649                │
+└──────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│       Hermes Web UI  (:8649, 内部) ← 不直接对浏览器              │
+│       (EKKOLearnAI/hermes-web-ui 上游干净副本)                    │
+│            Vue 3 SPA + Koa BFF + Socket.IO                       │
+│   聊天 / 会话 / 看板 / 定时任务 / 模型管理 / 文件浏览器 / 终端   │
 └──────────────────────────────────────────────────────────────────┘
                                 │
               ┌─────────────────┼────────────────────┐
@@ -46,13 +52,14 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
    └──────────────────┘ └──────────────┘ └───────────────────────┘
 ```
 
-### 三个端口(很重要)
+### 四个端口(很重要)
 
 | Port | 进程 | 用途 | 是否暴露浏览器 |
 |------|------|------|--------------|
 | **8080** | llama-server | LLM 推理(OpenAI 兼容,router 模式) | ❌ 内部 |
 | **7860** | Hermes FastAPI (bridge) | embeddings / RAG / sessions / kanban / crons | ❌ 内部 |
-| **8648** | **Hermes Web UI**(主入口) | Vue 3 SPA + Koa BFF | ✅ **浏览器打开这个** |
+| **8649** | Hermes Web UI | Vue 3 SPA + Koa BFF | ❌ 内部(被反代) |
+| **8648** | **webui_proxy**(主入口) | 薄反代,拦截 `/api/hermes/usage/stats` 用修正后 SQL | ✅ **浏览器打开这个** |
 
 ---
 
@@ -67,6 +74,10 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 - **云端 fallback** — `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 写到 `.env` 即可,故障自动切本地或下一家。
 - **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
 - **隐私优先** — `data/`、`hermes/data/`、`.env`、IDE 状态、运行时缓存全在 `.gitignore`,**`git status` 干净**。
+- 🆕 **webui_proxy 反代拦截** — npm 包 `usage/stats` 端点 SQL bug 已修:正确按 `(model, provider, base_url)` 分桶,排除 `source='tool'` / `id LIKE 'compress_%'` / `parent_session_id IS NOT NULL` / `archived=1` 等内部 session;端口拓扑改为 `:8648 → :8649` 双层。
+- 🐛 **PowerShell Runspace 修复** — 4 个 start.ps1 (webui/bridge/llm_engine/webui_proxy) 不再因 `add_OutputDataReceived` callback 在 Runspace 销毁后崩溃而静默带走子进程。
+- 📐 **启动 fail-fast** — `bin/hermes-supervisor.bat` + `bin/hermes-all.bat` 在启动前调 `hermes-root verify`,USB 盘符换 (E:→F:) 早爆,不再等所有模块都 fail 了才发现。
+- 🧹 **DWG 工具集收敛** — 根目录 49 个 DWG/DXF 脚本 `git mv` 到 `tools/dwg/`,LLM system prompt 加 `PROJECT_CONVENTIONS` 硬规则,以后再写就强制落到 `tools/dwg/`。
 
 ---
 
@@ -178,7 +189,7 @@ ctx_size = 4096
 ```
 hermes-agent\
 ├── bin\                  ← 启动器集合(CRLF 行尾!)
-├── modules\              ← 自描述服务(llm_engine / bridge / webui / env_bootstrap / model_manager / supervisor)
+├── modules\              ← 自描述服务(llm_engine / bridge / webui / webui_proxy / env_bootstrap / model_manager / supervisor)
 ├── deps\                 ← 统一依赖区(junction 桥接 runtime 和 node)
 ├── bridge\               ← FastAPI 后端(:7860)
 ├── hermes\               ← Python 桥接层
@@ -188,7 +199,7 @@ hermes-agent\
 ├── data\                 ← ★ 运行时数据(全部 git ignored)
 ├── portable-python\      ← Python 3.12.10(git ignored)
 ├── runtime\              ← llama.cpp + DLL + Node 23(git ignored)
-├── tests\                ← 集成测试
+├── tests\                ← 集成测试(smoke_webui_proxy / smoke_hermes_env / test_hermes)
 ├── AGENTS.md             ← 项目记忆库(架构/决策/gotcha/历史)
 └── README.md             ← 你在这里
 ```
@@ -254,7 +265,17 @@ hermes-agent\
 
 ## 📈 更新日志
 
-### 2026-06-13 — v3 Phase Close-Out(本次)
+### 2026-06-16c — webui_proxy + Runspace 修复 + 大清理(本次)
+**完整功能** — 修复 npm 包 SQL bug + 修 PowerShell 崩溃 + 启动 fail-fast + 根目录 DWG 脚本收敛:
+
+- 🆕 **新增 `modules/webui_proxy/` 薄反代** — 拦截 `/api/hermes/usage/stats` 端点 SQL bug(按 `(model, provider, base_url)` 分桶,排除 `source='tool'` / `id LIKE 'compress_%'` / `parent_session_id IS NOT NULL` / `archived=1` 内部 session,日期轴 dense 0 填充)。端口拓扑改为 `:8648 webui_proxy(公开) → :8649 webui(内部)` 双层。
+- 🐛 **PowerShell Runspace 修复** — 4 个 start.ps1 (webui/bridge/llm_engine/webui_proxy) 改用 `RedirectStandardOutput=$false` 让子进程继承 PowerShell 父进程 stdio,不再因 `add_OutputDataReceived` callback 在 Runspace 销毁后崩溃而静默带走子进程。
+- 📐 **启动 fail-fast** — `bin/hermes-supervisor.bat` + `bin/hermes-all.bat` 在启动前调 `hermes-root verify`,USB 盘符换 (E:→F:) 早爆,不再等所有模块都 fail 了才发现。
+- 🧹 **根目录 49 个 DWG/DXF 脚本** `git mv` 到 `tools/dwg/`,LLM system prompt 加 `PROJECT_CONVENTIONS` 硬规则,以后再写就强制落到 `tools/dwg/`。
+- 📝 **`docs/PROJECT_OVERVIEW.md` 新建** (142 行开发者视角精简地图:架构 / 端口 / 不变式 / 文件索引 / 修订时间线)。
+- 🗑️ **22 个 `bin/_*.ps1/_*.py` 诊断 + 4 个根目录冗余 + 13 个 `_backup` + 11 个 `__pycache__`** 全部清除。
+
+### 2026-06-13 — v3 Phase Close-Out
 **Soft release** — 无新功能、无破坏性重构。从"作者 U 盘"变成"公开仓库就绪":
 
 - 🔒 **Logs page ENOENT 修复** — 三个地方显式 pin `HERMES_AGENT_CLI_PYTHON`,webui 不再被旧 `HERMES_BIN` 环境变量污染。

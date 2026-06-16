@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 r"""
-Hermes Agent - 多模型 CLI 切换器
-==================================
+Hermes Agent - multi-model CLI switcher
+=======================================
 
-- 列出 data/models/*.gguf (带大小、量化、参数量、context、tensors)
-- 切模型走 llama-server 的 router 模式:POST /v1/models/load,
-  不再 kill+restart,LRU 自动腾地方
-- 调 gopeed-web API 列/添加模型 (通信桥演示)
+- List `data/models/*.gguf` (with size, quant, params, context, tensors)
+- Switch models via llama-server's router mode: POST /v1/models/load
+  (no kill+restart; LRU evicts automatically)
+- Talk to gopeed-web API to list/add models (signal-bridge demo)
 
 Usage:
     portable-python\python.exe bin\hermes-models.py

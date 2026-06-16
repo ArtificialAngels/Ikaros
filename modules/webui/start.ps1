@@ -1,6 +1,6 @@
 # modules/webui/start.ps1 — Launch hermes-web-ui
 [CmdletBinding()]
-param([int]$Port = 8648)
+param([int]$Port = 8649)
 
 . $PSScriptRoot\..\..\deps\hermes-env.ps1
 
@@ -31,16 +31,21 @@ if (-not (Test-Path $NODE)) {
 if (-not (Test-Path $LogDir))    { New-Item -ItemType Directory -Path $LogDir    -Force | Out-Null }
 if (-not (Test-Path $WebuiHome)) { New-Item -ItemType Directory -Path $WebuiHome -Force | Out-Null }
 
-# Truncate logs (use .NET to avoid file locks)
-[System.IO.File]::WriteAllText($logPath, '', [System.Text.UTF8Encoding]::new($false))
-[System.IO.File]::WriteAllText($errPath, '', [System.Text.UTF8Encoding]::new($false))
+# NOTE: we DO NOT truncate $logPath/$errPath here. The supervisor's
+# start_module() already truncated them and holds them open in append mode
+# (supervisor's start_module creates log_f = open(path, "a", buffering=1) and
+# closes them only after the module's port-health check passes). Trying to
+# WriteAllText (truncate) while the supervisor's handle is open on Windows
+# raises IOException("access denied"); the StreamWriter ctor then fails too,
+# leaving $logWriter == $null and the cleanup at the bottom throws
+# "InvokeMethodOnNull". Best practice: append-only, no truncate from here.
 
 Write-Host "============================================================"
 Write-Host "  Hermes - webui (hermes-web-ui)"
 Write-Host ""
 Write-Host "  Source:     $Source"
 Write-Host "  Node:       $NODE"
-Write-Host "  Endpoint:   http://127.0.0.1`:$Port"
+Write-Host "  Endpoint:   http://127.0.0.1`:$Port   (proxied to :8648 via modules/webui_proxy)"
 Write-Host "============================================================"
 Write-Host ""
 
@@ -61,8 +66,8 @@ $psi.UseShellExecute        = $false
 $psi.CreateNoWindow         = $true
 $psi.WindowStyle            = 'Hidden'
 $psi.RedirectStandardInput  = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError  = $true
+$psi.RedirectStandardOutput = $false
+$psi.RedirectStandardError  = $false
 
 $psi.EnvironmentVariables['PORT']                                    = "$Port"
 $psi.EnvironmentVariables['HERMES_WEB_UI_HOME']                      = $WebuiHome
@@ -74,17 +79,16 @@ $psi.EnvironmentVariables['PYTHONUTF8']                              = '1'
 $psi.EnvironmentVariables['HERMES_AGENT_BRIDGE_PYTHON']              = $PYTHON
 $psi.EnvironmentVariables['HERMES_AGENT_CLI_PYTHON']                 = $PYTHON
 
-$proc = [System.Diagnostics.Process]::Start($psi)
+# See modules/webui_proxy/start.ps1 for the full rationale: we deliberately
+# do NOT use $psi.RedirectStandardOutput/Error = $true + add_OutputDataReceived
+# to drain the child's stdio, because the callback is a PowerShell script
+# block that needs a Runspace -- and when start.ps1 exits the Runspace is
+# disposed, the next background data event throws PSInvalidOperationException,
+# the PowerShell host process crashes, and the broken stdout pipe takes the
+# child with it. Letting the child inherit PowerShell's stdio (which the
+# supervisor has redirected to the per-module log files) avoids all of that.
 
-# Drain streams
-$logWriter = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.UTF8Encoding]::new($false))
-$logWriter.AutoFlush = $true
-$errWriter = [System.IO.StreamWriter]::new($errPath, $true, [System.Text.UTF8Encoding]::new($false))
-$errWriter.AutoFlush = $true
-$proc.add_OutputDataReceived({ if ($null -ne $_.Data) { $logWriter.WriteLine($_.Data) } })
-$proc.add_ErrorDataReceived({  if ($null -ne $_.Data) { $errWriter.WriteLine($_.Data) } })
-$proc.BeginOutputReadLine()
-$proc.BeginErrorReadLine()
+$proc = [System.Diagnostics.Process]::Start($psi)
 
 Start-Sleep -Seconds 3
 
@@ -97,7 +101,7 @@ if ($proc.HasExited) {
     }
     Write-Host "  [FAIL] webui exited with code $rc" -ForegroundColor Red
     if ($errTail) { foreach ($l in $errTail -split "`n") { Write-Host "    | $l" -ForegroundColor DarkYellow } }
-    $proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+    if ($null -ne $proc)       { $proc.Dispose() }
     exit 1
 }
 
@@ -129,5 +133,5 @@ $launchInfo = @{
 } | ConvertTo-Json -Compress
 $launchInfo | Set-Content -Path (Join-Path $LogDir 'webui-last-launch.json') -Encoding UTF8
 
-$proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+if ($null -ne $proc)       { $proc.Dispose() }
 exit 0

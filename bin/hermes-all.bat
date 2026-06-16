@@ -64,6 +64,19 @@ REM ---- Step 2: Start all services via the pure-Python supervisor ----
 REM      Why Python: see bin\hermes-supervisor.bat header for the
 REM      `cmd /c "powershell -File ..."` fragility this replaced.
 echo [2/2] Starting all services via Python supervisor...
+
+REM ---- Step 2a: double-verify at user-facing entry (supervisor.bat already
+REM      does this; doing it here too gives clearer error attribution) ----
+call "%HERMES_BIN%\hermes-root.bat" verify
+if errorlevel 1 (
+    echo.
+    echo [FATAL] HERMES_ROOT verify FAILED at hermes-all.bat entry.
+    echo         The supervisor was NOT started. See the error from
+    echo         `bin\hermes-root.bat verify` above for diagnosis.
+    pause
+    exit /b 3
+)
+
 call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --start
 if errorlevel 1 (
     echo [ERROR] Supervisor failed to start services.

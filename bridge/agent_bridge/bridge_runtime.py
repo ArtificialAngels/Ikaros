@@ -681,6 +681,16 @@ def _refresh_terminal_env() -> None:
             if cfg_key in terminal_cfg:
                 val = terminal_cfg[cfg_key]
                 if cfg_key == "cwd" and str(val) in {".", "auto", "cwd"}:
+                    # "."/auto/cwd -> resolve to project root (HERMES_HOME's grandparent),
+                    # not os.getcwd() — bridge process cwd is a hardcoded absolute path,
+                    # which breaks drive-letter-portable semantics.
+                    resolved = str(_hermes_home().parent.parent)
+                    os.environ[env_var] = resolved
+                    print(
+                        f"[hermes-bridge] terminal.cwd={val!r} resolved to project root: {resolved}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     continue
                 if cfg_key == "cwd" and isinstance(val, str):
                     val = os.path.expanduser(val)

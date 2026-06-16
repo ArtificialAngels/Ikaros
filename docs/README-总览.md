@@ -52,6 +52,7 @@
 
 - [README.md](../README.md) — GitHub 介绍(用户视角)
 - [AGENTS.md](../AGENTS.md) — 项目记忆库(架构 / 决策 / gotcha / 历史)
+- [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) — 开发者视角精简地图(架构 / 模块 / 不变式 / 文件索引)
 - [00-速览.md](00-速览.md) — 整合包完整信息表
 - [01-这是什么.md](01-这是什么.md) — 定义 / 能力范围 / 协议
 - [02-怎么启动.md](02-怎么启动.md) — 启动器用法 + 命令行 + 配置解读

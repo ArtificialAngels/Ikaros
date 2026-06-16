@@ -42,6 +42,27 @@ from bridge_runtime import (
     _tool_names_from_definitions,
 )
 
+# ============================================================
+# Project conventions — appended to the LLM system message so the
+# Agent knows where to land tool scripts. Keep terse (system prompt
+# budget is shared with the user's persona).
+# ============================================================
+PROJECT_CONVENTIONS = """## Hermes Project Conventions (hard rule, 2026-06-16+)
+
+**File landing rules:**
+- **Never** write new `.py` / `.ps1` / `.bat` / `.sh` files to the HERMES_ROOT
+  root directory. The 51 stray DWG/DXF scripts that accumulated there have
+  already been moved to `tools/dwg/`.
+- DWG / DXF scripts (debug, extract, convert, generate-inventory) land in
+  `tools/dwg/`. Use stable naming: `tool_<verb>.py` for production-grade
+  utilities; `debug_<aspect>.py` for one-off experiments.
+- Non-DWG scratch scripts land in `tools/_scratch/` (gitignored).
+- Historical versions / experiment branches go under `tools/dwg/_archive/`
+  (gitignored, recoverable from git history if needed).
+- When in doubt: `tools/dwg/` is the default.
+"""
+
+
 class SessionDbHolder:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -157,6 +178,10 @@ class AgentPool:
                 runtime = _resolve_runtime(resolved_model, requested_provider or None)
                 agent_cfg = cfg.get("agent") or {}
                 prompt = str(agent_cfg.get("system_prompt", "") or "").strip() or None
+                if prompt:
+                    prompt = prompt + "\n\n" + PROJECT_CONVENTIONS
+                else:
+                    prompt = PROJECT_CONVENTIONS
 
                 agent = AIAgent(
                     model=resolved_model,

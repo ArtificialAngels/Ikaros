@@ -16,9 +16,12 @@ if (-not (Test-Path $PYTHON)) {
 }
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
-# Truncate logs (use .NET to avoid file locks)
-[System.IO.File]::WriteAllText($logPath, '', [System.Text.UTF8Encoding]::new($false))
-[System.IO.File]::WriteAllText($errPath, '', [System.Text.UTF8Encoding]::new($false))
+# NOTE: we DO NOT truncate $logPath/$errPath here. The supervisor's
+# start_module() already truncated them and holds them open in append mode
+# (see bin/hermes-supervisor.py: log_f = open(path, "a", buffering=1)).
+# Trying to WriteAllText (truncate) while the supervisor's handle is open
+# on Windows raises IOException("access denied"). Best practice: append-only,
+# no truncate from here.
 
 Write-Host "============================================================"
 Write-Host "  Hermes - bridge (FastAPI)"
@@ -47,8 +50,8 @@ $psi.UseShellExecute        = $false
 $psi.CreateNoWindow         = $true
 $psi.WindowStyle            = 'Hidden'
 $psi.RedirectStandardInput  = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError  = $true
+$psi.RedirectStandardOutput = $false
+$psi.RedirectStandardError  = $false
 
 # Env vars
 foreach ($k in @('HERMES_HOME','HERMES_LLAMA_URL','HERMES_MODELS_DIR','HERMES_BRIDGE_PORT')) {
@@ -60,17 +63,14 @@ $psi.EnvironmentVariables['HERMES_MODELS_DIR']  = $ModelsDir
 $psi.EnvironmentVariables['HERMES_BRIDGE_PORT'] = "$Port"
 $psi.EnvironmentVariables['PYTHONPATH']         = "$HERMES_ROOT;$HERMES_ROOT\hermes-agent"
 
-$proc = [System.Diagnostics.Process]::Start($psi)
+# See modules/webui_proxy/start.ps1 for the rationale: we deliberately do
+# NOT use $psi.RedirectStandardOutput/Error = $true + add_OutputDataReceived.
+# The callback is a PowerShell script block that needs a Runspace, and
+# when start.ps1 exits the Runspace is disposed, causing a host crash that
+# breaks the child's stdio pipe. Letting the child inherit PowerShell's
+# stdio (already captured by the supervisor) avoids the whole problem.
 
-# Drain streams
-$logWriter = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.UTF8Encoding]::new($false))
-$logWriter.AutoFlush = $true
-$errWriter = [System.IO.StreamWriter]::new($errPath, $true, [System.Text.UTF8Encoding]::new($false))
-$errWriter.AutoFlush = $true
-$proc.add_OutputDataReceived({ if ($null -ne $_.Data) { $logWriter.WriteLine($_.Data) } })
-$proc.add_ErrorDataReceived({  if ($null -ne $_.Data) { $errWriter.WriteLine($_.Data) } })
-$proc.BeginOutputReadLine()
-$proc.BeginErrorReadLine()
+$proc = [System.Diagnostics.Process]::Start($psi)
 
 Start-Sleep -Seconds 2
 
@@ -83,7 +83,7 @@ if ($proc.HasExited) {
     }
     Write-Host "  [FAIL] bridge exited immediately with code $rc" -ForegroundColor Red
     if ($errTail) { foreach ($l in $errTail -split "`n") { Write-Host "    | $l" -ForegroundColor DarkYellow } }
-    $proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+    $proc.Dispose()
     exit 1
 }
 
@@ -112,5 +112,5 @@ $launchInfo = @{
 } | ConvertTo-Json -Compress
 $launchInfo | Set-Content -Path (Join-Path $LogDir 'bridge-last-launch.json') -Encoding UTF8
 
-$proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+$proc.Dispose()
 exit 0

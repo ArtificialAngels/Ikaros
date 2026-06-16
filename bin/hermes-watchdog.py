@@ -1,39 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Hermes Watchdog — 独立的 auto-restart 守护进程
-==============================================
+Hermes Watchdog — standalone auto-restart daemon.
+=================================================
 
-**为什么单独成一个进程**
-    supervisor 启动完所有 services 后会立即退出(`hermes-all.bat`
-    期望它快速 return 以便关闭窗口)。但服务跑着跑着可能 crash,
-    需要一个**永远活着**的进程盯着端口,死了就重启。
-    把 watchdog 做成 detached 子进程就完美满足这个需求:
-    parent 退出不影响它,服务死了它能救。
+Why a separate process:
+    The supervisor exits immediately after spawning services (so `hermes-all.bat`
+    can close its window). But services can crash mid-run, and we need a process
+    that *always lives* to watch the ports and restart dead ones. A detached
+    child process fits this perfectly: parent exit doesn't affect it, services
+    that die get revived.
 
-**职责**
-    1. 每 10s 扫描 `discover_modules()` 里所有 type=service 的模块
-    2. 测每个 service 的 port:死了就调 `supervisor --restart <name>` 重启
-    3. 自己挂了就完事——反正 supervisor 会重新 spawn 一个
+Responsibilities:
+    1. Every 10s, scan `discover_modules()` for all type=service modules.
+    2. Probe each service's port — if dead, call `supervisor --restart <name>`.
+    3. If this watchdog itself dies, the next `hermes-all.bat` respawns it.
 
-**单例**
-    `data/logs/hermes-watchdog.pid` 写自己的 PID。启动时检查:
-    - 文件不存在 → 自己是 first,继续
-    - 文件存在但 PID 已死 → stale,删除并继续
-    - 文件存在且 PID 还活着 → exit 0(避免 fork 多个)
+Singleton:
+    Writes its own PID to `data/logs/hermes-watchdog.pid`. On startup checks:
+      - file missing  -> we are first, continue
+      - file present, PID dead -> stale, delete and continue
+      - file present, PID alive -> exit 0 (avoid forking multiple watchdogs)
 
-**优雅退出**
-    - Ctrl-C → except KeyboardInterrupt → unlink PID 文件 → exit 0
-    - taskkill /F /PID <pid> → 立即死,supervisor `cmd_watchdog_stop`
-      会清理 PID 文件
+Graceful exit:
+    Ctrl-C -> KeyboardInterrupt -> unlink PID file -> exit 0
+    taskkill /F /PID <pid> -> dies immediately; supervisor `cmd_watchdog_stop`
+    cleans the PID file.
 
-**为什么不用 import supervisor**
-    supervisor 是个 main-script,直接 import 会触发它的 argparse。
-    复制 discover_modules()/check_port() 各 ~30 行,比拆 module 干净。
+Why no `import supervisor`:
+    Supervisor is a main-script; importing it triggers its argparse. Duplicating
+    `discover_modules()` / `check_port()` (~30 lines each) is cleaner than
+    splitting it into a module.
 
-**用法**
-    通常由 `bin/hermes-supervisor.py --start` 自动 detached 启动。
-    手动调试:`portable-python\python.exe bin\hermes-watchdog.py`。
+Usage:
+    Usually auto-launched detached by `bin/hermes-supervisor.py --start`.
+    Manual debug: `portable-python\python.exe bin\hermes-watchdog.py`.
 """
 from __future__ import annotations
 
@@ -48,7 +49,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # ============================================================
-# HERMES_ROOT 解析(同 supervisor,但不依赖 supervisor)
+# HERMES_ROOT resolution (mirrors supervisor; standalone)
 # ============================================================
 
 HERE = Path(__file__).resolve()
@@ -85,13 +86,14 @@ SUPERVISOR = HERMES_ROOT / "bin" / "hermes-supervisor.py"
 
 PID_FILE = LOG_DIR / "hermes-watchdog.pid"
 
-# watchdog 周期(秒)。太短 → CPU;太长 → 重启延迟。
+# Watchdog cycle (seconds). Too short wastes CPU; too long delays restart.
 INTERVAL_S = 10
-# 重启同一个 service 的最短间隔(防止 start.ps1 自身 bug 导致疯狂重启)。
+# Minimum gap between two restarts of the same service (prevents tight loops
+# if start.ps1 itself is broken).
 RESTART_COOLDOWN_S = 30
 
 # ============================================================
-# 数据模型(supervisor 的精简版,只读 type/port/host)
+# Data model (supervisor's slimmer version; only fields watchdog needs)
 # ============================================================
 
 
@@ -105,7 +107,7 @@ class Module:
 
 
 def discover_modules() -> Dict[str, Module]:
-    """扫描 modules/*/module.json,只关心 watchdog 需要的字段。"""
+    """Scan modules/*/module.json; only fields the watchdog cares about."""
     modules: Dict[str, Module] = {}
     if not MODULES_DIR.is_dir():
         return modules
@@ -131,7 +133,7 @@ def discover_modules() -> Dict[str, Module]:
 
 
 def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
-    """非阻塞 TCP 探活。"""
+    """Non-blocking TCP liveness probe."""
     try:
         with socket.create_connection((host, port), timeout=timeout_s):
             return True
@@ -140,21 +142,17 @@ def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
 
 
 # ============================================================
-# 单例检查
+# Singleton check
 # ============================================================
 
 
 def claim_singleton() -> bool:
-    """如果已有 watchdog 在跑,返回 False(自己应退出)。否则写 PID 文件并返回 True。
+    """Claim the singleton watchdog slot. Returns False if another instance is alive.
 
-    关键陷阱:supervisor `cmd_watchdog_start` 在 Popen watchdog 之后立刻写
-    PID_FILE = proc.pid(即 watchdog 自己的 PID)。watchdog 启动后 claim_singleton()
-    读 PID_FILE 会读到自己的 PID,如果天真地 tasklist-check → 找到自己 → 误判
-    "another instance running" → 立刻退出,PID_FILE 残留一个死 PID。
-
-    修复:先把 `old_pid == os.getpid()` 的情况跳过 alive check(那要么是
-    supervisor 帮我预写的,要么是上次 watchdog 死后留下的 stale,
-    两种情况都直接覆盖)。
+    Pitfall: supervisor pre-writes PID_FILE with our PID *before* Popen returns,
+    so a naive alive-check would see "another instance" (= ourselves) and exit.
+    We skip the alive-check when the stored PID equals our own (either freshly
+    pre-written by supervisor, or stale from a previous crash) — just overwrite.
     """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     if PID_FILE.is_file():
@@ -163,7 +161,7 @@ def claim_singleton() -> bool:
         except ValueError:
             old_pid = None
         if old_pid is not None and old_pid != os.getpid() and os.name == "nt":
-            # 真有别人在跑才检查 liveness
+            # only check liveness when the stored PID is actually someone else
             try:
                 r = subprocess.run(
                     ["tasklist", "/FI", f"PID eq {old_pid}", "/NH"],
@@ -175,7 +173,7 @@ def claim_singleton() -> bool:
                     return False
             except Exception:
                 pass
-        # stale 或 self → 删除重建
+        # stale or self -> delete and recreate
         try:
             PID_FILE.unlink()
         except OSError:
@@ -192,12 +190,12 @@ def release_singleton() -> None:
 
 
 # ============================================================
-# 重启服务
+# Restart service
 # ============================================================
 
 
 def restart_service(name: str) -> bool:
-    """通过 supervisor --restart 重启单个 service。"""
+    """Restart a single service via `supervisor --restart`."""
     if not SUPERVISOR.is_file():
         print(f"[watchdog] supervisor not found: {SUPERVISOR}", file=sys.stderr)
         return False
@@ -209,7 +207,7 @@ def restart_service(name: str) -> bool:
             text=True,
             timeout=120,
         )
-        # 记录输出到日志
+        # append output to log
         log_path = LOG_DIR / "hermes-watchdog.log"
         with log_path.open("a", encoding="utf-8") as f:
             ts = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -228,7 +226,7 @@ def restart_service(name: str) -> bool:
 
 
 # ============================================================
-# 主循环
+# Main loop
 # ============================================================
 
 
@@ -241,7 +239,7 @@ def run() -> int:
           flush=True)
     print(f"[watchdog] supervising: {HERMES_ROOT}", flush=True)
 
-    # name -> 最后一次重启的 timestamp(冷却用)
+    # name -> timestamp of last restart (for cooldown)
     last_restart: Dict[str, float] = {}
 
     try:
@@ -253,7 +251,8 @@ def run() -> int:
                     continue
                 if check_port(m.host, m.port, timeout_s=1.0):
                     continue
-                # 冷却:同一 service 短时间内别反复重启(start.ps1 自身坏了的话)
+                # cooldown: don't restart the same service repeatedly in a short
+                # window (likely start.ps1 itself is broken, not transient crash)
                 now = time.time()
                 if now - last_restart.get(name, 0) < RESTART_COOLDOWN_S:
                     continue

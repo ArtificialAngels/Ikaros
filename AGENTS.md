@@ -4,7 +4,22 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-15f (extracted auto-restart watchdog out of
+> **Last revised:** 2026-06-16c (added `modules/webui_proxy` as a thin Python
+> reverse-proxy in front of `hermes-web-ui` on :8648. The npm package's
+> `/api/hermes/usage/stats` SQL was broken (GROUP BY model only, no
+> provider/profile/base_url split, no exclusion of internal sessions like
+> `source='tool'`, `id LIKE 'compress_%'`, `parent_session_id IS NOT NULL`,
+> `archived=1`). The proxy intercepts only that one path and serves it
+> from corrected SQL against `data/hermes-agent/state.db`; everything
+> else (chat SSE / WebSocket / static assets) is passed through to
+> upstream :8649. **Also fixed the PowerShell Runspace-after-exit bug**
+> in all 4 start.ps1 modules — using `add_OutputDataReceived` to drain
+> child stdio crashed the PowerShell host after start.ps1 returned,
+> which silently took the python/node child with it. Now we let the
+> child INHERIT PowerShell's stdio (already captured by the supervisor
+> into the per-module log files). See §0.8).
+>
+> Previous: 2026-06-15f (extracted auto-restart watchdog out of
 > `bin/hermes-supervisor.py` into a standalone detached
 > `bin/hermes-watchdog.py` daemon. supervisor `cmd_start` no longer hangs
 > in a `while True: sleep(10)` loop — it spawns the watchdog via
@@ -42,764 +57,275 @@
 
 ---
 
-## 0. 2026-06-13 — Phase Close-Out: Privacy, Stability, and Repo Hygiene
 
-This revision is a **soft release** — no behaviour changes, no new
-features, no breaking refactors. The goal is to take the v2 router-mode
-codebase from "works on the author's USB stick" to "ready for a public
-GitHub push". Highlights:
+## Revision Timeline (chronological; see git log for details)
 
-1. **Logs-page ENOENT fix (t8).** `GET /api/hermes/logs/agent` etc. used
-   to fail with `spawn E:\Hermes Agent\bin ENOENT` whenever the user's
-   shell had a stale `HERMES_BIN=<project bin dir>` env var (a relic of
-   the old `supervisor.bat` that did `set "SUPERVISOR=%HERMES_BIN%\…"`).
-   Fixed by pinning `HERMES_AGENT_CLI_PYTHON=%HERMES_PYTHON%` in three
-   places: `deps/hermes-env.bat`, `deps/hermes-env.ps1`, and
-   `modules/webui/start.ps1`. The webui's `bundledCliPythonForWindows()`
-   short-circuits on this var and never even looks at `HERMES_BIN`.
-
-2. **Repo privacy scrub.** Four files were accidentally tracked before
-   `data/` and `hermes/data/` were added to `.gitignore` (in commits
-   `30c716b` and `ce99e4d`):
-   - `data/hermes-agent/config.yaml`  (local config with absolute paths)
-   - `data/models/router-preset.ini`  (per-model NGL/ctx)
-   - `hermes/data/skills/note.py`     (sample skill)
-   - `hermes/data/skills/weather.py`  (sample skill)
-   All four have been `git rm --cached`d. The two skill files were
-   relocated to `docs/examples/skills/` as reference code. A new
-   `data/models/router-preset.example.ini` provides a commented
-   template. `.gitignore` was substantially expanded (see §X.1 below).
-
-3. **`.gitignore` overhaul.** Sections added: data subdirectories
-   (`data/hermes-agent/`, `data/webui/`, `data/memory/`, `data/kanban/`,
-   `data/crons/`, `data/logs/`, `data/skills/`, `data/knowledge/`),
-   per-model NGL config, runtime caches (`.hermes-root`), IDE state
-   (`.qoder/`, `.opencode/`), all backup / dump / corrupt variants
-   (`*.bak`, `*.corrupt.*.bak`, `config.yaml.corrupt.*.bak`),
-   Python/Node build artifacts, and OS / shell litter.
-
-4. **Docs refresh.** `docs/00-速览.md` port numbers were updated
-   (webui 7860 → 8648), `docs/examples/skills/` created with a README,
-   and the README.md rewrite is forthcoming.
-
-The following sections of AGENTS.md (§1-§10) were left **unchanged** —
-they already describe the post-Phase-11 state.
+- **2026-06-16c** - `modules/webui_proxy` (new thin Python reverse-proxy on :8648) +
+  PowerShell Runspace-after-exit fix in all 4 `start.ps1` modules. See §0.8.
+- **2026-06-16** - root completion check: `bin\hermes-supervisor.bat` now calls
+  `hermes-root.bat verify` to fail-fast on stale env var or `.hermes-root` cache
+  (prevents supervisor launching lla with a broken path after USB drive-letter swap).
+  `bin\hermes-all.bat` double-verifies at the user-facing entry for clearer error attribution.
+- **2026-06-16b** - skills 路径归属澄清 + 根目录脚本收敛: bridge `HERMES_HOME=data/hermes-agent`
+  所以对话走 `data/hermes-agent/skills/`,源码仓库与 npm dist 都不参与执行;51 个 DWG/DXF
+  调试脚本一次性移到 `tools/dwg/`(原文件 untracked,无 git rename 历史),
+  `bridge_pool.py` system prompt 追加 `PROJECT_CONVENTIONS` 约束 LLM 落盘位置。
+- **2026-06-15f** - extract watchdog: new `bin/hermes-watchdog.py` (detached); supervisor drops
+  its in-line `while True: sleep(10)` loop (-25 lines).
+- **2026-06-15e** - retire 3 unused `data/{knowledge,memory,skills}` directories (all empty);
+  sync `hermes/config.py`, `hermes/workspace.py`, `config/hermes.yaml`.
+- **2026-06-15d** - compress revision-log comments round 2 (Python / bridge_runtime).
+- **2026-06-15c** - compress revision-log comments round 1 (bat / ps1: supervisor / hermes-all).
+- **2026-06-15b** - drop duplicate browser-open in `hermes-all.bat`: the npm package has
+  its own health-check hook that opens the browser.
+- **2026-06-15a** - drop `.\hermes-web-ui\` dev source (npm global is the single source).
+- **2026-06-15** - `setup-portable.bat` gains a Node.js download step.
+- **2026-06-14** - junction sweep: module.json / `fix-eol.py` / smoke tests.
+- **2026-06-13** - junction de-coupling for drive-letter portability: the 4 `deps/` junctions
+  are gone, replaced by direct `runtime/*` paths; auto-heal rmdir any leftover junction
+  on startup; repo renamed `hermes-agent` -> `hermes-agent-portable`; privacy scrub +
+  `.gitignore` overhaul.
 
 ---
 
-## 0.5. 2026-06-13 — Junction De-coupling: Drive-Letter Portability
-
-**Symptom (F: drive failure):** `bin\hermes-all.bat` on a copy of the
-project moved from `E:\Hermes Agent` to `F:\Hermes Agent` failed with:
-
-```
-[2/2] Starting all services via Python supervisor...
-  > llm_engine (service)    [TIMEOUT] llm_engine — port 8080 not ready in 90s
-  > bridge (service)        [OK]   bridge (:7860)
-  > webui (service)         [FAIL] webui — start.ps1 exited (rc=1)
-  FAILED: 2 module(s): llm_engine, webui
-```
-
-`bridge` (which only needs `HERMES_PYTHON`) started fine, but
-`llm_engine` and `webui` — both of which call `deps/hermes-env.{bat,ps1}`
-and depend on the env-block's PATH entries for `llama-server` and
-`node.exe` — failed silently.
-
-**Root cause:** `deps/` used to expose `runtime/`, `node23/`, and
-`portable-python/` to consumers via four NTFS **directory junctions**
-(`mklink /J`):
-
-| Junction              | Target (reparse point)              |
-|-----------------------|--------------------------------------|
-| `deps\node`           | `E:\Hermes Agent\runtime\node23`     |
-| `deps\tools`          | `E:\Hermes Agent\runtime`            |
-| `deps\llamacpp\bin`   | `E:\Hermes Agent\runtime`            |
-| `deps\python-test`    | `E:\Hermes Agent\portable-python`    |
-
-NTFS junctions **store the target as an absolute path** in their
-reparse-point data. They cannot hold a relative target — `mklink /J`
-will silently absolutize the path you give it. When the project folder
-was copied from `E:\` to `F:\` (USB slot change, drive letter
-remap, etc.) the junction targets still said `E:\...` so any consumer
-that touched `deps\node\...` got "file not found" (or, depending on
-the access method, a misleading "success" with empty content).
-
-`deps/hermes-env.{bat,ps1}` referenced the junctions via
-`Join-Path $HERMES_DEPS 'node'` / `'tools'` / `'llamacpp\bin'` to
-build the runtime PATH — which made the env block useless on any
-non-E: drive. And, critically, **`deps/` was never committed to git**
-in the first place — the env files, manifest, and README all lived as
-local-only artifacts. So a fresh `git clone` on F: would have been
-even more broken (no env setup at all). The whole `deps/` directory
-is now first-time-committed in the same change.
-
-**Fix (applied in follow-up commit to `1b06b139`):**
-
-1. **First commit of `deps/` to git** — `hermes-env.bat`,
-   `hermes-env.ps1`, `manifest.json`, `README.md`. Without this, a
-   fresh clone on F: would have no env setup at all and the auto-heal
-   below wouldn't even run.
-2. **Refactored `deps/hermes-env.bat` and `deps/hermes-env.ps1`** to
-   resolve `%HERMES_RUNTIME%` and `Join-Path $HERMES_RUNTIME 'node23'`
-   directly, bypassing the junctions entirely.
-3. **Added a defensive self-heal step** in both env files: on every
-   invocation, walk the four historical junction paths under `deps\`
-   and `rmdir /Q` anything that still shows up as a reparse point
-   (the user may be running an old checkout of the project on a
-   different drive). `rmdir /Q` on a reparse point does NOT recurse
-   into the target — the real on-disk content in `runtime\`,
-   `node23\`, and `portable-python\` is untouched.
-4. **Kept the existing `.gitignore` lines** (`deps/node/`,
-   `deps/tools/`, `deps/llamacpp/`, `deps/python-test/`) so even if
-   someone accidentally recreates a junction or stubs the directory,
-   the resulting reparse point can't be committed.
-
-**Why not recreate the junctions on startup?** Two reasons:
-* `mklink /J` requires either admin privileges or the user to have
-  "Create Symbolic Link" rights; we'd be adding a UAC prompt or a
-  silent failure to the most common startup path.
-* Relative targets are not supported by `mklink /J`, so we'd have
-  to compute the absolute path first — at which point the env file
-  is just as well off using that absolute path directly (and we
-  sidestep the whole junction layer).
-
-**Tested:** `call deps\hermes-env.bat` now sets `PATH` to include
-`E:\Hermes Agent\runtime` and `E:\Hermes Agent\runtime\node23`
-(bat) / their PowerShell equivalents (ps1) regardless of the
-`HERMES_DEPS\node` junction's presence. The self-heal logs
-`[hermes-env] removed stale junction: deps\X` on first run of a
-project copy whose junctions still point at a different drive.
-
-**Files changed:**
-* `deps/hermes-env.bat` — replaced junction-based PATH, added self-heal
-* `deps/hermes-env.ps1` — same
-* `deps/manifest.json` — first commit; documents the runtime/CUDA
-  asset layout
-* `deps/README.md` — first commit; explains the junction refactor
-* `AGENTS.md` — this section + §0 header + §3 directory-layout update
-* (no other consumer of the junctions was found in tracked code;
-  `modules\*/start.ps1` and `bin\*.bat` all go through `hermes-env.*`
-  for the env block and never reference `deps\node\...` directly)
-
----
-
-## 0.6. 2026-06-14 — Junction Sweep: Module Manifests + Doc Comments
-
-The §0.5 fix in the previous revision removed the dependency on the
-four `deps/node/` / `deps/llamacpp/bin/` / `deps/tools/` /
-`deps/python-test/` NTFS junctions from the *runtime path*
-(`deps/hermes-env.{bat,ps1}` now resolves `%HERMES_RUNTIME%` and
-`runtime\node23` directly). But three tracked files still contained
-**documentation / config-level references** to those junction paths,
-which would silently mislead anyone debugging a future F:-drive-style
-failure:
-
-| File                                | Line | Old (junction path)                          |
-|-------------------------------------|------|----------------------------------------------|
-| `modules/webui/module.json`         | 8    | `"node": "deps/node/node.exe"`               |
-| `modules/llm_engine/module.json`    | 8    | `"binary": "deps/llamacpp/bin/llama-server.exe"` |
-| `bin/fix-eol.py`                    | 17,77 | docstring + comment listing the four junctions |
-
-The supervisor itself doesn't read those `binary` / `node` fields
-(it just `subprocess.Popen()`s the corresponding `start.ps1`), so the
-failure was cosmetic — but the inconsistency was a footgun for
-anyone reading the manifest to figure out "where does the Node exe
-actually live?". Worse, **on the user's F: drive the runtime was
-present but `webui/start.ps1` still said `Node missing: F:\Hermes
-Agent\deps\node\node.exe`** in `data/logs/webui.log` — meaning the
-F: copy was running on an older `deps/hermes-env.ps1` that pre-dated
-the §0.5 fix.
-
-**Fix (this revision):**
-
-1. **`modules/webui/module.json`** — `"node": "deps/node/node.exe"`
-   → `"node": "runtime/node23/node.exe"`. Same path that
-   `deps/hermes-env.ps1` now resolves to at runtime, so the manifest
-   is now self-consistent with the actual launch path.
-2. **`modules/llm_engine/module.json`** — `"binary": "deps/llamacpp/bin/llama-server.exe"`
-   → `"binary": "runtime/llama-server.exe"`. The `start.ps1` does its
-   own CUDA-aware picker (`%LLAMACPP_BIN%\llama-server-cuda-<v>.exe`
-   preferred, `llama-server.exe` fallback), so the manifest field is
-   documentation — but it should match the reality on disk.
-3. **`bin/fix-eol.py`** — Updated the "What `--all` does NOT cover"
-   section: previously said "skip `deps/node/`, `deps/llamacpp/`,
-   `deps/tools/`, `deps/python-test/` because those are third-party
-   LF scripts". That was true *when* those dirs were junction targets
-   of `runtime/node_modules/` and `runtime/cuda/<v>/` — they no
-   longer exist. The new comment points at the correct third-party
-   locations: `runtime/node_modules/` (Node.js packages, LF) and
-   `runtime/cuda/<v>/` (bundled CUDA build, LF).
-4. **`deps/README.md`** — Rewrote the "no junctions in this
-   directory" paragraph to explicitly *forbid* recreating the
-   legacy junctions and to spell out the canonical paths
-   (`runtime\node23\node.exe` / `runtime\llama-server.exe`).
-   The `.gitignore` block was also relaxed — the four `deps/*`
-   ignore lines are kept (so any accidental `mklink /J` is still
-   blocked from committing), but the comments no longer call them
-   "third-party LF scripts".
-5. **`deps/manifest.json`** — Bumped version to `2026.06.14`. Added a
-   new top-level `canonical_paths` section that pins the one true
-   location of `node.exe` + `llama-server.exe` + `python.exe` +
-   `cuda/<v>/bin/`. Auditing consumers can `jq .canonical_paths` to
-   see what the project *actually* depends on, with no ambiguity.
-   Changelog gains a new entry.
-6. **Cleaned `deps/llamacpp/`** — the directory still contained a
-   leftover empty `lib/` subdirectory from a half-completed
-   refactor (the rmdir auto-heal had materialized the empty target
-   directory when it removed the junction). Removed; `deps/llamacpp/`
-   is now a truly empty directory (and excluded by `.gitignore`
-   regardless).
-7. **New smoke test `tests/smoke_hermes_env.py`** — exercises
-   `bin/hermes-root.py resolve` + `init`, then walks `deps/`
-   asserting that no entry is a directory reparse point. Anyone
-   who runs the test on a future checkout that *does* have a
-   stale junction will get a clear failure pointing at the culprit.
-   Plus `tests/smoke_node_path.ps1` — dot-sources
-   `deps/hermes-env.ps1` in a fresh PowerShell session and asserts
-   that `$NODE == E:\Hermes Agent\runtime\node23\node.exe`
-   (NOT `deps\node\node.exe`). This is the exact assertion that
-   would have caught the F: drive failure in the user's report.
-
-**Why this matters beyond cosmetics:**
-- A reader scanning `module.json` to find "where is the Node exe?"
-  no longer gets a misleading pointer.
-- An operator debugging the supervisor logs sees manifest fields
-  matching the actual `start.ps1` behaviour.
-- A fresh clone on a new drive letter is now provably
-  junction-free by both `smoke_hermes_env.py` (Python side) and
-  `smoke_node_path.ps1` (PowerShell side) — any regression will
-  fail loudly.
-
-**Files changed:**
-* `modules/webui/module.json` — junction path → runtime/* path
-* `modules/llm_engine/module.json` — same
-* `bin/fix-eol.py` — updated third-party LF locations comment
-* `deps/README.md` — forbids recreating junctions; documents canonical paths
-* `deps/manifest.json` — version bump + `canonical_paths` section
-* `tests/smoke_hermes_env.py` — NEW: junction-detection smoke test
-* `tests/smoke_node_path.ps1` — NEW: dot-source + alias assertion
-* `AGENTS.md` — this section + header bump
-
----
-
-## 0.7. 2026-06-15 — Node.js Download Step in setup-portable.bat
-
-Prior to this revision, `bin/setup-portable.bat` downloaded two
-runtime pieces (portable-python + llama.cpp) but **did not download
-Node.js**, even though `modules/webui/module.json` declared Node.js
-23.11.1 as bundled and `runtime/node23/` was in `.gitignore`. The
-result was a setup-portable script that claimed "ALL OK" yet left
-the user with a non-functional WebUI on a fresh clone.
-
-This revision adds a third download step that bootstraps Node.js
-from nodejs.org, completing the "fresh clone + setup-portable =
-everything works" promise.
-
-### Changes
-
-* `bin/setup-portable.bat`:
-  - New section `[3/4] runtime/node23/` between llama.cpp and model
-    sections. Downloads `node-v23.11.1-win-x64.zip` (~30 MB) from
-    `https://nodejs.org/dist/v23.11.1/` and extracts to
-    `runtime/node23/`. Idempotent — re-runs skip the download if
-    `node.exe` already exists.
-  - New `node` subcommand: `bin\setup-portable.bat node` installs
-    only the Node.js piece.
-  - Status subcommand now reports `runtime/node23/ present` or
-    `MISSING` (previously it was silently skipped — see bug fix below).
-  - Bug fix: the `:check_runtime` status block used
-    `if not exist A if not exist B (then) else (else)`, which is a
-    well-known cmd.exe broken-syntax combination (chained IF + else
-    silently falls through in non-trivial truth tables). Rewrote as
-    a nested IF so the status branch correctly reports
-    "present" vs "MISSING".
-
-* `deps/manifest.json`:
-  - Bumped `version` to `2026.06.15`.
-  - Moved `node23/` out of `runtime.components` into a new
-    `runtime_node23` section with explicit `source` URL,
-    `required_by: ["modules/webui/"]`, and notes about the
-    hermes-web-ui npm package not being auto-installed.
-  - Added 2026-06-15 changelog entry.
-
-* `AGENTS.md` — header bump + this §0.7 section.
-
-### What is NOT changed
-
-* The `hermes-web-ui` npm package is **intentionally not** installed
-  by setup-portable.bat. Users must install it manually with:
-  ```bat
-  cd runtime\node23
-  npm install -g hermes-web-ui
-  ```
-  The download step prints a `[WARN]` if the npm global install is
-  absent, with the same copy-pasteable remediation command.
-
-* No new python dependencies, no new config, no breaking changes.
-  Re-running `bin/setup-portable.bat` is safe and idempotent.
-
-### Acceptance
-
-* `bin\setup-portable.bat status` now reports all four pieces:
-  portable-python, runtime/llama-server, runtime/node23/, model.
-* On a fresh checkout, after `bin\setup-portable.bat`, the
-  `hermes-supervisor` can start `llm_engine` and `webui` modules.
-
----
-
-## 0.7a. 2026-06-15a — Remove `.\hermes-web-ui\` dev source (npm global is the only path)
-
-### Why
-
-The `.\hermes-web-ui\` folder at the repo root was a gitignored
-clone of the [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui)
-repo, intended as a dev-source fallback for the WebUI.
-
-In practice it was **dead code**:
-* `modules/webui/start.ps1` always preferred the npm global install
-  at `runtime/node23/node_modules/hermes-web-ui/`.
-* The dev source was only used if the npm global install was absent,
-  which never happened on any working setup.
-* The local clone was also perpetually 2 patches behind the npm
-  install (e.g. v0.6.12 vs v0.6.14), so it would have masked real
-  fixes if it ever was used.
-
-Two copies of the same package on disk also created confusion
-("which one is authoritative?") and cost ~80 MB of unused disk.
-
-### What changed
-
-* **Removed the folder**: `e:\Hermes Agent\hermes-web-ui\` is gone
-  (gitignored, so no git impact; on F: drive users will simply have
-  the stale folder too — they can `rmdir /S /Q hermes-web-ui` on
-  next `git pull`).
-* **`modules/webui/start.ps1`** (lines 13-30): collapsed the
-  if/elseif/else dev-source fallback into a single npm-global check.
-  If the launcher is missing, the script now prints a one-liner
-  remediation command and exits 1. The dev-source branch and its
-  `[WARN] Falling back to dev source.` message are gone.
-* **`bin/setup-portable.bat`**: the post-Node.js `[WARN]` now only
-  fires when `runtime/node23/node_modules/hermes-web-ui/` is absent
-  (previously it required both global AND dev source to be absent).
-  The remediation command is now a single `cd runtime\node23 ^&^& npm install -g hermes-web-ui`.
-* **`deps/manifest.json`** (`runtime_node23.notes` + new 2026-06-15
-  `2026.06.15a` changelog entry): updated to reference the npm
-  install command instead of the dev source.
-* **`AGENTS.md` §0.7 (this file)**: the "What is NOT changed" section
-  no longer mentions the dev source. §3 (Project Layout) no longer
-  lists `hermes-web-ui\` as a directory.
-* **`README.md`**: removed the `hermes-web-ui\ ← 上游 EKKOLearnAI/hermes-web-ui(只读)`
-  line from the directory cheat sheet. The "致谢" section no longer
-  claims `hermes-web-ui\` is a sibling clone — it now points to the
-  npm install command.
-* **`.gitignore`**: the "Upstream clean copies" section now only
-  covers `hermes-agent/`. The `hermes-web-ui/` ignore rule and the
-  `git clone ... hermes-web-ui` instructions are gone; a new note
-  explains that the WebUI now ships as an npm global install.
-
-### What is NOT changed
-
-* The `hermes-web-ui` npm package itself is still NOT bundled by
-  `bin/setup-portable.bat` — it remains a manual
-  `cd runtime\node23 && npm install -g hermes-web-ui` step.
-* The upstream project URL ([EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui))
-  is still referenced in §1 ("What This Is") and §4 ("Components")
-  as the canonical source of the WebUI code.
-
-### Acceptance
-
-* `Test-Path 'hermes-web-ui'` returns `False` (folder deleted).
-* `modules/webui/start.ps1` does not contain `$DevSource` or
-  the `elseif (Test-Path ... 'hermes-web-ui/...')` branch.
-* `bin\setup-portable.bat` does not contain `HERMES_ROOT%\hermes-web-ui`
-  in any echo line.
-* `.gitignore` no longer contains a `hermes-web-ui/` ignore pattern.
-  The "Upstream clean copies" section now only covers `hermes-agent/`
-  (line 39). The `git clone ... hermes-web-ui` instructions are
-  removed; a 4-line note (lines 41-44) explains the WebUI ships
-  via `npm install -g hermes-web-ui`.
-* `bin\setup-portable.bat` still works as before: `status` reports
-  the same 4 pieces; `python` and `node` subcommands are unchanged.
-* `runtime/node23/node_modules/hermes-web-ui/` is the single
-  authoritative source for the WebUI runtime.
-
----
-
-## 0.7b. 2026-06-15b — Remove duplicate browser open in `hermes-all.bat`
-
-### Symptom
-
-Running `bin\hermes-all.bat` opened the WebUI in two browser tabs
-(or, on machines that dedupe tabs, showed a brief flash of two
-load attempts). The user would see a `localhost:8648` page load,
-then a second `localhost:8648` page load a couple of seconds later.
-
-### Root cause
-
-Two places in the launch chain were independently opening the
-browser to `http://localhost:8648/`:
-
-1. **`bin/hermes-all.bat` (lines 96-98, pre-fix)** — after the
-   supervisor returned successfully, the launcher spawned a
-   PowerShell one-liner to call `Start-Process` on the URL, with
-   an `explorer` fallback if PowerShell was unhappy.
-
-2. **`runtime/node23/node_modules/hermes-web-ui/bin/hermes-web-ui.mjs`
-   (line 454-456)** — the npm package's `poll`-loop runs a
-   `fetch(healthUrl)`; when the server returns 200, it calls
-   `execSync(isWin ? 'start ' + url : 'xdg-open ' + url)` to open
-   the browser itself.
-
-   (See [EKKOLearnAI/hermes-web-ui README](https://github.com/EKKOLearnAI/hermes-web-ui#scripts):
-   `- Opens browser on successful startup` is a documented feature.)
-
-   Sequence: supervisor → webui module → node → hermes-web-ui.mjs
-   polls health → `mjs` opens browser (1st) → control returns to
-   supervisor → supervisor returns to `hermes-all.bat` → `hermes-all`
-   opens browser (2nd).
-
-### What changed
-
-* **`bin/hermes-all.bat`**: removed the two-line `Start-Process` /
-  `explorer` block. Replaced with a 4-line comment pointing at
-  `hermes-web-ui.mjs` line ~454 and explaining the deliberate
-  non-action. Header still says "Browser opens to webui at :8648"
-  because that promise is still kept — just by a different layer
-  of the stack.
-
-### What is NOT changed
-
-* `hermes-web-ui.mjs` is left untouched. It lives in
-  `runtime/node23/node_modules/` (gitignored, user-managed npm
-  package) and its auto-open-on-health-check behaviour is a
-  documented upstream feature we want to keep.
-* `bin/hermes-supervisor.bat` (used standalone) still does NOT
-  open the browser — supervisors that are not full-stack launchers
-  shouldn't open windows. Only the user-facing one-click launcher
-  had the redundant block.
-* No cmd, ps1, or .py logic was added; this is purely a deletion.
-
-### Acceptance
-
-* `grep -n 'Start-Process' bin/hermes-all.bat` returns no matches
-  for the URL (the comment contains the phrase "Start-Process" as
-  a string, which is expected and intentional).
-* `bin\hermes-all.bat` exits 0 and the user sees exactly one
-  browser tab at `http://localhost:8648/`.
-* `bin/hermes-supervisor.bat --start` (standalone, not via
-  `hermes-all`) still does NOT open any browser tab.
-
----
-
-## 0.7c. 2026-06-15c — Compress revision-log-style comments in .bat / .ps1
-
-### What the problem was
-
-Over 2026-06-13 → 2026-06-15 the project accumulated a few
-mini "changelogs" hidden inside .bat / .ps1 header comments. They
-were useful when written (the author wanted to capture *why* a
-decision was made, not just *what* it does), but once AGENTS.md
-became the canonical project memory bank, the in-file copies
-became drift hazards:
-
-* `deps/hermes-env.ps1` had a 10-line `CHANGELOG (2026-06-13):` block
-  in its header explaining the junction-heal step — but §0.6 already
-  documents the same migration in 70+ lines.
-* `bin/hermes-all.bat` Step 2 had a 7-line "Was: `cmd /c
-  'powershell -File ...'`" block describing a fragility the current
-  Python supervisor already comments on at its own header.
-* `bin/hermes-firstrun.bat` had a "Phase 10: now delegates to the
-  env_bootstrap module" line pointing at a long-since-deleted
-  `hermes.firstrun` script.
-* `bin/setup-runtime.bat` had a one-line "Migrate old-style
-  llama-cuda.zip (legacy from previous setup)" with no date or
-  context.
-* `tests/smoke_node_path.ps1` had two "(NOT the legacy deps/*
-  junctions)" hedges that confused more than they informed.
-* `deps/hermes-env.bat` had a 7-line "Why this file is so small"
-  explanation that just paraphrased the line above it.
-
-### What changed
-
-7 files, −80 / +36 = **net −44 lines** (and every line removed
-was a comment, so behaviour is bit-for-bit unchanged):
-
-| File | Old header | New header |
-|------|-----------:|-----------:|
-| `deps/hermes-env.ps1`      | 23 | 5 |
-| `deps/hermes-env.bat`      | 36 | 13 |
-| `bin/hermes-all.bat`       | 14 | 9 |
-| `bin/hermes-firstrun.bat`  | 25 | 18 |
-| `bin/hermes-supervisor.bat`| 12 | 6 |
-| `bin/setup-runtime.bat`    |  1 | 3 (a real new explanatory comment) |
-| `tests/smoke_node_path.ps1`|  5 | 5 (rewritten, no length change) |
-
-Compression strategy: replace the verbose block with a single
-"see AGENTS.md §X.Y" pointer, where X.Y is the existing memory
-section that already covers the topic (§0.4 for the cmd /c
-fragility, §0.6 / §3 for the junction audit, §0.7a for the
-hermes-web-ui dev source, etc.). The "see §" links are the actual
-code-comment equivalent of a paper's "see Appendix B" — terse, but
-the reader can find the rationale in one click.
-
-### What is NOT changed
-
-* No logic was touched. `git diff` shows only comment lines
-  (line-context-wise: only lines whose first non-whitespace char
-  is `REM`, `#`, or `--`).
-* The `bin/setup-runtime.bat` migration step itself (the
-  `move /Y "!RUNTIME!\llama-cuda.zip" "!ZIP_PATH!"` block) was
-  kept; only the comment above it was rewritten.
-* AGENTS.md structure (the `## 0.7a. / 0.7b. / 0.7c.` series) is
-  preserved — these sections *are* the project's "what changed
-  and why" log; the .bat / .ps1 headers should not duplicate it.
-
-### Acceptance
-
-* `git diff` on the 7 files shows only comment-line changes.
-* `bin\fix-eol.py --all --check` still passes (no CRLF drift).
-* `tests\smoke_hermes_env.py` still passes (the env file's
-  actual logic was untouched).
-* `bin\hermes-supervisor.bat --dry-run` still produces the same
-  start order (only the comment block above the call was
-  rewritten).
-* `git diff --stat` reports `7 files changed, 36 insertions(+),
-  80 deletions(-)` (a net reduction of 44 comment lines).
-
-## 0.7d. 2026-06-15d — Compress remaining revision-log-style comments (Python + extras)
-
-### What the problem was
-
-§0.7c swept the 7 worst offenders in `bin/`, `deps/`, and `tests/`
-(header CHANGELOG blocks, "Was:" / "Why:" / "Phase 10 legacy" prose),
-but several Python files (mostly in `modules/`, `hermes/`) plus a few
-stray `bin/*.bat` lines still carried smaller bits of revision-log noise:
-
-* `modules/env_bootstrap/gpu_detect.py` docstring had a 4-line
-  "Multi-version CUDA support (Phase 8):" block — the version list is
-  the design doc; "Phase 8" was history.
-* `modules/model_manager/manager.py` had three "Re-exports from the X
-  submodule (Phase 10 ready / migrated in Phase 11)" comments above
-  the import blocks.
-* `modules/model_manager/gguf.py` and `mirror.py` each had a
-  "(Phase 11: migrated from hermes.X)" tag in their module docstring.
-* `bin/setup-portable.bat` had a 4-line "Move extracted files to
-  runtime/. Phase 8 multi-version layout: runtime/ ... runtime/cuda/12.4/ ..."
-  block — the most repetitive of the lot.
-* `bin/setup-runtime.bat` had a "Updated 2026-06-06: bump to b9538"
-  line and a 3-line "Migrate legacy llama-cuda.zip" block.
-* `bin/gpu-detect.bat` had a "Phase 10: forwards to ..." 2-line block.
-* `hermes/knowledge.py` had a 4-line "Inlined from the deleted
-  hermes/memory.py" comment whose first half is just provenance.
-* `tests/test_hermes.py` had 3 lines saying "hermes.gpu was removed in
-  Phase 1-6. The replacement lives in modules/env_bootstrap/gpu_detect.py
-  (also callable as `python -m modules.env_bootstrap.gpu_detect recommend`)".
-
-### What changed
-
-13 files, +24 / −43 = **net −19 lines** (all comment / docstring):
-
-| File | Net | Notes |
-|------|----:|-------|
-| `bin/setup-runtime.bat`                 | −3 | dropped "Updated 2026-06-06" header + rewrote 3-line "Migrate legacy" block to 1 line |
-| `bin/setup-portable.bat`                | −3 | collapsed 4-line Phase 8 layout block + "2b. (Phase 8)" header |
-| `bin/gpu-detect.bat`                    | −2 | "Phase 10: forwards to ..." 2-line block → 1 line |
-| `bin/hermes-all.bat`                    | −2 | "Single source of truth: resolve HERMES_ROOT + 13 derived paths" header collapsed |
-| `modules/llm_engine/start.ps1`          |  0 | "(multi-version support, Phase 8)" → "(multi-version: 11.8 / 12.4 / 13.0)" |
-| `modules/env_bootstrap/gpu_detect.py`   |  0 | docstring re-aligned (no length change); legacy-section header shortened |
-| `modules/model_manager/manager.py`      | −4 | 3 "Re-exports (Phase X)" comments + 5-line "Phase 12: legacy helper removed" |
-| `modules/model_manager/gguf.py`         |  0 | "(Phase 11: migrated ...)" stripped from docstring |
-| `modules/model_manager/mirror.py`       |  0 | same |
-| `hermes/knowledge.py`                   | −3 | 4-line "Inlined from the deleted hermes/memory.py" → 1 line |
-| `hermes/config.py`                      |  0 | "Legacy data-dir fallback (kept for back-compat; ...)" shortened |
-| `tests/test_hermes.py`                  | −2 | 3-line "hermes.gpu was removed in Phase 1-6" → 1 line |
-| `docs/15-故障排查.md`                   |  0 | "这是 Phase 13 之前的老 bug / **v3 已修**" → "详见 `AGENTS.md §0` (env-loader gotcha)" |
-
-**Pre-existing test breakage (NOT in scope of this commit):**
-`tests/test_hermes.py` 跑时 6/12 失败 (Agent / Memory / KB / LLM router /
-Skills / Planner 都报 `No module named 'hermes.agent'` 等) — 这是
-pre-existing 的 import 路径问题:测试 `from hermes.agent import HermesAgent`
-试图 import `hermes-agent/agent/`,但 `hermes-agent/` 是 .gitignore 排除的
-upstream clean copy,没有 `hermes-agent/__init__.py` 把它包成 Python package,
-所以 `import hermes.agent` 找不到。**与本次注释清理无关**,不在本 commit 修。
-
-### What is NOT changed
-
-* `hermes/static/*.js` (前端 Vue/Socket.IO 代码) 中也有 "Phase X" /
-  "v0.5 changes (Phase 5 of the kanban plan)" 字样 — 但这些是 feature
-  / version marker,**不计入**修订日志;它们在浏览器侧运行,不是 Hermes
-  自身的历史。
-* `bin/hermes-supervisor.bat` L38-39 "Hand off to Python directly. No
-  cmd /c layer ..." 是设计意图解释,不是修订历史,保留。
-* `hermes/config.py` L184 `/data/config/hermes.yaml (legacy data-dir fallback)`
-  是 candidate 列表的文档行,属于"为什么有这个 fallback",保留。
-* `modules/env_bootstrap/gpu_detect.py` L303 "Back-compat shims
-  (single-version CUDA layout, pre-multi-version)" — back-compat 函数
-  段头,不是修订历史,保留 (只把 "Legacy single-version CUDA runtime
-  checks" 改成 "Back-compat shims")。
-
-### Acceptance
-
-* `git diff` 显示净减 19 行注释/docstring,无任何 logic 变化。
-* `bin\fix-eol.py --all --check` 通过(.bat/.ps1 全部 CRLF 不变)。
-* 4 个 .py 文件被 SearchReplace 工具在 Windows 下写成了 CRLF,
-  用一行 Python (`open(f,'rb').read().replace(b'\r\n',b'\n')` + write) LF-normalize
-  修回;`.gitattributes` 强制 `*.py text eol=lf` 提交时会再过一遍 LF。
-* `tests\smoke_node_path.ps1` 仍然 OK。
-* 头部 "Last revised" 升级到 2026-06-15d。
-* `git diff --stat` 报告 `13 files changed, 24 insertions(+), 43 deletions(-)`。
-
-## 0.7e. 2026-06-15e — Retire Dead `data/{knowledge,memory,skills}` Directories
-
-### What the problem was
-
-三个顶层 `data/` 子目录一直存在但从未被任何代码实际读取:
-
-* `data/knowledge/` (0 文件, 0 字节) — 空壳,active KB 在 `hermes/data/knowledge/`。
-* `data/memory/` (1 文件, 443 字节 debug payload) — 几乎空,active memory 在 `hermes/data/memory/` (149 KB)。
-* `data/skills/` (0 文件, 0 字节) — 空壳,active skills 已迁到 `docs/examples/skills/`(见 §0.6)。
-
-这三个目录是早期版本的副产物。后来所有真正的 KB / memory / skills
-都搬到 `hermes/data/` 下了,但旧 shell 入口(`hermes/config.py` 里的
-`MemoryConfig.path` / `KnowledgeConfig.path` / `SkillsConfig.custom_dir`
-默认值,以及 `hermes/workspace.py` 里的 `WHITELIST_DIRS` WebUI 文件浏览白名单)
-却还停留在引用 `data/...` 的状态。grep 全仓 0 命中 — 完全是死代码,
-但每次新人 `ls data/` 都会误以为是真目录然后困惑。
-
-### What changed
-
-* 删 `data/knowledge/`、`data/memory/`、`data/skills/` 三个目录(.gitignore 排除,不影响 commit)。
-* `hermes/config.py` 删 `MemoryConfig.path` / `KnowledgeConfig.path` / `SkillsConfig.custom_dir` 三个 dead path 默认值(grep 0 引用)。
-* `hermes/workspace.py` 删 `WHITELIST_DIRS` 里 `data/knowledge`、`data/memory`、`data/skills` 三个 entry,并修两处 docstring 示例(从 `data/knowledge` 改为 `data/models`)。
-* `config/hermes.yaml` 删 `memory.path` 和 `skills.custom_dir` 两个 explicit `path:` 字段,加 2 行注释说明 KB / memory / skills 路径全部从 `HERMES_DATA_DIR` 经 `resolve_data_paths()` 派生,不需要 explicit path。
-* `.gitignore` L92 `.hermes-root` rule 的 inline `# ...` 注释导致 git 把它当字面 pattern 而**没**忽略此文件(`git check-ignore -v .hermes-root` 一直 rc=1)—— 把注释移到独立行后才生效。把 inline 注释 + 大量 trailing space 换成独立注释行,顺手清理。
-* 头部 "Last revised" 升级到 2026-06-15e。
-
-### What is NOT changed — and why
-
-`Hermes Agent\hermes-agent\` (116 MB upstream source) 和 `Hermes Agent\data\hermes-agent\`
-(47 MB upstream runtime state) **两个都不删**。它们名字一样、都在
-`hermes-agent` 这个名字下,但角色完全不同,看起来像 duplicates 其实不是:
-
-| 目录 | 大小 | 角色 | 来源 |
-|---|---|---|---|
-| `hermes-agent/` (root) | 116 MB / 5682 文件 | upstream 源码 (`agent/`、`hermes_cli/`、`tools/`、...) | `git clone https://github.com/.../hermes-agent`(clean,不要改) |
-| `data/hermes-agent/` | 47 MB / 720 文件 | upstream runtime state = `HERMES_HOME` | `config.yaml` / sessions / skills / caches / vector stores |
-
-关键证据:
-
-* `hermes/__main__.py` L19: `from hermes_cli.main import main` — 我们的薄 wrapper delegate 到 **upstream** `hermes_cli/` 模块,这个模块在 `hermes-agent/hermes_cli/` 下,所以 `hermes-agent/` 必须存在。
-* `bridge/README.md` L40: "**Upstream hermes-agent code** → `../hermes-agent/` (do not edit; PR upstream)";L45: "**State** → `../data/hermes-agent/` (= `HERMES_HOME`)";L66: "`HERMES_HOME = ../data/hermes-agent` so all upstream state lands inside"。
-* `hermes-agent/.gitignore` 在我们 `.gitignore` L39 被排除,所以 116 MB 源码不会污染我们的 commit。
-* `data/hermes-agent/` 里的 state 在 `HERMES_HOME` 下写入,我们 own 它的内容但不改 upstream 代码。
-
-删任何一边都会破坏 upstream 链路:
-
-* 删 `hermes-agent/` → `from hermes_cli.main import main` 立刻 ImportError,所有 chat / tool / skills 全瘫。
-* 删 `data/hermes-agent/` → upstream 把 state 写到默认 `~/.hermes-agent/`,下次启动发现 state 不在,会重新 bootstrap,丢失所有 sessions / skills 配置 / 缓存。
-
-### Acceptance
-
-* `git status` 显示 5 modified:`AGENTS.md` / `config/hermes.yaml` / `hermes/config.py` / `hermes/workspace.py` / `.gitignore`(无 untracked,因为 `.hermes-root` 重新被 ignore)。
-* `data/{knowledge,memory,skills}` 在磁盘上消失,但 `hermes/data/{knowledge,memory,skills}/` 完好(`resolve_data_paths()` 用的就是这条)。
-* `from hermes.config import HermesConfig, MemoryConfig, KnowledgeConfig, SkillsConfig; HermesConfig()` 实例化 OK;`MemoryConfig` / `KnowledgeConfig` / `SkillsConfig` 没有 `path` / `custom_dir` 字段了(只保留 `backend` / `recency_decay` / `max_results` / `chunk_size` / `chunk_overlap` / `builtin` / `hot_reload`)。
-* `tests\smoke_node_path.ps1` 通过。
-* `git diff --stat` 报告 `5 files changed, 76 insertions(+), 21 deletions(-)`。
-
----
-
-## 0.7f. 2026-06-15f — Extract Auto-Restart Watchdog as Detached Process
-
-### What the problem was
-
-`bin/hermes-supervisor.py` 的 `cmd_start` 末尾有一段 `while True: time.sleep(10)` 的 watchdog loop
-(L596-617 旧位置),用来监控 services 死了就 restart。问题是 **supervisor 永远 hang**:
-
-* `bin/hermes-all.bat` L67 调 `hermes-supervisor.bat --start` 之后,supervisor 永远不 return。
-* 用户看到启动窗口"卡住"——以为失败了。
-* 临时 hack:在 `hermes-all.bat` 末尾加 `timeout /t 3 /nobreak >nul` 强行关窗口(L89-90),
-  但 supervisor 进程仍在前台跑,只是窗口关了,console 占用也不释放。
-* 另一个问题:watchdog 跟 supervisor 共享一个 console handle,如果 supervisor 异常退出
-  (e.g. Ctrl-C),watchdog 也跟着死,失去守护意义。
-
-### What changed — Architecture
-
-把 watchdog **从 supervisor 内部** 拆出来,做成独立的 detached 进程:
-
-```
-旧:hermes-all.bat → supervisor (含 while True watchdog) → 关窗口(超时强制)
-                         ↓
-                         services (无 watchdog 守护)
-新:hermes-all.bat → supervisor --start → spawn detached watchdog → return → 关闭窗口
-                              ↓                ↓
-                              services ←──── restart if DOWN
-                              ↑
-                  watchdog (独立 PID,parent 退出不影响它)
+## 0.8. 2026-06-16c — `modules/webui_proxy` (port 8648) + PowerShell Runspace-after-exit fix
+
+Two changes shipped in the same revision because they share a debugging session.
+
+### Part A — `modules/webui_proxy/`
+
+**Symptom.** The npm package `hermes-web-ui` ships a `/api/hermes/usage/stats`
+endpoint backed by an obfuscated `Pw()` function in `dist/server/index.js`.
+Inspecting the SQL it generates against `data/hermes-agent/state.db` shows
+two problems:
+
+1. `GROUP BY model` only — sessions that hit the same model name across
+   different providers (`custom` vs `minimax-cn`) or base URLs
+   (`http://127.0.0.1:8080/v1` vs `https://api.minimaxi.com/v1`) get
+   bucketed together. Cross-provider cost reporting is meaningless.
+2. No exclusion of internal sessions — `source='tool'`, `id LIKE
+   'compress_%'`, `parent_session_id IS NOT NULL`, and `archived=1` rows
+   show up alongside the real user sessions, inflating the counts.
+
+**Why a separate proxy instead of patching the npm package?**
+
+- The npm package is updated via `npm install -g hermes-web-ui`. Any
+  hand-edit to `dist/server/index.js` is overwritten on the next install.
+- The Vue 3 frontend is hard-coded to fetch `/api/hermes/usage/stats`;
+  we cannot change the path.
+- A thin Python proxy intercepts only the broken endpoint and forwards
+  everything else (chat SSE, WebSocket, static assets, /api/hermes/health,
+  /api/hermes/logs/*) unchanged.
+
+**Implementation.**
+
+- `modules/webui_proxy/webui_proxy.py` (446 lines, stdlib only —
+  `http.server`, `urllib`, `sqlite3`). One `ProxyHandler` class with
+  `do_GET/POST/PUT/DELETE/PATCH/OPTIONS`; `do_GET` checks for
+  `USAGE_STATS_PATH = "/api/hermes/usage/stats"` and dispatches to
+  `_handle_usage_stats()` (SQL) or `_proxy_pass()` (urllib to upstream
+  with hop-by-hop header filtering and a 502 fallback for "upstream
+  unavailable" / "connection refused" / "timed out").
+- `modules/webui_proxy/start.ps1`, `stop.ps1`, `health.ps1`,
+  `module.json` follow the same pattern as the other modules
+  (`--port`, `--upstream`, `--state-db` CLI flags; port 8648; depends
+  on `webui` which must be listening on 8649 first).
+- `modules/webui/module.json` no longer claims port 8648; it now
+  declares port 8649 with a `description` that explicitly says
+  "proxied to :8648 via modules/webui_proxy".
+
+**SQL diff** (webui_proxy's corrected version vs the npm package's):
+
+```sql
+-- npm Pw() (the broken version):
+SELECT model, SUM(...) FROM sessions
+WHERE started_at > ? AND model IS NOT NULL
+GROUP BY model
+ORDER BY ...
+
+-- webui_proxy.py (the fixed version):
+SELECT
+    model, billing_provider AS provider, billing_base_url AS base_url,
+    SUM(input_tokens) AS input_tokens, ...,
+    COUNT(*) AS sessions,
+    SUM(COALESCE(api_call_count, 0)) AS api_calls
+FROM sessions
+WHERE started_at > ?
+  AND model IS NOT NULL AND model != ''
+  AND source != 'tool'                              -- exclude tool sessions
+  AND id NOT LIKE 'compress_%'                      -- exclude compressor
+  AND (parent_session_id IS NULL OR parent_session_id = '')
+  AND COALESCE(archived, 0) = 0                     -- exclude archived
+GROUP BY model, billing_provider, billing_base_url  -- split by billing lane
+ORDER BY sessions DESC, model ASC
 ```
 
-具体改动:
+Note: the `profile` column from the npm package's `Pw()` does not
+exist in `state.db.sessions` (the project enforces profile per-request
+via the `X-Hermes-Profile` header upstream; it's not persisted in
+the session row). Including `profile` in the GROUP BY would raise
+a SQL error, so the proxy splits by `(model, provider, base_url)` —
+the two dimensions that actually identify a billing lane in the
+local DB. The date axis is dense (zero-rows for empty days are
+filled in `daily_usage`) so the chart x-axis is always contiguous
+from `today - days` to `today` (inclusive of today, so `days=30`
+actually returns 31 rows — see `tests/smoke_webui_proxy.py` for
+the exact expectations).
 
-* **新文件** `bin/hermes-watchdog.py` (266 行) — 独立 watchdog 守护进程
-  - 自己 `discover_modules()` + `check_port()`,每 10s 扫描所有 service
-  - service DOWN → 调 `supervisor --restart <name>` 重启
-  - 单例检查:`data/logs/hermes-watchdog.pid` 写自己的 PID
-    + 启动时检查 stale / alive,避免 fork 多个
-  - 优雅退出:KeyboardInterrupt / SIGTERM → 删 PID 文件 → exit 0
-  - 冷却:同一 service 30s 内不重复重启(防 start.ps1 自身 bug 导致疯狂 fork)
-* **新文件** `bin/hermes-watchdog.bat` — bat 启动器(供手动调试,正常情况 supervisor 自动 spawn)
-* **`bin/hermes-supervisor.py` 改**:
-  - **移除** `cmd_start` 末尾 `while True: sleep(10)` 的 watchdog loop (-25 行)
-  - **新增** `cmd_watchdog_start()` — detached 启动 watchdog(`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`,
-    stdout/stderr 重定向到 `data/logs/hermes-watchdog.{log,err}`)
-  - **新增** `cmd_watchdog_stop()` — 通过 PID 文件 taskkill watchdog
-  - **新增** `cmd_restart(name)` — 重启单个 service(供 watchdog 调用)
-  - **`cmd_start` 末尾**:`cmd_watchdog_start(modules)` 然后 `return 0`(不再 hang)
-  - **`cmd_stop` 开头**:`cmd_watchdog_stop()` 在 stop services 之前(防 watchdog 在 stop 期间重启某个 service)
-  - **新增** argparse: `--watchdog` / `--watchdog-stop` / `--restart <name>`
-* **`bin/hermes-all.bat` 改**:移除 `timeout /t 3 /nobreak >nul` 强制关闭窗口的 hack
-  (-2 行),改成正常 exit(supervisor 现在能正常 return,不再 hang)
-* **`bin/hermes-stop.bat` 改**:在 `hermes-supervisor.bat --stop` 之前,
-  先读 `data/logs/hermes-watchdog.pid` + `taskkill /F /PID`,
-  fallback 用 `Get-CimInstance Win32_Process | Where CommandLine match 'hermes-watchdog.py'`
-  兜底抓任何 stray 进程(+14 行)
+**Acceptance test** (`tests/smoke_webui_proxy.py`, 8 scenarios):
 
-### What is NOT changed — and why
+1. `GET /api/hermes/usage/stats?days=30` → 200, `total_sessions=4`
+   (was 5 before the internal-session exclusion), `model_usage`
+   rows split by (model, provider, base_url), `daily_usage` 31 rows.
+2. `days=90` → 91 daily rows.
+3. `days=365` → 366 daily rows.
+4. `days=abc` (invalid) → falls back to 30 → 31 daily rows.
+5. `days=1000` (out of range) → falls back to 30 → 31 daily rows.
+6. `GET /api/hermes/health` → 401 unauthorized (passthrough to
+   upstream 8649, which returns 401 because no cookie).
+7. `GET /` → 200, body `<!doctype html>...<html lang="zh-CN">...`
+   (the Vue 3 SPA, passthrough).
+8. Stability: 3 consecutive `usage/stats` calls all return 200.
 
-* **supervisor 的拓扑排序 / port health check / start.ps1 调度逻辑** 全部保留。
-  watchdog 不重复这些逻辑,它只是"发现 DOWN → 调 supervisor --restart"。
-* **services 自身不知道有 watchdog 在守护**。start.ps1 / stop.ps1 完全 unchanged。
-  这是有意的:服务应该尽量 dumb,所有 lifecycle 决策交给 supervisor / watchdog。
-* **modules/ 目录结构 unchanged**。没新增 `modules/watchdog/module.json`,
-  因为 watchdog 是 meta-level 进程(它监管别的服务,本身没 port),跟
-  llm_engine / bridge / webui 不是一类。强行塞进 modules/ 反而模糊了边界。
-* **没新增 systemd / Windows Service 抽象**。DETACHED_PROCESS + PID 文件足够,
-  上 NSSM / sc.exe 反而增加依赖。Hermes 是 portable USB 项目,能少一个依赖少一个。
+### Part B — PowerShell Runspace-after-exit fix
 
-### Acceptance
+**Symptom (the killer).** During the Part A testing, the first
+supervisor-launched `webui_proxy` accepted the TCP connection on
+:8648, returned 0 bytes of HTTP, and the client got
+`http.client.RemoteDisconnected`. But the same `webui_proxy.py` run
+from a plain PowerShell prompt (no supervisor) returned 200 with the
+correct JSON. The bug was not in the Python — it was in how
+`start.ps1` was talking to the child process.
 
-* `git status` 显示 6 changed(2 新文件 + 4 modified):`bin/hermes-watchdog.py` /
-  `bin/hermes-watchdog.bat` / `bin/hermes-supervisor.py` / `bin/hermes-all.bat` /
-  `bin/hermes-stop.bat` / `AGENTS.md`。
-* `portable-python\python.exe bin/hermes-supervisor.py --dry-run` 输出 5 个模块的 start order,
-  跟改动前一致。
-* `portable-python\python.exe bin/hermes-supervisor.py --watchdog` 启动 watchdog,
-  `data/logs/hermes-watchdog.pid` 出现且 PID 是 python.exe 进程的 PID;
-  再跑一次同样的命令 → 输出 `[skip] watchdog already running (pid N)`。
-* `portable-python\python.exe bin/hermes-supervisor.py --watchdog-stop` kill watchdog,
-  PID 文件被删除。
-* `portable-python\python.exe bin/hermes-supervisor.py --start` 启动 services + watchdog,
-  **supervisor 立即 return 0**(从 L96 `cmd_start` 函数 return 0 退出)——**不再 hang 在
-  `while True`**。可以用 `echo $LASTEXITCODE` 验证返回码。
-* `bin/hermes-all.bat` 启动后**正常 exit 0**,不需要 `timeout /t 3` 强制关窗口。
-  `cmd /c "bin\hermes-all.bat & echo done"` 立即打印 `done`(改动前会等 3 秒)。
-* `bin/hermes-stop.bat` 先 kill watchdog 再 stop services。
-  在 watchdog 跑着的情况下 `bin\hermes-stop.bat` 后,`data/logs/hermes-watchdog.pid` 不存在,
-  且没有 python.exe 进程 cmdline 包含 `hermes-watchdog.py`。
-* `tests\test_hermes.py` 仍然 12/12 passed(没动测试逻辑,只是 hermes-watchdog.py 是新模块不进入 test)。
-* `bin\fix-eol.py --all --check` 通过(`.bat` 文件全部 CRLF,新增的 `hermes-watchdog.bat` 也是 CRLF)。
-* `git diff --stat` 报告约 `6 files changed, ~250 insertions(+), ~28 deletions(-)`。
+**Root cause.** All 4 `modules/*/start.ps1` (bridge, llm_engine,
+webui, webui_proxy) used this pattern to capture the child
+process's stdout/stderr into a per-module log file:
+
+```powershell
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError  = $true
+$proc = [System.Diagnostics.Process]::Start($psi)
+$logWriter = [System.IO.StreamWriter]::new($logPath, ...)
+$logWriter.AutoFlush = $true
+$proc.add_OutputDataReceived({
+    if ($null -ne $_.Data) { $logWriter.WriteLine($_.Data) }
+})
+$proc.BeginOutputReadLine()
+# ... later: $proc.Dispose(); $logWriter.Dispose(); exit 0
+```
+
+This looks innocent but it has two Windows-specific traps:
+
+1. **`StreamWriter` ctor on a locked file.** The supervisor's
+   `start_module()` already opened the same `data/logs/<module>.log`
+   in append mode (`log_f = open(path, "a", buffering=1)` —
+   `bin/hermes-supervisor.py:313`) and only closes it after the
+   module's port-health check passes. So when `start.ps1` runs and
+   tries to `StreamWriter::new($logPath, $true, ...)`, the ctor
+   can fail with `IOException: access denied` because the
+   supervisor is still holding the file open. The `try/catch`
+   silences that, but then `$logWriter` is `$null` and the
+   `add_OutputDataReceived` callback throws
+   `PSInvalidOperationException: PropertyNotFound` (the .NET
+   object's `AutoFlush` property is gone).
+
+2. **Runspace-after-exit crash.** Even if (1) is dodged (e.g. by
+   using `try/catch` and `$null -ne $logWriter` guards), the
+   `add_OutputDataReceived` callback is a **PowerShell script
+   block** which needs a Runspace to execute. The script block
+   runs on a `System.Threading.ThreadPool` thread. When
+   `start.ps1` exits (via the `exit 0` at the bottom), the
+   PowerShell host disposes the Runspace. The next stdout/stderr
+   event on the background thread then throws
+   `PSInvalidOperationException: There is no Runspace available`,
+   the PowerShell process crashes ("The PowerShell process will
+   exit"), and any detached child process loses its inherited
+   stdout/stderr pipe — which makes the next `print()` /
+   `sys.stderr.write()` in the child raise `BrokenPipeError` and
+   the child exits.
+
+That last sentence is the silent-killer. The supervisor polls
+`:8648` for `LISTENING` *before* the Runspace crash happens
+(typically the child binds the port within ~50 ms of launch).
+So the supervisor sees `[OK] webui_proxy (:8648)`, reports
+success, spawns the watchdog, and exits. A few hundred ms
+later, the child process dies from the broken pipe, but the
+watchdog hasn't re-checked yet (its interval is 10 s). If the
+user happens to load the UI in those first few seconds, it
+works; if they wait until 10 s later, the child is already
+dead, the watchdog restarts it, the race restarts, and the
+dashboard shows intermittent `RemoteDisconnected`.
+
+**Fix (applied to all 4 start.ps1 modules).** Drop the
+`add_OutputDataReceived` / `StreamWriter` pattern entirely.
+Let the child **inherit** PowerShell's stdio:
+
+```powershell
+$psi.UseShellExecute        = $false
+$psi.RedirectStandardInput  = $false
+$psi.RedirectStandardOutput = $false   # <-- key change
+$psi.RedirectStandardError  = $false   # <-- key change
+$proc = [System.Diagnostics.Process]::Start($psi)
+```
+
+PowerShell's stdio is itself redirected to the per-module log
+files by the supervisor (`stdout=log_f, stderr=err_f` in
+`bin/hermes-supervisor.py:329-330`), and on Windows file
+handles are duplicated on `CreateProcess` when the child
+doesn't redirect its own stdio. So the child writes go
+straight to the same `data/logs/<module>.{log,err}` files —
+without any in-PowerShell buffering / capture layer, without
+a Runspace, and without a `StreamWriter` that can lock
+against the supervisor's log file handle.
+
+We also dropped the `[System.IO.File]::WriteAllText(...)`
+truncate in each `start.ps1` for the same reason (the
+supervisor's open file handle conflicts with the truncate;
+better to let the supervisor own truncation, which it does
+at line 310-311 of `bin/hermes-supervisor.py`).
+
+**Files changed (Part B):**
+
+- `modules/webui_proxy/start.ps1` — drop truncate, drop
+  `StreamWriter`/`add_OutputDataReceived`, switch to
+  inherit-stdio + 27-line rationale comment.
+- `modules/webui/start.ps1` — same.
+- `modules/bridge/start.ps1` — same.
+- `modules/llm_engine/start.ps1` — same.
+- (No change to `modules/env_bootstrap/start.ps1`; that one
+  is a one-shot tool, not a long-running service, so it
+  doesn't hit the same race.)
+
+**Acceptance test** (run after the fix):
+
+```
+$ python bin/hermes-supervisor.py --start
+  Order:  env_bootstrap -> llm_engine -> bridge -> webui -> webui_proxy
+  [OK]   llm_engine (:8080)
+  [OK]   bridge (:7860)
+  [OK]   webui (:8649)
+  [OK]   webui_proxy (:8648)
+  STARTED: 5 module(s)
+
+$ python tests/smoke_webui_proxy.py
+  === ALL TESTS PASSED ===        # 8/8 scenarios, ~250 ms total
+```
+
+**Net diff vs the broken state:**
+
+- 4 start.ps1 files: −logWriter / −errWriter / −add_OutputDataReceived
+  / −truncate-LogFile = ~70 source lines removed, ~30 lines of
+  rationale comment added.
+- 1 new module (`webui_proxy/`): ~480 lines (Python + 4 ancillary
+  files).
+- 1 new smoke test (`tests/smoke_webui_proxy.py`): 102 lines.
+- 1 new port topology (webui on :8649 internal, webui_proxy on
+  :8648 public — the supervisor's dependency graph now has
+  `webui_proxy → webui`, so the reverse-proxy is the last thing
+  to start, which is the only correct order).
 
 ---
+
 
 ## 1. What This Is
 

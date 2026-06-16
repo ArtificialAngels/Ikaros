@@ -173,8 +173,12 @@ if (Test-Path $PresetPath) {
 $logPath = Join-Path $LogDir 'llm-engine.log'
 $errPath = Join-Path $LogDir 'llm-engine.err'
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-[System.IO.File]::WriteAllText($logPath, '', [System.Text.UTF8Encoding]::new($false))
-[System.IO.File]::WriteAllText($errPath, '', [System.Text.UTF8Encoding]::new($false))
+
+# NOTE: we DO NOT truncate $logPath/$errPath here. The supervisor's
+# start_module() already truncated them and holds them open in append mode
+# (see bin/hermes-supervisor.py: log_f = open(path, "a", buffering=1)).
+# Trying to WriteAllText (truncate) while the supervisor's handle is open
+# on Windows raises IOException("access denied"). Best practice: append-only.
 
 # ---- Launch via cmd /c wrapper (stdin bug fix) ----
 $innerCmd = '"' + ($Bin -replace '"','\"') + '"'
@@ -192,20 +196,16 @@ $psi.UseShellExecute        = $false
 $psi.CreateNoWindow         = $true
 $psi.WindowStyle            = 'Hidden'
 $psi.RedirectStandardInput  = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError  = $true
+$psi.RedirectStandardOutput = $false
+$psi.RedirectStandardError  = $false
+
+# See modules/webui_proxy/start.ps1 for the rationale: we deliberately do
+# NOT use $psi.RedirectStandardOutput/Error = $true + add_OutputDataReceived.
+# Letting the child inherit PowerShell's stdio (captured by the supervisor
+# to the per-module log files) avoids the PowerShell host crash that
+# happens when the Runspace is disposed after start.ps1 exits.
 
 $proc = [System.Diagnostics.Process]::Start($psi)
-
-# Drain streams
-$logWriter = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.UTF8Encoding]::new($false))
-$logWriter.AutoFlush = $true
-$errWriter = [System.IO.StreamWriter]::new($errPath, $true, [System.Text.UTF8Encoding]::new($false))
-$errWriter.AutoFlush = $true
-$proc.add_OutputDataReceived({ if ($null -ne $_.Data) { $logWriter.WriteLine($_.Data) } })
-$proc.add_ErrorDataReceived({  if ($null -ne $_.Data) { $errWriter.WriteLine($_.Data) } })
-$proc.BeginOutputReadLine()
-$proc.BeginErrorReadLine()
 
 Start-Sleep -Seconds 1.5
 
@@ -220,7 +220,7 @@ if ($proc.HasExited) {
     if ($errTail) {
         foreach ($l in $errTail -split "`n") { Write-Host "    | $l" -ForegroundColor DarkYellow }
     }
-    $proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+    $proc.Dispose()
     exit 1
 }
 
@@ -254,5 +254,5 @@ $launchInfo = @{
 } | ConvertTo-Json -Compress
 $launchInfo | Set-Content -Path (Join-Path $LogDir 'llm-engine-last-launch.json') -Encoding UTF8
 
-$proc.Dispose(); $logWriter.Dispose(); $errWriter.Dispose()
+$proc.Dispose()
 exit 0

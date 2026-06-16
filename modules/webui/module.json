@@ -1,18 +1,18 @@
 {
   "name": "webui",
   "version": "1.0.0",
-  "description": "hermes-web-ui — Node.js BFF + Vue 3 SPA. Serves UI on :8648, proxies chat to llama-server/bridge.",
+  "description": "hermes-web-ui — Node.js BFF + Vue 3 SPA. Serves UI on :8649 (back-end port), fronted by modules/webui_proxy which listens on :8648 and intercepts /api/hermes/usage/stats with corrected SQL.",
   "type": "service",
   "runtime": {
     "kind": "node",
     "node": "runtime/node23/node.exe",
     "entry": "hermes-web-ui.mjs",
-    "args": ["start", "8648"],
+    "args": ["start", "8649"],
     "working_directory": "."
   },
   "network": {
     "host": "127.0.0.1",
-    "port": 8648,
+    "port": 8649,
     "protocol": "http",
     "health_endpoint": "/health",
     "health_timeout_ms": 5000

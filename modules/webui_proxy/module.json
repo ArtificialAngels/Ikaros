@@ -1,0 +1,34 @@
+{
+  "name": "webui_proxy",
+  "version": "1.0.0",
+  "description": "Thin Python reverse-proxy in front of hermes-web-ui. Listens on :8648, forwards to :8649, intercepts only /api/hermes/usage/stats to fix the npm package's broken GROUP BY (no provider/profile/base_url split) and missing internal-session exclusion.",
+  "type": "service",
+  "runtime": {
+    "kind": "python",
+    "python": "portable-python/python.exe",
+    "entry": "webui_proxy.py",
+    "args": ["--port", "8648", "--upstream", "http://127.0.0.1:8649", "--state-db", "data/hermes-agent/state.db"]
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 8648,
+    "protocol": "http",
+    "health_endpoint": "/health",
+    "health_timeout_ms": 5000
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "health": "health.ps1",
+    "startup_timeout_s": 30,
+    "shutdown_timeout_s": 10
+  },
+  "depends_on": [
+    { "module": "webui", "required": true, "reason": "upstream hermes-web-ui (port 8649) must be listening" }
+  ],
+  "env": {
+    "HERMES_ROOT": "${HERMES_ROOT}",
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONUTF8": "1"
+  }
+}

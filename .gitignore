@@ -158,6 +158,16 @@ desktop.ini
 *.diag*
 .tmp.*
 
+# --- DWG / DXF tooling outputs and scratch (2026-06-16c) ---
+# tools/ is committed (README.md + dwg/ + oda_setup.exe are real project assets);
+# the *outputs* of those tools and the throwaway scratch scripts are not.
+# (Inline `#` comments after a rule are NOT supported by git's .gitignore
+# syntax and were silently breaking the rules below; keep them bare.)
+dxf_conversion_log/
+tools/_scratch/
+tools/dwg/_archive/
+tools/_find_*.ps1
+
 # --- Docker ---
 docker-compose*.yml
 Dockerfile.local

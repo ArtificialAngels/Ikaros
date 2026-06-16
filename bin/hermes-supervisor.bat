@@ -23,6 +23,33 @@ if errorlevel 1 (
     echo [FATAL] could not resolve HERMES_ROOT.
     exit /b 2
 )
+
+REM ---- Fail-fast HERMES_ROOT verify (NEW 2026-06-16) ----
+REM Prevents services from launching with a broken path after USB drive-letter
+REM swap (e.g. E: -> F:). hermes-root.bat verify exit codes: 0=ok, 1=marker missing, 2=unresolved.
+call "%HERMES_BIN%\hermes-root.bat" verify
+set "VERIFY_RC=%ERRORLEVEL%"
+if not "%VERIFY_RC%"=="0" (
+    echo.
+    echo [FATAL] HERMES_ROOT verify FAILED ^(rc=%VERIFY_RC%^)
+    echo         Resolved root: %HERMES_ROOT%
+    echo         Critical marker check failed:
+    echo           - portable-python\python.exe NOT found at:
+    echo             "%HERMES_ROOT%\portable-python\python.exe"
+    echo.
+    echo         Likely cause: USB drive letter changed ^(e.g. E: -^> F:^),
+    echo         but a stale env var or .hermes-root cache still points to
+    echo         the old location.
+    echo.
+    echo         Fix ^(pick one^):
+    echo           1. Re-insert the USB stick and re-run hermes-all.bat.
+    echo           2. Force re-resolve by deleting .hermes-root at the
+    echo              project's root, then re-run hermes-all.bat.
+    echo           3. Manually: bin\hermes-root.bat init ^&^& bin\hermes-all.bat
+    echo.
+    exit /b 3
+)
+
 set "SUPERVISOR=%HERMES_BIN%\hermes-supervisor.py"
 
 if not exist "%HERMES_PYTHON%" (

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Hermes Supervisor — Pure Python 进程编排器
-==========================================
+Hermes Supervisor — Pure Python process orchestrator.
+======================================================
 
-**Why this file exists**
+Why this file exists
     The legacy `modules/supervisor/orchestrator.ps1` was launched from a bat
     via `cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File ..."`.
     That bridge dies on paths with spaces (e.g. ``E:\\Hermes Agent``): cmd's
@@ -15,21 +15,19 @@ Hermes Supervisor — Pure Python 进程编排器
         'M' is not recognized as an internal or external command
         \\ : The term '\\' is not recognized ...
 
-**Design rules**
-    1. **No cmd /c** — Python's ``subprocess.Popen`` list args go straight
-       to ``CreateProcessW`` on Windows. The cmd interpreter never sees
-       the command line, so quotes / paths / spaces cannot break parsing.
-    2. **No short path** — PowerShell `-File` is what needs the 8.3
-       workaround. Python handles long paths, spaces, and Unicode natively.
-    3. **DETACHED_PROCESS** — children are fully detached from the
-       supervisor; closing the launching terminal does not kill them.
-    4. **Socket health check** — no urllib / requests dependency.
-    5. **Reuse existing start.ps1** — we do not rewrite the complex
-       per-module launch logic (llama-server CUDA selection, bridge
-       env injection, webui Node args); PowerShell still owns that.
-       Python only orchestrates: launch + health-check + shutdown.
+Design rules
+    1. No cmd /c — Python's ``subprocess.Popen`` list args go straight to
+       ``CreateProcessW`` on Windows; quotes / paths / spaces cannot break
+       parsing.
+    2. No short path — Python handles long paths, spaces, Unicode natively.
+    3. DETACHED_PROCESS — children are fully detached from the supervisor;
+       closing the launching terminal does not kill them.
+    4. Socket health check — no urllib / requests dependency.
+    5. Reuse existing start.ps1 — PowerShell still owns per-module launch
+       logic (llama-server CUDA selection, bridge env injection, webui
+       Node args). Python only orchestrates: launch + health-check + shutdown.
 
-**Usage**
+Usage
     python bin/hermes-supervisor.py              # start all services
     python bin/hermes-supervisor.py --stop       # stop all in reverse order
     python bin/hermes-supervisor.py --status     # port health check
@@ -52,7 +50,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # ============================================================
-# 常量
+# Constants
 # ============================================================
 
 # HERMES_ROOT: single source of truth is bin\hermes-root.py.
@@ -82,7 +80,8 @@ def _resolve_hermes_root(here: Path) -> Path:
         if (p / "portable-python" / "python.exe").is_file():
             return p
     resolver = here.parent / "hermes-root.py"
-    py = here.parent / "portable-python" / "python.exe"
+    # FIX 2026-06-16: here.parent.parent (one level up from bin/), not here.parent — original pointed at nonexistent bin/portable-python/, so subprocess.run was dead code. Now supervisor can drive-scan-resolve when env var is stale.
+    py = here.parent.parent / "portable-python" / "python.exe"
     if resolver.is_file() and py.is_file():
         try:
             r = subprocess.run(
@@ -92,6 +91,8 @@ def _resolve_hermes_root(here: Path) -> Path:
             if r.returncode == 0 and r.stdout.strip():
                 p = Path(r.stdout.strip()).resolve()
                 if p.is_dir():
+                    # FIX 2026-06-16: explicitly update os.environ so any Popen-spawned child (start.ps1 -> hermes-env.ps1) inherits the freshly-resolved HERMES_ROOT instead of a stale env var (USB drive-letter swap E: -> F:).
+                    os.environ["HERMES_ROOT"] = str(p)
                     return p
         except Exception:
             pass
@@ -103,20 +104,20 @@ MODULES_DIR = HERMES_ROOT / "modules"
 LOG_DIR = HERMES_ROOT / "data" / "logs"
 PYTHON_EXE = HERMES_ROOT / "portable-python" / "python.exe"
 
-# Windows 进程创建标志
+# Windows process creation flags
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
 
-# Windows ANSI (Unicode 输出到 console)
+# Windows ANSI (Unicode output to console)
 ENABLE_VIRTUAL_TERMINAL = 0x00000004
 
 # ============================================================
-# 颜色
+# Colors
 # ============================================================
 
 
 class C:
-    """ANSI 颜色 (Windows 10+ 启用 ENABLE_VIRTUAL_TERMINAL 后可用)"""
+    """ANSI colors (available on Windows 10+ after ENABLE_VIRTUAL_TERMINAL)."""
     RST = "\x1b[0m"
     GRN = "\x1b[32m"
     RED = "\x1b[31m"
@@ -127,7 +128,7 @@ class C:
 
 
 def enable_vt() -> None:
-    """Windows 10+ 启用 ANSI 颜色 (失败也不致命)"""
+    """Enable ANSI colors on Windows 10+ (non-fatal if it fails)."""
     if os.name != "nt":
         return
     try:
@@ -142,7 +143,7 @@ def enable_vt() -> None:
 
 
 # ============================================================
-# 数据模型
+# Data model
 # ============================================================
 
 
@@ -172,12 +173,12 @@ class Module:
 
 
 # ============================================================
-# 模块发现
+# Module discovery
 # ============================================================
 
 
 def discover_modules() -> Dict[str, Module]:
-    """扫描 modules/*/module.json,返回 name -> Module 字典。"""
+    """Scan modules/*/module.json, return name -> Module dict."""
     modules: Dict[str, Module] = {}
     for entry in sorted(MODULES_DIR.iterdir()):
         if not entry.is_dir():
@@ -229,12 +230,12 @@ def discover_modules() -> Dict[str, Module]:
 
 
 # ============================================================
-# 拓扑排序 (Kahn 算法)
+# Topological sort (Kahn's algorithm)
 # ============================================================
 
 
 def topo_sort(modules: Dict[str, Module], reverse: bool = False) -> List[str]:
-    """拓扑排序。可选 reverse=True 用于 stop 顺序。"""
+    """Topological sort. reverse=True yields the stop order."""
     in_deg: Dict[str, int] = {n: 0 for n in modules}
     adj: Dict[str, List[str]] = {n: [] for n in modules}
     for n, m in modules.items():
@@ -243,7 +244,7 @@ def topo_sort(modules: Dict[str, Module], reverse: bool = False) -> List[str]:
                 adj[d].append(n)
                 in_deg[n] += 1
 
-    # 稳定:按名字排序入度 0 的节点
+    # stable: in-degree-0 nodes sorted by name for deterministic order
     queue = sorted([n for n, d in in_deg.items() if d == 0])
     order: List[str] = []
     while queue:
@@ -264,12 +265,12 @@ def topo_sort(modules: Dict[str, Module], reverse: bool = False) -> List[str]:
 
 
 # ============================================================
-# 端口健康检查
+# Port health check
 # ============================================================
 
 
 def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
-    """非阻塞地检测 TCP 端口是否可连接 (服务已起)。"""
+    """Non-blocking TCP probe: is the service already listening?"""
     try:
         with socket.create_connection((host, port), timeout=timeout_s):
             return True
@@ -278,7 +279,7 @@ def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
 
 
 def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
-    """轮询直到端口就绪或超时。"""
+    """Poll until the port is ready or the timeout elapses."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if check_port(host, port, timeout_s=1.0):
@@ -288,14 +289,15 @@ def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
 
 
 # ============================================================
-# 进程管理
+# Process management
 # ============================================================
 
 
 def start_module(m: Module) -> Optional[subprocess.Popen]:
     """
-    用 subprocess.Popen (列表参数) 启动模块的 start.ps1。
-    返回 Popen;如果 start.ps1 立即退出 (HasExited=True) 则返回 None。
+    Launch the module's start.ps1 via subprocess.Popen (list args).
+    Returns the Popen handle; returns None if start.ps1 exits immediately
+    (HasExited=True).
     """
     script = m.path / m.start_script
     if not script.is_file():
@@ -311,13 +313,13 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
     log_f = open(log_path, "a", encoding="utf-8", buffering=1)
     err_f = open(err_path, "a", encoding="utf-8", buffering=1)
 
-    # 关键:列表参数直接进 CreateProcessW,绕过 cmd / c 的引号解析。
-    # 不需要 8.3 短路径 —— Python 内部已正确处理空格 / 中文 / Unicode。
-    # 注:DETACHED_PROCESS (0x8) 看上去很诱人(让子进程与 supervisor 脱钩),
-    # 但实测发现它会让 PowerShell 启动后立刻 exit 0 且没有任何输出
-    # (start.ps1 的 banner 都来不及打印)。用 CREATE_NEW_PROCESS_GROUP 即可:
-    # 子进程仍是新进程组,Ctrl-C 不会传过去;同时 stdio 重定向到文件
-    # 也会让子进程在 supervisor 退出后继续运行(文件句柄已 detach)。
+    # KEY: list args go straight to CreateProcessW, bypassing cmd /c quote parsing.
+    # No 8.3 short path needed — Python handles spaces / Unicode natively.
+    # Note: DETACHED_PROCESS (0x8) looks tempting (detaches from supervisor), but
+    # empirically PowerShell exits 0 immediately with no output (start.ps1 banner
+    # never prints). CREATE_NEW_PROCESS_GROUP is enough: child is in a new process
+    # group (Ctrl-C doesn't propagate), and redirecting stdio to files detaches
+    # the file handles from supervisor so children outlive the supervisor.
     creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
     try:
         proc = subprocess.Popen(
@@ -340,11 +342,11 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
         err_f.close()
         return None
 
-    # tool 类型(瞬时任务)立即返回 Popen,稍后再 check
+    # tool type (one-shot task): return Popen immediately, check later
     if m.type == "tool":
         return proc
 
-    # service 类型:等几秒看是否启动脚本立即崩了
+    # service type: wait a few seconds to see if the launcher crashes immediately
     time.sleep(2)
     if proc.poll() is not None:
         rc = proc.returncode
@@ -356,7 +358,7 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
         err_f.close()
         return None
 
-    # 端口健康检查
+    # port health check
     if m.port:
         if wait_for_port(m.host, m.port, m.startup_timeout_s):
             print(f"  {C.GRN}[OK]{C.RST}   {m.name} (:{m.port})")
@@ -378,7 +380,7 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
 
 
 def stop_module(m: Module) -> None:
-    """调用 stop.ps1 优雅停止模块。"""
+    """Invoke stop.ps1 to gracefully shut down a module."""
     script = m.path / m.stop_script
     if not script.is_file():
         return
@@ -405,7 +407,7 @@ def read_tail(path: Path, n: int) -> List[str]:
 
 
 # ============================================================
-# 主流程
+# Main flow
 # ============================================================
 
 
@@ -547,23 +549,22 @@ def cmd_status(modules: Dict[str, Module], only: List[str]) -> int:
 
 
 def cmd_watchdog_start(modules: Dict[str, Module]) -> int:
-    """Detached 启动 watchdog 守护进程,然后立即 return。
+    """Detached-launch the watchdog daemon, then return immediately.
 
-    Why detached:
-        supervisor 退出时 watchdog 必须继续运行(它是 services 的
-        守护者,supervisor 死了它也得活)。DETACHED_PROCESS 让父进程
-        退出不影响子进程,stdout/stderr 重定向到文件,parent 退出后
-        watchdog 仍持有文件句柄。
-    Why idempotent:
-        hermes-stop.bat 之后立刻 hermes-all.bat 会再次启动 watchdog。
-        PID 文件存在 + 进程还活着 → skip,避免 fork 多个 watchdog。
+    Why detached: supervisor exits after spawning services (`hermes-all.bat`
+    wants a quick return so its window can close). The watchdog must keep
+    running as a detached child — parent exit doesn't affect it, file
+    handles survive, and it can resurrect any service that crashes.
+
+    Why idempotent: `hermes-stop.bat` followed by `hermes-all.bat` should
+    not fork multiple watchdogs. PID file exists + process alive → skip.
     """
     pid_file = LOG_DIR / "hermes-watchdog.pid"
-    # 单例检查:如果已有 watchdog 在跑,skip
+    # singleton check: skip if a watchdog is already running
     if pid_file.is_file():
         try:
             old_pid = int(pid_file.read_text(encoding="utf-8").strip())
-            # 跨平台 check:Windows 用 tasklist,Linux 用 /proc
+            # cross-platform check: tasklist on Windows, /proc on Linux
             if os.name == "nt":
                 r = subprocess.run(
                     ["tasklist", "/FI", f"PID eq {old_pid}", "/NH"],
@@ -574,7 +575,7 @@ def cmd_watchdog_start(modules: Dict[str, Module]) -> int:
                     return 0
         except (ValueError, subprocess.TimeoutExpired, Exception):
             pass
-        # stale pid file:删除重建
+        # stale pid file: remove and recreate
         pid_file.unlink(missing_ok=True)
 
     script = HERE.parent / "hermes-watchdog.py"
@@ -597,7 +598,7 @@ def cmd_watchdog_start(modules: Dict[str, Module]) -> int:
         print(f"  {C.RED}[FAIL]{C.RST} cannot launch watchdog: {e}")
         return 1
 
-    # 写 PID 文件(给 hermes-stop.bat 用)
+    # write PID file (consumed by hermes-stop.bat)
     pid_file.write_text(str(proc.pid), encoding="utf-8")
     print(f"  {C.GRN}[OK]{C.RST}   watchdog detached (pid {proc.pid})")
     print(f"         log: {LOG_DIR / 'hermes-watchdog.log'}")
@@ -606,7 +607,7 @@ def cmd_watchdog_start(modules: Dict[str, Module]) -> int:
 
 
 def cmd_restart(modules: Dict[str, Module], name: str) -> int:
-    """重启单个 service。被 watchdog 用,也可手动调试。"""
+    """Restart a single service. Used by the watchdog; also handy for manual debugging."""
     m = modules.get(name)
     if m is None:
         print(f"{C.RED}[FAIL]{C.RST} unknown module: {name}", file=sys.stderr)
@@ -620,9 +621,9 @@ def cmd_restart(modules: Dict[str, Module], name: str) -> int:
 
 
 def cmd_watchdog_stop() -> int:
-    """通过 PID 文件 + cmdline grep 优雅停 watchdog。
+    """Gracefully stop the watchdog via its PID file + cmdline grep.
 
-    比直接 taskkill python.exe 精确,不会误杀别的 Python 进程。
+    More precise than `taskkill python.exe` — won't kill unrelated Python.
     """
     pid_file = LOG_DIR / "hermes-watchdog.pid"
     if not pid_file.is_file():
@@ -676,7 +677,7 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
         else:
             started.append(n)
 
-    # 持久化状态
+    # persist state
     state = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "started": started,
@@ -695,7 +696,7 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     print(f"  {C.GRN}STARTED{C.RST}: {len(started)} module(s)")
     print(f"{C.BLD}============================================================{C.RST}")
 
-    # Detached 启动 watchdog 然后 return — supervisor 不再 hang
+    # Detached-launch watchdog then return — supervisor no longer hangs
     print()
     print(f"  {C.CYN}>{C.RST} starting watchdog...")
     rc = cmd_watchdog_start(modules)
@@ -723,14 +724,14 @@ def cmd_stop(modules: Dict[str, Module], only: List[str]) -> int:
 
 
 # ============================================================
-# 入口
+# Entry
 # ============================================================
 
 
 def main() -> int:
     enable_vt()
     parser = argparse.ArgumentParser(
-        description="Hermes 进程编排器 (纯 Python 实现,无 cmd / c 引号问题)\n\n"
+        description="Hermes process orchestrator (pure-Python; bypasses cmd /c quote bugs)\n\n"
                     "Examples:\n"
                     "  --status     TCP-level liveness probe of every module\n"
                     "  --dry-run    show topological start order\n"
@@ -742,21 +743,21 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     grp = parser.add_mutually_exclusive_group()
-    grp.add_argument("--start", action="store_true", help="启动所有 service (默认) + detached watchdog")
-    grp.add_argument("--stop", action="store_true", help="反向停止所有 service + kill watchdog")
-    grp.add_argument("--status", action="store_true", help="端口健康检查 (TCP)")
-    grp.add_argument("--dry-run", action="store_true", help="只显示启动顺序")
+    grp.add_argument("--start", action="store_true", help="start all services (default) + detached watchdog")
+    grp.add_argument("--stop", action="store_true", help="reverse-stop all services + kill watchdog")
+    grp.add_argument("--status", action="store_true", help="port health check (TCP)")
+    grp.add_argument("--dry-run", action="store_true", help="show start order only")
     grp.add_argument("--ports", action="store_true",
-                     help="列出每个模块的 IO 端口契约(信号映射表)")
+                     help="print every module's IO port contract (signal map)")
     grp.add_argument("--inspect", metavar="MODULE",
-                     help="导出指定模块的完整 module.json")
+                     help="dump one module's full module.json")
     grp.add_argument("--restart", metavar="MODULE",
-                     help="重启单个 service (供 watchdog 使用)")
+                     help="restart one service (used by watchdog)")
     grp.add_argument("--watchdog", action="store_true",
-                     help="独立 detached 启动 watchdog 守护进程")
+                     help="start the watchdog daemon as a detached process")
     grp.add_argument("--watchdog-stop", action="store_true",
-                     help="通过 PID 文件停止 watchdog")
-    parser.add_argument("--only", nargs="+", default=[], help="只处理指定模块")
+                     help="stop the watchdog via PID file")
+    parser.add_argument("--only", nargs="+", default=[], help="process only the named modules")
     args = parser.parse_args()
 
     if not HERMES_ROOT.is_dir():
@@ -773,7 +774,7 @@ def main() -> int:
         return 2
 
     if args.stop:
-        # 先停 watchdog 再停 services(watchdog 启动中可能正在重启某个 service)
+        # stop watchdog first, then services (watchdog may be mid-restart)
         cmd_watchdog_stop()
         return cmd_stop(modules, set(args.only))
     if args.status:
