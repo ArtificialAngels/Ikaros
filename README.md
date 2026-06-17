@@ -236,6 +236,8 @@ hermes-agent\
 
 `hermes-agent\` 是上游的干净副本(Phase 11 锁定版本),本项目所有二次开发放在 `modules\` 下。WebUI 不再是 sibling clone —— 它通过 `cd runtime\node23 && npm install -g hermes-web-ui` 装到 `runtime/node23/node_modules/hermes-web-ui/`(见 [docs/14-维护与升级.md](docs/14-维护与升级.md))。
 
+**升级上游**(2026-06-17 改为 selective sync):用 `bin\hermes-upstream-sync.py pull → diff → pick → report` 的流程,**不**直接 `git clone` 覆盖 `hermes-agent/`。详见 [docs/14-维护与升级.md](docs/14-维护与升级.md)。
+
 ---
 
 ## 📊 已下载资源(完整 U 盘用量)

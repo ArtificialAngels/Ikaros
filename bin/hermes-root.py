@@ -28,7 +28,10 @@ from __future__ import annotations
 import argparse
 import ctypes
 import os
+import platform
+import socket
 import string
+import subprocess
 import sys
 from pathlib import Path
 
@@ -216,11 +219,14 @@ def cmd_init(_args) -> int:
         print(f"HERMES_STATUS=not_found", file=sys.stdout)
         print(f"# HERMES_ROOT not found -- tried env, .hermes-root cache, "
               f"script-location, drive scan", file=sys.stderr)
+        # Also dump device info so a "machine changed?" guess is easy
+        print(f"# device info: {collect_device_info()}", file=sys.stderr)
         return EXIT_NOT_FOUND
 
     valid, missing = looks_like_hermes_root(root)
     if not valid:
         print(f"# Missing markers: {', '.join(missing)}", file=sys.stderr)
+        print(f"# device info: {collect_device_info()}", file=sys.stderr)
 
     # Persist successful resolution (even if incomplete -- it pins the path
     # so subsequent calls don't re-scan drives)
@@ -230,6 +236,7 @@ def cmd_init(_args) -> int:
         print(f"# WARN: could not persist .hermes-root: {e}", file=sys.stderr)
 
     # Print env block
+    info = collect_device_info()
     env_block = [
         ("HERMES_ROOT",         str(root)),
         ("HERMES_BIN",          str(root / "bin")),
@@ -244,6 +251,14 @@ def cmd_init(_args) -> int:
         ("HERMES_LOGS",         str(root / "data" / "logs")),
         ("HERMES_DATA_DIR",     str(root / "hermes" / "data")),
         ("HERMES_RESOLVE_SOURCE", source),
+        # Device fingerprint — never trust drive letters for machine identity.
+        # Use these to verify "am I on the same machine as last session?" even
+        # if HERMES_ROOT is on a different drive or USB stick.
+        ("HERMES_HOST",         info["host"]),
+        ("HERMES_BIOS_UUID",    info["bios_uuid"]),
+        ("HERMES_BIOS_SERIAL",  info["bios_serial"]),
+        ("HERMES_OS",           info["os"]),
+        ("HERMES_USER",         info["user"]),
         ("HERMES_STATUS",       "ok" if valid else "incomplete"),
     ]
     for k, v in env_block:
@@ -299,14 +314,117 @@ def cmd_persist(_args) -> int:
     print(f"{C.DIM}(source: {source}){C.RST}")
     return EXIT_OK
 
-
 def cmd_clean(_args) -> int:
+    """Remove .hermes-root cache file at the project root."""
     cache = SCRIPT_BIN_DIR.parent / CACHE_FILE
     if cache.exists():
         cache.unlink()
         print(f"{C.GRN}Removed: {cache}{C.RST}")
     else:
         print(f"{C.DIM}No cache file at: {cache}{C.RST}")
+    return EXIT_OK
+
+
+# ============================================================
+# Device fingerprint (2026-06-17)
+# ============================================================
+# Why this lives here: the user explicitly asked that "running on a
+# different machine" be detectable when something goes wrong. Drive letters
+# (E:\ F:\ ...) are not stable across machines; HERMES_ROOT may even live
+# on a USB stick that moves between machines. The only stable per-machine
+# identifiers are OS-level: hostname, BIOS UUID, BIOS serial, OS build,
+# and the logged-in user.
+#
+# Failure mode this guards against: an agent concludes "the project moved
+# drives" and silently re-installs or re-pins state on a different machine
+# than the user's last session — overwriting per-machine state.
+#
+# Use the helper on every error path so the user can diff their own
+# fingerprint against the previous session's.
+
+def _wmic(field: str, klass: str = "Win32_ComputerSystemProduct", timeout: float = 2.0) -> str:
+    """Read a single field via PowerShell CIM. Empty string on any failure.
+
+    Why PowerShell and not wmic: wmic on Windows 11 24H2 produces mixed
+    codepage output that crashes Python's text decoder, and the wmic
+    command itself is deprecated. PowerShell's Get-CimInstance handles
+    any string with a single .ToString() call we control, and the call
+    is fast (CIM uses WinRM/WSMan locally, no shell overhead).
+    """
+    if not is_windows():
+        return ""
+    try:
+        ps_cmd = (
+            f"[Console]::OutputEncoding=[Text.UTF8Encoding]::UTF8;"
+            f"(Get-CimInstance -ClassName '{klass}' "
+            f"| Select-Object -First 1 -ExpandProperty '{field}' "
+            f"| ForEach-Object {{ $_.ToString().Trim() }})"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, timeout=timeout,
+        )
+        # PowerShell -Command output is the active console codepage (UTF-8
+        # after we set it). Decode as utf-8 with replace as a safety net.
+        out = r.stdout.decode("utf-8", errors="replace")
+        # Strip the BOM if present
+        if out.startswith("\ufeff"):
+            out = out[1:]
+        for ln in out.splitlines():
+            ln = ln.strip()
+            if ln:
+                return ln
+    except Exception:
+        return ""
+    return ""
+
+
+def collect_device_info() -> dict:
+    """Return a stable per-machine fingerprint. Empty fields when unknown."""
+    info = {
+        "host": "",
+        "user": "",
+        "os": "",
+        "bios_uuid": "",
+        "bios_serial": "",
+    }
+    # host + user + os are stdlib; no subprocess needed
+    try:
+        info["host"] = os.environ.get("COMPUTERNAME", "") or ""
+        if not info["host"]:
+            info["host"] = socket.gethostname()
+    except Exception:
+        pass
+    try:
+        info["user"] = os.environ.get("USERNAME", "") or os.environ.get("USER", "")
+    except Exception:
+        pass
+    # OS string — keep it short and stable, no locale noise
+    if is_windows():
+        try:
+            info["os"] = f"Windows {platform.release()} (build {platform.version()})"
+        except Exception:
+            info["os"] = "Windows"
+    else:
+        try:
+            info["os"] = f"{platform.system()} {platform.release()}"
+        except Exception:
+            info["os"] = platform.system() or "unknown"
+    # BIOS-level identifiers — survive OS reinstall, drive swaps, USB stick
+    # moves. THIS is the only thing that truly identifies a machine.
+    info["bios_uuid"] = _wmic("UUID", "Win32_ComputerSystemProduct")
+    info["bios_serial"] = _wmic("SerialNumber", "Win32_BIOS")
+    return info
+
+
+def cmd_device_info(_args) -> int:
+    """Print a compact device fingerprint. Use to diff "same machine?" across sessions."""
+    info = collect_device_info()
+    summary = (
+        f"host={info['host']} user={info['user']} "
+        f"uuid={info['bios_uuid']} serial={info['bios_serial']} os={info['os']}"
+    )
+    print(summary)
     return EXIT_OK
 
 
@@ -324,6 +442,8 @@ def main() -> int:
     sub.add_parser("scan", help="Scan all drive letters for candidates")
     sub.add_parser("persist", help="Write .hermes-root cache file")
     sub.add_parser("clean", help="Remove .hermes-root cache file")
+    sub.add_parser("device-info",
+                   help="Print device fingerprint (host/uuid/bios/os/user)")
     args = parser.parse_args()
 
     handlers = {
@@ -333,6 +453,7 @@ def main() -> int:
         "scan": cmd_scan,
         "persist": cmd_persist,
         "clean": cmd_clean,
+        "device-info": cmd_device_info,
     }
     return handlers[args.cmd](args)
 

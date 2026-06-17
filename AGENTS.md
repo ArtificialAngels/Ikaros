@@ -765,6 +765,7 @@ See §10 Debugging for the painful history.
 | Skip CPU when VRAM full of weights       | Hybrid offload with <5 layers = full CPU is faster         |
 | CRLF line endings for all .bat files      | cmd.exe does NOT parse LF-only files (bug: truncates paths)  |
 | client-side api-adapter.js                | Translate upstream WebUI's endpoints onto ours — no need to fork upstream Python BFF |
+| Selective upstream sync via `bin/hermes-upstream-sync.py` (2026-06-17) | `hermes-agent/` is a Phase-11-locked read-only snapshot; we never `git clone` to overwrite it. Clone to `upstream/` (gitignored), `diff` to see what changed since our pin, `pick` one file at a time after review. Avoids pulling breaking changes from upstream we don't actually need. |
 
 ---
 

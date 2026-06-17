@@ -114,7 +114,7 @@ class RoutingDecision:
     network_online: bool = True
 
     # How to reach the model
-    route_target: str = ""     # "llama_server" | "cloud_api" | "agent_bridge"
+    route_target: str = ""     # "llama_server" | "cloud_api"
     route_model: str = ""      # actual model name to pass to the target
 
     # Client can optionally override these

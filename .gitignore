@@ -186,3 +186,15 @@ coverage/
 .parcel-cache/
 .eslintcache
 .stylelintcache
+upstream/
+
+# --- CodeGraph (dead end on Node 23.11 — keeps trying to be installed) ---
+deps/codegraph/
+bin/.codegraph/
+
+# --- GitNexus external (installed in user HOME, not in repo) ---
+.claude/
+*.code-workspace
+package-lock.json
+bin/desktop.ini
+config.yaml.pre-gitnexus.*.bak

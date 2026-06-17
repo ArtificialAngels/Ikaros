@@ -92,6 +92,31 @@ INTERVAL_S = 10
 # if start.ps1 itself is broken).
 RESTART_COOLDOWN_S = 30
 
+# FIX 2026-06-17: when launcher is mid-update it writes ~/.hermes-web-ui/upgrading.lock.
+# Webui :8649 will go down briefly (npm renames its dir → process exits) and
+# the watchdog MUST NOT race npm by restarting the old webui. If the lock
+# is present and unexpired we skip webui checks; other services (bridge,
+# llm_engine, webui_proxy) are unaffected. Lock is auto-ignored past its
+# deadline so a crashed launcher never strands the watchdog.
+UPGRADING_LOCK = (Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or ".")
+                  / ".hermes-web-ui" / "upgrading.lock")
+
+
+def is_upgrading_lock_active() -> bool:
+    """Return True if a fresh upgrading.lock is present. Stale or absent -> False."""
+    try:
+        if not UPGRADING_LOCK.is_file():
+            return False
+        line = UPGRADING_LOCK.read_text(encoding="utf-8", errors="replace").strip()
+        # format: "<created>|<deadline>" seconds since epoch
+        if "|" not in line:
+            return False  # legacy / malformed — treat as not upgrading
+        _, deadline_s = line.split("|", 1)
+        deadline = int(deadline_s)
+        return int(time.time()) < deadline
+    except Exception:
+        return False
+
 # ============================================================
 # Data model (supervisor's slimmer version; only fields watchdog needs)
 # ============================================================
@@ -245,9 +270,25 @@ def run() -> int:
     try:
         while True:
             time.sleep(INTERVAL_S)
+            # FIX 2026-06-17: while launcher is mid-update, skip webui checks.
+            # npm install renames the webui dir → its process dies → port
+            # goes down. Restarting the old webui at that moment EBUSYs npm.
+            skip_modules: set[str] = set()
+            if is_upgrading_lock_active():
+                skip_modules.add("webui")
+                # only announce once per cycle
+                if not getattr(run, "_upgrade_skip_announced", False):
+                    print("[watchdog] upgrading.lock active — skipping webui check",
+                          flush=True)
+                    run._upgrade_skip_announced = True
+            else:
+                run._upgrade_skip_announced = False
+
             modules = discover_modules()
             for name, m in modules.items():
                 if m.type != "service" or not m.port:
+                    continue
+                if name in skip_modules:
                     continue
                 if check_port(m.host, m.port, timeout_s=1.0):
                     continue

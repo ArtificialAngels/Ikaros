@@ -111,4 +111,4 @@ LLM 在对话中针对 DWG / DXF 模具资料(`模具图`、`ICE`、`吉利` 等
 ---
 
 > **下次见到 LLM 把脚本写到根目录**,请引用 `PROJECT_CONVENTIONS`
-> (在 `bridge/agent_bridge/bridge_pool.py`) 提示它重写到 `tools/dwg/`。
+> (在 `bin/fix-eol.py` / `modules/bridge/sitecustomize.py`) 提示它重写到 `tools/dwg/`。

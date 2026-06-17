@@ -1234,6 +1234,14 @@ async def chat_completions(request: Request) -> Any:
             routing_decision = None
     elif routing_override == "local":
         routing_decision = type("D", (), {"route_target": "llama_server", "reason": "X-Hermes-Routing header"})()
+    elif routing_override == "cloud":
+        # Explicit cloud override — bypass routing engine, route straight to
+        # the cloud_api path. Caller asserts the model in body["model"] is a
+        # cloud-registered model (e.g. minimax-cn / openai / anthropic).
+        # If it's not, _handle_cloud_chat will return a clean 4xx explaining
+        # why instead of falling through to llama-server (which would 400 on
+        # "model not found" — misleading for the caller).
+        routing_decision = type("D", (), {"route_target": "cloud_api", "reason": "X-Hermes-Routing: cloud header"})()
 
     # ---- Route ----
     if routing_decision is not None and routing_decision.route_target == "cloud_api":
