@@ -22,7 +22,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -44,6 +47,22 @@ DEFAULT_STATE_DB = "data/hermes-agent/state.db"
 DEFAULT_UPSTREAM_TIMEOUT = 60.0
 # Path we intercept
 USAGE_STATS_PATH = "/api/hermes/usage/stats"
+# Plugin management paths (new in 2026-06-17: E方案 — break hermes-web-ui's
+# "read-only" stance so the UI can actually manage plugins, with safety:
+#   - only listen on 127.0.0.1 (external CSRF impossible)
+#   - whitelist of action verbs (no shell injection)
+#   - 5s subprocess timeout
+#   - proxy never reveals stderr to the SPA
+PLUGINS_PREFIX = "/api/hermes/plugins/"
+PLUGIN_ALLOWED_ACTIONS = frozenset({"list", "enable", "disable", "install", "remove"})
+# Whitelist for plugin names: bundle-prefixed identifiers like
+# "browser-browser-use", "browser-browserbase". Reject anything that
+# looks like a path traversal, shell metachar, or git URL.
+PLUGIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+PLUGIN_SOURCE_PATTERN = re.compile(r"^(?:https?://|git@)[A-Za-z0-9._:/\-@?&=]+$|^[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+$")
+PLUGIN_HERMES_TIMEOUT_S = 5.0
+# Resolve hermes CLI once at import time
+PLUGIN_HERMES_PY = shutil.which("python") or sys.executable
 
 
 # ============== SQL: correct usage aggregation ==============
@@ -276,11 +295,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith(USAGE_STATS_PATH):
             self._handle_usage_stats()
+        elif self.path.startswith(PLUGINS_PREFIX):
+            # /api/hermes/plugins/list is the only GET endpoint
+            self._handle_plugin_action("list")
         else:
             self._proxy_pass()
 
     def do_POST(self) -> None:
-        self._proxy_pass()
+        if self.path.startswith(PLUGINS_PREFIX):
+            # Read body first, then route to handler. The handler does NOT
+            # forward the request to upstream — it shells out to hermes CLI.
+            self._handle_plugin_with_body()
+        else:
+            self._proxy_pass()
 
     def do_PUT(self) -> None:
         self._proxy_pass()
@@ -313,6 +340,146 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    # ---------- Plugin management (E方案, 2026-06-17) ----------
+    def _handle_plugin_with_body(self) -> None:
+        """Read JSON body then dispatch. POST endpoints: enable/disable/install/remove."""
+        # Action is the last path segment: /api/hermes/plugins/<action>
+        action = self.path[len(PLUGINS_PREFIX):].split("?", 1)[0].split("/", 1)[0]
+        if action not in PLUGIN_ALLOWED_ACTIONS or action == "list":
+            # list is GET-only; everything else except these 4 is rejected
+            self._plugin_send_error(HTTPStatus.METHOD_NOT_ALLOWED,
+                                    f"action '{action}' is not allowed on POST")
+            return
+        # Read body
+        body: dict[str, Any] = {}
+        if "Content-Length" in self.headers:
+            try:
+                clen = int(self.headers["Content-Length"])
+                if clen > 0 and clen < 64 * 1024:
+                    raw = self.rfile.read(clen)
+                    if raw:
+                        try:
+                            body = json.loads(raw.decode("utf-8"))
+                            if not isinstance(body, dict):
+                                body = {}
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            self._plugin_send_error(HTTPStatus.BAD_REQUEST,
+                                                    "body must be JSON object")
+                            return
+            except (TypeError, ValueError):
+                body = {}
+        # Dispatch
+        if action in ("enable", "disable", "remove"):
+            name = body.get("name", "")
+            if not isinstance(name, str) or not PLUGIN_NAME_PATTERN.match(name):
+                self._plugin_send_error(HTTPStatus.BAD_REQUEST,
+                                        "field 'name' required, must match "
+                                        "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+                return
+            self._run_hermes_plugin(action, [name])
+        elif action == "install":
+            source = body.get("source", "")
+            if not isinstance(source, str) or not PLUGIN_SOURCE_PATTERN.match(source):
+                self._plugin_send_error(HTTPStatus.BAD_REQUEST,
+                                        "field 'source' required, must be a "
+                                        "git URL (https://, git@) or owner/repo")
+                return
+            self._run_hermes_plugin(action, [source])
+
+    def _handle_plugin_action(self, action: str) -> None:
+        """GET /api/hermes/plugins/<action> (action is hardcoded by router)."""
+        self._run_hermes_plugin(action, [])
+
+    def _run_hermes_plugin(self, action: str, args: list[str]) -> None:
+        """Shell out to hermes CLI, capture stdout, return JSON envelope."""
+        if action not in PLUGIN_ALLOWED_ACTIONS:
+            self._plugin_send_error(HTTPStatus.BAD_REQUEST, "unknown action")
+            return
+        # Build argv — list form, no shell. subprocess passes args verbatim.
+        argv = [PLUGIN_HERMES_PY, "-m", "hermes", "plugins", action, *args]
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=PLUGIN_HERMES_TIMEOUT_S,
+                cwd=str(Path(__file__).resolve().parent.parent.parent),  # HERMES_ROOT
+            )
+            stdout = proc.stdout
+            stderr = proc.stderr
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            self._plugin_send_error(HTTPStatus.GATEWAY_TIMEOUT,
+                                    f"hermes plugins {action} timed out after "
+                                    f"{PLUGIN_HERMES_TIMEOUT_S}s")
+            return
+        except FileNotFoundError:
+            self._plugin_send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
+                                    "python interpreter not found")
+            return
+        # Try to parse list output as a table → return as structured JSON
+        if action == "list":
+            plugins = self._parse_hermes_plugin_table(stdout)
+            payload = {
+                "action": action,
+                "ok": rc == 0,
+                "plugins": plugins,
+                "raw": stdout[-4096:],
+                "stderr": (stderr or "")[-1024:] if rc != 0 else "",
+            }
+        else:
+            # enable/disable/install/remove: return a simple envelope
+            payload = {
+                "action": action,
+                "ok": rc == 0,
+                "args": args,
+                "raw": stdout[-2048:],
+                "stderr": (stderr or "")[-1024:] if rc != 0 else "",
+                "exit_code": rc,
+            }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        status = HTTPStatus.OK if rc == 0 else HTTPStatus.INTERNAL_SERVER_ERROR
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _parse_hermes_plugin_table(self, stdout: str) -> list[dict[str, str]]:
+        """Best-effort parse of `hermes plugins list` table output (no JSON CLI flag)."""
+        out: list[dict[str, str]] = []
+        for line in stdout.splitlines():
+            # Skip borders / headers
+            if not line.strip() or set(line.strip()) <= {"┌", "┐", "└", "┘", "─", "│", "├", "┤", "┬", "┴", "┼"}:
+                continue
+            if line.strip().startswith(("Name", "Plugins")):
+                continue
+            if line.startswith("│") and line.count("│") >= 6:
+                # rough split by │ — but columns can wrap so this is fragile
+                parts = [p.strip() for p in line.strip("│").split("│")]
+                if len(parts) >= 5 and parts[0] and parts[0] not in ("Name",):
+                    out.append({
+                        "name": parts[0],
+                        "status": parts[1] if len(parts) > 1 else "",
+                        "version": parts[2] if len(parts) > 2 else "",
+                        "description": parts[3] if len(parts) > 3 else "",
+                        "source": parts[4] if len(parts) > 4 else "",
+                    })
+        return out
+
+    def _plugin_send_error(self, status: HTTPStatus, msg: str) -> None:
+        body = json.dumps({"ok": False, "error": msg}, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _proxy_pass(self) -> None:
         url = self.upstream_base + self.path

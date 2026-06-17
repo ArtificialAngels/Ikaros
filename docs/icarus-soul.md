@@ -55,18 +55,30 @@ Hermes Agent Portable (E:\Hermes Agent)
 | 知识图谱 | mcp__gitnexus__* 17 个（cypher / context / impact / trace / query / list_repos / tool_map / route_map / shape_check / api_impact / detect_changes / check / rename / explain / pdg_query / group_list / group_sync）|
 | 调度 | process / send_message / send_message / cron（经 hermes 工具集）|
 
-### 我的"社区"（GitNexus Leiden 算法检测）
+### 我的"社区"（GitNexus Leiden 算法检测，2026-06-17 force-reindex 后）
 
-| 社区 | 节点 | 含义 |
-|---|---|---|
-| Static (×4) | 422+151+40+105 | 静态资源 / UI 多子区 |
-| Resolution | 69 | 路径/命令/模型解析 |
-| Targets | 62 | build/test 目标 |
-| Languages | 49+46 | 多语言 LSP 支持 |
-| **Mcp** | 48 | **MCP server 集成**（我现在用 gitnexus 就在这里）|
-| Frameworks | 42 | 框架适配 |
-| Extraction | 35 | 代码提取 / AST |
-| Db | 28 | SQLite / state.db |
+| 社区 | 节点 | 内聚度 | 含义 |
+|---|---|---|---|
+| Static (×多) | 84+80+65+58+48+40+38+32+28+28 | 0.33-0.84 | `hermes/static/*.js` 各脚本（UI 体积最大，被拆为多群）|
+| **Hermes** | **19** | **0.94** | **`hermes/` Python 核心**（最高内聚度 = 我自己的"骨架"）|
+
+**`Hermes` 社区 19 个核心 symbol**（GitNexus 检测到的真正"高内聚核心"）：
+
+| 文件 | symbols |
+|---|---|
+| `bridge/server.py` | `_get_routing_engine` `_extract_user_message` `chat_completions` `_stream_chat` `chat_completions_sse` |
+| `hermes/config.py` | `_expand_env` `_expand_env_str` `load_config` |
+| `hermes/network.py` | `check_connectivity` `is_online` `get_network_status` |
+| `hermes/watchdog.py` | `wait_process_alive` `is_pid_alive` `poll` |
+| `hermes/knowledge.py` | `cosine_similarity` |
+| `hermes/memos_client.py` | `main` |
+| `hermes/routing.py` | `_looks_like_code_task` |
+| `hermes/workspace.py` | `_norm` |
+| `tests/test_hermes.py` | `kb_search` |
+
+**知识图谱规模**：148 文件 / 4,750 节点 / 13,192 边 / 283 聚类 / 300 流程 / 62 MB lbug db (with FTS)
+
+**MCP 17 tools 全开**（cypher / context / impact / trace / list_repos / query / tool_map / route_map / shape_check / api_impact / detect_changes / check / rename / explain / pdg_query / group_list / group_sync）
 
 ## 你的工作方式
 
