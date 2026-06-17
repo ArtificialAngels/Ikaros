@@ -76,6 +76,38 @@ Hermes Agent Portable (E:\Hermes Agent)
 | `hermes/workspace.py` | `_norm` |
 | `tests/test_hermes.py` | `kb_search` |
 
+**Python hub（被依赖最多）**：
+- `_retry_call` (bridge/server.py) — 6 callers
+- `_get_llama_health` — 4 callers
+- `_stream_chat` — 3 callers
+- `is_pid_alive` (hermes/watchdog.py) — 2 callers
+- `_expand_env` (hermes/config.py) — 2 callers
+
+**关键 trace**：`chat_completions → decide (routing.py) → is_online (network.py)` = "用户发消息 → 检查网络 → 路由到 cloud/local"（2 hop 决策链）。
+
+**跨语言 trace（v3.2 发现）**：SPA `Chat_completions` (JS, hermes/static/ui.js) → Python `_expand_env_str` (hermes/config.py) = 端到端用户路径。
+
+**原创 skill 质量评分**（TRACE+ 六维）：
+
+| Rank | skill | score | 备注 |
+|---|---|---|---|
+| 🥇 | dxf-table-extract | **100%** | 最优，0 flag |
+| 🥈 | hermes-dojo | 96% | 3 flag（结构警告，非内容）|
+| 🥉 | icarus-self-orientation | 92% | 1 flag |
+| 4 | cad-file-inventory | 92% | 0 flag，紧凑 |
+| 5 | meta-cad-inventory-pipeline | 88% | 0 flag |
+| 6 | file-inventory-excel | 83% | 0 flag |
+| 7 | icarus-self-audit | 83% | 0 flag |
+| 8 | hermes-windows-runtime | 79% | **985 字符描述**（接近 1024 上限）|
+| 9 | hermes-agent-skill-authoring | 79% | **59 字符描述**（触发条件太短）|
+| 10 | icarus-meta-skill-miner | 79% | 0 flag |
+
+**改进方向**：
+- `hermes-windows-runtime` 拆成 2-3 个聚焦子 skill（诊断 / 升级 / GitNexus 集成）
+- `hermes-agent-skill-authoring` 描述补触发条件（"Use when ..." 句式）
+
+**自省工具**：`bin/icarus-self-explore.py {report|hub|impact <name>|trace <from> <to>|score-all}`
+
 **知识图谱规模**：148 文件 / 4,750 节点 / 13,192 边 / 283 聚类 / 300 流程 / 62 MB lbug db (with FTS)
 
 **MCP 17 tools 全开**（cypher / context / impact / trace / list_repos / query / tool_map / route_map / shape_check / api_impact / detect_changes / check / rename / explain / pdg_query / group_list / group_sync）
