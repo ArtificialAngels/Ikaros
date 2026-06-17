@@ -99,12 +99,14 @@ Hermes Agent Portable (E:\Hermes Agent)
 | 6 | file-inventory-excel | 83% | 0 flag |
 | 7 | icarus-self-audit | 83% | 0 flag |
 | 8 | hermes-windows-runtime | 79% | **985 字符描述**（接近 1024 上限）|
-| 9 | hermes-agent-skill-authoring | 79% | **59 字符描述**（触发条件太短）|
+| 9 | hermes-agent-skill-authoring | 79% | 描述 59→686 字符（用户可触发性 ↑，但 F5/S5 仍 1/2 不是 2/2）|
 | 10 | icarus-meta-skill-miner | 79% | 0 flag |
 
 **改进方向**：
 - `hermes-windows-runtime` 拆成 2-3 个聚焦子 skill（诊断 / 升级 / GitNexus 集成）
-- `hermes-agent-skill-authoring` 描述补触发条件（"Use when ..." 句式）
+- `hermes-windows-runtime` description 从 985 字符压到 ≤ 500（F5/S5 满分）
+- `hermes-agent-skill-authoring` body 里 7 个 backtick path 是模板（R2 失分），用代码块包起来可修
+- 评分器 (skill-quality-scorer) TRACE+ 倾向 description ≤ 500 字符（"L1 触发层简洁"），但**用户搜索/触发的可读性**比评分高更重要——**不为了拿满分而把 description 砍短到 59 字符**
 
 **自省工具**：`bin/icarus-self-explore.py {report|hub|impact <name>|trace <from> <to>|score-all}`
 
