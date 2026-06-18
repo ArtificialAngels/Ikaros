@@ -161,7 +161,7 @@ $argList = @(
     '--host',         '127.0.0.1'
     '--port',         "$Port"
     '--jinja'
-    '--ctx-size',     '32768'
+    '--ctx-size',     '65536'
     '--n-gpu-layers', '16'
     '--temp',         '0.7'
 )
