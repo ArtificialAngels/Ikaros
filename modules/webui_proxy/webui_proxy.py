@@ -54,12 +54,17 @@ USAGE_STATS_PATH = "/api/hermes/usage/stats"
 # reflect disk changes, we intercept this path and proxy to the bridge
 # (which shells out to the supervisor).
 LLAMA_RESTART_PATH = "/api/hermes/llama/restart"
+# Liveness path: WebUI's topbar can show a green/yellow/red dot to
+# indicate "Icarus is alive" — this is the bridge endpoint behind it.
+# WebUI fetches /api/hermes/liveness to render the badge.
+LIVENESS_PATH = "/api/hermes/liveness"
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:7860"
 # WebUI path → bridge path. The SPA uses /api/hermes/* namespacing; the
 # bridge uses /v1/* (its OpenAI-compatible API). Map them explicitly so
 # future endpoints can be added without rewriting _proxy_to_bridge.
 WEBUI_TO_BRIDGE_PATH: dict[str, str] = {
     "/api/hermes/llama/restart": "/v1/llama/restart",
+    "/api/hermes/liveness": "/v1/liveness",
 }
 # Plugin management paths (new in 2026-06-17: E方案 — break hermes-web-ui's
 # "read-only" stance so the UI can actually manage plugins, with safety:
@@ -312,6 +317,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         elif self.path.startswith(PLUGINS_PREFIX):
             # /api/hermes/plugins/list is the only GET endpoint
             self._handle_plugin_action("list")
+        elif self.path == LIVENESS_PATH:
+            # WebUI can poll liveness to render an "Icarus alive" badge.
+            # Proxied to bridge /v1/liveness which probes local + clouds.
+            self._proxy_to_bridge()
         else:
             self._proxy_pass()
 

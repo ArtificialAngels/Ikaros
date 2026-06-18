@@ -124,6 +124,15 @@ MEMORY_INGEST_EVERY_TICKS = 2160
 # to bound the log file size. At 10s tick that's every ~24h. Old logs
 # (60d-365d) get noisy events dropped; logs > 1y are deleted.
 ARCHIVE_EVERY_TICKS = 8640  # ~24h at 10s/tick
+# Liveness probe: every N ticks, call GET :7860/v1/liveness and write
+# the verdict (ok / degraded / dead) into the heartbeat. 4 ticks =
+# 40s — fast enough to catch outages, slow enough that 5 parallel HTTP
+# probes (local + 3 clouds + anthropic) don't dominate the cycle.
+LIVENESS_PROBE_EVERY_TICKS = 4
+# Liveness dead-threshold: after N consecutive "dead" verdicts, emit
+# a special alert event (so icarus-remember surfaces it in the daily
+# narrative as "I lost all providers for X minutes").
+LIVENESS_DEAD_ALERT_AFTER = 5  # ~3min20s at 40s/probe × 5
 
 # FIX 2026-06-17: when launcher is mid-update it writes ~/.hermes-web-ui/upgrading.lock.
 # Webui :8649 will go down briefly (npm renames its dir → process exits) and
@@ -378,6 +387,39 @@ def _service_status_snapshot() -> dict:
     return services
 
 
+# ---- Liveness probe (talks to bridge /v1/liveness) ----
+def _probe_liveness() -> dict | None:
+    """Ask bridge whether Icarus can talk to a model right now.
+
+    Returns the verdict dict on success, None on bridge unreachable.
+    The dict is shaped like:
+        {"status": "ok"|"degraded"|"dead", "summary": str, ...}
+    and matches the contract of POST /v1/liveness exactly.
+
+    We use a 10s timeout to absorb a slow bridge / slow cloud probe.
+    /v1/liveness runs 4 parallel HTTP probes (local + 3 clouds + maybe
+    Anthropic) with 4s timeout each, so the endpoint can take up to
+    ~5s under normal conditions and ~10s if all clouds time out. The
+    5s timeout in earlier versions was too tight and produced false
+    "dead" verdicts under transient network slowness.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+    try:
+        req = urllib.request.Request("http://127.0.0.1:7860/v1/liveness", method="GET")
+        with urllib.request.urlopen(req, timeout=10.0) as r:
+            payload = r.read().decode("utf-8", errors="replace")
+            return json.loads(payload)
+    except urllib.error.URLError as e:
+        # Bridge down — by definition Icarus is "dead" until it comes back.
+        return {"status": "dead", "summary": f"bridge unreachable: {type(e).__name__}: {e}",
+                "local": None, "cloud": {}}
+    except Exception as e:
+        return {"status": "dead", "summary": f"liveness probe error: {type(e).__name__}: {e}",
+                "local": None, "cloud": {}}
+
+
 def _detect_system_change(prev: dict | None) -> tuple[dict, list[str]]:
     """Re-probe device info. Returns (current_dict, list_of_changed_fields)."""
     cur = _read_device_info()
@@ -523,6 +565,11 @@ def run() -> int:
     # name -> timestamp of last restart (for cooldown)
     last_restart: Dict[str, float] = {}
 
+    # Liveness state machine: counter for consecutive "dead" verdicts so
+    # we only emit a `liveness_dead_alert` after N probes (~3 min) rather
+    # than on every transient blip. Reset to 0 on first non-dead verdict.
+    consecutive_dead = 0
+
     tick_count = 0
     try:
         while True:
@@ -556,6 +603,30 @@ def run() -> int:
             if tick_count % SNAPSHOT_EVERY_TICKS == 0:
                 snapshot = _service_status_snapshot()
                 _hb_event("service_status", services=snapshot)
+
+            # Liveness probe: every LIVENESS_PROBE_EVERY_TICKS ticks (40s)
+            # call bridge /v1/liveness and emit a `liveness` event with the
+            # verdict (ok / degraded / dead). If `dead` persists for
+            # LIVENESS_DEAD_ALERT_AFTER consecutive probes, emit a
+            # `liveness_dead_alert` so icarus-remember surfaces it in
+            # the daily narrative ("lost all providers at 03:14 UTC").
+            if tick_count % LIVENESS_PROBE_EVERY_TICKS == 0:
+                lv = _probe_liveness()
+                if lv is not None:
+                    _hb_event("liveness", **lv)
+                    if lv["status"] == "dead":
+                        consecutive_dead += 1
+                        if consecutive_dead == LIVENESS_DEAD_ALERT_AFTER:
+                            _hb_event("liveness_dead_alert",
+                                      consecutive_dead=consecutive_dead,
+                                      local=lv.get("local"),
+                                      cloud=lv.get("cloud"))
+                    else:
+                        # Recovered: emit recovery event the first time
+                        if consecutive_dead >= LIVENESS_DEAD_ALERT_AFTER:
+                            _hb_event("liveness_recovered",
+                                      after_dead_count=consecutive_dead)
+                        consecutive_dead = 0
 
             # System-change probe: every SYSTEM_PROBE_EVERY_TICKS ticks
             # (~5 min) re-run device-info and diff. Emits system_change

@@ -101,6 +101,9 @@ def summarise(records: list[dict]) -> dict:
     system_changes = [r for r in records if r.get("event") == "system_change"]
     archives = [r for r in records if r.get("event") == "archive"]
     quarterlies = [r for r in records if r.get("event") == "quarterly"]
+    livenesses = [r for r in records if r.get("event") == "liveness"]
+    liveness_dead_alerts = [r for r in records if r.get("event") == "liveness_dead_alert"]
+    liveness_recoveries = [r for r in records if r.get("event") == "liveness_recovered"]
 
     # Most recent wake for the day (i.e. the "I am this machine" anchor)
     last_wake = wakes[-1] if wakes else None
@@ -142,6 +145,9 @@ def summarise(records: list[dict]) -> dict:
         "system_changes": system_changes,
         "archives": archives,
         "quarterlies": quarterlies,
+        "livenesses": livenesses,
+        "liveness_dead_alerts": liveness_dead_alerts,
+        "liveness_recoveries": liveness_recoveries,
         "tick_count": sum(1 for r in records if r.get("event") == "tick"),
     }
 
@@ -216,6 +222,44 @@ def render_markdown(summary: dict) -> str:
             if info.get("pid"):
                 extra += f" pid={info['pid']}"
             lines.append(f"- {mark} **{name}**{extra}")
+        lines.append("")
+
+    # Liveness: the LAST probe of the day + dead-alert list (anomalies)
+    livenesses = summary.get("livenesses", [])
+    if livenesses:
+        last_lv = livenesses[-1]
+        status_lv = last_lv.get("status", "?")
+        mark_lv = {"ok": "🟢", "degraded": "🟡", "dead": "🔴"}.get(status_lv, "⚪")
+        lines.append("## Liveness (last probe)")
+        lines.append("")
+        lines.append(f"- {mark_lv} **{status_lv}**  ·  {last_lv.get('summary', '')}")
+        # Count transitions of the day
+        if len(livenesses) > 1:
+            transitions = [(l["ts"], l.get("status")) for l in livenesses
+                           if l.get("status") != livenesses[livenesses.index(l) - 1].get("status")
+                           and livenesses.index(l) > 0]
+            if transitions:
+                lines.append(f"- Day transitions: " + ", ".join(
+                    f"`{s} @ {t}`" for t, s in transitions))
+        lines.append("")
+
+    # Liveness dead alerts (I lost all providers for >=3 min)
+    dead_alerts = summary.get("liveness_dead_alerts", [])
+    if dead_alerts:
+        lines.append("## ⚠️ Liveness dead alerts")
+        lines.append("")
+        for a in dead_alerts:
+            lines.append(f"- {a['ts']}  consecutive dead={a.get('consecutive_dead')}  "
+                         f"after probe: {a.get('local', {}).get('error') or 'no local'}")
+        lines.append("")
+
+    # Liveness recoveries
+    recoveries = summary.get("liveness_recoveries", [])
+    if recoveries:
+        lines.append("## 🟢 Liveness recoveries")
+        lines.append("")
+        for r in recoveries:
+            lines.append(f"- {r['ts']}  recovered after {r.get('after_dead_count')} consecutive dead probes")
         lines.append("")
 
     # Restarts

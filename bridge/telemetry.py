@@ -240,6 +240,9 @@ class Topics:
     PORT_LISTEN = "port.listen"
     PORT_LOST = "port.lost"
     DISK_LOW = "disk.low"
+    LIVENESS_OK = "liveness.ok"           # at least one provider (local OR cloud) is reachable
+    LIVENESS_DEGRADED = "liveness.degraded"  # some providers reachable, but not all healthy
+    LIVENESS_DEAD = "liveness.dead"         # NO provider reachable — Icarus is silent
 
 
 __all__ = [

@@ -421,6 +421,184 @@ async def health_snapshot() -> dict[str, Any]:
     }
 
 
+# ---- /v1/liveness (Icarus is "alive" = at least one chat-capable provider reachable) ----
+#
+# Why this endpoint exists
+# ------------------------
+# The watchdog + icarus-remember pipeline need a single, trustworthy answer
+# to "can Icarus talk to a model right now?"  The /health endpoint reports
+# 30+ fields and skips external network calls, so it can't tell the
+# difference between "llama-server is up but every chat times out" and
+# "everything is fine". /v1/liveness actively pings each known provider
+# and returns a 3-state verdict:
+#
+#   status="ok"       — at least one provider (local OR cloud) answered
+#   status="degraded" — providers reachable but auth/format errors
+#   status="dead"     — no provider answered within timeout
+#
+# Watchdog writes this verdict into the heartbeat. icarus-remember
+# surfaces it in the daily memory narrative.  icarus-self-explore score
+# can dock points if the verdict stays "dead" for too long.
+#
+# Probes (run in parallel, 4s timeout each)
+# -----------------------------------------
+#   1. Local:        GET  <LLAMA_BASE_URL>/v1/models
+#   2. minimax-cn:   GET  https://api.minimaxi.com/anthropic/v1/models
+#                    (cheap, no auth required for the model list)
+#   3. deepseek:     GET  https://api.deepseek.com/v1/models
+#   4. openai:       GET  https://api.openai.com/v1/models
+#   5. anthropic:    GET  https://api.anthropic.com/v1/models
+#                    (Anthropic doesn't expose /v1/models — use /v1/messages
+#                    with max_tokens=1 instead, see _probe_anthropic)
+#
+# Cloud providers are hard-coded here (not loaded from config) because
+# liveness is a fixed concept — the same 4-5 providers any user might
+# have configured. If a user runs a private proxy, the liveness score
+# only reflects the public clouds it knows about.
+
+_LIVENESS_PROBE_TIMEOUT_S = 4.0
+_LIVENESS_CLOUD_PROVIDERS: dict[str, str] = {
+    "minimax-cn": "https://api.minimaxi.com/anthropic/v1/models",
+    "deepseek": "https://api.deepseek.com/v1/models",
+    "openai": "https://api.openai.com/v1/models",
+}
+
+
+async def _probe_local_llama() -> dict[str, Any]:
+    """Probe local llama-server. Uses the shared HTTP client for connection reuse."""
+    t0 = time.monotonic()
+    try:
+        r = await _http.get("/v1/models", timeout=_LIVENESS_PROBE_TIMEOUT_S)
+        latency = round((time.monotonic() - t0) * 1000, 1)
+        if r.status_code == 200:
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            ids = [m.get("id") for m in (data.get("data") or [])]
+            return {
+                "alive": True, "status": 200, "latency_ms": latency,
+                "model_count": len(ids), "note": f"{len(ids)} chat model(s) available",
+            }
+        return {"alive": False, "status": r.status_code, "latency_ms": latency,
+                "error": f"HTTP {r.status_code}"}
+    except Exception as e:
+        return {"alive": False, "status": 0, "latency_ms": round((time.monotonic() - t0) * 1000, 1),
+                "error": f"{type(e).__name__}: {e}"}
+
+
+async def _probe_cloud_get(url: str) -> dict[str, Any]:
+    """Generic GET probe (no auth — some providers expose /v1/models publicly)."""
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=_LIVENESS_PROBE_TIMEOUT_S) as c:
+            r = await c.get(url)
+        latency = round((time.monotonic() - t0) * 1000, 1)
+        alive = r.status_code in (200, 401, 403)  # 401/403 = reachable, just unauth
+        return {
+            "alive": alive, "status": r.status_code, "latency_ms": latency,
+            "error": None if alive else f"HTTP {r.status_code}",
+        }
+    except Exception as e:
+        return {"alive": False, "status": 0, "latency_ms": round((time.monotonic() - t0) * 1000, 1),
+                "error": f"{type(e).__name__}: {e}"}
+
+
+async def _probe_cloud_post(url: str, body: dict, headers: dict) -> dict[str, Any]:
+    """Generic POST probe (used when GET isn't supported)."""
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=_LIVENESS_PROBE_TIMEOUT_S) as c:
+            r = await c.post(url, json=body, headers=headers)
+        latency = round((time.monotonic() - t0) * 1000, 1)
+        alive = r.status_code in (200, 401, 403)
+        return {
+            "alive": alive, "status": r.status_code, "latency_ms": latency,
+            "error": None if alive else f"HTTP {r.status_code}",
+        }
+    except Exception as e:
+        return {"alive": False, "status": 0, "latency_ms": round((time.monotonic() - t0) * 1000, 1),
+                "error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/v1/liveness")
+async def liveness() -> dict[str, Any]:
+    """Composite liveness: at least one provider reachable → "ok".
+
+    Returns:
+      {
+        "status": "ok" | "degraded" | "dead",
+        "ts": <unix>,
+        "local":  { "alive": bool, "latency_ms": float, ... },
+        "cloud":  { "<provider>": { ... }, ... },
+        "summary": "local up, 2/3 clouds up"
+      }
+    """
+    # Run all probes in parallel.
+    tasks: dict[str, Any] = {"local": asyncio.create_task(_probe_local_llama())}
+    for name, url in _LIVENESS_CLOUD_PROVIDERS.items():
+        tasks[f"cloud.{name}"] = asyncio.create_task(_probe_cloud_get(url))
+    # Anthropic: probe with a minimal /v1/messages POST (they don't expose /v1/models).
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        tasks["cloud.anthropic"] = asyncio.create_task(_probe_cloud_post(
+            "https://api.anthropic.com/v1/messages",
+            {"model": "claude-3-5-haiku-20241022", "max_tokens": 1, "messages": [{"role": "user", "content": "x"}]},
+            {"x-api-key": anthropic_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        ))
+    # Collect.
+    results: dict[str, Any] = {}
+    for name, task in tasks.items():
+        try:
+            results[name] = await task
+        except Exception as e:
+            results[name] = {"alive": False, "status": 0, "latency_ms": 0.0,
+                             "error": f"probe crashed: {type(e).__name__}: {e}"}
+
+    # Decide.
+    local_alive = results.get("local", {}).get("alive", False)
+    cloud_alive_count = sum(1 for k, v in results.items()
+                            if k.startswith("cloud.") and v.get("alive"))
+    cloud_total = sum(1 for k in results if k.startswith("cloud."))
+
+    if local_alive and cloud_alive_count == cloud_total and cloud_total > 0:
+        status = "ok"
+    elif local_alive or cloud_alive_count > 0:
+        status = "ok"  # at least one — Icarus is alive
+    else:
+        status = "dead"
+
+    if local_alive and cloud_alive_count > 0 and cloud_alive_count < cloud_total:
+        # surface as "degraded" only if we have at least 2 configured and one is down
+        if cloud_total >= 2 and cloud_alive_count < cloud_total:
+            status = "degraded"
+
+    # Side-effect: emit liveness signal for downstream consumers.
+    sig_topic = {
+        "ok": telemetry.Topics.LIVENESS_OK,
+        "degraded": telemetry.Topics.LIVENESS_DEGRADED,
+        "dead": telemetry.Topics.LIVENESS_DEAD,
+    }[status]
+    telemetry.bus().emit(sig_topic, {
+        "local_alive": local_alive,
+        "cloud_alive": cloud_alive_count,
+        "cloud_total": cloud_total,
+    })
+
+    summary = []
+    if local_alive:
+        lh = results["local"]
+        summary.append(f"local llama up ({lh.get('model_count', 0)} models, {lh.get('latency_ms', 0):.0f}ms)")
+    else:
+        summary.append("local llama DOWN")
+    summary.append(f"cloud: {cloud_alive_count}/{cloud_total} up")
+
+    return {
+        "status": status,
+        "ts": time.time(),
+        "local": results.get("local"),
+        "cloud": {k.removeprefix("cloud."): v for k, v in results.items() if k.startswith("cloud.")},
+        "summary": " · ".join(summary),
+    }
+
+
 # ---- /v1/signals (telemetry aggregation) ----
 
 _signals_cache: dict[str, Any] = {"ts": 0.0, "data": None}
