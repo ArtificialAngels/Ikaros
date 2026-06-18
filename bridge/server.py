@@ -64,7 +64,23 @@ os.environ.setdefault("HERMES_MODULE", "bridge")
 
 # ---- Config (all overridable via env vars) ----
 
-LLAMA_BASE_URL = os.environ.get("HERMES_LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
+# ---- Multi-endpoint fallback for llama-server ----
+# "活着" 是第一要义：当主端口 (HERMES_LLAMA_URL) 死了，bridge 自动切到
+# 下一个候选端口。环境变量 HERMES_LLAMA_FALLBACKS 逗号分隔，例如：
+#   export HERMES_LLAMA_FALLBACKS="http://127.0.0.1:8081,http://127.0.0.1:8082"
+# 候选必须互相独立（不同 port，或不同 host）。健康监控每次轮询所有候选，
+# 把当前 alive 的第一个选为活跃 base_url；所有候选全死才走 liveness.dead。
+_LLAMA_CANDIDATES: list[str] = []
+_primary = os.environ.get("HERMES_LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
+_LLAMA_CANDIDATES.append(_primary)
+_fb = os.environ.get("HERMES_LLAMA_FALLBACKS", "").strip()
+if _fb:
+    for u in _fb.split(","):
+        u = u.strip().rstrip("/")
+        if u and u not in _LLAMA_CANDIDATES:
+            _LLAMA_CANDIDATES.append(u)
+LLAMA_BASE_URL = _primary  # 兼容老代码，下方 _active_base_url 才是真相
+_FALLBACK_FAIL_THRESHOLD = int(os.environ.get("HERMES_BRIDGE_FALLBACK_FAILS", "2"))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path(__file__).resolve().parent.parent / "data" / "hermes-agent")))
 MODELS_DIR = Path(os.environ.get("HERMES_MODELS_DIR", str(Path(__file__).resolve().parent.parent / "data" / "models")))
 BRIDGE_PORT = int(os.environ.get("HERMES_BRIDGE_PORT", "7860"))
@@ -104,52 +120,121 @@ async def _retry_call(coro_factory, label: str = "request") -> Any:
 
 
 # ---- Connection health tracking ----
-_llama_health: dict[str, Any] = {
-    "alive": False,
-    "last_check": 0.0,
-    "last_success": 0.0,
-    "consecutive_failures": 0,
-    "latency_ms": 0.0,
+# Per-candidate health: {url: {alive, consecutive_failures, last_check, last_success, latency_ms}}
+_candidate_health: dict[str, dict[str, Any]] = {
+    u: {
+        "alive": False,
+        "consecutive_failures": 0,
+        "last_check": 0.0,
+        "last_success": 0.0,
+        "latency_ms": 0.0,
+    }
+    for u in _LLAMA_CANDIDATES
 }
 _health_lock = threading.Lock()
+# 当前活跃的 base_url：每个候选 alive 时立即切到候选；不 alive 才保持原样
+_active_base_url: str = _primary
+_last_active_change: float = 0.0
+# 兼容老代码：LLAMA_BASE_URL 改写成"当前活跃"
+def _refresh_active_base_url() -> str:
+    """Pick the first alive candidate; otherwise keep current. Returns the active url."""
+    global _active_base_url
+    with _health_lock:
+        for u in _LLAMA_CANDIDATES:
+            if _candidate_health[u]["alive"]:
+                if u != _active_base_url:
+                    logger.warning(
+                        "bridge: llama-server active endpoint switched %s → %s",
+                        _active_base_url, u,
+                    )
+                    _active_base_url = u
+                    _last_active_change = time.time()
+                return _active_base_url
+    return _active_base_url
 
 
 def _get_llama_health() -> dict[str, Any]:
+    """Back-compat shape: aggregate over the active candidate + per-candidate breakdown."""
     with _health_lock:
-        return dict(_llama_health)
+        active = _active_base_url
+        per = {u: dict(v) for u, v in _candidate_health.items()}
+    agg = per.get(active, {})
+    return {
+        "alive": agg.get("alive", False),
+        "last_check": agg.get("last_check", 0.0),
+        "last_success": agg.get("last_success", 0.0),
+        "consecutive_failures": agg.get("consecutive_failures", 0),
+        "latency_ms": agg.get("latency_ms", 0.0),
+        "active_url": active,
+        "candidates": per,
+    }
 
 
 async def _check_llama_health() -> bool:
-    """Probe llama-server and update the shared health state."""
-    t0 = time.perf_counter()
-    try:
-        r = await _http.get("/health", timeout=3.0)
-        alive = r.status_code == 200
-        latency = (time.perf_counter() - t0) * 1000.0
-    except Exception as e:
-        alive = False
-        latency = 0.0
-
+    """Probe every candidate; pick the first alive as active. Returns aggregate alive."""
+    global _active_base_url
+    any_alive = False
     now = time.time()
-    with _health_lock:
-        _llama_health["last_check"] = now
-        if alive:
-            _llama_health["alive"] = True
-            _llama_health["last_success"] = now
-            _llama_health["consecutive_failures"] = 0
-            _llama_health["latency_ms"] = round(latency, 1)
-        else:
-            _llama_health["consecutive_failures"] += 1
-            _llama_health["latency_ms"] = 0.0
-            # Only mark dead after 2 consecutive failures (avoid flapping)
-            if _llama_health["consecutive_failures"] >= 2:
-                _llama_health["alive"] = False
 
-    # Also update the shared health registry for cross-component visibility
-    health_registry.report("llama_server", alive=alive, latency_ms=round(latency, 1))
+    async def _probe_one(url: str) -> tuple[str, bool, float]:
+        t0 = time.perf_counter()
+        try:
+            # use a fresh client per-candidate because _http's base_url is fixed
+            async with httpx.AsyncClient(base_url=url, timeout=3.0) as cli:
+                r = await cli.get("/health")
+            ok = r.status_code == 200
+        except Exception:
+            ok = False
+        return url, ok, (time.perf_counter() - t0) * 1000.0
+
+    results = await asyncio.gather(*[_probe_one(u) for u in _LLAMA_CANDIDATES], return_exceptions=False)
+
+    with _health_lock:
+        for url, ok, latency in results:
+            ch = _candidate_health[url]
+            ch["last_check"] = now
+            if ok:
+                ch["alive"] = True
+                ch["last_success"] = now
+                ch["consecutive_failures"] = 0
+                ch["latency_ms"] = round(latency, 1)
+                any_alive = True
+            else:
+                ch["consecutive_failures"] += 1
+                ch["latency_ms"] = 0.0
+                if ch["consecutive_failures"] >= _FALLBACK_FAIL_THRESHOLD:
+                    ch["alive"] = False
+
+        # Re-pick active: only switch when the CURRENT active is dead. Otherwise
+        # stay sticky to the current active (manual switch survives across health
+        # checks). 切端口不能让 Icarus 休眠 — manual switch wins over auto-pick.
+        if not _candidate_health.get(_active_base_url, {}).get("alive", False):
+            for u in _LLAMA_CANDIDATES:
+                if _candidate_health[u]["alive"]:
+                    if u != _active_base_url:
+                        logger.warning(
+                            "bridge: llama-server active endpoint auto-failed-over %s → %s (current dead)",
+                            _active_base_url, u,
+                        )
+                        _active_base_url = u
+                        _last_active_change = now
+                    break
+
+    # Cross-component visibility: report the active candidate as "llama_server"
+    active_health = _candidate_health.get(_active_base_url, {})
+    health_registry.report(
+        "llama_server",
+        alive=active_health.get("alive", False),
+        latency_ms=active_health.get("latency_ms", 0.0),
+        extra={
+            "active_url": _active_base_url,
+            "candidates_alive": sum(1 for v in _candidate_health.values() if v["alive"]),
+            "candidates_total": len(_LLAMA_CANDIDATES),
+        },
+    )
     health_registry.report("bridge", alive=True, extra={"port": BRIDGE_PORT, "pid": os.getpid()})
 
-    return alive
+    return any_alive
 
 
 # ---- Background health monitor ----
@@ -178,14 +263,54 @@ def _stop_health_monitor() -> None:
     _health_monitor_stop.set()
 
 
-# Single shared HTTP client for proxying to llama-server (keeps the connection
-# pool warm and makes streaming responses efficient).
+# Single shared HTTP client for proxying to llama-server. The base_url is
+# refreshed on every request from _active_base_url so that chat traffic
+# always reaches whichever llama-server candidate is currently alive.
+# "活着" 是第一要义: 切端口不影响 Icarus 持续在线。
+def _current_base_url() -> str:
+    return _active_base_url
+
+
 _http = httpx.AsyncClient(
-    base_url=LLAMA_BASE_URL,
+    base_url=_current_base_url(),
     timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
     limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 _warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
+
+
+async def _proxy_to_active(method: str, path: str, **kwargs) -> httpx.Response:
+    """Send an HTTP request to the *current* active llama-server, picking the
+    alive candidate at call-time. If a request fails with a connection error,
+    we transparently retry against any other alive candidate once before
+    surfacing the error. This is the "活着回退" hot-path.
+    """
+    last_exc: Exception | None = None
+    tried: set[str] = set()
+    # Try the active one first, then any other alive candidate as fallback.
+    with _health_lock:
+        order = [_active_base_url] + [u for u in _LLAMA_CANDIDATES if u != _active_base_url]
+    for url in order:
+        if url in tried:
+            continue
+        tried.add(url)
+        # Skip known-dead candidates (unless it's the only one, in which case try anyway)
+        if _candidate_health.get(url, {}).get("alive") is False and len([u for u in _LLAMA_CANDIDATES if u not in tried]) > 0:
+            continue
+        try:
+            async with httpx.AsyncClient(
+                base_url=url,
+                timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
+            ) as cli:
+                resp = await cli.request(method, path, **kwargs)
+                return resp
+        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_exc = e
+            logger.warning("bridge: %s %s via %s failed: %s", method, path, url, type(e).__name__)
+            continue
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("no llama-server candidates available")
 
 # ---- Bridge-to-WebUI heartbeat ----
 # The WebUI can poll /health to verify the bridge is alive, and the bridge
@@ -465,10 +590,11 @@ _LIVENESS_CLOUD_PROVIDERS: dict[str, str] = {
 
 
 async def _probe_local_llama() -> dict[str, Any]:
-    """Probe local llama-server. Uses the shared HTTP client for connection reuse."""
+    """Probe local llama-server. Routes through _proxy_to_active so it always
+    hits whichever candidate is currently alive (port-switch survival)."""
     t0 = time.monotonic()
     try:
-        r = await _http.get("/v1/models", timeout=_LIVENESS_PROBE_TIMEOUT_S)
+        r = await _proxy_to_active("GET", "/v1/models", timeout=_LIVENESS_PROBE_TIMEOUT_S)
         latency = round((time.monotonic() - t0) * 1000, 1)
         if r.status_code == 200:
             data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -476,12 +602,13 @@ async def _probe_local_llama() -> dict[str, Any]:
             return {
                 "alive": True, "status": 200, "latency_ms": latency,
                 "model_count": len(ids), "note": f"{len(ids)} chat model(s) available",
+                "active_url": _active_base_url,
             }
         return {"alive": False, "status": r.status_code, "latency_ms": latency,
-                "error": f"HTTP {r.status_code}"}
+                "error": f"HTTP {r.status_code}", "active_url": _active_base_url}
     except Exception as e:
         return {"alive": False, "status": 0, "latency_ms": round((time.monotonic() - t0) * 1000, 1),
-                "error": f"{type(e).__name__}: {e}"}
+                "error": f"{type(e).__name__}: {e}", "active_url": _active_base_url}
 
 
 async def _probe_cloud_get(url: str) -> dict[str, Any]:
@@ -585,9 +712,18 @@ async def liveness() -> dict[str, Any]:
     summary = []
     if local_alive:
         lh = results["local"]
-        summary.append(f"local llama up ({lh.get('model_count', 0)} models, {lh.get('latency_ms', 0):.0f}ms)")
+        # Tell the operator which base_url is currently active
+        active_url = lh.get("active_url") or _active_base_url
+        summary.append(
+            f"local llama up ({lh.get('model_count', 0)} models, {lh.get('latency_ms', 0):.0f}ms, via {active_url})"
+        )
     else:
-        summary.append("local llama DOWN")
+        # Report candidate breakdown so the operator can see which ports died
+        cand = _get_llama_health().get("candidates", {})
+        alive = [u.rsplit(':', 1)[-1] for u, v in cand.items() if v.get("alive")]
+        summary.append(
+            f"local llama DOWN (candidates: {','.join(alive) or 'none alive'} of {len(cand)})"
+        )
     summary.append(f"cloud: {cloud_alive_count}/{cloud_total} up")
 
     return {
@@ -596,6 +732,8 @@ async def liveness() -> dict[str, Any]:
         "local": results.get("local"),
         "cloud": {k.removeprefix("cloud."): v for k, v in results.items() if k.startswith("cloud.")},
         "summary": " · ".join(summary),
+        "llama_candidates": _get_llama_health().get("candidates", {}),
+        "llama_active": _active_base_url,
     }
 
 
@@ -1437,6 +1575,67 @@ async def restart_llama() -> dict[str, Any]:
     }
 
 
+# ---- /v1/llama/active — read current active llama-server base_url ----
+# Icarus rule: 切端口不能让我休眠。
+@app.get("/v1/llama/active")
+async def llama_active() -> dict[str, Any]:
+    """Return the current active llama-server endpoint and per-candidate health.
+    Useful for the WebUI to display 'currently routing via :8080' (or whichever)."""
+    return {
+        "active_url": _active_base_url,
+        "candidates": _get_llama_health().get("candidates", {}),
+        "candidates_total": len(_LLAMA_CANDIDATES),
+        "candidates_alive": sum(1 for v in _get_llama_health().get("candidates", {}).values() if v.get("alive")),
+    }
+
+
+# ---- /v1/llama/switch-active — manually pick which candidate to use ----
+# Body: {"url": "http://127.0.0.1:8081"} — must be one of the configured
+# candidates. The active url is updated immediately (no restart). The next
+# chat request will route to the new endpoint. Use this when the primary
+# llama-server died and you want to force-failover without waiting for the
+# health monitor to react.
+@app.post("/v1/llama/switch-active")
+async def llama_switch_active(body: dict[str, Any]) -> dict[str, Any]:
+    global _active_base_url
+    target = (body.get("url") or "").strip().rstrip("/")
+    if not target:
+        raise HTTPException(status_code=400, detail="missing 'url' in body")
+    if target not in _LLAMA_CANDIDATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"url {target!r} is not a configured candidate. Known: {_LLAMA_CANDIDATES}",
+        )
+    # Probe the target before switching so we don't blindly point at a dead one.
+    try:
+        async with httpx.AsyncClient(base_url=target, timeout=3.0) as cli:
+            r = await cli.get("/health")
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"target {target} not healthy (HTTP {r.status_code})")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"target {target} unreachable: {e}")
+
+    old = _active_base_url
+    with _health_lock:
+        _active_base_url = target
+        _candidate_health[target]["alive"] = True
+        _candidate_health[target]["consecutive_failures"] = 0
+        _last_active_change = time.time()
+    logger.warning("bridge: active llama endpoint manually switched %s → %s", old, target)
+    telemetry.bus().emit(telemetry.Topics.MODEL_EVICTED, {
+        "event": "llama_active_switch",
+        "from": old,
+        "to": target,
+        "manual": True,
+    })
+    return {
+        "ok": True,
+        "from": old,
+        "to": target,
+        "candidates": _get_llama_health().get("candidates", {}),
+    }
+
+
 # ---- /v1/models/warmup ----
 
 # Warmup task registry — concurrent warmups are rare, so a single dict + lock
@@ -1716,20 +1915,22 @@ async def chat_completions(request: Request) -> Any:
             },
         )
 
-    # Non-streaming
+    # Non-streaming — route through _proxy_to_active so a dead port transparently
+    # falls back to the next alive llama-server candidate. "活着" 优先。
     try:
-        r = await _retry_call(
-            lambda: _http.post("/v1/chat/completions", json=body, timeout=300.0),
-            label="chat",
-        )
+        r = await _proxy_to_active("POST", "/v1/chat/completions", json=body, timeout=300.0)
         telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
             "model": body.get("model", "?"),
             "status": r.status_code,
+            "active_url": _active_base_url,
         })
         return JSONResponse(
             content=r.json(),
             status_code=r.status_code,
-            headers={"X-Hermes-Routing-Target": "llama_server"},
+            headers={
+                "X-Hermes-Routing-Target": "llama_server",
+                "X-Hermes-Llama-Active": _active_base_url,
+            },
         )
     except httpx.HTTPError as e:
         telemetry.bus().emit(telemetry.Topics.CHAT_ERROR, {

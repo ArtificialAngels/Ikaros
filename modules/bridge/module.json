@@ -28,6 +28,7 @@
     { "module": "llm_engine", "required": false, "reason": "proxies /v1/chat/completions to llama-server" }
   ],
   "env": {
-    "HERMES_LLAMA_URL": "http://127.0.0.1:8080"
+    "HERMES_LLAMA_URL": "http://127.0.0.1:8080",
+    "HERMES_LLAMA_FALLBACKS": "http://127.0.0.1:8081,http://127.0.0.1:9999"
   }
 }

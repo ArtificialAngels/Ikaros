@@ -320,6 +320,11 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
     # never prints). CREATE_NEW_PROCESS_GROUP is enough: child is in a new process
     # group (Ctrl-C doesn't propagate), and redirecting stdio to files detaches
     # the file handles from supervisor so children outlive the supervisor.
+    # env: merge module.json's `env` (HERMES_LLAMA_FALLBACKS, etc.) over the
+    # current os.environ so the child sees both system vars and module config.
+    child_env = dict(os.environ)
+    if m.env:
+        child_env.update(m.env)
     creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
     try:
         proc = subprocess.Popen(
@@ -328,6 +333,7 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
             stdin=subprocess.DEVNULL,
             stdout=log_f,
             stderr=err_f,
+            env=child_env,
             creationflags=creationflags,
             close_fds=True,
         )
