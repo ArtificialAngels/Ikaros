@@ -616,6 +616,11 @@ def cmd_restart(modules: Dict[str, Module], name: str) -> int:
         print(f"  {C.DIM}[skip]{C.RST} {name} is type={m.type}, not a service")
         return 0
     print(f"  {C.CYN}>{C.RST} restarting {name} (:{m.port})")
+    # Fix (2026-06-18): stop the old instance first so start_module's port
+    # check does not race against a stale process. Without this, a service
+    # bound to a fixed port (e.g. llama-server :8080) would either get
+    # EADDRINUSE or leave two processes fighting for the same port.
+    stop_module(m)
     proc = start_module(m)
     return 0 if proc is not None else 1
 

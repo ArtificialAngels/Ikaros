@@ -192,6 +192,12 @@ upstream/
 deps/codegraph/
 bin/.codegraph/
 
+# --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
+# These are Icarus' visual identity. Treat as design tokens, not throwaway.
+bin/favicon.ico
+bin/logo.png
+ArtificialAngel.ico
+
 # --- GitNexus external (installed in user HOME, not in repo) ---
 .claude/
 *.code-workspace

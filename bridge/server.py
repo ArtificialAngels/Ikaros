@@ -40,6 +40,9 @@ import json
 import logging
 import os
 import random
+import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -805,8 +808,12 @@ async def list_models() -> dict[str, Any]:
         if r.status_code == 200:
             raw = r.json()
             data = raw.get("data", [])
-            # Deduplicate: keep one entry per base name, preferring .gguf IDs.
-            # Also filter out ghost models (no file on disk) and non-chat models.
+            # Deduplicate: keep one entry per base name, preferring the
+            # .gguf id (since /v1/models/load accepts both forms, the
+            # .gguf id is the one webui dropdowns historically use and
+            # matches the on-disk filename exactly).
+            # Also filter out ghost models (no file on disk) and
+            # non-chat models (mmproj vision encoders, etc).
             seen: dict[str, dict] = {}
             for m in data:
                 mid = m.get("id", "")
@@ -817,7 +824,8 @@ async def list_models() -> dict[str, Any]:
                 if existing is None:
                     seen[base] = m
                 else:
-                    # Prefer the .gguf variant (canonical for /models/load).
+                    # Prefer the .gguf variant (canonical for /models/load
+                    # AND matches the on-disk filename users see).
                     if mid.endswith(".gguf") and not existing.get("id", "").endswith(".gguf"):
                         seen[base] = m
             # Drop ghosts: model whose .gguf file is not on disk
@@ -856,24 +864,78 @@ async def load_model(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="`model` field is required")
 
     # llama-server exposes /models/load (not /v1/models/load) per b9538 docs
-    try:
-        r = await _retry_call(
-            lambda: _http.post("/models/load", json={"model": model}, timeout=30.0),
-            label="model-load",
+    # The router mode accepts both "<alias>" and "<filename>.gguf" but
+    # we normalise at this layer so callers can pass either. Try the
+    # caller's spelling first; on 404 try the alternate form (alias ↔
+    # .gguf) so a "wrong" choice of name is still silently corrected
+    # — critical for webui dropdowns where the user has no way to
+    # know which form llama-server's router has registered.
+    candidates: list[str] = [model]
+    base = _normalize_model_id(model)
+    if base != model:
+        # Caller passed "X.gguf" → also try alias "X".
+        candidates.append(base)
+    else:
+        # Caller passed "X" (or any non-.gguf) → also try "X.gguf".
+        # Only add if a .gguf of that name actually exists on disk;
+        # otherwise llama-server will 404 (correctly) and our next
+        # 404 → 404 fallback would be wasted work.
+        candidate_gguf = MODELS_DIR / f"{model}.gguf"
+        if candidate_gguf.is_file():
+            candidates.append(f"{model}.gguf")
+
+    last_err: str = ""
+    for i, candidate in enumerate(candidates):
+        try:
+            r = await _retry_call(
+                lambda c=candidate: _http.post(
+                    "/models/load", json={"model": c}, timeout=30.0,
+                ),
+                label=f"model-load({candidate})",
+            )
+        except httpx.HTTPError as e:
+            telemetry.bus().emit(telemetry.Topics.MODULE_ERROR, {
+                "model": candidate, "via": "load", "error": str(e),
+            })
+            raise HTTPException(status_code=502, detail=f"llama-server unreachable: {e}")
+
+        # _retry_call returns the response (does NOT raise on 4xx), so
+        # we inspect status_code ourselves. 404 → try the next candidate
+        # in the alternation. 5xx → bubble up (server is sick, not
+        # the wrong name). 2xx → done.
+        if r.status_code == 404 and i + 1 < len(candidates):
+            logger.debug(
+                "model-load: '%s' returned 404, trying fallback '%s'",
+                candidate, candidates[i + 1],
+            )
+            last_err = f"404 for {candidate}"
+            continue
+        if 200 <= r.status_code < 300:
+            telemetry.bus().emit(
+                telemetry.Topics.MODEL_LOADED,
+                {"model": candidate, "status": r.status_code, "via": "load",
+                 "fallback_index": i},
+            )
+            if i > 0:
+                logger.info(
+                    "model-load: '%s' resolved via fallback '%s' (index %d)",
+                    model, candidate, i,
+                )
+        else:
+            telemetry.bus().emit(telemetry.Topics.MODULE_ERROR, {
+                "model": candidate, "via": "load",
+                "status": r.status_code,
+            })
+        return JSONResponse(
+            content=r.json() if r.headers.get("content-type", "").startswith("application/json") else {"raw": r.text},
+            status_code=r.status_code,
         )
-        ok = 200 <= r.status_code < 300
-        # Signal: model loaded (or failed) — distinguish by HTTP status.
-        telemetry.bus().emit(
-            telemetry.Topics.MODEL_LOADED if ok else telemetry.Topics.MODULE_ERROR,
-            {"model": model, "status": r.status_code, "via": "load"},
-        )
-        return JSONResponse(content=r.json() if r.headers.get("content-type", "").startswith("application/json") else {"raw": r.text},
-                            status_code=r.status_code)
-    except httpx.HTTPError as e:
-        telemetry.bus().emit(telemetry.Topics.MODULE_ERROR, {
-            "model": model, "via": "load", "error": str(e),
-        })
-        raise HTTPException(status_code=502, detail=f"llama-server unreachable: {e}")
+
+    # All candidates 404'd. Report the last one.
+    raise HTTPException(
+        status_code=404,
+        detail=f"model '{model}' not found (tried: {', '.join(candidates)})",
+    )
 
 
 # ---- /v1/models/swap (alias of /v1/models/load, semantically distinct) ----
@@ -1012,6 +1074,189 @@ async def evict_model(request: Request) -> dict[str, Any]:
         )
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"llama-server unreachable: {e}")
+
+
+# ---- /v1/llama/restart ----
+#
+# Why this endpoint exists
+# ------------------------
+# llama-server's router mode reads `--models-dir` + `router-preset.ini` ONCE at
+# startup and caches the resulting model list in memory. The runtime API
+# (`/v1/models`, `/models/load`, `/models/unload`) never re-scans the disk,
+# so a user who deletes/renames a `.gguf` file mid-session will:
+#   1. Still see the old id in /v1/models (stale cache).
+#   2. Get HTTP 500 "model name=X failed to load" on /v1/chat/completions
+#      (llama tries to mmap a file that no longer exists).
+#   3. Have no way to force a refresh from the WebUI ("refresh cache" only
+#      refreshes cloud provider catalogs, see webui index.js:1035).
+#
+# The WebUI's "refresh model cache" button deliberately does NOT touch local
+# .gguf, so users hit a dead end. This endpoint shells out to the supervisor
+# (which owns the lifecycle) and asks it to stop + start the llm_engine
+# module. After it returns, llama-server's process is fresh and its in-memory
+# model list matches what's currently on disk.
+#
+# Safety
+# ------
+# * Only restarts the `llm_engine` module (whitelisted by name).
+# * Hardcoded to HERMES_ROOT/bin/hermes-supervisor.py — the supervisor's own
+#   stop.ps1 is what kills the old process, so we don't reinvent the wheel.
+# * 90s timeout to absorb llama-server's startup (it can take 10-20s to load
+#   the first model from cold VRAM).
+# * After restart, the bridge immediately re-probes llama health so the
+#   response payload tells the caller whether the new instance is up.
+_SUPERVISOR_BIN = Path(__file__).resolve().parent.parent / "bin" / "hermes-supervisor.py"
+_LLAMA_HEALTH_TIMEOUT_S = 30.0
+
+
+async def _wait_for_llama_back(timeout_s: float = _LLAMA_HEALTH_TIMEOUT_S) -> dict[str, Any]:
+    """Poll llama-server /health until it returns 200 or timeout elapses.
+
+    Returns {"ready": bool, "elapsed_s": float, "last_status": int|None}.
+    """
+    deadline = time.monotonic() + timeout_s
+    last_status: int | None = None
+    t0 = time.monotonic()
+    while time.monotonic() < deadline:
+        try:
+            r = await _http.get("/health", timeout=2.0)
+            last_status = r.status_code
+            if r.status_code == 200:
+                return {"ready": True, "elapsed_s": round(time.monotonic() - t0, 2), "last_status": 200}
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return {"ready": False, "elapsed_s": round(time.monotonic() - t0, 2), "last_status": last_status}
+
+
+@app.post("/v1/llama/restart")
+async def restart_llama() -> dict[str, Any]:
+    """Force-restart llama-server so it re-scans --models-dir + router-preset.ini.
+
+    Use this after you add/remove/rename a .gguf file in data/models/. The
+    WebUI's "refresh model cache" button does NOT touch local models, so
+    this is the only bridge-level way to make WebUI's model dropdown reflect
+    the current disk state.
+
+    Body: {} (reserved for future options like { "wait": false }).
+
+    Returns: { "status": "ok" | "error", "supervisor_exit": int, "elapsed_s": float,
+               "llama_ready": bool, "pid_before": int|None, "pid_after": int|None,
+               "models_count": int|None }
+    """
+    if not _SUPERVISOR_BIN.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail=f"supervisor binary not found at {_SUPERVISOR_BIN}",
+        )
+    if shutil.which("python") is None and shutil.which("python3") is None:
+        raise HTTPException(status_code=500, detail="no python interpreter on PATH for supervisor")
+
+    # 1) capture the old llama PID (for the response payload + heartbeat).
+    pid_before: int | None = None
+    try:
+        r = await _http.get("/props", timeout=3.0)
+        if r.status_code == 200:
+            # /props doesn't expose a PID; we have to infer from netstat.
+            pass
+    except Exception:
+        pass
+    try:
+        netstat_out = subprocess.run(
+            ["netstat", "-aon", "-p", "tcp"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        for line in netstat_out.splitlines():
+            if "LISTENING" in line and ":8080" in line:
+                m = re.search(r"(\d+)\s*$", line.strip())
+                if m:
+                    pid_before = int(m.group(1))
+                    break
+    except Exception:
+        pass
+
+    # 2) shell out to supervisor --restart llm_engine (no shell, list args).
+    py = shutil.which("python") or shutil.which("python3")
+    # We deliberately call the *portable* python (HERMES_HOME's portable-python)
+    # if it's on PATH, because the supervisor scripts depend on a working
+    # `python` that has all the deps. The PATH set by start.bat puts that first.
+    t0 = time.monotonic()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            py, str(_SUPERVISOR_BIN), "--restart", "llm_engine",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=90.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise HTTPException(status_code=504, detail="supervisor --restart timed out (>90s)")
+        supervisor_exit = proc.returncode
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=f"supervisor spawn failed: {e}")
+
+    elapsed_s = round(time.monotonic() - t0, 2)
+    supervisor_stdout = (stdout_b or b"").decode("utf-8", errors="replace")
+    supervisor_stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+
+    if supervisor_exit != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"supervisor --restart llm_engine failed (exit={supervisor_exit}); "
+                f"stderr={supervisor_stderr.strip()[-400:]}"
+            ),
+        )
+
+    # 3) wait for llama-server to be reachable again.
+    health = await _wait_for_llama_back()
+
+    # 4) capture the new PID + the post-restart /v1/models count.
+    pid_after: int | None = None
+    models_count: int | None = None
+    if health["ready"]:
+        try:
+            netstat_out = subprocess.run(
+                ["netstat", "-aon", "-p", "tcp"],
+                capture_output=True, text=True, timeout=5, check=False,
+            ).stdout
+            for line in netstat_out.splitlines():
+                if "LISTENING" in line and ":8080" in line:
+                    m = re.search(r"(\d+)\s*$", line.strip())
+                    if m:
+                        pid_after = int(m.group(1))
+                        break
+        except Exception:
+            pass
+        try:
+            r = await _http.get("/v1/models", timeout=5.0)
+            if r.status_code == 200:
+                models_count = len(r.json().get("data", []))
+        except Exception:
+            pass
+
+    # 5) emit a signal so the rest of the system can observe the restart.
+    telemetry.bus().emit(telemetry.Topics.MODEL_EVICTED, {
+        "event": "llama_restart",
+        "pid_before": pid_before,
+        "pid_after": pid_after,
+        "elapsed_s": elapsed_s,
+        "llama_ready": health["ready"],
+        "models_count": models_count,
+    })
+
+    return {
+        "status": "ok" if health["ready"] else "degraded",
+        "supervisor_exit": supervisor_exit,
+        "elapsed_s": elapsed_s,
+        "pid_before": pid_before,
+        "pid_after": pid_after,
+        "llama_ready": health["ready"],
+        "llama_health_wait_elapsed_s": health["elapsed_s"],
+        "models_count": models_count,
+        "supervisor_stdout_tail": supervisor_stdout.strip().splitlines()[-6:],
+    }
 
 
 # ---- /v1/models/warmup ----
@@ -1208,6 +1453,26 @@ async def chat_completions(request: Request) -> Any:
     """
     body = await request.json()
     is_stream = bool(body.get("stream"))
+
+    # FIX 2026-06-18: model name normalisation for llama-server router.
+    # llama-server's router mode registers each .gguf under TWO ids:
+    #   - the alias (filename without .gguf suffix)  → responds to chat
+    #   - the bare filename with .gguf suffix          → only resolves in
+    #                                                  /models/load, not /v1/chat/completions
+    # If webui passes "Qwen3-8B-Q4_K_M.gguf" to chat, llama-server
+    # returns 400 "model not found" with an empty stream. Strip the
+    # .gguf before forwarding chat. The dedup layer in /v1/models
+    # still surfaces the .gguf form to webui so the dropdown shows
+    # both options; this strip is the bridge-time safety net.
+    raw_model = body.get("model", "")
+    if raw_model:
+        normalised = _normalize_model_id(raw_model)
+        if normalised != raw_model:
+            logger.info(
+                "chat: model %r → %r (strip .gguf for llama-server router)",
+                raw_model, normalised,
+            )
+            body["model"] = normalised
 
     # ---- Smart routing ----
     routing_override = request.headers.get("X-Hermes-Routing", "").strip().lower()

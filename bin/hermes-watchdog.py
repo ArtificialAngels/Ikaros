@@ -81,16 +81,49 @@ def _resolve_hermes_root(here: Path) -> Path:
 HERMES_ROOT = _resolve_hermes_root(HERE)
 MODULES_DIR = HERMES_ROOT / "modules"
 LOG_DIR = HERMES_ROOT / "data" / "logs"
+# HERMES_HOME is the user-specific hermes-agent state dir (skills,
+# memory, sessions, cron jobs). It is *not* a sibling of LOG_DIR — it
+# lives one level deeper under data/. Previously we used
+# LOG_DIR.parent/cron/jobs.json which is the wrong path (LOG_DIR.parent
+# is data/, not data/hermes-agent/). Constants here so both
+# _read_device_info and _service_status_snapshot agree.
+HERMES_HOME = HERMES_ROOT / "data" / "hermes-agent"
 PYTHON_EXE = HERMES_ROOT / "portable-python" / "python.exe"
 SUPERVISOR = HERMES_ROOT / "bin" / "hermes-supervisor.py"
 
 PID_FILE = LOG_DIR / "hermes-watchdog.pid"
+# FIX 2026-06-18: persistent heartbeat log. watchdog writes one line per
+# tick / state-change / restart / system-change to this file. Survives
+# across watchdog restarts because it's append-only JSONL. We never
+# delete or rotate it; the user inspects it to see "when was I asleep
+# / when did the drive change / when did service X die".
+# Each line is independently parseable (one JSON object per line).
+HEARTBEAT_FILE = LOG_DIR / "icarus-heartbeat.jsonl"
 
 # Watchdog cycle (seconds). Too short wastes CPU; too long delays restart.
 INTERVAL_S = 10
 # Minimum gap between two restarts of the same service (prevents tight loops
 # if start.ps1 itself is broken).
 RESTART_COOLDOWN_S = 30
+# Heartbeat write throttle. Service snapshots are 1/tick (10s) by default;
+# that's noisy. We snapshot at a slower rate and emit lightweight "tick"
+# markers in between. The full service_status line is emitted every
+# SNAPSHOT_EVERY_TICKS ticks (i.e. every 60s at 10s interval).
+SNAPSHOT_EVERY_TICKS = 6
+# System-change probe: every N ticks (slow), re-run `bin/hermes-root.bat
+# init` and diff against last seen fingerprint. If anything changed
+# (user/host/bios_uuid/drive/serial), emit a system_change event.
+SYSTEM_PROBE_EVERY_TICKS = 30  # every ~5min
+# Memory ingest: every N ticks, run bin/icarus-remember.py to write
+# today's narrative entry into data/hermes-agent/memories/icarus/.
+# This is the "memory core" ingest — converts the structured heartbeat
+# into a human-readable paragraph that the agent can re-read later.
+# Default ~6h (6h * 360 ticks) so we get 4 entries/day without flooding.
+MEMORY_INGEST_EVERY_TICKS = 2160
+# Heartbeat archival: every N ticks, run bin/icarus-heartbeat-archive.py
+# to bound the log file size. At 10s tick that's every ~24h. Old logs
+# (60d-365d) get noisy events dropped; logs > 1y are deleted.
+ARCHIVE_EVERY_TICKS = 8640  # ~24h at 10s/tick
 
 # FIX 2026-06-17: when launcher is mid-update it writes ~/.hermes-web-ui/upgrading.lock.
 # Webui :8649 will go down briefly (npm renames its dir → process exits) and
@@ -215,6 +248,211 @@ def release_singleton() -> None:
 
 
 # ============================================================
+# Heartbeat (FIX 2026-06-18)
+# ============================================================
+
+
+def _hb_event(event: str, **fields) -> None:
+    """Append a single JSONL line to the heartbeat log. Best-effort; never raises."""
+    import json as _json
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, **fields}
+    try:
+        HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with HEARTBEAT_FILE.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        # Heartbeat is observability, not load-bearing. Never crash the
+        # watchdog over a log write failure (e.g. disk full, EOL issue).
+        sys.stderr.write(f"[watchdog] heartbeat write failed: {e}\n")
+
+
+def _read_device_info() -> dict:
+    """Read hermes-root.py device-info. Returns empty dict on failure.
+
+    Output format is a single space-separated line of key=value pairs:
+        "host=LEGION9 user=PZS0X uuid=FC0BC32E-... serial=PF36EHVY os=Windows 11 (build 10.0.26200)"
+    Note: `os=` value contains spaces ("Windows 11 (build 10.0.26200)") so
+    we cannot split on '=' alone. We split on whitespace, then take the
+    first '=' to separate key from value. The 'os' key is special-cased
+    to join all remaining tokens back into the value.
+    """
+    try:
+        r = subprocess.run(
+            [str(PYTHON_EXE), str(HERE.parent / "hermes-root.py"), "device-info"],
+            capture_output=True, text=True, timeout=5,
+        )
+        out: dict = {}
+        # Walk tokens. The "os" key consumes every remaining token.
+        # Device-info output looks like:
+        #   host=LEGION9 user=PZS0X uuid=... serial=PF36EHVY os=Windows 11 (build 10.0.26200)
+        # So "os" is the LAST key in the line. We split on whitespace,
+        # partition each token on '=', and once we hit key=='os' we
+        # join the remaining tokens (which together form the value
+        # "Windows 11 (build 10.0.26200)").
+        tokens = r.stdout.split()
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if "=" not in tok:
+                i += 1
+                continue
+            key, _, val = tok.partition("=")
+            key = key.strip()
+            if key == "os":
+                # Greedily consume remaining tokens for the os value.
+                rest: list[str] = []
+                for t in tokens[i:]:
+                    if "=" in t:
+                        rest.append(t.partition("=")[2])
+                    else:
+                        # Continuation token (e.g. "11" or "(build 10.0.26200)"
+                        # when device-info was already partitioned on '=').
+                        # We only include it if the previous token *also*
+                        # came from an os= ... line — but tokens above
+                        # already are space-split, so the continuation is
+                        # just plain text. Append verbatim to preserve.
+                        if rest:
+                            rest.append(t)
+                out["os"] = " ".join(rest)
+                break
+            else:
+                out[key] = val
+            i += 1
+        return out
+    except Exception:
+        return {}
+
+
+def _service_status_snapshot() -> dict:
+    """Probe all service ports + check gateway/cron liveness.
+
+    Gateway and cron are *not* standalone port services. Gateway runs as
+    `python -m hermes gateway run`; the cron scheduler is a module
+    inside the gateway process. So we check by scanning the running
+    process list for their command lines (cheap, ~50ms on Windows).
+    """
+    mods = discover_modules()
+    services = {}
+    for name, m in mods.items():
+        if m.type == "service" and m.port:
+            services[name] = {
+                "port": m.port,
+                "up": check_port(m.host, m.port, timeout_s=0.8),
+            }
+
+    # Scan process list once for both gateway and cron (both are inside
+    # the same `hermes gateway run` process; we report them as up when
+    # the gateway process is alive, since killing gateway would kill
+    # cron with it). This replaces the old "is pid_file present" check
+    # which was wrong (no pid file is ever written for gateway).
+    try:
+        r = subprocess.run(
+            ["wmic", "process", "where",
+             "name='python.exe'", "get", "processid,commandline", "/format:list"],
+            capture_output=True, text=True, timeout=4,
+        )
+        text = r.stdout
+    except Exception:
+        text = ""
+    gateway_alive = "hermes gateway run" in text
+    gateway_pid = None
+    # Pull the gateway pid for diagnostics. wmic /format:list emits
+    # CommandLine=... BEFORE ProcessId=... (verified), so the pattern
+    # is: match "hermes gateway run" then look at the FOLLOWING
+    # ProcessId=... (skip over other fields in between).
+    import re as _re
+    m = _re.search(
+        r"hermes gateway run.*?ProcessId=(\d+)",
+        text, _re.DOTALL,
+    )
+    if m:
+        gateway_pid = int(m.group(1))
+    services["gateway"] = {"up": gateway_alive, "pid": gateway_pid}
+    # Cron runs inside gateway. Report as "up" iff gateway is up AND
+    # jobs.json is present at the canonical HERMES_HOME/cron path.
+    cron_jobs = HERMES_HOME / "cron" / "jobs.json"
+    services["cron"] = {
+        "up": gateway_alive and cron_jobs.is_file(),
+        "jobs_file": str(cron_jobs) if cron_jobs.is_file() else None,
+    }
+    return services
+
+
+def _detect_system_change(prev: dict | None) -> tuple[dict, list[str]]:
+    """Re-probe device info. Returns (current_dict, list_of_changed_fields)."""
+    cur = _read_device_info()
+    changed: list[str] = []
+    if prev:
+        for k, v in cur.items():
+            if prev.get(k) != v:
+                changed.append(k)
+    return cur, changed
+
+
+def _run_archive() -> bool:
+    """Run icarus-heartbeat-archive.py to bound log size. Returns True
+    if it actually wrote (i.e. records were dropped). Watchdog invokes
+    this every ARCHIVE_EVERY_TICKS ticks (default ~24h). Failures are
+    non-fatal: archive logs its own errors and watchdog keeps going.
+    """
+    script = HERE.parent / "icarus-heartbeat-archive.py"
+    if not script.is_file():
+        return False
+    try:
+        before = HEARTBEAT_FILE.stat().st_size if HEARTBEAT_FILE.is_file() else 0
+        r = subprocess.run(
+            [str(PYTHON_EXE), str(script), "--json"],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(HERMES_ROOT),
+        )
+        if r.returncode != 0:
+            sys.stderr.write(f"[watchdog] archive failed: rc={r.returncode} {r.stderr[:200]}\n")
+            return False
+        after = HEARTBEAT_FILE.stat().st_size if HEARTBEAT_FILE.is_file() else 0
+        try:
+            info = json.loads(r.stdout)
+            counts = info.get("counts", {})
+            dropped = (counts.get("dropped_noisy_old", 0)
+                       + counts.get("dropped_too_old", 0))
+            _hb_event("archive", dropped=dropped,
+                      bytes_before=before, bytes_after=after)
+        except Exception:
+            pass
+        return dropped > 0
+    except Exception as e:
+        sys.stderr.write(f"[watchdog] archive error: {e}\n")
+        return False
+
+
+def _run_memory_ingest() -> bool:
+    """Run icarus-remember.py to write today's narrative entry to
+    data/hermes-agent/memories/icarus/YYYY-MM-DD.md. This is the
+    "memory core" ingest — converts structured heartbeat into
+    human-readable text the agent can re-read. Runs every
+    MEMORY_INGEST_EVERY_TICKS ticks (~6h by default).
+    """
+    script = HERE.parent / "icarus-remember.py"
+    if not script.is_file():
+        return False
+    try:
+        r = subprocess.run(
+            [str(PYTHON_EXE), str(script)],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(HERMES_ROOT),
+        )
+        if r.returncode not in (0, 1):
+            # 0 = success, 1 = no records (acceptable on a fresh day)
+            sys.stderr.write(
+                f"[watchdog] memory-ingest failed: rc={r.returncode} {r.stderr[:200]}\n"
+            )
+            return False
+        return r.returncode == 0
+    except Exception as e:
+        sys.stderr.write(f"[watchdog] memory-ingest error: {e}\n")
+        return False
+
+
+# ============================================================
 # Restart service
 # ============================================================
 
@@ -259,17 +497,38 @@ def run() -> int:
     if not claim_singleton():
         return 0
 
+    started_at = time.time()
     print(f"[watchdog] started (pid {os.getpid()})", flush=True)
     print(f"[watchdog] interval: {INTERVAL_S}s  cooldown: {RESTART_COOLDOWN_S}s",
           flush=True)
     print(f"[watchdog] supervising: {HERMES_ROOT}", flush=True)
 
+    # Heartbeat: emit wake event with full device fingerprint on startup.
+    # This is the "what machine am I running on" anchor for the heartbeat
+    # log. Also captures the watchdog's own pid and the supervising
+    # HERMES_ROOT, so the user can tell watchdog instances apart.
+    boot_info = _read_device_info()
+    _hb_event(
+        "wake",
+        watchdog_pid=os.getpid(),
+        hermes_root=str(HERMES_ROOT),
+        **boot_info,
+    )
+    # last-known device fingerprint, for system_change diff
+    last_device_info = boot_info
+    # last-known service state, to detect UP->DOWN transitions without
+    # spamming the log (DOWN->UP emits a restart event separately).
+    last_svc_state: dict[str, bool] = {}
+
     # name -> timestamp of last restart (for cooldown)
     last_restart: Dict[str, float] = {}
 
+    tick_count = 0
     try:
         while True:
             time.sleep(INTERVAL_S)
+            tick_count += 1
+
             # FIX 2026-06-17: while launcher is mid-update, skip webui checks.
             # npm install renames the webui dir → its process dies → port
             # goes down. Restarting the old webui at that moment EBUSYs npm.
@@ -284,13 +543,65 @@ def run() -> int:
             else:
                 run._upgrade_skip_announced = False
 
+            # Lightweight tick heartbeat (every cycle). Cheap; the file grows
+            # at ~6 lines/minute which is fine for human inspection.
+            _hb_event("tick", watchdog_pid=os.getpid(),
+                      uptime_s=int(time.time() - started_at),
+                      tick=tick_count)
+
+            # Snapshot: every SNAPSHOT_EVERY_TICKS ticks (60s) we record the
+            # full service state. This is the user's primary "what was
+            # running" view; ticks are just liveness.
+            snapshot = None
+            if tick_count % SNAPSHOT_EVERY_TICKS == 0:
+                snapshot = _service_status_snapshot()
+                _hb_event("service_status", services=snapshot)
+
+            # System-change probe: every SYSTEM_PROBE_EVERY_TICKS ticks
+            # (~5 min) re-run device-info and diff. Emits system_change
+            # events the first time drive/user/host/uuid changes. This
+            # is how watchdog answers "what machine am I on right now"
+            # without the user having to run bin/hermes-root.bat init.
+            if tick_count % SYSTEM_PROBE_EVERY_TICKS == 0:
+                cur, changed = _detect_system_change(last_device_info)
+                if changed:
+                    _hb_event("system_change",
+                              changed=changed,
+                              prev={k: last_device_info.get(k) for k in changed},
+                              cur={k: cur.get(k) for k in changed})
+                last_device_info = cur
+
+            # Heartbeat archival: every ARCHIVE_EVERY_TICKS ticks (~24h)
+            # run the archiver. The archiver is a no-op if there's
+            # nothing old enough to compress/delete, so the cost is
+            # one subprocess per day.
+            if tick_count % ARCHIVE_EVERY_TICKS == 0:
+                _run_archive()
+
+            # Memory core ingest: every MEMORY_INGEST_EVERY_TICKS ticks
+            # (~6h) write today's narrative entry to
+            # data/hermes-agent/memories/icarus/YYYY-MM-DD.md. This
+            # converts the structured heartbeat into human-readable
+            # text the agent can re-read on session start.
+            if tick_count % MEMORY_INGEST_EVERY_TICKS == 0:
+                _run_memory_ingest()
+
+            # Per-service port check + restart on DOWN.
             modules = discover_modules()
             for name, m in modules.items():
                 if m.type != "service" or not m.port:
                     continue
                 if name in skip_modules:
                     continue
-                if check_port(m.host, m.port, timeout_s=1.0):
+                port_up = check_port(m.host, m.port, timeout_s=1.0)
+                if snapshot is None and name in last_svc_state:
+                    # Edge-triggered DOWN detection: if last tick saw it
+                    # UP but this tick sees it DOWN, log immediately.
+                    if last_svc_state[name] and not port_up:
+                        _hb_event("service_down", service=name,
+                                  port=m.port)
+                last_svc_state[name] = port_up
+                if port_up:
                     continue
                 # cooldown: don't restart the same service repeatedly in a short
                 # window (likely start.ps1 itself is broken, not transient crash)
@@ -300,14 +611,27 @@ def run() -> int:
                 print(f"[watchdog] {name} (:{m.port}) DOWN — restarting",
                       flush=True)
                 last_restart[name] = now
-                if restart_service(name):
+                ok = restart_service(name)
+                _hb_event("restart", service=name, port=m.port, ok=ok)
+                if ok:
                     print(f"[watchdog] {name} restarted OK", flush=True)
                 else:
                     print(f"[watchdog] {name} restart FAILED (see log)",
                           flush=True)
     except KeyboardInterrupt:
+        _hb_event("sleep", reason="KeyboardInterrupt",
+                  uptime_s=int(time.time() - started_at))
         print("[watchdog] KeyboardInterrupt — exiting", flush=True)
     finally:
+        # Record sleep event BEFORE releasing the PID file. This way the
+        # heartbeat log always has a paired wake/sleep entry per watchdog
+        # lifetime, even on crash (the 'finally' block still runs).
+        try:
+            _hb_event("sleep_final",
+                      reason="exit",
+                      uptime_s=int(time.time() - started_at))
+        except Exception:
+            pass
         release_singleton()
     return 0
 

@@ -47,6 +47,20 @@ DEFAULT_STATE_DB = "data/hermes-agent/state.db"
 DEFAULT_UPSTREAM_TIMEOUT = 60.0
 # Path we intercept
 USAGE_STATS_PATH = "/api/hermes/usage/stats"
+# Local llama-server restart path (2026-06-18, F方案). WebUI's
+# `/api/hermes/provider-models/cache/refresh` only refreshes cloud
+# provider catalogs (see webui dist/server/index.js:1035). It does NOT
+# re-scan local `data/models/*.gguf`. To make the WebUI's model dropdown
+# reflect disk changes, we intercept this path and proxy to the bridge
+# (which shells out to the supervisor).
+LLAMA_RESTART_PATH = "/api/hermes/llama/restart"
+DEFAULT_BRIDGE_URL = "http://127.0.0.1:7860"
+# WebUI path → bridge path. The SPA uses /api/hermes/* namespacing; the
+# bridge uses /v1/* (its OpenAI-compatible API). Map them explicitly so
+# future endpoints can be added without rewriting _proxy_to_bridge.
+WEBUI_TO_BRIDGE_PATH: dict[str, str] = {
+    "/api/hermes/llama/restart": "/v1/llama/restart",
+}
 # Plugin management paths (new in 2026-06-17: E方案 — break hermes-web-ui's
 # "read-only" stance so the UI can actually manage plugins, with safety:
 #   - only listen on 127.0.0.1 (external CSRF impossible)
@@ -306,6 +320,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # Read body first, then route to handler. The handler does NOT
             # forward the request to upstream — it shells out to hermes CLI.
             self._handle_plugin_with_body()
+        elif self.path == LLAMA_RESTART_PATH:
+            # Proxy to bridge /v1/llama/restart (which calls the supervisor).
+            # WebUI's built-in refresh-cache button only refreshes cloud
+            # providers; this is the bridge-level escape hatch for local.
+            self._proxy_to_bridge()
         else:
             self._proxy_pass()
 
@@ -322,7 +341,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # CORS preflight: forward to upstream (or short-circuit OK).
         self._proxy_pass()
 
-    # ---------- Handlers ----------
     def _handle_usage_stats(self) -> None:
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
@@ -555,14 +573,104 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(resp_body)
 
+    def _proxy_to_bridge(self) -> None:
+        """Forward the current request to the bridge (no shell, list args).
 
-def make_handler(upstream_base: str, state_db: Path, upstream_timeout: float) -> type[ProxyHandler]:
+        The original WebUI proxy_pass forwards to the webui upstream. This
+        method is for paths that need to reach the bridge directly (e.g.
+        llama restart). Mirrors `_proxy_pass` for response handling so
+        clients see the same wire format they'd get from the bridge.
+
+        Path mapping
+        ------------
+        WebUI's SPA fetches `/api/hermes/llama/restart` (matches the
+        convention of `/api/hermes/*` for app-level endpoints). The bridge
+        exposes the same handler at `/v1/llama/restart` (matches its
+        OpenAI-compatible API). We map them explicitly via WEBUI_TO_BRIDGE_PATH.
+        """
+        # Map webui paths → bridge paths. Default: strip /api/hermes prefix.
+        bridge_path = WEBUI_TO_BRIDGE_PATH.get(self.path)
+        if bridge_path is None:
+            # Fall back: strip the /api/hermes prefix and forward the rest.
+            for prefix in ("/api/hermes", "/api/hermes/"):
+                if self.path == prefix.rstrip("/"):
+                    bridge_path = "/"
+                    break
+                if self.path.startswith(prefix):
+                    bridge_path = self.path[len(prefix.rstrip("/")):]
+                    if not bridge_path.startswith("/"):
+                        bridge_path = "/" + bridge_path
+                    break
+            else:
+                bridge_path = self.path
+        url = self.bridge_url + bridge_path
+        body: bytes | None = None
+        if "Content-Length" in self.headers:
+            try:
+                clen = int(self.headers["Content-Length"])
+                if clen > 0:
+                    body = self.rfile.read(clen)
+            except (TypeError, ValueError):
+                body = None
+
+        fwd_headers: dict[str, str] = {}
+        skip = {
+            "host", "content-length", "connection", "keep-alive",
+            "proxy-authenticate", "proxy-authorization", "te", "trailers",
+            "transfer-encoding", "upgrade",
+        }
+        for k, v in self.headers.items():
+            lk = k.lower()
+            if lk in skip:
+                continue
+            fwd_headers[k] = v
+
+        req = urllib.request.Request(url, data=body, method=self.command, headers=fwd_headers)
+        try:
+            with urllib.request.urlopen(req, timeout=self.upstream_timeout) as resp:
+                status = resp.status
+                resp_body = resp.read()
+                resp_headers = [(k, v) for k, v in resp.getheaders() if k.lower() not in skip]
+        except urllib.error.HTTPError as e:
+            try:
+                resp_body = e.read()
+            except Exception:
+                resp_body = str(e).encode("utf-8")
+            status = e.code
+            resp_headers = [("Content-Type", "text/plain; charset=utf-8")]
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            msg = f"bridge unavailable: {type(e).__name__}: {e}".encode("utf-8")
+            self.send_response(HTTPStatus.BAD_GATEWAY)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(msg)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+
+        self.send_response(status)
+        for k, v in resp_headers:
+            self.send_header(k, v)
+        if not any(k.lower() == "content-length" for k, _ in resp_headers):
+            self.send_header("Content-Length", str(len(resp_body)))
+        # Bridge doesn't set CORS, but the WebUI SPA at :8649 may fetch
+        # this via fetch() from :8648 (same origin, so no CORS needed).
+        # Add an open CORS header just in case a tool hits it cross-origin.
+        if not any(k.lower() == "access-control-allow-origin" for k, _ in resp_headers):
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(resp_body)
+
+
+def make_handler(upstream_base: str, state_db: Path, upstream_timeout: float,
+                 bridge_url: str = DEFAULT_BRIDGE_URL) -> type[ProxyHandler]:
     """Factory to inject config into the handler class."""
     class _Bound(ProxyHandler):
         pass
     _Bound.upstream_base = upstream_base
     _Bound.state_db = state_db
     _Bound.upstream_timeout = upstream_timeout
+    _Bound.bridge_url = bridge_url  # type: ignore[attr-defined]
     return _Bound
 
 
@@ -573,6 +681,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--upstream", default=DEFAULT_UPSTREAM,
                         help="Upstream base URL (the npm package webui)")
+    parser.add_argument("--bridge", default=DEFAULT_BRIDGE_URL,
+                        help="Bridge base URL (for paths like /api/hermes/llama/restart)")
     parser.add_argument("--state-db", default=DEFAULT_STATE_DB,
                         help="Path to state.db (relative to HERMES_ROOT if not absolute)")
     parser.add_argument("--upstream-timeout", type=float, default=DEFAULT_UPSTREAM_TIMEOUT)
@@ -588,7 +698,7 @@ def main() -> int:
         else:
             state_db = state_db.resolve()
 
-    handler_cls = make_handler(args.upstream, state_db, args.upstream_timeout)
+    handler_cls = make_handler(args.upstream, state_db, args.upstream_timeout, args.bridge)
     httpd = ThreadingHTTPServer((args.bind, args.port), handler_cls)
 
     sys.stderr.write(
