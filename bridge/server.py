@@ -2173,6 +2173,143 @@ async def agent_run(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"AIAgent error: {e}")
 
 
+# ---- Icarus memory endpoints (plan 3: 跨会话记忆检索) ----
+# Three endpoints designed for "agent wakes up, asks: what did I do last
+# time?". The third (awake-briefing) is the one the agent calls
+# automatically at the start of each new session.
+
+_ICARUS_MEMORY_DIR = Path(
+    os.environ.get(
+        "ICARUS_MEMORY_DIR",
+        str(Path(__file__).resolve().parent.parent / "data" / "hermes-agent" / "memories" / "icarus"),
+    )
+)
+
+
+def _read_memory_files(max_files: int = 7) -> list[dict[str, Any]]:
+    """Read the most recent N daily notes (sorted newest-first).
+    Returns a list of {date, path, headline, body} dicts.
+    Skips the dojo-*.md raw analysis files (those are evidence; the
+    agent reads the narrative notes instead)."""
+    if not _ICARUS_MEMORY_DIR.is_dir():
+        return []
+    files = sorted(
+        [p for p in _ICARUS_MEMORY_DIR.glob("*.md")
+         if not p.name.startswith("dojo-")],
+        key=lambda p: p.name,
+        reverse=True,
+    )[:max_files]
+    out: list[dict[str, Any]] = []
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        # Extract headline = first non-empty line after the # heading
+        lines = text.splitlines()
+        headline = ""
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                headline = stripped[:160]
+                break
+        out.append({
+            "date": p.stem,  # YYYY-MM-DD
+            "path": str(p.relative_to(Path(__file__).resolve().parent.parent)),
+            "headline": headline,
+            "size_bytes": len(text),
+        })
+    return out
+
+
+@app.get("/v1/icarus/last-session")
+async def icarus_last_session() -> dict[str, Any]:
+    """Return the most recent Icarus daily note (full body). Useful for
+    the agent to load on session start to remember what happened yesterday."""
+    notes = _read_memory_files(1)
+    if not notes:
+        return {"found": False, "reason": "no memory files in _ICARUS_MEMORY_DIR"}
+    latest = notes[0]
+    full = (_ICARUS_MEMORY_DIR / f"{latest['date']}.md").read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    return {
+        "found": True,
+        "date": latest["date"],
+        "path": latest["path"],
+        "body": full,
+    }
+
+
+@app.get("/v1/icarus/memories")
+async def icarus_memories(days: int = 7) -> dict[str, Any]:
+    """Return an index of the most recent N daily notes (headlines only,
+    not full bodies — to keep the response small for the SPA sidebar)."""
+    notes = _read_memory_files(max(1, min(days, 90)))
+    return {
+        "count": len(notes),
+        "memory_dir": str(_ICARUS_MEMORY_DIR.relative_to(
+            Path(__file__).resolve().parent.parent
+        )),
+        "notes": notes,
+    }
+
+
+@app.get("/v1/icarus/awake-briefing")
+async def icarus_awake_briefing() -> dict[str, Any]:
+    """One-shot briefing for a freshly-awakened agent session. Composes:
+      - Last 1 daily note headline
+      - Last 3 daily note headlines (recency window)
+      - Heartbeat summary: tick count + last 5 events since wake
+      - Today's todo status (if any)
+    Designed to be cheap (no model calls, all in-process reads)."""
+    notes = _read_memory_files(max_files=3)
+    last_full = notes[0] if notes else None
+    last_full_body = ""
+    if last_full:
+        try:
+            last_full_body = (
+                _ICARUS_MEMORY_DIR / f"{last_full['date']}.md"
+            ).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+
+    # Heartbeat summary: last 5 events for the wake sequence
+    heartbeat_path = Path(__file__).resolve().parent.parent / "data" / "logs" / "icarus-heartbeat.jsonl"
+    recent_events: list[dict[str, Any]] = []
+    if heartbeat_path.is_file():
+        try:
+            lines = heartbeat_path.read_text(
+                encoding="utf-8", errors="ignore"
+            ).strip().splitlines()[-5:]
+            for line in lines:
+                try:
+                    ev = json.loads(line)
+                    recent_events.append({
+                        "event": ev.get("event"),
+                        "ts": ev.get("ts"),
+                    })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return {
+        "last_session": {
+            "date": last_full["date"] if last_full else None,
+            "headline": last_full["headline"] if last_full else None,
+            "body_excerpt": last_full_body[:2000] if last_full_body else "",
+        },
+        "recent_three_dates": [n["date"] for n in notes],
+        "recent_three_headlines": [n["headline"] for n in notes],
+        "heartbeat_recent": recent_events,
+        "current_ts": time.time(),
+        "memory_dir": str(_ICARUS_MEMORY_DIR.relative_to(
+            Path(__file__).resolve().parent.parent
+        )),
+    }
+
+
 # ---- Lifecycle ----
 
 

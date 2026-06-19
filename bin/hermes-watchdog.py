@@ -122,13 +122,18 @@ SYSTEM_PROBE_EVERY_TICKS = 30  # every ~5min
 MEMORY_INGEST_EVERY_TICKS = 2160
 # Heartbeat archival: every N ticks, run bin/icarus-heartbeat-archive.py
 # to bound the log file size. At 10s tick that's every ~24h. Old logs
-# (60d-365d) get noisy events dropped; logs > 1y are deleted.
+# are compressed (FRESHFUZZY) or dropped (DROP). Failure mode: silent.
 ARCHIVE_EVERY_TICKS = 8640  # ~24h at 10s/tick
 # Liveness probe: every N ticks, call GET :7860/v1/liveness and write
 # the verdict (ok / degraded / dead) into the heartbeat. 4 ticks =
-# 40s — fast enough to catch outages, slow enough that 5 parallel HTTP
-# probes (local + 3 clouds + anthropic) don't dominate the cycle.
+# 40s with default 10s tick. Per plan G (liveness 守护).
 LIVENESS_PROBE_EVERY_TICKS = 4
+# Dojo daily loop (plan 2): every N ticks run bin/icarus-dojo-daily.py
+# which calls monitor.py → tracker.py save → writes a daily note.
+# Always read-only (no auto-apply). At 10s tick, 8640 = ~24h. Run it
+# shortly after the archive tick so the daily note isn't shadowed by
+# the archive summary.
+DOJO_DAILY_EVERY_TICKS = 8640  # ~24h at 10s/tick
 # Liveness dead-threshold: after N consecutive "dead" verdicts, emit
 # a special alert event (so icarus-remember surfaces it in the daily
 # narrative as "I lost all providers for X minutes").
@@ -494,6 +499,37 @@ def _run_memory_ingest() -> bool:
         return False
 
 
+def _run_dojo_daily() -> bool:
+    """Run icarus-dojo-daily.py (plan 2). Always read-only: never
+    auto-applies skill fixes. Emits a heartbeat event so Icarus'
+    timeline sees the dojo tick. Failures are non-fatal.
+    """
+    script = HERE.parent / "icarus-dojo-daily.py"
+    if not script.is_file():
+        return False
+    try:
+        r = subprocess.run(
+            [str(PYTHON_EXE), str(script)],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(HERMES_ROOT),
+        )
+        log_path = LOG_DIR / "hermes-watchdog.log"
+        with log_path.open("a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+            f.write(f"\n[{ts}] dojo-daily rc={r.returncode}\n")
+            if r.stdout:
+                f.write("--- stdout ---\n" + r.stdout + "\n")
+            if r.stderr:
+                f.write("--- stderr ---\n" + r.stderr + "\n")
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("[watchdog] dojo-daily timeout (120s)\n")
+        return False
+    except Exception as e:
+        sys.stderr.write(f"[watchdog] dojo-daily error: {e}\n")
+        return False
+
+
 # ============================================================
 # Restart service
 # ============================================================
@@ -556,6 +592,28 @@ def run() -> int:
         hermes_root=str(HERMES_ROOT),
         **boot_info,
     )
+    # Plan 3: emit an awake-briefing on every wake so the heartbeat has
+    # a "what did I do last" snapshot at the start of every session.
+    # The actual memory fetch is in bridge (via /v1/icarus/awake-briefing).
+    # Here we just trigger it; failures are silent (the bridge may not
+    # be up yet on a cold start).
+    try:
+        import urllib.request as _url
+        with _url.urlopen("http://127.0.0.1:7860/v1/icarus/awake-briefing",
+                          timeout=4) as _r:
+            _brief = json.loads(_r.read().decode("utf-8"))
+            _hb_event(
+                "awake_briefing",
+                last_session_date=_brief.get("last_session", {}).get("date"),
+                last_session_headline=(
+                    _brief.get("last_session", {}).get("headline") or ""
+                )[:160],
+                recent_count=len(_brief.get("recent_three_dates", [])),
+            )
+    except Exception:
+        # Bridge not up yet — skip silently; the next tick at +10s will
+        # still find the same memory. Don't spam logs.
+        pass
     # last-known device fingerprint, for system_change diff
     last_device_info = boot_info
     # last-known service state, to detect UP->DOWN transitions without
@@ -656,6 +714,13 @@ def run() -> int:
             # text the agent can re-read on session start.
             if tick_count % MEMORY_INGEST_EVERY_TICKS == 0:
                 _run_memory_ingest()
+
+            # Dojo daily loop (plan 2): every DOJO_DAILY_EVERY_TICKS ticks
+            # (~24h) run icarus-dojo-daily.py → monitor.py + tracker save
+            # + daily note. Read-only: never auto-applies skill fixes.
+            # The dojo-daily script emits its own heartbeat event.
+            if tick_count % DOJO_DAILY_EVERY_TICKS == 0:
+                _run_dojo_daily()
 
             # Per-service port check + restart on DOWN.
             modules = discover_modules()
