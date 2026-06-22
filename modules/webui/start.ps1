@@ -69,6 +69,16 @@ $psi.RedirectStandardInput  = $false
 $psi.RedirectStandardOutput = $false
 $psi.RedirectStandardError  = $false
 
+# Pin PATH explicitly so the webui process — and any detached restart children
+# it spawns after a self-update (hermes-web-ui.mjs restart --port) — can find
+# `hermes` (portable-python\Scripts) and `npm`/`node` (runtime\node23).
+# Without this, the detached restart inherits whatever PATH the OS gave the
+# supervisor, which typically lacks portable-python\Scripts → ENOENT when
+# the new server tries `spawn hermes gateway run --replace`.
+$pythonScripts  = Join-Path $HERMES_ROOT 'portable-python\Scripts'
+$inheritedPath  = $psi.EnvironmentVariables['PATH']
+$psi.EnvironmentVariables['PATH'] = "$NODE_BIN_DIR;$pythonScripts;$inheritedPath"
+
 $psi.EnvironmentVariables['PORT']                                    = "$Port"
 $psi.EnvironmentVariables['HERMES_WEB_UI_HOME']                      = $WebuiHome
 $psi.EnvironmentVariables['HERMES_HOME']                             = $HermesHome

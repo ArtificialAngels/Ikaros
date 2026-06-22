@@ -11,7 +11,7 @@ Retains only the two submodules with real consumers:
   HuggingFace / GitHub URL rewriting for slow-network users. Used by
   ``modules/env_bootstrap/gpu_detect.py`` when installing pip packages.
 
-Everything else (download manager, manager CLI, gopeed client) was
+Everything else (download manager, manager CLI) was
 removed in 2026-06-15 — llama-server's router mode natively covers
 model listing, loading, LRU eviction, and per-model presets.
 """

@@ -25,8 +25,7 @@
           "llama-server.exe (CPU build)",
           "llama-server-vulkan.exe (AMD / Intel / NVIDIA fallback)",
           "llama-server-impl.dll (shared by all CPU/Vulkan/CUDA builds)",
-          "aria2c.exe (multi-thread downloader)",
-          "gopeed-web.exe (download bridge)"
+          "aria2c.exe (multi-thread downloader)"
         ]
       },
       "runtime_node23": {

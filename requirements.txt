@@ -24,6 +24,7 @@ google-generativeai==0.8.3
 # ---- Embedding & 向量库 ----
 chromadb==0.5.20
 sentence-transformers==3.2.1   # 可选：本地 embedding
+sqlite-vec==0.1.9              # SQLite vector search (hermes-agent 0.17.0+)
 
 # ---- 工具/工具集 ----
 httpx[http2]==0.27.2
@@ -41,6 +42,8 @@ click==8.1.7
 structlog==24.4.0
 loguru==0.7.2
 croniter==6.0.0            # cron schedule calculator (used by hermes.cron)
+concurrent-log-handler==0.9.29  # thread-safe file logging (hermes-agent 0.17.0+)
+portalocker==3.2.0              # file locking (concurrent_log_handler dep)
 
 # ---- 安全 / 加密 ----
 cryptography==43.0.3

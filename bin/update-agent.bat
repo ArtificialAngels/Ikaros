@@ -20,6 +20,19 @@ set "PY=%HERMES_ROOT%\portable-python\python.exe"
 set "UPSTREAM_REPO=NousResearch/hermes-agent"
 set "UPSTREAM_BRANCH=main"
 
+REM ---- Auto-detect system proxy if HTTPS_PROXY is not already set ----
+REM Windows stores proxy in the registry (IE/Edge settings); CLI tools like
+REM aria2c / Python urllib do NOT read it automatically.  We read
+REM it here and export HTTPS_PROXY + HTTP_PROXY so both download tiers
+REM go through the same proxy the browser uses.
+if not defined HTTPS_PROXY ^(
+    for /f "delims=" %%P in ^('powershell -NoProfile -Command "try{$p=(gp 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').ProxyServer; if($p -match 'https?=([^\s;]+)'){$Matches[1]}elseif($p -notmatch '='){$p}}catch{}" 2^>nul'^) do ^(
+        echo   [proxy] Detected system proxy: %%P
+        set "HTTPS_PROXY=%%P"
+        set "HTTP_PROXY=%%P"
+    ^)
+)
+
 REM ---- Read current version from pyproject.toml ----
 set "CURRENT_VERSION=unknown"
 if exist "%AGENT_DIR%\pyproject.toml" (
@@ -65,24 +78,79 @@ if errorlevel 1 (
 )
 
 REM ---- Step 2: Download from GitHub ----
+REM Two-tier fallback:
+REM   1. aria2c  — multi-threaded with proxy support; 300 s timeout.
+REM   2. BITS    — Windows Background Transfer; slowest but most resilient.
+REM
+REM Both respect HTTPS_PROXY (auto-detected from Windows system proxy above).
 set "ZIP_URL=https://github.com/%UPSTREAM_REPO%/archive/refs/heads/%TARGET%.zip"
 set "ZIP_FILE=%TEMP%\hermes-agent-update.zip"
 set "EXTRACT_DIR=%TEMP%\hermes-agent-extract"
 
 echo [2/4] Downloading from GitHub (%TARGET%)...
 echo   URL: %ZIP_URL%
+echo.
 
-REM Try aria2c first (faster), then PowerShell BITS
+if exist "%ZIP_FILE%" del "%ZIP_FILE%" 2>nul
+
+REM --- Method 1: aria2c with 300-second ceiling ---
+set "DL_OK=0"
 if exist "%HERMES_ROOT%\runtime\aria2c.exe" (
-    "%HERMES_ROOT%\runtime\aria2c.exe" -x16 -s16 --console-log-level=error --summary-interval=0 -d "%TEMP%" -o "hermes-agent-update.zip" "%ZIP_URL%" >nul 2>&1
-) else (
-    powershell -NoProfile -Command "try { Start-BitsTransfer -Source '%ZIP_URL%' -Destination '%ZIP_FILE%' -ErrorAction Stop } catch { exit 1 }" >nul 2>&1
-)
-if errorlevel 1 (
-    echo   [FAIL] Download failed. Check network connectivity.
+    echo   [aria2c] Starting ^(timeout: 300s^)...
+    del "%ZIP_FILE%.aria2" 2>nul
+    set "ARIA_PROXY="
+    if defined HTTPS_PROXY set "ARIA_PROXY=--all-proxy=!HTTPS_PROXY!"
+    start /b "" "%HERMES_ROOT%\runtime\aria2c.exe" -x16 -s16 --connect-timeout=30 --lowest-speed-limit=512 !ARIA_PROXY! --console-log-level=error --summary-interval=10 -d "%TEMP%" -o "hermes-agent-update.zip" "%ZIP_URL%"
+    set "ARIA_PID=!ERRORLEVEL!"
+    REM start /b always returns 0; capture real PID via tasklist
+    for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq aria2c.exe" /FO LIST 2^>nul ^| findstr /R "PID:"') do set "ARIA_PID=%%P"
+    set "ARIA_START=0"
+    for /f "tokens=4 delims=]" %%T in ('^<nul set /p^=x ^| find /v "" ^| findstr .') do REM noop
+    REM Use a simple seconds counter via nested loops
+    for /L %%s in ^(1,1,300^) do ^(
+        tasklist /FI "PID eq !ARIA_PID!" 2^>nul | findstr /I "aria2c" ^>nul 2^>^&1
+        if errorlevel 1 ^(
+            REM process exited — check file
+            if exist "%ZIP_FILE%" if not exist "%ZIP_FILE%.aria2" ^(
+                set "DL_OK=1"
+                goto :aria_done
+            ^)
+            REM exited but file incomplete
+            goto :aria_done
+        ^)
+        timeout /t 1 /nobreak ^>nul 2^>^&1
+    ^)
+    REM 300 s elapsed — kill aria2c
+    echo   [aria2c] Timeout after 300s, aborting.
+    taskkill /PID !ARIA_PID! /F ^>nul 2^>^&1
+    del "%ZIP_FILE%" 2>nul
+    del "%ZIP_FILE%.aria2" 2>nul
+) else ^(
+    echo   [aria2c] Not found, skipping.
+^)
+:aria_done
+if "!DL_OK!"=="1" ^(
+    echo   [aria2c] OK
+    goto :download_ok
+^)
+echo   [aria2c] Failed or timed out.
+echo.
+
+REM --- Method 2: PowerShell BITS (last resort) ---
+echo   [BITS] Falling back to Windows BITS transfer...
+powershell -NoProfile -Command "try { Start-BitsTransfer -Source '%ZIP_URL%' -Destination '%ZIP_FILE%' -ErrorAction Stop } catch { Write-Host $_.Exception.Message; exit 1 }"
+if errorlevel 1 ^(
+    echo.
+    echo   [FAIL] All download methods failed.
+    echo          aria2c  : timed out or errored
+    echo          BITS    : transfer failed
+    echo          Check network / proxy settings.
     goto :cleanup
-)
-echo   OK: downloaded to %ZIP_FILE%
+^)
+echo   [BITS] OK
+
+:download_ok
+echo   Downloaded: %ZIP_FILE%
 
 REM ---- Step 3: Extract and replace ----
 echo [3/4] Extracting and replacing hermes-agent/ ...
