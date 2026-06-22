@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import os
 import random
 import re
@@ -2308,6 +2309,248 @@ async def icarus_awake_briefing() -> dict[str, Any]:
             Path(__file__).resolve().parent.parent
         )),
     }
+
+
+
+
+
+# ---- Icarus session recovery (plan: UI 重启对话续接) ----
+# UI 重启导致对话中断的解决方案分 3 部分:
+# 1) /v1/icarus/active-session — 查 webui db 找到最近一个未结束的 session
+# 2) /v1/icarus/session/{id}/tail — 取 session 最近 N 条消息
+# 3) /v1/icarus/session/{id}/resume-context — 生成 system prompt 可注入新对话
+#
+# SPA 启动后会自动调 #1, 弹个 toast 让用户决定是否 resume
+
+_WEBUI_DB_PATH = Path(os.environ.get(
+    "HERMES_WEBUI_DB_PATH",
+    str(Path(__file__).resolve().parent.parent / "data" / "webui" / "hermes-web-ui.db"),
+))
+
+
+def _open_webui_db():
+    """Open the webui SQLite DB (read-only safe). Returns None if missing."""
+    if not _WEBUI_DB_PATH.is_file():
+        return None
+    # readonly via URI mode (no writes from bridge — write side is webui itself)
+    uri = f"file:{_WEBUI_DB_PATH.as_posix()}?mode=ro"
+    try:
+        return sqlite3.connect(uri, uri=True, timeout=3)
+    except Exception:
+        return None
+
+
+@app.get("/v1/icarus/active-session")
+async def icarus_active_session(max_age_seconds: int = 86400 * 3) -> dict[str, Any]:
+    """Find the most recent ACTIVE (not ended) session in webui db.
+    Returns metadata + the last few messages so the SPA can show
+    a 'Resume last conversation?' toast.
+
+    max_age_seconds: only consider sessions whose last_active is within
+    this window. Default 3 days — anything older is considered stale
+    and not worth resuming.
+    """
+    con = _open_webui_db()
+    if not con:
+        return {"found": False, "reason": "webui db not accessible"}
+
+    # webui db stores last_active in SECONDS (10-digit unix ts)
+    now_sec = int(time.time())
+    cutoff = now_sec - max_age_seconds
+
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT id, title, source, agent, profile, model, provider,
+                   message_count, started_at, last_active, workspace
+            FROM sessions
+            WHERE ended_at IS NULL AND last_active >= ?
+            ORDER BY last_active DESC
+            LIMIT 5
+        """, (cutoff,))
+        rows = cur.fetchall()
+    except Exception as e:
+        con.close()
+        return {"found": False, "reason": f"db query error: {e}"}
+
+    if not rows:
+        con.close()
+        return {"found": False, "reason": "no recent active session"}
+
+    # The most recent active session
+    r = rows[0]
+    session_id, title, source, agent, profile, model, provider, msg_count, started_at, last_active, workspace = r
+    age_seconds = (int(time.time()) - (last_active or int(time.time())))
+
+    # Last 3 messages
+    last_msgs: list[dict[str, Any]] = []
+    try:
+        cur.execute("""
+            SELECT role, content, timestamp
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 3
+        """, (session_id,))
+        for m in cur.fetchall():
+            role, content, ts = m
+            last_msgs.append({
+                "role": role,
+                "content_excerpt": (content or "")[:300],
+                "ts": ts,
+            })
+        last_msgs.reverse()  # oldest first
+    except Exception:
+        pass
+
+    con.close()
+
+    return {
+        "found": True,
+        "session_id": session_id,
+        "title": title,
+        "source": source,
+        "agent": agent,
+        "profile": profile,
+        "model": model,
+        "provider": provider,
+        "message_count": msg_count,
+        "started_at": started_at,
+        "last_active": last_active,
+        "age_seconds": age_seconds,
+        "age_human": f"{int(age_seconds//3600)}h{int((age_seconds%3600)//60)}m" if age_seconds < 86400 else f"{int(age_seconds//86400)}d{int((age_seconds%86400)//3600)}h",
+        "last_messages": last_msgs,
+        "workspace": workspace,
+        "db_path": str(_WEBUI_DB_PATH.relative_to(
+            Path(__file__).resolve().parent.parent
+        )),
+    }
+
+
+@app.get("/v1/icarus/session/{session_id}/tail")
+async def icarus_session_tail(
+    session_id: str, limit: int = 10
+) -> dict[str, Any]:
+    """Return the last N messages of a session from webui db.
+    Used to compose a 'previous conversation' summary for resume."""
+    con = _open_webui_db()
+    if not con:
+        return {"found": False, "reason": "webui db not accessible"}
+
+    limit = max(1, min(limit, 50))
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT role, content, timestamp, tool_name
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (session_id, limit))
+        rows = cur.fetchall()
+    except Exception as e:
+        con.close()
+        return {"found": False, "reason": f"db error: {e}"}
+
+    msgs = list(reversed([{
+        "role": r[0],
+        "content_excerpt": (r[1] or "")[:500],
+        "ts": r[2],
+        "tool_name": r[3],
+    } for r in rows]))
+    con.close()
+    return {"found": True, "session_id": session_id, "messages": msgs}
+
+
+@app.post("/v1/icarus/session/{session_id}/resume-context")
+async def icarus_resume_context(session_id: str) -> dict[str, Any]:
+    """Compose a system prompt describing the previous session so the
+    agent can seamlessly pick up where it left off.
+
+    Returns:
+      {
+        "system_prompt": "You were working with the user on ...
+
+                          Last messages:
+  user: ...
+  assistant: ...
+
+                          The user wants to continue from where we left off.",
+        "session_id": "...",
+        "summary": "...",
+      }
+    """
+    # 1) get tail
+    con = _open_webui_db()
+    if not con:
+        return {"found": False, "reason": "webui db not accessible"}
+
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT title, message_count, last_active FROM sessions WHERE id = ?",
+            (session_id,),
+        )
+        sess = cur.fetchone()
+        if not sess:
+            con.close()
+            return {"found": False, "reason": "session not found"}
+
+        title, msg_count, last_active = sess
+        cur.execute("""
+            SELECT role, content, tool_name
+            FROM messages
+            WHERE session_id = ?
+              AND role IN ('user', 'assistant')
+              AND content IS NOT NULL AND content != ''
+            ORDER BY timestamp DESC
+            LIMIT 8
+        """, (session_id,))
+        rows = cur.fetchall()
+    finally:
+        con.close()
+
+    msgs = list(reversed(rows))  # oldest first
+
+    # 2) compose system prompt
+    if title:
+        lines = [f"# Previous session: {title} ({msg_count} messages)"]
+    else:
+        lines = [f"# Previous session ({msg_count} messages)"]
+    if last_active:
+        from datetime import datetime
+        try:
+            # webui db stores last_active in SECONDS
+            dt = datetime.fromtimestamp(int(last_active))
+            lines.append(f"# Last active: {dt.isoformat()}")
+        except Exception:
+            pass
+    lines.append("")
+    lines.append("The user wants to continue this conversation. Recap where you left off, then ask what they want to do next.")
+    lines.append("")
+    lines.append("## Last messages")
+    for role, content, tool_name in msgs:
+        excerpt = (content or "")[:400].replace("\n", " ")
+        lines.append(f"- **{role}**: {excerpt}")
+
+    system_prompt = "\n".join(lines)
+
+    # 3) short summary (first ~200 chars of last assistant message)
+    summary = ""
+    for role, content, _ in reversed(msgs):
+        if role == "assistant" and content:
+            summary = content[:300]
+            break
+
+    return {
+        "found": True,
+        "session_id": session_id,
+        "title": title,
+        "summary": summary,
+        "system_prompt": system_prompt,
+        "message_count": msg_count,
+    }
+
 
 
 # ---- Lifecycle ----
