@@ -39,6 +39,13 @@ Write-Host ""
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = $PYTHON
 $psi.Arguments              = "-u `"$Script`" --port $Port --upstream $Upstream --state-db data/hermes-agent/state.db"
+# NOTE 2026-06-22: WorkingDirectory in ProcessStartInfo only applies to the
+# .NET Process.Start() call — but the child INHERITS powershell's OWN cwd,
+# which was set by supervisor to modules/webui_proxy/. We override it by
+# passing the working directory via the START /D switch in cmd, which
+# Windows applies to the process before its first user-mode instruction.
+$psi.Arguments              = "/c cd /d `"$HERMES_ROOT`" && `"$PYTHON`" -u `"$Script`" --port $Port --upstream $Upstream --state-db data/hermes-agent/state.db"
+$psi.FileName               = "cmd.exe"
 $psi.WorkingDirectory       = $HERMES_ROOT
 $psi.UseShellExecute        = $false
 $psi.CreateNoWindow         = $true
