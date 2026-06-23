@@ -47,6 +47,14 @@ DEFAULT_STATE_DB = "data/hermes-agent/state.db"
 DEFAULT_UPSTREAM_TIMEOUT = 60.0
 # Path we intercept
 USAGE_STATS_PATH = "/api/hermes/usage/stats"
+# Webui self-update path. The npm package's built-in POST /api/hermes/update
+# runs `npm install -g hermes-web-ui@latest` from within the webui process.
+# On Windows this fails with EBUSY (the running webui Node process holds
+# open the very files npm is trying to rename). We intercept this path in
+# webui_proxy and write a marker file instead; bin/hermes-watchdog.py
+# picks it up at the next tick and performs stop->npm install->start.
+WEBUI_UPDATE_PATH = "/api/hermes/update"
+WEBUI_UPDATE_MARKER = Path("data/webui/needs-update.json")
 # Local llama-server restart path (2026-06-18, F方案). WebUI's
 # `/api/hermes/provider-models/cache/refresh` only refreshes cloud
 # provider catalogs (see webui dist/server/index.js:1035). It does NOT
@@ -359,6 +367,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # WebUI's built-in refresh-cache button only refreshes cloud
             # providers; this is the bridge-level escape hatch for local.
             self._proxy_to_bridge()
+        elif self.path == WEBUI_UPDATE_PATH:
+            # Intercept: write needs-update marker for the watchdog to pick
+            # up. Do NOT forward to upstream — the upstream endpoint is
+            # the one that EBUSYs on Windows. The watchdog (10s tick) will
+            # stop webui, run npm install -g, and start the new version.
+            self._handle_update_marker()
         else:
             self._proxy_pass()
 
@@ -620,6 +634,66 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         self.end_headers()
         self.wfile.write(resp_body)
+
+    def _handle_update_marker(self) -> None:
+        """Intercept /api/hermes/update and write a needs-update marker.
+
+        Why: the upstream webui's update endpoint runs
+        `npm install -g hermes-web-ui@latest` from inside the webui
+        Node process. On Windows the rename step in that install hits
+        EBUSY because the running webui still holds the very files
+        npm wants to replace. We write a marker instead and let
+        bin/hermes-watchdog.py handle the actual stop -> npm install ->
+        start sequence on its next tick (within 10s of the click).
+        """
+        # Resolve project root (where data/webui/ lives). The proxy is
+        # at modules/webui_proxy/webui_proxy.py; HERMES_ROOT is three
+        # levels up.
+        try:
+            here = Path(__file__).resolve()
+            project_root = here.parent.parent.parent
+            marker_path = project_root / "data" / "webui" / "needs-update.json"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "requested_at": int(time.time()),
+                "trigger": "webui_update_button",
+            }
+            # Atomic-ish: write to .tmp then rename (POSIX-style); on
+            # Windows the rename fails if target exists, so we just
+            # overwrite directly — the watchdog only cares about the
+            # file existing.
+            marker_path.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            self._send_update_response(
+                success=False,
+                code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                msg=f"failed to write update marker: {e}",
+            )
+            return
+        self._send_update_response(
+            success=True,
+            code=HTTPStatus.OK,
+            msg=(
+                "hermes-web-ui update scheduled. The watchdog will stop the "
+                "current webui, run npm install, and start the new version "
+                "within 10 seconds. The UI will reload automatically."
+            ),
+        )
+
+    def _send_update_response(self, success: bool, code: HTTPStatus, msg: str) -> None:
+        body = json.dumps(
+            {"success": success, "message": msg},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _proxy_to_bridge(self) -> None:
         """Forward the current request to the bridge (no shell, list args).

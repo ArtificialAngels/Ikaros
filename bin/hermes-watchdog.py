@@ -43,6 +43,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,6 +148,14 @@ LIVENESS_DEAD_ALERT_AFTER = 5  # ~3min20s at 40s/probe × 5
 # deadline so a crashed launcher never strands the watchdog.
 UPGRADING_LOCK = (Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or ".")
                   / ".hermes-web-ui" / "upgrading.lock")
+
+# 2026-06-23: webui self-update marker. webui_proxy intercepts
+# POST /api/hermes/update and writes this file (since the upstream
+# npm endpoint EBUSYs on Windows). The watchdog picks it up at the
+# next tick, invokes bin/_webui_update.py to perform the actual
+# stop->npm install->start cycle, and deletes the marker.
+WEBUI_UPDATE_MARKER = HERMES_ROOT / "data" / "webui" / "needs-update.json"
+WEBUI_UPDATE_SCRIPT = HERMES_ROOT / "bin" / "_webui_update.py"
 
 
 def is_upgrading_lock_active() -> bool:
@@ -633,6 +642,48 @@ def run() -> int:
         while True:
             time.sleep(INTERVAL_S)
             tick_count += 1
+
+            # 2026-06-23: webui update marker. webui_proxy intercepts the
+            # upstream /api/hermes/update endpoint and writes this file.
+            # We invoke _webui_update.py which does the actual work in a
+            # SEPARATE PROCESS (so this watchdog tick can keep doing
+            # other things). _webui_update.py acquires the upgrading.lock
+            # itself, so the "skip webui" branch below sees the lock and
+            # backs off. The script blocks for ~30-90s; we run it in a
+            # thread so other modules' checks stay on cadence.
+            if WEBUI_UPDATE_MARKER.is_file():
+                print(f"[watchdog] webui update marker detected -> "
+                      f"spawning {WEBUI_UPDATE_SCRIPT.name}", flush=True)
+                _hb_event("webui_update_start", marker=str(WEBUI_UPDATE_MARKER))
+                try:
+                    proc = subprocess.Popen(
+                        [str(PYTHON_EXE), str(WEBUI_UPDATE_SCRIPT)],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, cwd=str(HERMES_ROOT),
+                    )
+                    # Run it in a thread so we don't block the 10s tick.
+                    # Don't wait — the script writes its own log lines and
+                    # deletes the marker on success. If it fails the
+                    # marker will remain; we'll retry next tick.
+                    def _drain_update(p):
+                        try:
+                            out, _ = p.communicate(timeout=600)
+                        except subprocess.TimeoutExpired:
+                            p.kill()
+                            out = "[watchdog] _webui_update.py timeout\n"
+                        if out:
+                            for line in out.splitlines():
+                                print(f"[webui_update] {line}", flush=True)
+                        _hb_event("webui_update_end", rc=p.returncode)
+                    threading.Thread(target=_drain_update, args=(proc,),
+                                     daemon=True, name="webui-update").start()
+                except Exception as e:
+                    print(f"[watchdog] failed to spawn _webui_update.py: {e}",
+                          flush=True)
+                    _hb_event("webui_update_spawn_fail", error=str(e))
+                # Note: we do NOT consume the marker here. The update
+                # script itself deletes it on success. If it fails, the
+                # marker remains and we retry next tick.
 
             # FIX 2026-06-17: while launcher is mid-update, skip webui checks.
             # npm install renames the webui dir → its process dies → port

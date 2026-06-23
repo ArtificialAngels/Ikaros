@@ -25,12 +25,12 @@ REM Windows stores proxy in the registry (IE/Edge settings); CLI tools like
 REM aria2c / Python urllib do NOT read it automatically.  We read
 REM it here and export HTTPS_PROXY + HTTP_PROXY so both download tiers
 REM go through the same proxy the browser uses.
-if not defined HTTPS_PROXY ^(
-    for /f "delims=" %%P in ^('powershell -NoProfile -Command "try{$p=(gp 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').ProxyServer; if($p -match 'https?=([^\s;]+)'){$Matches[1]}elseif($p -notmatch '='){$p}}catch{}" 2^>nul'^) do ^(
+for /f "tokens=*" %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%HERMES_ROOT%\bin\_detect_proxy.ps1" 2^>nul') do (
+    if not defined HTTPS_PROXY (
         echo   [proxy] Detected system proxy: %%P
         set "HTTPS_PROXY=%%P"
         set "HTTP_PROXY=%%P"
-    ^)
+    )
 )
 
 REM ---- Read current version from pyproject.toml ----
