@@ -1859,6 +1859,24 @@ async def chat_completions(request: Request) -> Any:
         routing_override = os.environ.get("HERMES_ROUTING_MODE", "auto").strip().lower()
     routing_decision = None
 
+    # ---- Context compression (before routing, so compressed messages route correctly) ----
+    try:
+        session_id = request.headers.get("X-Session-Id", "") or body.get("session_id", "")
+        if session_id:
+            from bridge.context_middleware import get_compressor
+            compressor = get_compressor(session_id)
+            messages = body.get("messages", [])
+            if messages:
+                compressed = compressor.before_chat(messages)
+                if compressed is not messages:
+                    body["messages"] = compressed
+            _request_compressor = compressor
+        else:
+            _request_compressor = None
+    except Exception as exc:
+        logger.debug("context compression skipped: %s", exc)
+        _request_compressor = None
+
     if routing_override not in ("local", "cloud"):
         user_msg = _extract_user_message(body.get("messages", []))
         if user_msg:
@@ -1888,7 +1906,7 @@ async def chat_completions(request: Request) -> Any:
 
     # ---- Route ----
     if routing_decision is not None and routing_decision.route_target == "cloud_api":
-        return await _handle_cloud_chat(body, routing_decision, is_stream)
+        return await _handle_cloud_chat(body, routing_decision, is_stream, _request_compressor)
 
     # Default: proxy to llama-server
     logger.info(
@@ -1925,6 +1943,13 @@ async def chat_completions(request: Request) -> Any:
             "status": r.status_code,
             "active_url": _active_base_url,
         })
+        # Context compression: feed usage back from local response
+        if _request_compressor and r.status_code == 200:
+            try:
+                resp_data = r.json()
+                _request_compressor.after_chat(resp_data.get("usage"))
+            except Exception:
+                pass
         return JSONResponse(
             content=r.json(),
             status_code=r.status_code,
@@ -1945,6 +1970,7 @@ async def _handle_cloud_chat(
     body: dict[str, Any],
     decision: Any,
     is_stream: bool,
+    _request_compressor: Any = None,
 ) -> Any:
     """Handle a chat request routed to a cloud provider."""
     provider = getattr(decision, "cloud_provider", "") or "openai"
@@ -1972,6 +1998,29 @@ async def _handle_cloud_chat(
         "routing_reason": getattr(decision, "reason", ""),
     })
 
+    # ---- Copilot ACP route ----
+    if provider == "copilot":
+        if is_stream:
+            logger.warning("copilot ACP does not support streaming — falling back to non-stream")
+        try:
+            from bridge.copilot_bridge import chat as copilot_chat
+            resp = await copilot_chat(messages, model=model)
+            telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
+                "model": model, "provider": "copilot",
+            })
+            # Feed usage back for context compression
+            if _request_compressor:
+                try:
+                    _request_compressor.after_chat(resp.get("usage"))
+                except Exception:
+                    pass
+            return JSONResponse(
+                content=resp,
+                headers={"X-Hermes-Routing-Target": "cloud:copilot"},
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
     client = _get_cloud_client()
 
     try:
@@ -1994,6 +2043,12 @@ async def _handle_cloud_chat(
             "model": model,
             "provider": provider,
         })
+        # Context compression: feed usage back from cloud response
+        if _request_compressor:
+            try:
+                _request_compressor.after_chat(resp.get("usage"))
+            except Exception:
+                pass
         return JSONResponse(
             content=resp,
             headers={"X-Hermes-Routing-Target": f"cloud:{provider}"},
