@@ -1,96 +1,140 @@
-<svg viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="skin" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#fee"/>
-          <stop offset="100%" stop-color="#fce4e8"/>
-        </radialGradient>
-        <radialGradient id="eyeGrad" cx="40%" cy="40%" r="60%">
-          <stop offset="0%" stop-color="#8ac4ff"/>
-          <stop offset="60%" stop-color="#4a90d9"/>
-          <stop offset="100%" stop-color="#3a78c0"/>
-        </radialGradient>
-      </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300">
+<defs>
+  <radialGradient id="skin" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#fff5f5"/>
+    <stop offset="100%" stop-color="#fce4e8"/>
+  </radialGradient>
+  <linearGradient id="hairGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#ff9ab0"/>
+    <stop offset="100%" stop-color="#f07890"/>
+  </linearGradient>
+  <linearGradient id="wingGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#ffffff"/>
+    <stop offset="60%" stop-color="#f0f4ff"/>
+    <stop offset="100%" stop-color="#dce4f0"/>
+  </linearGradient>
+  <radialGradient id="eyeGrad" cx="40%" cy="40%" r="60%">
+    <stop offset="0%" stop-color="#8cf"/>
+    <stop offset="50%" stop-color="#48c"/>
+    <stop offset="100%" stop-color="#38a"/>
+  </radialGradient>
+  <linearGradient id="dressGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#fff"/>
+    <stop offset="100%" stop-color="#eef4fa"/>
+  </linearGradient>
+</defs>
 
-      <!-- Body / Dress -->
-      <path d="M80,145 Q100,215 120,145 Q140,150 135,210 Q130,250 100,255 Q70,250 65,210 Q60,150 80,145Z"
-            fill="white" stroke="#e8e8f0" stroke-width="1"/>
-      <!-- Dress shading -->
-      <path d="M85,150 Q100,210 115,150 Q120,180 100,220 Q80,180 85,150Z"
-            fill="#f8faff" opacity="0.5"/>
-      <!-- Collar ribbon -->
-      <path d="M88,145 Q100,152 112,145 Q108,155 100,158 Q92,155 88,145Z"
-            fill="#ff88a0"/>
+<!-- Wings (behind character) -->
+<g transform="translate(100,105)">
+  <!-- Left wing -->
+  <path d="M-65,20 C-100,0 -130,-40 -120,-70 C-115,-85 -95,-90 -80,-80 C-88,-100 -75,-120 -60,-110 C-50,-102 -48,-85 -55,-70 C-40,-80 -20,-75 -25,-55 C-30,-35 -45,-10 -65,20Z"
+        fill="url(#wingGrad)" stroke="#d0d8e8" stroke-width="0.5" opacity="0.92"/>
+  <!-- Right wing -->
+  <path d="M65,20 C100,0 130,-40 120,-70 C115,-85 95,-90 80,-80 C88,-100 75,-120 60,-110 C50,-102 48,-85 55,-70 C40,-80 20,-75 25,-55 C30,-35 45,-10 65,20Z"
+        fill="url(#wingGrad)" stroke="#d0d8e8" stroke-width="0.5" opacity="0.92"/>
+  <!-- Feather details L -->
+  <path d="M-65,5 Q-85,-15 -90,-40" stroke="#d0d8e8" stroke-width="0.8" fill="none" opacity="0.4"/>
+  <path d="M-55,15 Q-70,0 -80,-25" stroke="#d0d8e8" stroke-width="0.8" fill="none" opacity="0.4"/>
+  <!-- Feather details R -->
+  <path d="M65,5 Q85,-15 90,-40" stroke="#d0d8e8" stroke-width="0.8" fill="none" opacity="0.4"/>
+  <path d="M55,15 Q70,0 80,-25" stroke="#d0d8e8" stroke-width="0.8" fill="none" opacity="0.4"/>
+</g>
 
-      <!-- Arms -->
-      <path d="M82,152 Q68,170 65,190" stroke="#f5d0d0" stroke-width="7" fill="none" stroke-linecap="round"/>
-      <path d="M118,152 Q132,170 135,190" stroke="#f5d0d0" stroke-width="7" fill="none" stroke-linecap="round"/>
-      <!-- Hands -->
-      <circle cx="65" cy="192" r="5" fill="#fce4e8"/>
-      <circle cx="135" cy="192" r="5" fill="#fce4e8"/>
+<!-- Body / Dress -->
+<path d="M85,145 L80,155 L76,190 Q75,220 80,242 L85,252 Q100,260 115,252 L120,242 Q125,220 124,190 L120,155 L115,145Z"
+      fill="url(#dressGrad)" stroke="#d8e0ec" stroke-width="0.8"/>
+<!-- Dress shading -->
+<path d="M92,148 Q100,220 108,148 Q112,185 100,240 Q88,185 92,148Z"
+      fill="#f4f8ff" opacity="0.5"/>
+<!-- Skirt flare -->
+<path d="M76,190 Q70,210 65,225 Q80,245 100,252 Q120,245 135,225 Q130,210 124,190Z"
+      fill="#f8fbff" stroke="#d8e0ec" stroke-width="0.5"/>
+<!-- Collar -->
+<path d="M88,145 Q100,150 112,145 Q108,155 100,158 Q92,155 88,145Z"
+      fill="#ff8aa5" stroke="#f07090" stroke-width="0.5"/>
+<!-- Chest ribbon -->
+<ellipse cx="100" cy="152" rx="12" ry="5" fill="#ff8aa5" opacity="0.7"/>
 
-      <!-- Legs -->
-      <path d="M92,252 Q94,268 90,275" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
-      <path d="M108,252 Q106,268 110,275" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
-      <!-- Shoes -->
-      <ellipse cx="88" cy="276" rx="8" ry="4" fill="#ffa0b0"/>
-      <ellipse cx="112" cy="276" rx="8" ry="4" fill="#ffa0b0"/>
+<!-- Arms -->
+<path d="M82,150 Q68,168 65,190" stroke="#f5d0d0" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+<path d="M118,150 Q132,168 135,190" stroke="#f5d0d0" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+<!-- Hands -->
+<circle cx="64" cy="193" r="5" fill="#fce4e8"/>
+<circle cx="136" cy="193" r="5" fill="#fce4e8"/>
 
-      <!-- Head -->
-      <ellipse cx="100" cy="90" rx="42" ry="44" fill="url(#skin)"/>
+<!-- Legs -->
+<path d="M92,250 Q94,268 90,276" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+<path d="M108,250 Q106,268 110,276" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+<!-- Boots -->
+<ellipse cx="88" cy="278" rx="10" ry="5" fill="#ffa0b4"/>
+<ellipse cx="112" cy="278" rx="10" ry="5" fill="#ffa0b4"/>
 
-      <!-- Hair (Ikaros pink style) -->
-      <path d="M58,80 Q56,55 68,40 Q88,28 100,28 Q118,28 132,40 Q144,55 142,80 Q145,110 135,125 Q120,140 100,143 Q80,140 65,125 Q55,110 58,80Z"
-            fill="#ff8fa5" stroke="#f07a90" stroke-width="0.5"/>
-      <!-- Hair shine -->
-      <path d="M68,50 Q80,42 100,40 Q115,42 125,55"
-            stroke="#ffb0c0" stroke-width="3" fill="none" opacity="0.5"/>
-      <!-- Side hair -->
-      <path d="M58,85 Q52,100 58,120 Q50,115 48,100 Q45,85 55,75Z" fill="#ff8fa5"/>
-      <path d="M142,85 Q148,100 142,120 Q150,115 152,100 Q155,85 145,75Z" fill="#ff8fa5"/>
-      <!-- Ahoge (antenna) -->
-      <path d="M98,28 Q100,15 106,20" stroke="#ff7a90" stroke-width="3" fill="none" stroke-linecap="round"/>
-      <!-- Tiny hair ornament -->
-      <circle cx="65" cy="58" r="4" fill="#ff6680" opacity="0.6"/>
+<!-- Head -->
+<ellipse cx="100" cy="90" rx="40" ry="42" fill="url(#skin)"/>
 
-      <!-- Bangs -->
-      <path d="M65,48 Q75,58 100,55 Q120,56 130,50 Q125,65 100,68 Q75,67 65,48Z"
-            fill="#ff7088"/>
+<!-- Hair (pink, Ikaros style) -->
+<path d="M60,80 Q58,55 70,40 Q88,28 100,27 Q118,28 130,40 Q142,55 140,80 Q144,110 135,125 Q120,142 100,144 Q80,142 65,125 Q56,110 60,80Z"
+      fill="url(#hairGrad)" stroke="#e87088" stroke-width="0.5"/>
+<!-- Hair shine -->
+<path d="M72,50 Q85,40 100,38 Q112,40 122,52"
+      stroke="#ffc0d0" stroke-width="3.5" fill="none" opacity="0.5" stroke-linecap="round"/>
+<!-- Side strands L -->
+<path d="M60,85 Q54,102 60,120 Q52,116 48,100 Q46,85 55,72Z" fill="#f07890"/>
+<!-- Side strands R -->
+<path d="M140,85 Q146,102 140,120 Q148,116 152,100 Q154,85 145,72Z" fill="#f07890"/>
+<!-- Ahoge (antenna / forelock), very Ikaros -->
+<path d="M98,27 Q100,12 108,18 Q105,22 102,27Z" fill="#f07890"/>
+<path d="M95,28 Q90,16 96,14" stroke="#ff8aa0" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
 
-      <!-- Eyes (big blue anime style) -->
-      <!-- Left eye -->
-      <ellipse cx="82" cy="88" rx="10" ry="12" fill="url(#eyeGrad)" class="eye"/>
-      <ellipse cx="82" cy="86" rx="7" ry="9" fill="#6aace8" opacity="0.3"/>
-      <ellipse cx="82" cy="90" rx="3" ry="4" fill="#3a78c0" opacity="0.4"/>
-      <!-- Eye shine -->
-      <ellipse cx="79" cy="82" rx="3.5" ry="3" fill="white" opacity="0.9"/>
-      <circle cx="84" cy="90" r="1.5" fill="white" opacity="0.5"/>
+<!-- Bangs -->
+<path d="M68,48 Q80,58 100,54 Q118,54 130,48 Q126,64 100,68 Q74,66 68,48Z"
+      fill="#e87088" opacity="0.8"/>
 
-      <!-- Right eye -->
-      <ellipse cx="118" cy="88" rx="10" ry="12" fill="url(#eyeGrad)" class="eye"/>
-      <ellipse cx="118" cy="86" rx="7" ry="9" fill="#6aace8" opacity="0.3"/>
-      <ellipse cx="118" cy="90" rx="3" ry="4" fill="#3a78c0" opacity="0.4"/>
-      <ellipse cx="115" cy="82" rx="3.5" ry="3" fill="white" opacity="0.9"/>
-      <circle cx="120" cy="90" r="1.5" fill="white" opacity="0.5"/>
+<!-- Eyes (big blue) -->
+<!-- Left eye -->
+<ellipse cx="80" cy="87" rx="10" ry="12" fill="url(#eyeGrad)"/>
+<ellipse cx="80" cy="85" rx="7" ry="9" fill="#6ab" opacity="0.3"/>
+<ellipse cx="80" cy="89" rx="3" ry="4" fill="#38a" opacity="0.4"/>
+<!-- Highlights -->
+<ellipse cx="77" cy="81" rx="3.5" ry="3" fill="white" opacity="0.92"/>
+<circle cx="83" cy="89" r="1.8" fill="white" opacity="0.6"/>
+<circle cx="77" cy="92" r="1" fill="white" opacity="0.3"/>
 
-      <!-- Eyebrows -->
-      <path d="M72,76 Q82,72 92,76" stroke="#e87080" stroke-width="1.5" fill="none"/>
-      <path d="M108,76 Q118,72 128,76" stroke="#e87080" stroke-width="1.5" fill="none"/>
+<!-- Right eye -->
+<ellipse cx="120" cy="87" rx="10" ry="12" fill="url(#eyeGrad)"/>
+<ellipse cx="120" cy="85" rx="7" ry="9" fill="#6ab" opacity="0.3"/>
+<ellipse cx="120" cy="89" rx="3" ry="4" fill="#38a" opacity="0.4"/>
+<!-- Highlights -->
+<ellipse cx="117" cy="81" rx="3.5" ry="3" fill="white" opacity="0.92"/>
+<circle cx="123" cy="89" r="1.8" fill="white" opacity="0.6"/>
+<circle cx="117" cy="92" r="1" fill="white" opacity="0.3"/>
 
-      <!-- Nose -->
-      <path d="M100,96 Q101,100 100,101" stroke="#f0a0b0" stroke-width="0.8" fill="none"/>
+<!-- Eyelashes -->
+<path d="M70,76 Q75,73 80,74" stroke="#e87088" stroke-width="1.2" fill="none"/>
+<path d="M120,74 Q125,73 130,76" stroke="#e87088" stroke-width="1.2" fill="none"/>
+<!-- Lower lashes -->
+<path d="M72,99 Q76,102 80,99" stroke="#f0a0b0" stroke-width="0.6" fill="none" opacity="0.4"/>
+<path d="M120,99 Q124,102 128,99" stroke="#f0a0b0" stroke-width="0.6" fill="none" opacity="0.4"/>
 
-      <!-- Mouth (anime small) -->
-      <ellipse cx="100" cy="108" rx="5" ry="3.5" fill="#f07080" opacity="0.6" id="mouth"/>
+<!-- Eyebrows -->
+<path d="M70,72 Q82,68 92,73" stroke="#e87080" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+<path d="M108,73 Q118,68 130,72" stroke="#e87080" stroke-width="1.5" fill="none" stroke-linecap="round"/>
 
-      <!-- Blush -->
-      <ellipse cx="72" cy="100" rx="7" ry="4" fill="#ffa0b0" opacity="0.3"/>
-      <ellipse cx="128" cy="100" rx="7" ry="4" fill="#ffa0b0" opacity="0.3"/>
-    
-  <style>
-    .eye { animation: blink 4s infinite; transform-origin: center; }
-    @keyframes blink {
-      0%, 95%, 100% { transform: scaleY(1); }
-      97% { transform: scaleY(0.1); }
-    }
-  </style>
+<!-- Nose -->
+<path d="M100,95 Q101,100 100,101" stroke="#f0a0b0" stroke-width="0.8" fill="none" stroke-linecap="round"/>
+
+<!-- Mouth -->
+<ellipse cx="100" cy="108" rx="5" ry="3.5" fill="#e87080" opacity="0.5" id="mouth"/>
+<!-- Lower lip -->
+<ellipse cx="100" cy="112" rx="4" ry="2" fill="#ffb0c0" opacity="0.3"/>
+
+<!-- Blush -->
+<ellipse cx="70" cy="99" rx="8" ry="4" fill="#ffa0b0" opacity="0.25"/>
+<ellipse cx="130" cy="99" rx="8" ry="4" fill="#ffa0b0" opacity="0.25"/>
+
+<!-- Halo (floating above head) -->
+<ellipse cx="100" cy="10" rx="30" ry="8" fill="none" stroke="#f5d742" stroke-width="2.5" opacity="0.9"/>
+<ellipse cx="100" cy="10" rx="30" ry="8" fill="none" stroke="#ffe870" stroke-width="1" opacity="0.5" transform="translate(0,2)"/>
+<!-- Halo glow -->
+<ellipse cx="100" cy="10" rx="35" ry="12" fill="none" stroke="#f0c040" stroke-width="0.5" opacity="0.3" transform="scale(1.1) translate(-9,-1)"/>
 </svg>

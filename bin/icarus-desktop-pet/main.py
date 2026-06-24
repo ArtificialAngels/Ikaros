@@ -14,10 +14,10 @@ import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject
-from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
-    QActionGroup, QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
+    QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
 )
 
 # Paths
@@ -320,6 +320,8 @@ class IcarusApp:
         log.info("🪶 Icarus Desktop Pet running")
 
         # Start AudioEngine (lazy import so pyaudio doesn't block startup)
+        import sys
+        sys.path.insert(0, str(HERE))
         from audio_engine import AudioEngine
         self.audio = AudioEngine()
         self.audio.on_state = self._on_state
