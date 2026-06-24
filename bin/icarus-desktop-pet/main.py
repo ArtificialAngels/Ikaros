@@ -16,6 +16,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
 )
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
 # Paths
 HERE = Path(__file__).parent
 CHARACTER_SVG = HERE / "character.svg"
+CHARACTER_PNG = HERE / "character.png"
 HERMES_ROOT = HERE.parent.parent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
@@ -40,7 +42,7 @@ class SignalBridge(QObject):
 # ─── Pet Window ───
 
 class PetWindow(QMainWindow):
-    WIDTH, HEIGHT = 260, 320
+    WIDTH, HEIGHT = 460, 460
 
     def __init__(self, bridge: SignalBridge):
         super().__init__()
@@ -67,11 +69,30 @@ class PetWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # SVG widget
-        self.svg = QSvgWidget(str(CHARACTER_SVG))
-        self.svg.setFixedSize(200, 280)
-        self.svg.setStyleSheet("background: transparent;")
-        layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignCenter)
+        # Character widget (PNG image preferred, SVG fallback)
+        from PyQt6.QtWidgets import QLabel
+        char_label = QLabel(central)
+        char_label.setStyleSheet("background: transparent;")
+        char_label.setFixedSize(self.WIDTH - 20, self.HEIGHT - 60)
+        char_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        if CHARACTER_PNG.exists():
+            pixmap = QPixmap(str(CHARACTER_PNG))
+            scaled = pixmap.scaled(
+                char_label.width(),
+                char_label.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            char_label.setPixmap(scaled)
+            self._character_label = char_label
+        else:
+            # Fallback to SVG
+            self.svg = QSvgWidget(str(CHARACTER_SVG))
+            self.svg.setFixedSize(200, 280)
+            self.svg.setStyleSheet("background: transparent;")
+            layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(char_label, 0, Qt.AlignmentFlag.AlignCenter)
 
         # Position: center of screen (first run) or last position
         screen = QApplication.primaryScreen()
