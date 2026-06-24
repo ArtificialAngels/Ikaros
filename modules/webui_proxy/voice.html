@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>伊卡洛斯 · 语音对话测试</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .container {
+    max-width: 600px;
+    width: 100%;
+    text-align: center;
+  }
+  h1 {
+    font-size: 32px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #fff 0%, #c0d8ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    opacity: 0.7;
+    margin-bottom: 40px;
+    font-size: 14px;
+  }
+  .card {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 16px;
+    padding: 30px;
+    backdrop-filter: blur(10px);
+    margin-bottom: 20px;
+  }
+  .chat-log {
+    text-align: left;
+    min-height: 240px;
+    max-height: 400px;
+    overflow-y: auto;
+    margin: 20px 0;
+    padding: 16px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .chat-msg { margin-bottom: 12px; }
+  .chat-msg.you { color: #c0d8ff; }
+  .chat-msg.icarus { color: #ffeb99; }
+  .chat-msg.system { color: #888; font-style: italic; font-size: 12px; }
+  .mic-btn {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    font-size: 40px;
+    cursor: pointer;
+    box-shadow: 0 8px 32px rgba(102,126,234,0.4);
+    transition: all 0.3s ease;
+  }
+  .mic-btn:hover { transform: scale(1.05); }
+  .mic-btn.listening { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); animation: pulse 1.5s infinite; }
+  .mic-btn.thinking { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+  .mic-btn.speaking { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(245,87,108,0.7); }
+    70% { box-shadow: 0 0 0 30px rgba(245,87,108,0); }
+    100% { box-shadow: 0 0 0 0 rgba(245,87,108,0); }
+  }
+  .status-bar {
+    margin-top: 20px;
+    padding: 12px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    font-size: 13px;
+    min-height: 40px;
+  }
+  .controls {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+  .ctrl-btn {
+    padding: 8px 16px;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.05);
+    color: white;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .ctrl-btn:hover { background: rgba(255,255,255,0.15); }
+  .footer {
+    margin-top: 40px;
+    font-size: 12px;
+    opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🪶 伊卡洛斯 · 语音对话</h1>
+  <div class="subtitle">随时说话 — 听我说 — 像跟人聊天</div>
+
+  <div class="card">
+    <div class="chat-log" id="chat-log">
+      <div class="chat-msg system">[系统] 准备就绪。点下面的大圆圈开始说话。</div>
+    </div>
+
+    <button class="mic-btn" id="mic-btn">🎤</button>
+
+    <div class="status-bar" id="status-bar">点击 🎤 开始</div>
+
+    <div class="controls">
+      <button class="ctrl-btn" id="clear-btn">清空对话</button>
+      <button class="ctrl-btn" id="test-btn">测试 TTS</button>
+    </div>
+  </div>
+
+  <div class="footer">
+    架构: Whisper STT → Bridge LLM → edge-tts TTS<br>
+    自动重连 · 连续对话 · git-tracked · 跨设备一致
+  </div>
+</div>
+
+<script>
+// Override voice.js's auto-injection to also update our chat log
+(function() {
+  // Hook into voice.js status messages
+  let _log = document.getElementById("chat-log");
+  let _status = document.getElementById("status-bar");
+  let _btn = document.getElementById("mic-btn");
+
+  function addMsg(role, text) {
+    const div = document.createElement("div");
+    div.className = "chat-msg " + role;
+    div.textContent = (role === "you" ? "哥哥: " : role === "icarus" ? "伊卡洛斯: " : "[系统] ") + text;
+    _log.appendChild(div);
+    _log.scrollTop = _log.scrollHeight;
+  }
+
+  // Intercept voice.js WebSocket messages by proxying fetch + creating our own mirror WS
+  // Instead, just listen for keyboard shortcuts and intercept the global event
+  // The voice.js plugin will work as-is, we just observe its DOM changes
+  const observer = new MutationObserver(function(mutations) {
+    mutations.forEach(m => {
+      m.addedNodes.forEach(node => {
+        if (node.id === "icarus-voice-status") {
+          _status.textContent = node.textContent;
+          // Detect state changes
+          const t = node.textContent || "";
+          if (t.includes("聆听")) {
+            _btn.className = "mic-btn listening";
+            _btn.textContent = "🔴";
+          } else if (t.includes("思考")) {
+            _btn.className = "mic-btn thinking";
+            _btn.textContent = "🧠";
+          } else if (t.includes("回复")) {
+            _btn.className = "mic-btn speaking";
+            _btn.textContent = "🔊";
+          } else if (t.includes("你说")) {
+            addMsg("you", t.replace("📝 你说: ", ""));
+          } else if (t.startsWith("✅")) {
+            addMsg("icarus", t.replace("✅ ", ""));
+            _btn.className = "mic-btn";
+            _btn.textContent = "🎤";
+          }
+        }
+      });
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Buttons
+  document.getElementById("clear-btn").onclick = function() {
+    _log.innerHTML = '<div class="chat-msg system">[系统] 已清空</div>';
+  };
+  document.getElementById("test-btn").onclick = async function() {
+    // Test TTS directly via fetch
+    try {
+      const audio = new Audio();
+      audio.src = "/v1/voice/test-tts?text=" + encodeURIComponent("哥哥你好");
+      audio.onerror = function() {
+        addMsg("system", "TTS 端点待实现，请直接试语音");
+      };
+      audio.play().catch(e => addMsg("system", "请直接点 🎤 测试语音"));
+    } catch(e) {
+      addMsg("system", "请直接点 🎤 测试语音");
+    }
+  };
+
+  // Update button state observer
+  const btnObserver = new MutationObserver(function() {
+    const vbtn = document.getElementById("icarus-voice-btn");
+    if (vbtn && _btn && _btn.classList.contains("mic-btn")) {
+      // reflect state from voice.js button
+    }
+  });
+  setTimeout(() => btnObserver.observe(document.body, {childList: true, subtree: true}), 1000);
+
+  addMsg("system", "已加载。点 🎤 说话吧。");
+})();
+</script>
+<script src="/_icarus/voice.js"></script>
+</body>
+</html>

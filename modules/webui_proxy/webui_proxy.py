@@ -547,6 +547,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         elif self.path == "/_icarus/voice.js":
             # Voice dialogue plugin — served from module file (git-tracked).
             self._serve_file_as_js("voice.js")
+        elif self.path == "/_icarus/voice.html":
+            # Voice dialogue test page (works without SPA).
+            self._serve_file_as_html("voice.html")
         elif self.path.startswith(ICARUS_RECOVERY_API_PREFIX):
             # /api/hermes/icarus/* → bridge /v1/icarus/* (mapped in WEBUI_TO_BRIDGE_PATHS)
             self._proxy_to_bridge()
@@ -903,6 +906,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self.send_error(HTTPStatus.NOT_FOUND, f"{filename} not found")
+        except Exception as e:
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+    def _serve_file_as_html(self, filename: str) -> None:
+        """Serve an HTML file from modules/webui_proxy/ (e.g. voice.html)."""
+        import os
+        file_path = os.path.join(os.path.dirname(__file__), filename)
+        try:
+            with open(file_path, "rb") as f:
+                body = f.read()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
             self.wfile.write(body)
         except FileNotFoundError:
