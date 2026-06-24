@@ -13,9 +13,11 @@ import threading
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject, QUrl
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
@@ -25,6 +27,10 @@ from PyQt6.QtWidgets import (
 HERE = Path(__file__).parent
 CHARACTER_SVG = HERE / "character.svg"
 CHARACTER_PNG = HERE / "character.png"
+LIVE2D_HTML = HERE / "live2d" / "index.html"
+
+# Set to True to use Live2D (WebEngine), False for PNG/SVG rendering
+USE_LIVE2D = True
 HERMES_ROOT = HERE.parent.parent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
@@ -42,7 +48,7 @@ class SignalBridge(QObject):
 # ─── Pet Window ───
 
 class PetWindow(QMainWindow):
-    WIDTH, HEIGHT = 460, 460
+    WIDTH, HEIGHT = 500, 500  # bigger for Live2D
 
     def __init__(self, bridge: SignalBridge):
         super().__init__()
@@ -69,14 +75,22 @@ class PetWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Character widget (PNG image preferred, SVG fallback)
+        # Character widget (Live2D WebEngine, or PNG fallback)
         from PyQt6.QtWidgets import QLabel
-        char_label = QLabel(central)
-        char_label.setStyleSheet("background: transparent;")
-        char_label.setFixedSize(self.WIDTH - 20, self.HEIGHT - 60)
-        char_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        if CHARACTER_PNG.exists():
+        if USE_LIVE2D and LIVE2D_HTML.exists():
+            self._live2d_view = QWebEngineView(central)
+            self._live2d_view.setFixedSize(self.WIDTH, self.HEIGHT - 40)
+            self._live2d_view.setStyleSheet("background: transparent;")
+            self._live2d_view.page().setBackgroundColor(Qt.GlobalColor.transparent)
+            self._live2d_view.setUrl(QUrl.fromLocalFile(str(LIVE2D_HTML)))
+            layout.addWidget(self._live2d_view, 0, Qt.AlignmentFlag.AlignCenter)
+            self._character_label = None
+        elif CHARACTER_PNG.exists():
+            char_label = QLabel(central)
+            char_label.setStyleSheet("background: transparent;")
+            char_label.setFixedSize(self.WIDTH - 20, self.HEIGHT - 60)
+            char_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             pixmap = QPixmap(str(CHARACTER_PNG))
             scaled = pixmap.scaled(
                 char_label.width(),
@@ -92,7 +106,6 @@ class PetWindow(QMainWindow):
             self.svg.setFixedSize(200, 280)
             self.svg.setStyleSheet("background: transparent;")
             layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(char_label, 0, Qt.AlignmentFlag.AlignCenter)
 
         # Position: center of screen (first run) or last position
         screen = QApplication.primaryScreen()
@@ -122,8 +135,17 @@ class PetWindow(QMainWindow):
 
     def set_state(self, state: str):
         self._current_state = state.lower()
-        self.svg.renderer().setViewBox(self._svg_viewbox_for_state(state.lower()))
-        self.svg.update()
+        if hasattr(self, 'svg') and self.svg:
+            self.svg.renderer().setViewBox(self._svg_viewbox_for_state(state.lower()))
+            self.svg.update()
+        elif hasattr(self, '_live2d_view') and self._live2d_view:
+            # Send state to Live2D via JS
+            try:
+                self._live2d_view.page().runJavaScript(
+                    f"window.setExpression && window.setExpression('{state.lower()}')"
+                )
+            except Exception:
+                pass
 
     def _svg_viewbox_for_state(self, state: str) -> QRect:
         # Different viewbox regions for different states (if spritesheet)

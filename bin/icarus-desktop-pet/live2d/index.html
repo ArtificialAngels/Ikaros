@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live2D — 伊卡洛斯</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: transparent;
+  display: flex; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<!-- Cubism SDK -->
+<script src="vendor/live2dcubismcore.min.js"></script>
+<script src="vendor/cubism4.min.js"></script>
+
+<script>
+// ─── Init ───
+const MODEL_PATH = "models/";
+const MODEL_NAME = "xisitina";
+const canvas = document.getElementById("canvas");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// ─── Cubism setup ───
+const cubism = window.Cubism4 || window.Live2DCubismFramework;
+if (!cubism) {
+  document.title = "Cubism SDK not loaded";
+  throw new Error("Cubism SDK not loaded");
+}
+
+let gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+if (!gl) throw new Error("WebGL not supported");
+
+// Set viewport
+gl.viewport(0, 0, canvas.width, canvas.height);
+
+// Create Cubism matrix
+const matrix = cubism.CubismFramework.startUp();
+cubism.CubismFramework.initialize();
+
+// ─── Model loader ───
+async function loadModel(path) {
+  const response = await fetch(path + MODEL_NAME + ".moc");
+  const buffer = await response.arrayBuffer();
+  return buffer;
+}
+
+async function loadTexture(path) {
+  const img = new Image();
+  img.src = path;
+  return new Promise((resolve, reject) => {
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+  });
+}
+
+// ─── Main ───
+async function main() {
+  try {
+    // Load model
+    const mocData = await loadModel(MODEL_PATH + MODEL_NAME + "/");
+    console.log("MOC loaded: " + mocData.byteLength + " bytes");
+
+    // Load texture
+    const texture = await loadTexture(MODEL_PATH + MODEL_NAME + "/texture_00.png").catch(() => null);
+    console.log("Texture: " + (texture ? "OK" : "MISSING"));
+
+    document.title = "🪶 伊卡洛斯(Live2D)";
+  } catch (e) {
+    console.error(e);
+    document.title = "⚠ " + e.message;
+  }
+}
+
+window.addEventListener("DOMContentLoaded", main);
+window.addEventListener("resize", () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+// ─── Python API ───
+window.setExpression = (name) => { /* TODO */ };
+window.setMotion = (name) => { /* TODO */ };
+window.getLive2D = () => ({ loaded: false });
+</script>
+</body>
+</html>
