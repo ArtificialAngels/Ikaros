@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 300px; height: 400px;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  font-family: 'Segoe UI', sans-serif;
+}
+/* ───── Contenedor ───── */
+#pet {
+  position: relative;
+  width: 300px; height: 400px;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center;
+  animation: float 3s ease-in-out infinite;
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+/* ───── Halo ───── */
+#halo {
+  position: absolute; top: 20px; left: 50%;
+  transform: translateX(-50%);
+  width: 60px; height: 16px;
+  border: 3px solid #f5d742;
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(245, 215, 66, 0.5), 0 0 24px rgba(245, 215, 66, 0.3);
+  transition: all 0.5s;
+}
+#halo.thinking { animation: spin 1s linear infinite; }
+#halo.listening { box-shadow: 0 0 20px rgba(245, 215, 66, 0.8), 0 0 40px rgba(245, 215, 66, 0.5); }
+#halo.sleeping { opacity: 0.3; }
+@keyframes spin {
+  0% { transform: translateX(-50%) rotate(0deg); }
+  100% { transform: translateX(-50%) rotate(360deg); }
+}
+
+/* ───── Character body SVG container ───── */
+#character {
+  width: 200px; height: 240px;
+  margin-top: 20px;
+}
+#character svg { width: 100%; height: 100%; }
+
+/* ───── Speech bubble ───── */
+#bubble {
+  position: absolute; top: -10px; right: -20px;
+  background: rgba(255,255,255,0.95);
+  color: #333;
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  max-width: 200px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+#bubble.show { opacity: 1; }
+#bubble::after {
+  content: '';
+  position: absolute; bottom: -6px; left: 20px;
+  width: 12px; height: 12px;
+  background: rgba(255,255,255,0.95);
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+/* ───── Status indicator ───── */
+#status {
+  position: absolute; bottom: 20px;
+  font-size: 12px; color: rgba(255,255,255,0.7);
+  text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  background: rgba(0,0,0,0.3);
+  padding: 4px 12px; border-radius: 10px;
+  backdrop-filter: blur(4px);
+}
+#status.listening { background: rgba(220, 50, 50, 0.6); }
+#status.thinking { background: rgba(50, 120, 220, 0.6); }
+#status.speaking { background: rgba(50, 180, 100, 0.6); }
+
+/* ───── Wing animation ───── */
+.wing { transition: transform 0.6s ease-in-out; transform-origin: 50% 100%; }
+.wing-left.closed { transform: scaleX(-1) rotate(-10deg); }
+.wing-left.open { transform: scaleX(-1) rotate(-40deg); }
+.wing-right.closed { transform: rotate(-10deg); }
+.wing-right.open { transform: rotate(-40deg); }
+.wing-left.listening { animation: flutterL 0.8s ease-in-out infinite; }
+.wing-right.listening { animation: flutterR 0.8s ease-in-out infinite; }
+@keyframes flutterL {
+  0%, 100% { transform: scaleX(-1) rotate(-40deg); }
+  50% { transform: scaleX(-1) rotate(-30deg); }
+}
+@keyframes flutterR {
+  0%, 100% { transform: rotate(-40deg); }
+  50% { transform: rotate(-30deg); }
+}
+.wing-left.sleeping { transform: scaleX(-1) rotate(10deg); }
+.wing-right.sleeping { transform: rotate(10deg); }
+
+/* ───── Blink ───── */
+@keyframes blink {
+  0%, 95%, 100% { transform: scaleY(1); }
+  97% { transform: scaleY(0.1); }
+}
+.eye { animation: blink 4s infinite; }
+</style>
+</head>
+<body>
+
+<div id="pet">
+  <div id="halo"></div>
+  <div id="bubble"></div>
+
+  <div id="character">
+    <svg viewBox="0 0 200 240" xmlns="http://www.w3.org/2000/svg">
+      <!-- Wings -->
+      <g class="wing wing-left closed" transform="translate(60,60)">
+        <path d="M30,80 C-10,60 -30,20 -20,0 C-10,-10 10,0 20,10 C15,-10 25,-30 40,-20 C50,-10 45,10 35,25 C55,15 70,25 65,40 C60,55 40,60 30,80Z"
+              fill="white" stroke="#e8e8e8" stroke-width="0.5" opacity="0.95"/>
+      </g>
+      <g class="wing wing-right closed" transform="translate(120,60) scale(-1,1)">
+        <path d="M30,80 C-10,60 -30,20 -20,0 C-10,-10 10,0 20,10 C15,-10 25,-30 40,-20 C50,-10 45,10 35,25 C55,15 70,25 65,40 C60,55 40,60 30,80Z"
+              fill="white" stroke="#e8e8e8" stroke-width="0.5" opacity="0.95"/>
+      </g>
+
+      <!-- Body / Dress -->
+      <ellipse cx="100" cy="170" rx="35" ry="45" fill="white" stroke="#e0e0e0" stroke-width="0.5"/>
+      <path d="M75,160 Q100,200 125,160" fill="#f0f4ff" stroke="#d0d8e8" stroke-width="0.5"/>
+      <!-- Collar -->
+      <ellipse cx="100" cy="140" rx="20" ry="6" fill="#ffe4e8" opacity="0.6"/>
+
+      <!-- Arms -->
+      <path d="M68,148 Q55,170 60,185" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+      <path d="M132,148 Q145,170 140,185" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+
+      <!-- Legs (visible under dress) -->
+      <path d="M88,210 Q90,225 85,230" stroke="#f5d0d0" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <path d="M112,210 Q110,225 115,230" stroke="#f5d0d0" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+      <!-- Head -->
+      <ellipse cx="100" cy="100" rx="38" ry="40" fill="#fce4e8"/>
+
+      <!-- Hair (pink, Ikaros style) -->
+      <path d="M62,90 Q60,65 75,55 Q100,45 125,55 Q140,65 138,90
+               Q140,115 130,125 Q100,135 70,125 Q60,115 62,90Z"
+            fill="#ff8fa0" stroke="#f07a90" stroke-width="0.5"/>
+      <!-- Hair side tufts -->
+      <path d="M62,90 Q55,100 60,115 Q50,110 55,95Z" fill="#ff8fa0"/>
+      <path d="M138,90 Q145,100 140,115 Q150,110 145,95Z" fill="#ff8fa0"/>
+      <!-- Bangs -->
+      <path d="M75,60 Q85,72 100,70 Q115,72 125,60 Q120,75 100,78 Q80,75 75,60Z" fill="#ff7a90"/>
+      <!-- Hair ahoge (antenna hair) -->
+      <path d="M98,55 Q100,42 105,48" stroke="#ff7a90" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+      <!-- Eyes (blue, big) -->
+      <ellipse class="eye" cx="82" cy="100" rx="9" ry="11" fill="#78b8ff"/>
+      <ellipse cx="82" cy="100" rx="7" ry="9" fill="#4a90d9"/>
+      <circle cx="80" cy="96" r="3" fill="white" opacity="0.8"/>
+      <circle cx="84" cy="103" r="1.5" fill="white" opacity="0.4"/>
+
+      <ellipse class="eye" cx="118" cy="100" rx="9" ry="11" fill="#78b8ff"/>
+      <ellipse cx="118" cy="100" rx="7" ry="9" fill="#4a90d9"/>
+      <circle cx="116" cy="96" r="3" fill="white" opacity="0.8"/>
+      <circle cx="120" cy="103" r="1.5" fill="white" opacity="0.4"/>
+
+      <!-- Mouth (animated) -->
+      <ellipse cx="100" cy="115" rx="4" ry="3" fill="#f07080" opacity="0.6" id="mouth"/>
+    </svg>
+  </div>
+
+  <div id="status">🪽 待机中</div>
+</div>
+
+<script>
+// ───── State Machine ─────
+const STATES = {
+  IDLE:     { emoji: '🪽', label: '待机中', halo: '',     wings: 'closed' },
+  LISTENING: { emoji: '🎤', label: '聆听中', halo: 'listening', wings: 'listening' },
+  THINKING: { emoji: '🧠', label: '思考中', halo: 'thinking',  wings: 'open' },
+  SPEAKING: { emoji: '🔊', label: '说话中', halo: '',     wings: 'listening' },
+  SLEEPING: { emoji: '💤', label: '睡觉中', halo: 'sleeping', wings: 'sleeping' },
+  HAPPY:    { emoji: '😊', label: '开心~',  halo: 'listening', wings: 'open' },
+  CURIOUS:  { emoji: '👀', label: '好奇中', halo: '',     wings: 'open' },
+};
+
+let currentState = 'IDLE';
+
+// DOM refs
+const halo = document.getElementById('halo');
+const status = document.getElementById('status');
+const bubble = document.getElementById('bubble');
+const mouth = document.getElementById('mouth');
+const wingsL = document.querySelector('.wing-left');
+const wingsR = document.querySelector('.wing-right');
+
+function setState(state) {
+  currentState = state;
+  const s = STATES[state] || STATES.IDLE;
+  halo.className = s.halo;
+  status.textContent = `${s.emoji} ${s.label}`;
+  status.className = s.emoji === '🎤' ? 'listening' : s.emoji === '🧠' ? 'thinking' : s.emoji === '🔊' ? 'speaking' : '';
+
+  // Wings
+  wingsL.className = 'wing wing-left ' + s.wings;
+  wingsR.className = 'wing wing-right ' + s.wings;
+
+  // Mouth animation for speaking
+  if (state === 'SPEAKING') {
+    mouth.style.animation = 'none';
+    mouth.offsetHeight; // trigger reflow
+    mouth.style.animation = 'speak 0.3s ease-in-out infinite alternate';
+  } else {
+    mouth.style.animation = 'none';
+    mouth.setAttribute('ry', '3');
+  }
+
+  document.dispatchEvent(new CustomEvent('icarus-state', { detail: { state } }));
+}
+
+// Mouth speaking animation
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `
+  @keyframes speak {
+    0% { ry: 3; opacity: 0.6; }
+    100% { ry: 6; opacity: 0.9; }
+  }
+`;
+document.head.appendChild(styleSheet);
+
+function showBubble(text, duration = 3000) {
+  bubble.textContent = text;
+  bubble.classList.add('show');
+  if (duration > 0) {
+    setTimeout(() => bubble.classList.remove('show'), duration);
+  }
+}
+
+function hideBubble() {
+  bubble.classList.remove('show');
+}
+
+// ───── Python Bridge (pywebview) ─────
+window.addEventListener('pywebviewready', function() {
+  if (window.pywebview) {
+    console.log('pywebview bridge connected');
+  }
+});
+
+// Expose API to Python
+window.setPetState = setState;
+window.showBubble = showBubble;
+window.hideBubble = hideBubble;
+window.getState = () => currentState;
+
+// ───── Auto: idle blink etc ─────
+setState('IDLE');
+
+// Random blinks are handled by CSS animation
+
+console.log('🪶 Icarus desktop pet loaded');
+</script>
+</body>
+</html>
