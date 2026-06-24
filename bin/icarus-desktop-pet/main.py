@@ -350,7 +350,10 @@ def register_autostart():
     try:
         import winreg
         python = sys.executable
+        # Use the detached launcher so the pet survives HKCU boot
         cmd = f'"{python}" "{HERE / "main.py"}"'
+        # Also register the .bat wrapper for nice double-click UX
+        bat_cmd = f'""{HERE / "start.bat"}""'
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
                             winreg.KEY_SET_VALUE) as key:
