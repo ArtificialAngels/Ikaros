@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
+    QActionGroup, QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
 )
 
 # Paths
@@ -112,30 +112,102 @@ class PetWindow(QMainWindow):
 # ─── System Tray ───
 
 class PetTray:
-    def __init__(self, window: PetWindow, bridge: SignalBridge):
+    def __init__(self, window: PetWindow, bridge: SignalBridge, audio_engine):
         self.window = window
         self.bridge = bridge
+        self.audio = audio_engine
 
-        # Create a simple icon (colored dot)
-        icon = QPixmap(32, 32)
+        # Icon
+        icon = QPixmap(64, 64)
         icon.fill(Qt.GlobalColor.transparent)
         p = QPainter(icon)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Feather icon
         p.setBrush(Qt.GlobalColor.darkCyan)
-        p.drawEllipse(4, 4, 24, 24)
+        p.drawEllipse(8, 8, 48, 48)
+        p.setPen(Qt.GlobalColor.white)
+        p.setFont(self._font())
+        p.drawText(icon.rect(), Qt.AlignmentFlag.AlignCenter, "ɑ")
         p.end()
 
         self.tray = QSystemTrayIcon(QIcon(icon), parent=window)
-        self.tray.setToolTip("🪶 伊卡洛斯")
+        self.tray.setToolTip("🪶 伊卡洛斯 · 待机中")
 
-        # Menu
+        self._build_menu()
+
+    def _font(self):
+        from PyQt6.QtGui import QFont
+        f = QFont("Segoe UI", 28, QFont.Weight.Bold)
+        return f
+
+    def _build_menu(self):
         menu = QMenu()
+
         menu.addAction("🪶 显示/隐藏", self._toggle_visible)
-        menu.addAction("💤 休眠", self._sleep)
         menu.addSeparator()
+
+        # Mode group
+        self._mode_group = QActionGroup(menu)
+        self._mode_group.setExclusive(True)
+
+        self._continuous_action = QAction(
+            "🎤 连续对话模式", checkable=True, checked=True
+        )
+        self._wake_action = QAction(
+            "🔑 唤醒词模式", checkable=True
+        )
+
+        self._continuous_action.triggered.connect(lambda: self._set_mode("continuous"))
+        self._wake_action.triggered.connect(lambda: self._set_mode("wake"))
+
+        self._mode_group.addAction(self._continuous_action)
+        self._mode_group.addAction(self._wake_action)
+
+        menu.addAction(self._continuous_action)
+        menu.addAction(self._wake_action)
+        menu.addSeparator()
+
+        # Wake word submenu (only active in wake mode)
+        self._wake_menu = QMenu("🔑 唤醒词")
+        self._wake_menu.setEnabled(False)
+        for w in self.audio.wake_words:
+            action = self._wake_menu.addAction(f"{w}")
+            action.setCheckable(True)
+            action.setChecked(True)
+        self._wake_menu.addSeparator()
+        self._wake_menu.addAction("➕ 添加唤醒词…")
+        menu.addMenu(self._wake_menu)
+
+        # Sensitivity
+        sens_menu = menu.addMenu("🎚️ 麦克风灵敏度")
+        for label, val in [("高 (安静环境)", 200), ("中 (默认)", 400), ("低 (嘈杂)", 800)]:
+            a = sens_menu.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(val == self.audio.threshold)
+            a.triggered.connect(lambda checked, v=val: self._set_threshold(v))
+
+        menu.addSeparator()
+        menu.addAction("💤 隐藏", self._sleep)
         menu.addAction("❌ 退出", self._quit)
+
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_activate)
         self.tray.show()
+
+    def _set_mode(self, mode: str):
+        if mode == "continuous":
+            self.audio.continuous_mode = True
+            self.audio.wake_word_enabled = False
+            self._wake_menu.setEnabled(False)
+            self.tray.setToolTip("🪶 伊卡洛斯 · 连续对话")
+        else:
+            self.audio.continuous_mode = False
+            self.audio.wake_word_enabled = True
+            self._wake_menu.setEnabled(True)
+            self.tray.setToolTip("🪶 伊卡洛斯 · 唤醒模式")
+
+    def _set_threshold(self, val: int):
+        self.audio.threshold = val
 
     def _toggle_visible(self):
         self.window.setVisible(not self.window.isVisible())
@@ -149,6 +221,9 @@ class PetTray:
     def _on_activate(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._toggle_visible()
+
+    def update_status(self, text: str):
+        self.tray.setToolTip(f"🪶 伊卡洛斯 · {text}")
 
 
 # ─── Context Engine (threaded) ───
@@ -203,67 +278,10 @@ class ContextThread(threading.Thread):
         self._running = False
 
 
-# ─── Audio Engine (threaded) ───
+# ─── Audio Engine — imports the module-level AudioEngine ───
 
-class AudioThread(threading.Thread):
-    def __init__(self, bridge: SignalBridge):
-        super().__init__(daemon=True)
-        self.bridge = bridge
-        self._running = True
-
-    def run(self):
-        import asyncio
-        asyncio.run(self._ws_loop())
-
-    async def _ws_loop(self):
-        import asyncio
-        try:
-            import websockets
-        except ImportError:
-            log.warning("audio: websockets not available")
-            return
-
-        # Bypass proxy
-        for k in list(os.environ.keys()):
-            if 'proxy' in k.lower():
-                os.environ.pop(k, None)
-
-        uri = "ws://127.0.0.1:7860/v1/voice/ws"
-        while self._running:
-            try:
-                async with websockets.connect(uri, proxy=None) as ws:
-                    await ws.send(json.dumps({"action": "start", "session_id": "icarus_desktop"}))
-                    self.bridge.state_changed.emit("LISTENING")
-                    self.bridge.bubble_shown.emit("🎤 我在听~", 2000)
-
-                    while self._running:
-                        try:
-                            msg = await asyncio.wait_for(ws.recv(), timeout=0.3)
-                            if isinstance(msg, bytes):
-                                pass  # TTS audio — would play
-                            else:
-                                data = json.loads(msg)
-                                t = data.get("type", "")
-                                if t == "transcription":
-                                    self.bridge.bubble_shown.emit(data.get("text", ""), 3000)
-                                elif t == "thinking":
-                                    self.bridge.state_changed.emit("THINKING")
-                                elif t == "status":
-                                    self.bridge.bubble_shown.emit(data.get("message", ""), 2000)
-                                elif t == "done":
-                                    self.bridge.bubble_shown.emit(data.get("text", "嗯~"), 5000)
-                                    self.bridge.state_changed.emit("SPEAKING")
-                                    await asyncio.sleep(2)
-                                    self.bridge.state_changed.emit("LISTENING")
-                                    self.bridge.bubble_shown.emit("🎤 继续~", 2000)
-                        except asyncio.TimeoutError:
-                            continue
-            except Exception as exc:
-                log.warning("audio: WS error %s, retry in 3s", exc)
-                await asyncio.sleep(3)
-
-    def stop(self):
-        self._running = False
+# The real AudioEngine is in audio_engine.py
+# Imported lazily to avoid dependency issues
 
 
 # ─── Main App ───
@@ -272,9 +290,8 @@ class IcarusApp:
     def __init__(self):
         self.bridge = SignalBridge()
         self.window = PetWindow(self.bridge)
-        self.tray = PetTray(self.window, self.bridge)
-        self.audio = AudioThread(self.bridge)
-        self.context = ContextThread(self.bridge)
+        self.audio = None
+        self.tray = None
 
         # Connect signals
         self.bridge.state_changed.connect(self._on_state)
@@ -300,15 +317,30 @@ class IcarusApp:
             self.window.setWindowTitle("🪶")
 
     def run(self):
-        self.window.show()
-        self.audio.start()
-        self.context.start()
         log.info("🪶 Icarus Desktop Pet running")
+
+        # Start AudioEngine (lazy import so pyaudio doesn't block startup)
+        from audio_engine import AudioEngine
+        self.audio = AudioEngine()
+        self.audio.on_state = self._on_state
+        self.audio.on_bubble = self._on_bubble
+        self.audio.start()
+
+        # Create tray with audio reference
+        self.tray = PetTray(self.window, self.bridge, self.audio)
+
+        # Start context engine
+        self._context = ContextThread(self.bridge)
+        self._context.start()
+
+        self.window.show()
         return QApplication.exec()
 
     def cleanup(self):
-        self.audio.stop()
-        self.context.stop()
+        if self.audio:
+            self.audio.stop()
+        if hasattr(self, '_context'):
+            self._context.stop()
 
 
 def register_autostart():

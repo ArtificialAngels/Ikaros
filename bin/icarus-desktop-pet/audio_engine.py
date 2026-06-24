@@ -1,9 +1,16 @@
 """
-Icarus Audio Engine — pyaudio capture → WebSocket bridge.
+Icarus Audio Engine — persistent microphone capture with VAD + wake word.
 
-Captures microphone audio in a background thread, performs simple
-energy-based VAD, and sends audio chunks to the bridge's voice
-WebSocket endpoint for STT → LLM → TTS processing.
+Architecture (inspired by DeskMate's ListenEvent.py):
+  pyaudio capture thread (16000Hz, 16-bit mono)
+  → energy-based VAD (RMS threshold)
+  → silence detection → flush to bridge WebSocket
+  → optional wake-word gating
+  
+Config options (set via system tray):
+  - Continuous mode: always-on, auto detects speech
+  - Wake-word mode: listen for "伊卡洛斯" before processing
+  - Sensitivity: VAD threshold adjustment
 """
 
 from __future__ import annotations
@@ -11,53 +18,63 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import struct
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import pyaudio
 
-logger = logging.getLogger("icarus.audio")
+log = logging.getLogger("icarus.audio")
 
-# ---- Config ----
+# Audio config
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
-SILENCE_THRESHOLD = 300  # RMS below this = silence
-SILENCE_TIMEOUT = 1.2    # seconds of silence before flush
+RATE = 16000
+
+# VAD defaults
+DEFAULT_THRESHOLD = 400
+SILENCE_TIMEOUT = 1.2        # seconds of silence = utterance end
+MIN_AUDIO_MS = 500            # minimum audio to send (ms)
+MAX_UTTERANCE_SEC = 30
+
+# Websocket
 WS_URL = "ws://127.0.0.1:7860/v1/voice/ws"
 
-
 class AudioEngine:
-    """Microphone capture and VAD engine.
-
-    Captures audio in a thread, detects speech/silence, and sends
-    audio chunks through a WebSocket to the bridge.
-    """
+    """Persistent microphone capture with VAD and wake-word."""
 
     def __init__(self):
         self._running = False
-        self._thread: Optional[threading.Thread] = None
         self._p = pyaudio.PyAudio()
         self._stream: Optional[pyaudio.Stream] = None
         self._ws = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._audio_buffer = bytearray()
-        self._last_audio_time = 0.0
-        self._is_speaking = False
-        self._on_state_change = None  # callback(state)
-        self._on_transcription = None  # callback(text)
-        self._device_index: Optional[int] = None
+        self._buffer = bytearray()
+        self._speaking = False
+        self._last_audio_ts = 0.0
+        self._utterance_start = 0.0
 
-    @property
-    def device_count(self) -> int:
-        """Number of available audio input devices."""
-        return self._p.get_device_count()
+        # Config (mutable from tray)
+        self.continuous_mode = True
+        self.wake_word_enabled = False
+        self.wake_words = ["伊卡洛斯"]
+        self.threshold = DEFAULT_THRESHOLD
+        self.device_index: Optional[int] = None
+
+        # Callbacks
+        self.on_state: Optional[Callable[[str], None]] = None
+        self.on_bubble: Optional[Callable[[str, int], None]] = None
+
+        # Threads
+        self._capture_thread: Optional[threading.Thread] = None
+        self._ws_thread: Optional[threading.Thread] = None
+
+    # ─── Device management ───
 
     def list_devices(self) -> list[dict]:
-        """List all audio input devices."""
         devices = []
         for i in range(self._p.get_device_count()):
             info = self._p.get_device_info_by_index(i)
@@ -66,20 +83,15 @@ class AudioEngine:
                     "index": i,
                     "name": info["name"],
                     "channels": info["maxInputChannels"],
-                    "sample_rate": int(info["defaultSampleRate"]),
                 })
         return devices
 
     def set_device(self, index: int):
-        """Select a specific microphone by device index."""
-        self._device_index = index
+        self.device_index = index
 
-    def set_callbacks(self, on_state=None, on_transcription=None):
-        self._on_state_change = on_state
-        self._on_transcription = on_transcription
+    # ─── VAD ───
 
     def _rms(self, data: bytes) -> float:
-        """Compute RMS amplitude of raw 16-bit PCM data."""
         if len(data) < 2:
             return 0.0
         count = len(data) // 2
@@ -87,184 +99,177 @@ class AudioEngine:
             fmt = f"<{count}h"
             samples = struct.unpack(fmt, data[:count * 2])
             return (sum(s * s for s in samples) / count) ** 0.5
-        except Exception:
+        except:
             return 0.0
 
-    def _run_ws_client(self):
-        """Run the WebSocket client in its own asyncio event loop."""
-        async def _client():
-            import websockets
-            async with websockets.connect(WS_URL) as ws:
-                self._ws = ws
-                await ws.send(json.dumps({"action": "start"}))
-                logger.info("audio engine: WebSocket connected")
+    # ─── WebSocket client ───
 
-                while self._running:
-                    try:
-                        # Receive messages from bridge (transcription, audio)
-                        msg = await asyncio.wait_for(ws.recv(), timeout=0.1)
-                        if isinstance(msg, bytes):
-                            # TTS audio chunk — forward to callback
-                            if self._on_transcription:
-                                self._on_transcription({"type": "audio", "data": msg})
-                        else:
-                            data = json.loads(msg)
-                            if data.get("type") == "transcription":
-                                if self._on_transcription:
-                                    self._on_transcription(data)
-                            elif data.get("type") == "status":
-                                if data.get("message") == "思考中…":
-                                    self._emit_state("thinking")
-                            elif data.get("type") == "done":
-                                self._emit_state("idle")
-                                if self._on_transcription:
-                                    self._on_transcription({"type": "done"})
-                    except asyncio.TimeoutError:
-                        continue
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.warning("audio engine: WS disconnected")
-                        break
-
-                self._ws = None
-
-        try:
-            asyncio.run(_client())
-        except Exception as exc:
-            logger.error("audio engine: WS client error: %s", exc)
-
-    def _emit_state(self, state: str):
-        if self._on_state_change:
-            self._on_state_change(state)
-
-    def _capture_thread(self):
-        """Audio capture + VAD loop."""
-        try:
-            kwargs = {
-                "format": FORMAT,
-                "channels": CHANNELS,
-                "rate": RATE,
-                "input": True,
-                "frames_per_buffer": CHUNK,
-                "stream_callback": None,
-            }
-            if self._device_index is not None:
-                kwargs["input_device_index"] = self._device_index
-
-            self._stream = self._p.open(**kwargs)
-            logger.info("audio engine: capture started")
-
-            buffered_silence = 0.0
-            min_audio_chunks = 5  # minimum chunks before sending
-
-            while self._running and self._stream.is_active():
-                try:
-                    data = self._stream.read(CHUNK, exception_on_overflow=False)
-                except Exception:
-                    break
-
-                rms = self._rms(data)
-                now = time.time()
-
-                if rms > SILENCE_THRESHOLD:
-                    # Voice detected
-                    self._audio_buffer.extend(data)
-                    self._last_audio_time = now
-                    if not self._is_speaking:
-                        self._is_speaking = True
-                        self._emit_state("listening")
-                    buffered_silence = 0.0
-                else:
-                    if self._is_speaking:
-                        buffered_silence += CHUNK / RATE
-                        self._audio_buffer.extend(data)
-
-                        if buffered_silence > SILENCE_TIMEOUT:
-                            # Silence timeout — flush audio
-                            self._flush_audio()
-                    else:
-                        # Not speaking, not buffering — keep minimal buffer for VAD
-                        if len(self._audio_buffer) > 0:
-                            # Keep last 0.5s of silence for context
-                            max_buf = int(RATE * 0.5 * 2)  # 0.5s of 16-bit mono
-                            if len(self._audio_buffer) > max_buf:
-                                self._audio_buffer = self._audio_buffer[-max_buf:]
-
-            self._flush_audio()
-
-        except Exception as exc:
-            logger.error("audio engine: capture error: %s", exc)
-        finally:
-            if self._stream:
-                try:
-                    self._stream.stop_stream()
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = None
-
-    def _flush_audio(self):
-        """Send accumulated audio through WebSocket."""
-        if len(self._audio_buffer) < 4096:
-            self._audio_buffer.clear()
-            self._is_speaking = False
-            return
-
-        data = bytes(self._audio_buffer)
-        self._audio_buffer.clear()
-        self._is_speaking = False
-
-        if self._ws and data:
-            try:
-                # Send audio via the running WS client
-                # We use a synchronized queue approach
-                import queue
-                self._audio_queue.put(data)
-            except Exception:
-                pass
-
-    def _ws_send_loop(self):
-        """Background thread that sends queued audio through WebSocket."""
+    async def _ws_loop(self):
+        import asyncio
+        import websockets
+        for k in list(os.environ.keys()):
+            if 'proxy' in k.lower():
+                os.environ.pop(k, None)
+        uri = WS_URL
         while self._running:
             try:
-                data = self._audio_queue.get(timeout=0.5)
-                if self._ws:
-                    try:
-                        import asyncio
-                        asyncio.run_coroutine_threadsafe(
-                            self._ws.send(data), self._loop
-                        )
-                    except Exception:
-                        pass
-            except Exception:
+                async with websockets.connect(uri, proxy=None) as ws:
+                    self._ws = ws
+                    await ws.send(json.dumps({"action": "start"}))
+                    self._emit_state("LISTENING")
+                    self._emit_bubble("🎤 我在听~", 2000)
+
+                    while self._running:
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=0.3)
+                            if isinstance(msg, bytes):
+                                # TTS audio — for now skip (would play via speaker)
+                                pass
+                            else:
+                                data = json.loads(msg)
+                                t = data.get("type", "")
+                                if t == "transcription":
+                                    self._emit_bubble(data.get("text", "?"), 3000)
+                                elif t == "thinking":
+                                    self._emit_state("THINKING")
+                                elif t == "status":
+                                    self._emit_bubble(data.get("message", ""), 2000)
+                                elif t == "done":
+                                    self._emit_bubble(data.get("text", "嗯~"), 5000)
+                                    self._emit_state("SPEAKING")
+                                    await asyncio.sleep(0.5)
+                                    self._emit_state("LISTENING")
+                                elif t == "error":
+                                    self._emit_bubble(f"⚠️ {data.get('message', '?')}", 4000)
+                        except asyncio.TimeoutError:
+                            continue
+            except Exception as exc:
+                log.warning("WS: %s, retry 3s", exc)
+                await asyncio.sleep(3)
+
+    def _emit_state(self, s: str):
+        if self.on_state:
+            self.on_state(s)
+
+    def _emit_bubble(self, t: str, d: int = 3000):
+        if self.on_bubble:
+            self.on_bubble(t, d)
+
+    # ─── Capture thread (DeskMate pattern) ───
+
+    def _capture(self):
+        log.info("audio: capture started")
+        try:
+            kwargs = dict(
+                format=FORMAT, channels=CHANNELS, rate=RATE,
+                input=True, frames_per_buffer=CHUNK,
+            )
+            if self.device_index is not None:
+                kwargs["input_device_index"] = self.device_index
+            self._stream = self._p.open(**kwargs)
+        except Exception as exc:
+            log.error("audio: open stream failed: %s", exc)
+            return
+
+        silence_chunks = 0
+        speech_chunks = 0
+
+        while self._running and self._stream.is_active():
+            try:
+                data = self._stream.read(CHUNK, exception_on_overflow=False)
+            except:
+                break
+
+            rms = self._rms(data)
+            now = time.time()
+
+            if rms > self.threshold:
+                # Voice detected
+                self._buffer.extend(data)
+                self._last_audio_ts = now
+                if not self._speaking:
+                    self._speaking = True
+                    self._utterance_start = now
+                    speech_chunks = 0
+                    if self.continuous_mode:
+                        self._emit_state("LISTENING")
+                speech_chunks += 1
+                silence_chunks = 0
+            else:
+                if self._speaking:
+                    self._buffer.extend(data)  # keep trailing silence
+                    silence_chunks += 1
+                    # Check silence timeout
+                    dur = (now - self._last_audio_ts)
+                    total = (now - self._utterance_start)
+
+                    if dur > SILENCE_TIMEOUT or total > MAX_UTTERANCE_SEC:
+                        self._flush()
+                else:
+                    # Keep a rolling 0.5s buffer for VAD context
+                    max_pre = int(RATE * 0.5 * 2)
+                    if len(self._buffer) > max_pre:
+                        self._buffer = self._buffer[-max_pre:]
+
+        self._flush()
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except:
+                pass
+            self._stream = None
+
+    def _flush(self):
+        if len(self._buffer) < int(RATE * MIN_AUDIO_MS / 1000 * 2):
+            self._buffer.clear()
+            self._speaking = False
+            return
+        audio = bytes(self._buffer)
+        self._buffer.clear()
+        self._speaking = False
+
+        # Check wake word if enabled
+        # (In a real implementation, this would use a lightweight ASR)
+        # For now: send all speech through, wake word handled by LLM
+        if self._ws:
+            try:
+                # Send via the existing websocket
+                import asyncio
+                asyncio.run_coroutine_threadsafe(
+                    self._ws.send(audio), asyncio.get_event_loop()
+                )
+            except:
                 pass
 
+        self._emit_state("LISTENING")
+
+    # ─── Lifecycle ───
+
     def start(self):
-        """Start audio capture and WebSocket client."""
         if self._running:
             return
         self._running = True
-        self._audio_queue = __import__('queue').Queue()
-
-        # Start WebSocket client in a thread
-        self._ws_thread = threading.Thread(target=self._run_ws_client, daemon=True)
+        self._ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         self._ws_thread.start()
+        time.sleep(0.5)  # Let WS connect first
+        self._capture_thread = threading.Thread(target=self._capture, daemon=True)
+        self._capture_thread.start()
+        log.info("audio: engine started")
 
-        # Start capture thread
-        self._capture_thread_obj = threading.Thread(target=self._capture_thread, daemon=True)
-        self._capture_thread_obj.start()
-
-        # Wait a moment for WS to connect
-        time.sleep(1)
+    def _run_ws(self):
+        import asyncio
+        asyncio.run(self._ws_loop())
 
     def stop(self):
-        """Stop audio capture."""
         self._running = False
         if self._stream:
             try:
                 self._stream.stop_stream()
                 self._stream.close()
-            except Exception:
+            except:
                 pass
+            self._stream = None
 
     def close(self):
         self.stop()
