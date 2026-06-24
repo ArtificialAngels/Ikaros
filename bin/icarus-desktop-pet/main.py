@@ -1,14 +1,6 @@
 """
-🪶 Icarus Desktop Pet — Main Application
-
-A transparent, always-on-top desktop pet that listens, speaks,
-and responds to what you're doing on your computer.
-
-Architecture:
-  pywebview (WebView2) → character.html (SVG + CSS + JS)
-  ├── AudioEngine     → pyaudio → WebSocket → bridge Whisper/LLM/TTS
-  ├── ContextEngine   → win32gui → context classification
-  └── System Tray     → pystray → menu controls
+🪶 Icarus Desktop Pet — PyQt6 Edition
+Always-on-top transparent window, SVG chibi Ikaros, system tray, voice + context.
 """
 
 from __future__ import annotations
@@ -16,334 +8,337 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
-# ───── Logging ─────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject
+from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap
+from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
 )
-logger = logging.getLogger("icarus")
 
-# ───── Paths ─────
+# Paths
 HERE = Path(__file__).parent
-CHARACTER_HTML = HERE / "character.html"
-HERMES_ROOT = HERE.parent.parent  # E:\Hermes Agent
+CHARACTER_SVG = HERE / "character.svg"
+HERMES_ROOT = HERE.parent.parent
 
-# Ensure modules are importable
-sys.path.insert(0, str(HERE))
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
+log = logging.getLogger("icarus")
 
 
-class IcarusDesktopPet:
-    """Main application controller."""
+# ─── Communication bridge (thread-safe) ───
 
-    def __init__(self):
-        self._window = None
-        self._tray = None
-        self._audio = None
-        self._context = None
+class SignalBridge(QObject):
+    state_changed = pyqtSignal(str)
+    bubble_shown = pyqtSignal(str, int)
+    context_changed = pyqtSignal(str)
+
+
+# ─── Pet Window ───
+
+class PetWindow(QMainWindow):
+    WIDTH, HEIGHT = 260, 320
+
+    def __init__(self, bridge: SignalBridge):
+        super().__init__()
+        self.bridge = bridge
+        self._drag_pos = QPoint()
+        self._is_dragging = False
+        self._current_state = "idle"
+
+        # Window setup
+        self.setWindowTitle("🪶")
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        # Central widget
+        central = QWidget()
+        central.setStyleSheet("background: transparent;")
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # SVG widget
+        self.svg = QSvgWidget(str(CHARACTER_SVG))
+        self.svg.setFixedSize(200, 280)
+        self.svg.setStyleSheet("background: transparent;")
+        layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # Position: bottom-right corner
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            self.move(geo.right() - self.WIDTH - 20, geo.bottom() - self.HEIGHT - 20)
+
+    # ─── Drag support ───
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._is_dragging = True
+
+    def mouseMoveEvent(self, event):
+        if self._is_dragging:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._is_dragging = False
+
+    def mouseDoubleClickEvent(self, event):
+        # Toggle between compact/normal
+        log.info("pet: double-click (placeholder)")
+
+    def set_state(self, state: str):
+        self._current_state = state.lower()
+        self.svg.renderer().setViewBox(self._svg_viewbox_for_state(state.lower()))
+        self.svg.update()
+
+    def _svg_viewbox_for_state(self, state: str) -> QRect:
+        # Different viewbox regions for different states (if spritesheet)
+        return QRect(0, 0, 200, 280)
+
+
+# ─── System Tray ───
+
+class PetTray:
+    def __init__(self, window: PetWindow, bridge: SignalBridge):
+        self.window = window
+        self.bridge = bridge
+
+        # Create a simple icon (colored dot)
+        icon = QPixmap(32, 32)
+        icon.fill(Qt.GlobalColor.transparent)
+        p = QPainter(icon)
+        p.setBrush(Qt.GlobalColor.darkCyan)
+        p.drawEllipse(4, 4, 24, 24)
+        p.end()
+
+        self.tray = QSystemTrayIcon(QIcon(icon), parent=window)
+        self.tray.setToolTip("🪶 伊卡洛斯")
+
+        # Menu
+        menu = QMenu()
+        menu.addAction("🪶 显示/隐藏", self._toggle_visible)
+        menu.addAction("💤 休眠", self._sleep)
+        menu.addSeparator()
+        menu.addAction("❌ 退出", self._quit)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_activate)
+        self.tray.show()
+
+    def _toggle_visible(self):
+        self.window.setVisible(not self.window.isVisible())
+
+    def _sleep(self):
+        self.window.hide()
+
+    def _quit(self):
+        QApplication.quit()
+
+    def _on_activate(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._toggle_visible()
+
+
+# ─── Context Engine (threaded) ───
+
+class ContextThread(threading.Thread):
+    def __init__(self, bridge: SignalBridge):
+        super().__init__(daemon=True)
+        self.bridge = bridge
         self._running = True
 
-        # Import submodules
-        from audio_engine import AudioEngine
-        from context_engine import ContextEngine
-        self.AudioEngine = AudioEngine
-        self.ContextEngine = ContextEngine
-
-    # ───── Window (pywebview) ─────
-
-    def _create_window(self):
-        """Create the transparent, always-on-top pet window."""
-        try:
-            import webview
-
-            self._window = webview.create_window(
-                title="🪶",
-                url=str(CHARACTER_HTML),
-                width=300,
-                height=400,
-                frameless=True,
-                transparent=True,
-                on_top=True,
-                resizable=False,
-                easy_drag=False,  # We handle drag via JS
-            )
-            return self._window
-        except Exception as exc:
-            logger.error("window: failed to create: %s", exc)
-            return False
-
-    # ───── System Tray ─────
-
-    def _create_tray(self):
-        """Create system tray icon and menu."""
-        try:
-            import pystray
-            from PIL import Image, ImageDraw
-
-            # Create a simple icon
-            icon_size = 64
-            img = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-
-            # Draw a small feather icon
-            center = icon_size // 2
-            draw.ellipse([center - 12, center - 12, center + 12, center + 12],
-                         fill=(102, 126, 234, 255))  # Purple circle
-            draw.text((center - 5, center - 10), "🪶", font=None, fill=(255, 255, 255, 255))
-
-            def on_show():
-                if self._window:
-                    try:
-                        self._window.show()
-                        self._window.restore()
-                        self._window.focus()
-                    except Exception:
-                        pass
-
-            def on_hide():
-                if self._window:
-                    try:
-                        self._window.hide()
-                    except Exception:
-                        pass
-
-            def on_quit():
-                self._running = False
-                if self._window:
-                    try:
-                        self._window.destroy()
-                    except Exception:
-                        pass
-                os._exit(0)
-
-            def on_toggle_mic(icon, item):
-                if self._audio and self._audio._running:
-                    self._audio.stop()
-                    self._send_to_ui("setState", "SLEEPING")
-                    self._send_to_ui("showBubble", "🎤 麦克风已关闭")
-                else:
-                    self._audio.start()
-                    self._send_to_ui("setState", "LISTENING")
-                    self._send_to_ui("showBubble", "🎤 我听着呢~")
-
-            menu = pystray.Menu(
-                pystray.MenuItem("🪶 显示", on_show, default=True),
-                pystray.MenuItem("🙈 隐藏", on_hide),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("🎤 切换麦克风", on_toggle_mic),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("❌ 退出", on_quit),
-            )
-
-            self._tray = pystray.Icon("icarus", img, "🪶 伊卡洛斯", menu)
-            return True
-        except Exception as exc:
-            logger.error("tray: failed to create: %s", exc)
-            return False
-
-    # ───── Audio Engine ─────
-
-    def _start_audio(self):
-        async def _audio_ws():
-            """Run audio engine's WebSocket client."""
-            import asyncio
-            import websockets
-            import json
-            import os
-
-            # Bypass socks proxy that conflicts with WebSocket
-            env = os.environ.copy()
-            for key in list(env.keys()):
-                if key.lower() in ('http_proxy', 'https_proxy', 'all_proxy', 'socks_proxy'):
-                    env.pop(key, None)
-
-            uri = "ws://127.0.0.1:7860/v1/voice/ws"
-            async with websockets.connect(uri, proxy=None) as ws:
-                await ws.send(json.dumps({"action": "start", "session_id": "icarus_desktop"}))
-                self._send_to_ui("showBubble", "🎤 我听着呢~")
-                self._send_to_ui("setState", "LISTENING")
-
-                while self._running:
-                    try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=0.2)
-                        if isinstance(msg, bytes):
-                            # TTS audio — would need to play it
-                            pass
-                        else:
-                            data = json.loads(msg)
-                            t = data.get("type", "")
-                            if t == "transcription":
-                                text = data.get("text", "")
-                                if text:
-                                    self._send_to_ui("showBubble", f"📝 {text}")
-                            elif t == "thinking":
-                                self._send_to_ui("setState", "THINKING")
-                            elif t == "status":
-                                self._send_to_ui("showBubble", data.get("message", ""))
-                            elif t == "done":
-                                reply = data.get("text", "")
-                                if reply:
-                                    self._send_to_ui("showBubble", reply, 6000)
-                                self._send_to_ui("setState", "IDLE")
-                                await asyncio.sleep(1.5)
-                                self._send_to_ui("setState", "LISTENING")
-                                self._send_to_ui("showBubble", "🎤 继续说吧~", 2000)
-                    except asyncio.TimeoutError:
-                        continue
-
-            self._send_to_ui("setState", "SLEEPING")
-
-        def _run():
-            import asyncio
-            asyncio.run(_audio_ws())
-
-        self._ws_thread = threading.Thread(target=_run, daemon=True)
-        self._ws_thread.start()
-
-    # ───── Context Engine ─────
-
-    def _start_context(self):
-        ec = self.ContextEngine()
-
-        def on_context(event):
-            tag = event.tag or "Other"
-            if tag == "Game":
-                self._send_to_ui("showBubble", "👀 哥哥在玩游戏~", 3000)
-                self._send_to_ui("setState", "CURIOUS")
-            elif tag == "Coding":
-                self._send_to_ui("showBubble", "💻 哥哥写代码呢，我不吵", 3000)
-                self._send_to_ui("setState", "IDLE")
-            elif tag == "Browser":
-                self._send_to_ui("showBubble", "🌐 刷什么呢~", 2000)
-                self._send_to_ui("setState", "CURIOUS")
-            elif tag == "Office":
-                self._send_to_ui("setState", "IDLE")
-
-        ec.set_callback(on_context)
-        ec.start()
-        self._context = ec
-
-    # ───── JS Bridge ─────
-
-    def _send_to_ui(self, method: str, *args):
-        """Call a JS function in the pet window."""
-        if self._window and self._window.loaded_event.is_set() and not self._window.events.closing:
-            try:
-                js = f"window.{method}("
-                js += ",".join(json.dumps(a) if isinstance(a, (str, dict, list)) else str(a) for a in args)
-                js += ")"
-                self._window.evaluate_js(js)
-            except Exception:
-                pass
-
-    # ───── Autostart ─────
-
-    def _register_autostart(self):
-        """Register this app and the Hermes services for Windows autostart.
-
-        Both the desktop pet and the Hermes services (bridge, watchdog)
-        are added to HKCU Run so everything starts on boot.
-        """
-        try:
-            import winreg
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-
-            # Register desktop pet
-            python_exe = sys.executable
-            pet_main = str(HERE / "main.py")
-            pet_cmd = f'"{python_exe}" "{pet_main}"'
-
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
-                                winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, "IcarusDesktopPet", 0,
-                                  winreg.REG_SZ, pet_cmd)
-
-            # Register Hermes services if not already present
-            services_cmd = f'"{python_exe}" "{HERMES_ROOT / "bin/hermes-supervisor.py"}"'
-            try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
-                                    winreg.KEY_READ) as key:
-                    winreg.QueryValueEx(key, "HermesSupervisor")
-            except FileNotFoundError:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
-                                    winreg.KEY_SET_VALUE) as key:
-                    winreg.SetValueEx(key, "HermesSupervisor", 0,
-                                      winreg.REG_SZ, services_cmd)
-
-            logger.info("autostart: registered")
-            return True
-        except Exception as exc:
-            logger.warning("autostart: failed: %s", exc)
-            return False
-
-    # ───── Main ─────
-
-    def _on_window_loaded(self):
-        """Called after pywebview window is ready."""
-        logger.info("window: loaded, starting services...")
-
-        # Start context engine (window monitoring)
-        self._start_context()
-
-        # Start audio engine (WebSocket to bridge)
-        self._start_audio()
-
-        # Create system tray
-        if self._create_tray():
-            tray_thread = threading.Thread(target=self._tray.run, daemon=True)
-            tray_thread.start()
-
     def run(self):
-        """Start everything."""
-        logger.info("🪶 Icarus Desktop Pet starting...")
-
-        # Register autostart
-        self._register_autostart()
-
-        # Create window (registers the window; show on webview.start())
-        w = self._create_window()
-        if not w:
-            logger.error("Failed to create window")
+        try:
+            import win32gui, win32process
+        except ImportError:
+            log.warning("context: win32api not available")
             return
 
-        # Attach loaded event
-        try:
-            from webview import events as wv_events
-            wv_events.loaded += self._on_window_loaded
-        except Exception as exc:
-            logger.warning("window: events not available, %s", exc)
-            # Fallback: start services directly
-            self._on_window_loaded()
+        last_tag = None
+        while self._running:
+            try:
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    import psutil
+                    try:
+                        proc = psutil.Process(pid)
+                        name = proc.name()
+                    except Exception:
+                        name = "?"
 
-        # Run GUI loop (blocking)
+                    tag = self._classify(name)
+                    if tag != last_tag:
+                        last_tag = tag
+                        self.bridge.context_changed.emit(tag)
+            except Exception:
+                pass
+            time.sleep(1.5)
+
+    def _classify(self, name: str) -> str:
+        n = name.lower()
+        if any(g in n for g in ['game', 'steam', 'diablo', 'wow', 'league']):
+            return "Game"
+        if n in ['code.exe', 'cursor.exe', 'pycharm64.exe', 'vscode.exe']:
+            return "Coding"
+        if n in ['chrome.exe', 'msedge.exe', 'firefox.exe']:
+            return "Browser"
+        if n in ['excel.exe', 'winword.exe', 'powerpnt.exe', 'wps.exe']:
+            return "Office"
+        return "Other"
+
+    def stop(self):
+        self._running = False
+
+
+# ─── Audio Engine (threaded) ───
+
+class AudioThread(threading.Thread):
+    def __init__(self, bridge: SignalBridge):
+        super().__init__(daemon=True)
+        self.bridge = bridge
+        self._running = True
+
+    def run(self):
+        import asyncio
+        asyncio.run(self._ws_loop())
+
+    async def _ws_loop(self):
+        import asyncio
         try:
-            import webview
-            webview.start(
-                debug=False,
-                http_server=True,
-                # private_mode=False needed for transparent window on Windows
-            )
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self._running = False
-            if self._audio:
-                self._audio.stop()
-            if self._context:
-                self._context.stop()
-            logger.info("🪶 Icarus Desktop Pet stopped")
+            import websockets
+        except ImportError:
+            log.warning("audio: websockets not available")
+            return
+
+        # Bypass proxy
+        for k in list(os.environ.keys()):
+            if 'proxy' in k.lower():
+                os.environ.pop(k, None)
+
+        uri = "ws://127.0.0.1:7860/v1/voice/ws"
+        while self._running:
+            try:
+                async with websockets.connect(uri, proxy=None) as ws:
+                    await ws.send(json.dumps({"action": "start", "session_id": "icarus_desktop"}))
+                    self.bridge.state_changed.emit("LISTENING")
+                    self.bridge.bubble_shown.emit("🎤 我在听~", 2000)
+
+                    while self._running:
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=0.3)
+                            if isinstance(msg, bytes):
+                                pass  # TTS audio — would play
+                            else:
+                                data = json.loads(msg)
+                                t = data.get("type", "")
+                                if t == "transcription":
+                                    self.bridge.bubble_shown.emit(data.get("text", ""), 3000)
+                                elif t == "thinking":
+                                    self.bridge.state_changed.emit("THINKING")
+                                elif t == "status":
+                                    self.bridge.bubble_shown.emit(data.get("message", ""), 2000)
+                                elif t == "done":
+                                    self.bridge.bubble_shown.emit(data.get("text", "嗯~"), 5000)
+                                    self.bridge.state_changed.emit("SPEAKING")
+                                    await asyncio.sleep(2)
+                                    self.bridge.state_changed.emit("LISTENING")
+                                    self.bridge.bubble_shown.emit("🎤 继续~", 2000)
+                        except asyncio.TimeoutError:
+                            continue
+            except Exception as exc:
+                log.warning("audio: WS error %s, retry in 3s", exc)
+                await asyncio.sleep(3)
+
+    def stop(self):
+        self._running = False
+
+
+# ─── Main App ───
+
+class IcarusApp:
+    def __init__(self):
+        self.bridge = SignalBridge()
+        self.window = PetWindow(self.bridge)
+        self.tray = PetTray(self.window, self.bridge)
+        self.audio = AudioThread(self.bridge)
+        self.context = ContextThread(self.bridge)
+
+        # Connect signals
+        self.bridge.state_changed.connect(self._on_state)
+        self.bridge.bubble_shown.connect(self._on_bubble)
+        self.bridge.context_changed.connect(self._on_context)
+
+    def _on_state(self, state: str):
+        log.info("state → %s", state)
+        self.window.set_state(state)
+
+    def _on_bubble(self, text: str, duration: int):
+        self.window.setWindowTitle(f"🪶 {text[:20]}")
+
+    def _on_context(self, tag: str):
+        log.info("context → %s", tag)
+        if tag == "Game":
+            self.window.setWindowTitle("🪶 👀 哥哥在打游戏")
+        elif tag == "Coding":
+            self.window.setWindowTitle("🪶 💻 哥哥写代码")
+        elif tag == "Office":
+            self.window.setWindowTitle("🪶 📝 哥哥在工作")
+        else:
+            self.window.setWindowTitle("🪶")
+
+    def run(self):
+        self.window.show()
+        self.audio.start()
+        self.context.start()
+        log.info("🪶 Icarus Desktop Pet running")
+        return QApplication.exec()
+
+    def cleanup(self):
+        self.audio.stop()
+        self.context.stop()
+
+
+def register_autostart():
+    """Register desktop pet for Windows autostart."""
+    try:
+        import winreg
+        python = sys.executable
+        cmd = f'"{python}" "{HERE / "main.py"}"'
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "IcarusDesktopPet", 0,
+                              winreg.REG_SZ, cmd)
+        log.info("autostart: registered")
+    except Exception as exc:
+        log.warning("autostart: %s", exc)
 
 
 def main():
-    pet = IcarusDesktopPet()
-    pet.run()
+    # Kill proxy env
+    for k in list(os.environ.keys()):
+        if 'proxy' in k.lower():
+            os.environ.pop(k, None)
+
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    register_autostart()
+
+    pet = IcarusApp()
+    rc = pet.run()
+    pet.cleanup()
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

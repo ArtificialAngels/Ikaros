@@ -1,0 +1,96 @@
+<svg viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="skin" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#fee"/>
+          <stop offset="100%" stop-color="#fce4e8"/>
+        </radialGradient>
+        <radialGradient id="eyeGrad" cx="40%" cy="40%" r="60%">
+          <stop offset="0%" stop-color="#8ac4ff"/>
+          <stop offset="60%" stop-color="#4a90d9"/>
+          <stop offset="100%" stop-color="#3a78c0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- Body / Dress -->
+      <path d="M80,145 Q100,215 120,145 Q140,150 135,210 Q130,250 100,255 Q70,250 65,210 Q60,150 80,145Z"
+            fill="white" stroke="#e8e8f0" stroke-width="1"/>
+      <!-- Dress shading -->
+      <path d="M85,150 Q100,210 115,150 Q120,180 100,220 Q80,180 85,150Z"
+            fill="#f8faff" opacity="0.5"/>
+      <!-- Collar ribbon -->
+      <path d="M88,145 Q100,152 112,145 Q108,155 100,158 Q92,155 88,145Z"
+            fill="#ff88a0"/>
+
+      <!-- Arms -->
+      <path d="M82,152 Q68,170 65,190" stroke="#f5d0d0" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <path d="M118,152 Q132,170 135,190" stroke="#f5d0d0" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <!-- Hands -->
+      <circle cx="65" cy="192" r="5" fill="#fce4e8"/>
+      <circle cx="135" cy="192" r="5" fill="#fce4e8"/>
+
+      <!-- Legs -->
+      <path d="M92,252 Q94,268 90,275" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+      <path d="M108,252 Q106,268 110,275" stroke="#f5d0d0" stroke-width="6" fill="none" stroke-linecap="round"/>
+      <!-- Shoes -->
+      <ellipse cx="88" cy="276" rx="8" ry="4" fill="#ffa0b0"/>
+      <ellipse cx="112" cy="276" rx="8" ry="4" fill="#ffa0b0"/>
+
+      <!-- Head -->
+      <ellipse cx="100" cy="90" rx="42" ry="44" fill="url(#skin)"/>
+
+      <!-- Hair (Ikaros pink style) -->
+      <path d="M58,80 Q56,55 68,40 Q88,28 100,28 Q118,28 132,40 Q144,55 142,80 Q145,110 135,125 Q120,140 100,143 Q80,140 65,125 Q55,110 58,80Z"
+            fill="#ff8fa5" stroke="#f07a90" stroke-width="0.5"/>
+      <!-- Hair shine -->
+      <path d="M68,50 Q80,42 100,40 Q115,42 125,55"
+            stroke="#ffb0c0" stroke-width="3" fill="none" opacity="0.5"/>
+      <!-- Side hair -->
+      <path d="M58,85 Q52,100 58,120 Q50,115 48,100 Q45,85 55,75Z" fill="#ff8fa5"/>
+      <path d="M142,85 Q148,100 142,120 Q150,115 152,100 Q155,85 145,75Z" fill="#ff8fa5"/>
+      <!-- Ahoge (antenna) -->
+      <path d="M98,28 Q100,15 106,20" stroke="#ff7a90" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <!-- Tiny hair ornament -->
+      <circle cx="65" cy="58" r="4" fill="#ff6680" opacity="0.6"/>
+
+      <!-- Bangs -->
+      <path d="M65,48 Q75,58 100,55 Q120,56 130,50 Q125,65 100,68 Q75,67 65,48Z"
+            fill="#ff7088"/>
+
+      <!-- Eyes (big blue anime style) -->
+      <!-- Left eye -->
+      <ellipse cx="82" cy="88" rx="10" ry="12" fill="url(#eyeGrad)" class="eye"/>
+      <ellipse cx="82" cy="86" rx="7" ry="9" fill="#6aace8" opacity="0.3"/>
+      <ellipse cx="82" cy="90" rx="3" ry="4" fill="#3a78c0" opacity="0.4"/>
+      <!-- Eye shine -->
+      <ellipse cx="79" cy="82" rx="3.5" ry="3" fill="white" opacity="0.9"/>
+      <circle cx="84" cy="90" r="1.5" fill="white" opacity="0.5"/>
+
+      <!-- Right eye -->
+      <ellipse cx="118" cy="88" rx="10" ry="12" fill="url(#eyeGrad)" class="eye"/>
+      <ellipse cx="118" cy="86" rx="7" ry="9" fill="#6aace8" opacity="0.3"/>
+      <ellipse cx="118" cy="90" rx="3" ry="4" fill="#3a78c0" opacity="0.4"/>
+      <ellipse cx="115" cy="82" rx="3.5" ry="3" fill="white" opacity="0.9"/>
+      <circle cx="120" cy="90" r="1.5" fill="white" opacity="0.5"/>
+
+      <!-- Eyebrows -->
+      <path d="M72,76 Q82,72 92,76" stroke="#e87080" stroke-width="1.5" fill="none"/>
+      <path d="M108,76 Q118,72 128,76" stroke="#e87080" stroke-width="1.5" fill="none"/>
+
+      <!-- Nose -->
+      <path d="M100,96 Q101,100 100,101" stroke="#f0a0b0" stroke-width="0.8" fill="none"/>
+
+      <!-- Mouth (anime small) -->
+      <ellipse cx="100" cy="108" rx="5" ry="3.5" fill="#f07080" opacity="0.6" id="mouth"/>
+
+      <!-- Blush -->
+      <ellipse cx="72" cy="100" rx="7" ry="4" fill="#ffa0b0" opacity="0.3"/>
+      <ellipse cx="128" cy="100" rx="7" ry="4" fill="#ffa0b0" opacity="0.3"/>
+    
+  <style>
+    .eye { animation: blink 4s infinite; transform-origin: center; }
+    @keyframes blink {
+      0%, 95%, 100% { transform: scaleY(1); }
+      97% { transform: scaleY(0.1); }
+    }
+  </style>
+</svg>
