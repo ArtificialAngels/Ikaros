@@ -1,0 +1,10 @@
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\getrandom-b8a02f4ab02369c4.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\error.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\util.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\../README.md C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends\windows.rs
+
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libgetrandom-b8a02f4ab02369c4.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\error.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\util.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\../README.md C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends\windows.rs
+
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\lib.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\error.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\util.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\../README.md:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\getrandom-0.3.4\src\backends\windows.rs:

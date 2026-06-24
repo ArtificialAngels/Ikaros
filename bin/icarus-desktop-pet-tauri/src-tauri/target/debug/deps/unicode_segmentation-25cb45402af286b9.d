@@ -1,0 +1,9 @@
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\unicode_segmentation-25cb45402af286b9.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\grapheme.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\sentence.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\word.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\tables.rs
+
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libunicode_segmentation-25cb45402af286b9.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\grapheme.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\sentence.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\word.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\tables.rs
+
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\lib.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\grapheme.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\sentence.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\word.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\unicode-segmentation-1.13.3\src\tables.rs:

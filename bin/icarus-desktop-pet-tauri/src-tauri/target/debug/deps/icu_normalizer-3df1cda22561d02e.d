@@ -1,0 +1,10 @@
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\icu_normalizer-3df1cda22561d02e.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\properties.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\provider.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\uts46.rs
+
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libicu_normalizer-3df1cda22561d02e.rlib: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\properties.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\provider.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\uts46.rs
+
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libicu_normalizer-3df1cda22561d02e.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\properties.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\provider.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\uts46.rs
+
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\lib.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\properties.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\provider.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\icu_normalizer-2.2.0\src\uts46.rs:

@@ -1,0 +1,14 @@
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\softbuffer-0edb3f538d4d8af1.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_dispatch.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_interface.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\mod.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\win32.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\error.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\util.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\../README.md
+
+E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libsoftbuffer-0edb3f538d4d8af1.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_dispatch.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_interface.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\mod.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\win32.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\error.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\util.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\../README.md
+
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\lib.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_dispatch.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backend_interface.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\mod.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\backends\win32.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\error.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\util.rs:
+C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\softbuffer-0.4.8\src\../README.md:
+
+# env-dep:CARGO_PKG_VERSION=0.4.8
