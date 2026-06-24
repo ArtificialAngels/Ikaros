@@ -73,11 +73,14 @@ class PetWindow(QMainWindow):
         self.svg.setStyleSheet("background: transparent;")
         layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignCenter)
 
-        # Position: bottom-right corner
+        # Position: center of screen (first run) or last position
         screen = QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()
-            self.move(geo.right() - self.WIDTH - 20, geo.bottom() - self.HEIGHT - 20)
+            self.move(
+                (geo.width() - self.WIDTH) // 2,
+                (geo.height() - self.HEIGHT) // 2,
+            )
 
     # ─── Drag support ───
     def mousePressEvent(self, event):
