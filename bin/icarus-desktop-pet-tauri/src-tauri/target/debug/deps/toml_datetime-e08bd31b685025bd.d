@@ -1,8 +1,0 @@
-E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\toml_datetime-e08bd31b685025bd.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\datetime.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\de.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\ser.rs
-
-E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libtoml_datetime-e08bd31b685025bd.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\datetime.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\de.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\ser.rs
-
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\lib.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\datetime.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\de.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\toml_datetime-1.1.1+spec-1.1.0\src\ser.rs:

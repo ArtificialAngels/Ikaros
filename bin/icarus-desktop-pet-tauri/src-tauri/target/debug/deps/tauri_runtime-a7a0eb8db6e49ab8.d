@@ -1,9 +1,0 @@
-E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\tauri_runtime-a7a0eb8db6e49ab8.d: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\dpi.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\monitor.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\webview.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\window.rs
-
-E:\Hermes Agent\bin\icarus-desktop-pet-tauri\src-tauri\target\debug\deps\libtauri_runtime-a7a0eb8db6e49ab8.rmeta: C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\lib.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\dpi.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\monitor.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\webview.rs C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\window.rs
-
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\lib.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\dpi.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\monitor.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\webview.rs:
-C:\Users\PZS0X\.cargo\registry\src\mirrors.ustc.edu.cn-38d0e5eb5da2abae\tauri-runtime-2.11.3\src\window.rs:
