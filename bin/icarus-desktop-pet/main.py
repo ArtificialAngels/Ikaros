@@ -74,7 +74,7 @@ class IcarusDesktopPet:
                 resizable=False,
                 easy_drag=False,  # We handle drag via JS
             )
-            return True
+            return self._window
         except Exception as exc:
             logger.error("window: failed to create: %s", exc)
             return False
@@ -156,9 +156,16 @@ class IcarusDesktopPet:
             import asyncio
             import websockets
             import json
+            import os
+
+            # Bypass socks proxy that conflicts with WebSocket
+            env = os.environ.copy()
+            for key in list(env.keys()):
+                if key.lower() in ('http_proxy', 'https_proxy', 'all_proxy', 'socks_proxy'):
+                    env.pop(key, None)
 
             uri = "ws://127.0.0.1:7860/v1/voice/ws"
-            async with websockets.connect(uri) as ws:
+            async with websockets.connect(uri, proxy=None) as ws:
                 await ws.send(json.dumps({"action": "start", "session_id": "icarus_desktop"}))
                 self._send_to_ui("showBubble", "🎤 我听着呢~")
                 self._send_to_ui("setState", "LISTENING")
@@ -278,12 +285,9 @@ class IcarusDesktopPet:
 
     # ───── Main ─────
 
-    def run(self):
-        """Start everything."""
-        logger.info("🪶 Icarus Desktop Pet starting...")
-
-        # Register autostart
-        self._register_autostart()
+    def _on_window_loaded(self):
+        """Called after pywebview window is ready."""
+        logger.info("window: loaded, starting services...")
 
         # Start context engine (window monitoring)
         self._start_context()
@@ -292,23 +296,40 @@ class IcarusDesktopPet:
         self._start_audio()
 
         # Create system tray
-        if not self._create_tray():
-            logger.error("Failed to create system tray")
-            return
+        if self._create_tray():
+            tray_thread = threading.Thread(target=self._tray.run, daemon=True)
+            tray_thread.start()
 
-        # Create window
-        if not self._create_window():
+    def run(self):
+        """Start everything."""
+        logger.info("🪶 Icarus Desktop Pet starting...")
+
+        # Register autostart
+        self._register_autostart()
+
+        # Create window (registers the window; show on webview.start())
+        w = self._create_window()
+        if not w:
             logger.error("Failed to create window")
             return
 
-        # Start tray in a thread
-        tray_thread = threading.Thread(target=self._tray.run, daemon=True)
-        tray_thread.start()
+        # Attach loaded event
+        try:
+            from webview import events as wv_events
+            wv_events.loaded += self._on_window_loaded
+        except Exception as exc:
+            logger.warning("window: events not available, %s", exc)
+            # Fallback: start services directly
+            self._on_window_loaded()
 
-        # Run window (blocking)
+        # Run GUI loop (blocking)
         try:
             import webview
-            webview.start(debug=False, http_server=True)
+            webview.start(
+                debug=False,
+                http_server=True,
+                # private_mode=False needed for transparent window on Windows
+            )
         except KeyboardInterrupt:
             pass
         finally:
