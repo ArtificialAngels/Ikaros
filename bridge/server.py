@@ -57,6 +57,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from bridge import telemetry
 from bridge.health import registry as health_registry
+from bridge.voice_server import voice_ws_handler as _voice_ws_handler
 
 logger = logging.getLogger("hermes.bridge")
 
@@ -2607,6 +2608,20 @@ async def icarus_resume_context(session_id: str) -> dict[str, Any]:
     }
 
 
+# ---- Voice: real-time dialogue WebSocket ----
+
+
+@app.websocket("/v1/voice/ws")
+async def voice_websocket(websocket: WebSocket):
+    """WebSocket for real-time voice dialogue.
+
+    Uses browser MediaRecorder → Whisper API → LLM → edge-tts streaming.
+    See bridge/voice_server.py for protocol details.
+    """
+    await _voice_ws_handler(websocket)
+
+
+# ---- Lifecycle ----
 
 # ---- Lifecycle ----
 

@@ -50,11 +50,25 @@ USAGE_STATS_PATH = "/api/hermes/usage/stats"
 # Webui self-update path. The npm package's built-in POST /api/hermes/update
 # runs `npm install -g hermes-web-ui@latest` from within the webui process.
 # On Windows this fails with EBUSY (the running webui Node process holds
-# open the very files npm is trying to rename). We intercept this path in
-# webui_proxy and write a marker file instead; bin/hermes-watchdog.py
-# picks it up at the next tick and performs stop->npm install->start.
+# open the very files npm is trying to rename). The webui_proxy intercepts
+# this path AND runs its own registry poll; either way the marker is written
+# and the daemon thread spawns bin/_webui_update.py to perform the actual
+# stop->npm install->start cycle.
 WEBUI_UPDATE_PATH = "/api/hermes/update"
 WEBUI_UPDATE_MARKER = Path("data/webui/needs-update.json")
+WEBUI_NPM_REGISTRY = "https://registry.npmjs.org/hermes-web-ui/latest"
+# 2026-06-23: webui 0.6.19 removed all self-update UI (the `iy()` timer
+# that polled registry.npmjs.org is dead code — defined but never called;
+# the client has no update button). To compensate, webui_proxy runs its
+# own background registry poll AND directly spawns bin/_webui_update.py
+# in a daemon thread when a newer version is found. The watchdog does NOT
+# process the update marker (it was removed to avoid blocking its main
+# loop for 600s and racing with webui_proxy's own helper invocation).
+# The upgrading.lock mechanism still protects against npm EBUSY races
+# when the watchdog wants to restart webui mid-update.
+WEBUI_UPDATE_CHECK_INITIAL_S = 5        # first check 5s after proxy start
+WEBUI_UPDATE_CHECK_PERIOD_S   = 1800     # then every 30 min
+WEBUI_UPDATE_CHECK_TIMEOUT_S  = 10
 # Local llama-server restart path (2026-06-18, F方案). WebUI's
 # `/api/hermes/provider-models/cache/refresh` only refreshes cloud
 # provider catalogs (see webui dist/server/index.js:1035). It does NOT
@@ -102,6 +116,185 @@ PLUGIN_SOURCE_PATTERN = re.compile(r"^(?:https?://|git@)[A-Za-z0-9._:/\-@?&=]+$|
 PLUGIN_HERMES_TIMEOUT_S = 5.0
 # Resolve hermes CLI once at import time
 PLUGIN_HERMES_PY = shutil.which("python") or sys.executable
+
+
+# =================================================================
+# Webui auto-update: version compare + background registry poll
+# =================================================================
+
+def _webui_installed_version(here: Path) -> str:
+    """Read the installed hermes-web-ui version from its package.json.
+    Returns "" if the file isn't found or isn't readable; the caller
+    treats that as "unknown" and skips the registry comparison."""
+    pkg = here.parent.parent.parent / "runtime" / "node23" / "node_modules" / "hermes-web-ui" / "package.json"
+    if not pkg.is_file():
+        return ""
+    try:
+        return json.loads(pkg.read_text(encoding="utf-8")).get("version", "")
+    except (OSError, ValueError, KeyError):
+        return ""
+
+
+def _is_upgrading_lock_active() -> bool:
+    """Return True if bin/_webui_update.py holds the upgrading lock.
+
+    The lock is written by _webui_update.py before it starts the
+    stop -> npm install -> start cycle. Checking avoids spawning a
+    second helper while the first is still running (which would race
+    npm). See bin/_webui_update.py LOCK and bin/hermes-watchdog.py
+    is_upgrading_lock_active() for the lock format and TTL."""
+    try:
+        u = os.environ.get("USERPROFILE") or os.environ.get("HOME") or "."
+        lock_path = Path(u) / ".hermes-web-ui" / "upgrading.lock"
+        if not lock_path.is_file():
+            return False
+        line = lock_path.read_text(encoding="utf-8", errors="replace").strip()
+        if "|" not in line:
+            return False
+        _, deadline_s = line.split("|", 1)
+        deadline = int(deadline_s)
+        return int(time.time()) < deadline
+    except Exception:
+        return False
+
+
+def _compare_versions(a: str, b: str) -> int:
+    """Return -1, 0, 1 (a < b, a == b, a > b). Tolerant of 'v' prefix
+    and missing components (treats '1.2' as '1.2.0'). Pure stdlib so the
+    proxy stays dependency-free."""
+    def _parts(s: str) -> list[int]:
+        s = s.lstrip("v").strip()
+        out: list[int] = []
+        for piece in s.split(".")[:4]:
+            num = ""
+            for ch in piece:
+                if ch.isdigit():
+                    num += ch
+                else:
+                    break
+            out.append(int(num) if num else 0)
+        while len(out) < 4:
+            out.append(0)
+        return out
+    pa, pb = _parts(a), _parts(b)
+    if pa < pb:
+        return -1
+    if pa > pb:
+        return 1
+    return 0
+
+
+def _check_webui_update_once(here: Path) -> None:
+    """Query the npm registry for the latest hermes-web-ui version. If
+    newer than what's installed, write the needs-update marker so the
+    watchdog picks it up. Best-effort: every failure (network, JSON,
+    timeout) is logged and swallowed. Never raises."""
+    installed = _webui_installed_version(here)
+    if not installed:
+        sys.stderr.write("[webui_proxy] auto-update: no installed version found, skipping check\n")
+        return
+    # 2026-06-22: check upgrading.lock. If another instance of
+    # _webui_update.py is already running (e.g. because webui_proxy
+    # was restarted by supervisor during an active update), skip the
+    # check entirely. Without this guard, the new webui_proxy process
+    # would see installed < latest, write a fresh marker, and spawn a
+    # second helper — racing the first npm install.
+    if _is_upgrading_lock_active():
+        sys.stderr.write("[webui_proxy] auto-update: upgrading.lock active, skipping check\n")
+        return
+    try:
+        req = urllib.request.Request(
+            WEBUI_NPM_REGISTRY,
+            headers={"User-Agent": f"hermes-webui-proxy/{installed}"},
+        )
+        with urllib.request.urlopen(req, timeout=WEBUI_UPDATE_CHECK_TIMEOUT_S) as r:
+            latest = json.loads(r.read().decode("utf-8", "replace")).get("version", "")
+    except Exception as e:
+        sys.stderr.write(f"[webui_proxy] auto-update: registry check failed: {e!r}\n")
+        return
+    if not latest:
+        return
+    cmp = _compare_versions(installed, latest)
+    if cmp >= 0:
+        # No update needed; clear any stale marker (and any stale
+        # in-progress helper process can finish harmlessly).
+        marker = here.parent / "data" / "webui" / "needs-update.json"
+        if marker.exists():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+        return
+    # Installed < latest — write the marker AND invoke the helper
+    # directly. The marker is also consumed by bin/hermes-watchdog.py
+    # as a redundant safety net (in case webui_proxy itself dies mid-
+    # update, the watchdog's next tick will still see the marker and
+    # finish the job). The direct invocation here is the primary path.
+    marker_path = here.parent / "data" / "webui" / "needs-update.json"
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(
+            json.dumps({
+                "requested_at": int(time.time()),
+                "trigger": "auto_update_check",
+                "installed": installed,
+                "latest": latest,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        sys.stderr.write(
+            f"[webui_proxy] auto-update: {installed} -> {latest} "
+            f"available; marker written, spawning helper\n"
+        )
+    except OSError as e:
+        sys.stderr.write(f"[webui_proxy] auto-update: marker write failed: {e!r}\n")
+        return
+    # Spawn the helper in a daemon thread so this loop continues
+    # to the next sleep immediately. The helper handles its own
+    # stop -> npm install -> start cycle (~30-90s).
+    helper_script = here.parent / "bin" / "_webui_update.py"
+    if not helper_script.is_file():
+        sys.stderr.write(
+            f"[webui_proxy] auto-update: helper script not found: {helper_script}\n"
+        )
+        return
+    py = shutil.which("python") or sys.executable
+    def _run_helper():
+        try:
+            r = subprocess.run(
+                [str(py), str(helper_script)],
+                capture_output=True, text=True,
+                errors="replace", encoding="utf-8",
+                timeout=900, cwd=str(here.parent.parent),
+            )
+            if r.stdout:
+                for line in r.stdout.splitlines():
+                    sys.stderr.write(f"[webui_update] {line}\n")
+            if r.returncode != 0:
+                sys.stderr.write(
+                    f"[webui_proxy] auto-update: helper failed (rc={r.returncode})\n"
+                )
+            else:
+                sys.stderr.write("[webui_proxy] auto-update: helper completed OK\n")
+        except subprocess.TimeoutExpired:
+            sys.stderr.write("[webui_proxy] auto-update: helper timeout (900s)\n")
+        except Exception as e:
+            sys.stderr.write(f"[webui_proxy] auto-update: helper crashed: {e!r}\n")
+    threading.Thread(target=_run_helper, daemon=True, name="webui-helper").start()
+
+
+def _auto_update_loop(here: Path) -> None:
+    """Daemon thread: poll registry periodically. Daemon=True so the
+    proxy can shut down cleanly without joining. Errors never propagate."""
+    time.sleep(WEBUI_UPDATE_CHECK_INITIAL_S)
+    while True:
+        try:
+            _check_webui_update_once(here)
+        except Exception as e:
+            # The check function already swallows; this is a last-resort
+            # guard so an unexpected exception never crashes the thread.
+            sys.stderr.write(f"[webui_proxy] auto-update loop: {e!r}\n")
+        time.sleep(WEBUI_UPDATE_CHECK_PERIOD_S)
 
 
 # ============== SQL: correct usage aggregation ==============
@@ -351,6 +544,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(_RECOVERY_JS_SOURCE)
+        elif self.path == "/_icarus/voice.js":
+            # Voice dialogue plugin — served from module file (git-tracked).
+            self._serve_file_as_js("voice.js")
         elif self.path.startswith(ICARUS_RECOVERY_API_PREFIX):
             # /api/hermes/icarus/* → bridge /v1/icarus/* (mapped in WEBUI_TO_BRIDGE_PATHS)
             self._proxy_to_bridge()
@@ -695,6 +891,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_file_as_js(self, filename: str) -> None:
+        """Serve a JS file from modules/webui_proxy/ (e.g. voice.js)."""
+        import os
+        file_path = os.path.join(os.path.dirname(__file__), filename)
+        try:
+            with open(file_path, "rb") as f:
+                body = f.read()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self.send_error(HTTPStatus.NOT_FOUND, f"{filename} not found")
+        except Exception as e:
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
     def _proxy_to_bridge(self) -> None:
         """Forward the current request to the bridge (no shell, list args).
 
@@ -830,6 +1045,21 @@ def main() -> int:
     sys.stderr.write(
         f"[webui_proxy] intercepting: {USAGE_STATS_PATH}  (passing through everything else)\n"
     )
+    # Start the webui auto-update checker (daemon thread, dies with proxy)
+    # We pass __file__ so the thread can locate the installed webui version
+    # independently — avoids a global state coupling.
+    updater = threading.Thread(
+        target=_auto_update_loop,
+        args=(Path(__file__).resolve(),),
+        daemon=True,
+        name="webui-auto-update",
+    )
+    updater.start()
+    sys.stderr.write(
+        f"[webui_proxy] auto-update: daemon thread started "
+        f"(first check in {WEBUI_UPDATE_CHECK_INITIAL_S}s, "
+        f"then every {WEBUI_UPDATE_CHECK_PERIOD_S}s)\n"
+    )
     sys.stderr.flush()
     try:
         httpd.serve_forever()
@@ -875,7 +1105,8 @@ _INJECTION_SENTINEL = b"<!-- icarus-recovery:v1 -->"
 def _build_recovery_injection() -> bytes:
     return (
         _INJECTION_SENTINEL
-        + b'<script src="/_icarus/recovery.js" defer></script>'
+        + b'<script src="/_icarus/recovery.js" defer></script>\n'
+        + b'<script src="/_icarus/voice.js" defer></script>'
     )
 
 
@@ -903,6 +1134,25 @@ def _serve_recovery_js(self) -> None:
     self.send_header("Access-Control-Allow-Origin", "*")
     self.end_headers()
     self.wfile.write(body)
+
+
+def _serve_voice_js(self) -> None:
+    """Serve the voice plugin JS from the local file (modules/webui_proxy/voice.js)."""
+    voice_path = os.path.join(os.path.dirname(__file__), "voice.js")
+    try:
+        with open(voice_path, "rb") as f:
+            body = f.read()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/javascript; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+    except FileNotFoundError:
+        self.send_error(HTTPStatus.NOT_FOUND, "voice.js not found")
+    except Exception as e:
+        self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
 
 if __name__ == "__main__":
