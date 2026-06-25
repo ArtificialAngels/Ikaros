@@ -88,6 +88,12 @@ $psi.EnvironmentVariables['PYTHONIOENCODING']                        = 'utf-8'
 $psi.EnvironmentVariables['PYTHONUTF8']                              = '1'
 $psi.EnvironmentVariables['HERMES_AGENT_BRIDGE_PYTHON']              = $PYTHON
 $psi.EnvironmentVariables['HERMES_AGENT_CLI_PYTHON']                 = $PYTHON
+# hermes-agent source root — required so the npm webui's built-in agent
+# bridge broker (dist/server/agent-bridge/python/hermes_bridge.py) can
+# discover run_agent.py.  Without this the broker raises
+#   "hermes-agent run_agent.py not found"
+# and /chat-run requests never reach the agent (silent hang).
+$psi.EnvironmentVariables['HERMES_AGENT_ROOT']                       = Join-Path $HERMES_ROOT 'hermes-agent'
 
 # See modules/webui_proxy/start.ps1 for the full rationale: we deliberately
 # do NOT use $psi.RedirectStandardOutput/Error = $true + add_OutputDataReceived

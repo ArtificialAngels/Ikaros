@@ -4,7 +4,18 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-16c (added `modules/webui_proxy` as a thin Python
+> **Last revised:** 2026-06-26 (disabled `modules/agent_bridge_stub` and added
+> `HERMES_AGENT_ROOT` to `modules/webui/start.ps1`. The stub was occupying
+> :18765 (the npm webui's agent bridge broker endpoint) with a minimal TCP
+> shim that answered `{ok:true, running:false}` to every request — sufficient
+> for session-resume status checks but unable to execute `/chat-run` requests.
+> The npm package v0.6.21 already ships the full broker at
+> `dist/server/agent-bridge/python/hermes_bridge.py`; setting
+> `HERMES_AGENT_ROOT=<HERMES_ROOT>/hermes-agent` lets the webui discover
+> `run_agent.py` and spawn the real broker, restoring end-to-end chat.
+> See §0.9).
+>
+> Previous: 2026-06-16c (added `modules/webui_proxy` as a thin Python
 > reverse-proxy in front of `hermes-web-ui` on :8648. The npm package's
 > `/api/hermes/usage/stats` SQL was broken (GROUP BY model only, no
 > provider/profile/base_url split, no exclusion of internal sessions like
@@ -60,6 +71,10 @@
 
 ## Revision Timeline (chronological; see git log for details)
 
+- **2026-06-26** - disable `modules/agent_bridge_stub` (renamed `module.json` to
+  `module.json.disabled`), add `HERMES_AGENT_ROOT` env var to
+  `modules/webui/start.ps1`. The stub was blocking :18765 so the npm webui's
+  real broker could never start; chat-run requests hung indefinitely.
 - **2026-06-16c** - `modules/webui_proxy` (new thin Python reverse-proxy on :8648) +
   PowerShell Runspace-after-exit fix in all 4 `start.ps1` modules. See §0.8.
 - **2026-06-16** - root completion check: `bin\hermes-supervisor.bat` now calls
