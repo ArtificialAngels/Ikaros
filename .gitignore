@@ -192,6 +192,9 @@ upstream/
 deps/codegraph/
 bin/.codegraph/
 
+# --- Reference projects cloned for study (Neuro, etc.) — large, do not track ---
+deps/_src/
+
 # --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
 # These are Icarus' visual identity. Treat as design tokens, not throwaway.
 bin/favicon.ico
@@ -204,3 +207,5 @@ ArtificialAngel.ico
 package-lock.json
 bin/desktop.ini
 config.yaml.pre-gitnexus.*.bak
+bridge/data/
+data/icarus-memory/
