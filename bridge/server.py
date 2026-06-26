@@ -49,6 +49,10 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Neuro signals (global state for Prompter + Memory)
+from bridge.signals import icarus, AI_NAME, HOST_NAME, PATIENCE_DEFAULT
+
 from typing import Any, AsyncIterator
 
 import httpx
@@ -333,8 +337,27 @@ async def lifespan(app: FastAPI):
     _start_health_monitor()
     # Do an initial health check immediately
     await _check_llama_health()
-    logger.info("bridge v0.5.0 started — llama=%s", _get_llama_health()["alive"])
+    # ---- Neuro (Prompter + Memory) startup ----
+    # Mark LLM as ready so Prompter 100ms tick starts firing decisions
+    icarus.llm_ready = True
+    try:
+        from bridge.neuro import get_memory
+        memory = get_memory()
+        # Spawn memory reflection loop (every 20 messages triggers a self-summary)
+        asyncio.create_task(memory.run())
+        logger.info("NEURO: memory reflection loop started")
+    except Exception as exc:
+        logger.warning(f"NEURO: memory init failed: {exc}")
+    try:
+        from bridge.prompter import get_prompter
+        prompter = get_prompter()
+        prompter.start()
+        logger.info("NEURO: prompter started (100ms tick + PATIENCE)")
+    except Exception as exc:
+        logger.warning(f"NEURO: prompter init failed: {exc}")
+    logger.info("bridge v0.5.0 started — llama=%s neuro=on", _get_llama_health()["alive"])
     yield
+    icarus.terminate = True
     _stop_health_monitor()
     telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
     try:
@@ -1853,6 +1876,46 @@ async def chat_completions(request: Request) -> Any:
             )
             body["model"] = normalised
 
+    # ---- Neuro: mark user message + inject memory ----
+    try:
+        user_msg = _extract_user_message(body.get("messages", []))
+        if user_msg:
+            icarus.mark_new_message("user", user_msg)
+    except Exception as exc:
+        logger.debug("neuro mark user skipped: %s", exc)
+    try:
+        from bridge.neuro import get_memory
+        mem = get_memory()
+        injection = mem.get_prompt_injection()
+        if injection and injection.get("text") and injection.get("enabled"):
+            messages = body.get("messages", [])
+            mem_text = injection["text"]
+            if messages and messages[0].get("role") == "system":
+                existing_content = messages[0].get("content", "")
+                joined = existing_content + "\n\n" + mem_text
+                messages[0] = {**messages[0], "content": joined.strip()}
+            else:
+                messages.insert(0, {"role": "system", "content": mem_text})
+            body["messages"] = messages
+    except Exception as exc:
+        logger.debug("neuro memory injection skipped: %s", exc)
+
+    # ---- Task delegation prompt injection (Artificial Angel Phase 1) ----
+    try:
+        from bridge.task_delegation import get_task_delegation_prompt
+        delegation_text = get_task_delegation_prompt()
+        if delegation_text:
+            messages = body.get("messages", [])
+            if messages and messages[0].get("role") == "system":
+                existing_content = messages[0].get("content", "")
+                messages[0] = {**messages[0], "content": existing_content + "\n\n" + delegation_text}
+            else:
+                messages.insert(0, {"role": "system", "content": delegation_text})
+            body["messages"] = messages
+            logger.info("task delegation prompt injected (%d chars)", len(delegation_text))
+    except Exception as exc:
+        logger.warning("task delegation injection FAILED: %s", exc)
+
     # ---- Smart routing ----
     routing_override = request.headers.get("X-Hermes-Routing", "").strip().lower()
     # Also check global env var (HERMES_ROUTING_MODE in .env)
@@ -2625,6 +2688,108 @@ async def voice_websocket(websocket: WebSocket):
 
 # ---- Lifecycle ----
 
+
+
+# ============ Neuro Control Endpoints (for desktop pet / web UI) ============
+
+
+@app.get("/v1/neuro/status")
+async def neuro_status():
+    """Snapshot of Neuro runtime state — for UI dashboard / desktop pet."""
+    return {
+        "patience": icarus.patience,
+        "time_since_last_message": round(icarus.time_since_last_message, 1),
+        "history_len": len(icarus.history),
+        "human_speaking": icarus.human_speaking,
+        "AI_thinking": icarus.AI_thinking,
+        "AI_speaking": icarus.AI_speaking,
+        "stt_ready": icarus.stt_ready,
+        "tts_ready": icarus.tts_ready,
+        "llm_ready": icarus.llm_ready,
+        "new_message": icarus.new_message,
+        "remote_queue": len(icarus.recent_remote_messages),
+        "sio_queue": len(icarus.sio_queue),
+    }
+
+
+@app.post("/v1/neuro/patience")
+async def neuro_set_patience(body: dict):
+    """Adjust PATIENCE threshold (seconds before AI speaks proactively)."""
+    seconds = float(body.get("seconds", 30.0))
+    seconds = max(5.0, min(600.0, seconds))  # 5s..10min
+    icarus.patience = seconds
+    try:
+        from bridge.prompter import get_prompter
+        get_prompter().patience = seconds
+    except Exception:
+        pass
+    return {"patience": icarus.patience}
+
+
+@app.post("/v1/neuro/reset")
+async def neuro_reset_signals():
+    """Reset speaking flags (e.g. after a stuck state)."""
+    icarus.AI_thinking = False
+    icarus.AI_speaking = False
+    icarus.human_speaking = False
+    icarus.new_message = False
+    return {"reset": True}
+
+
+@app.get("/v1/neuro/memories")
+async def neuro_memories(limit: int = 50):
+    """Browse reflection memories (long-term)."""
+    try:
+        from bridge.neuro import get_memory
+        mem = get_memory()
+        all_mems = mem.API.get_all()
+        return {"count": mem.collection.count(), "memories": all_mems[-limit:]}
+    except Exception as e:
+        return {"error": str(e), "count": 0, "memories": []}
+
+
+@app.post("/v1/neuro/memory/add")
+async def neuro_memory_add(body: dict):
+    """Manually inject a memory."""
+    try:
+        from bridge.neuro import get_memory
+        mem = get_memory()
+        doc = body.get("document", "").strip()
+        if not doc:
+            return {"error": "empty document"}
+        meta = body.get("metadata", {"type": "manual"})
+        mid = mem.API.create(doc, meta)
+        return {"id": mid, "count": mem.collection.count()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/v1/neuro/memory/delete")
+async def neuro_memory_delete(body: dict):
+    """Delete a memory by id."""
+    try:
+        from bridge.neuro import get_memory
+        mem = get_memory()
+        mem.API.delete(body.get("id", ""))
+        return {"deleted": True, "count": mem.collection.count()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/v1/neuro/patience/trigger")
+async def neuro_patience_trigger():
+    """Force a PATIENCE tick — AI should say something immediately.
+    Useful for testing and for desktop pet to wake the AI up."""
+    try:
+        from bridge.prompter import get_prompter
+        prompter = get_prompter()
+        icarus.last_message_time = time.time() - prompter.patience - 1
+        return {"triggered": True, "reason": "patience_idle (manual)"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============ End Neuro Endpoints ============
 
 if __name__ == "__main__":
     import uvicorn  # type: ignore

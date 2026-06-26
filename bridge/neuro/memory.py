@@ -52,14 +52,20 @@ class Memory:
     - prompt_injection 注入机制
     """
     def __init__(self, signals, enabled: bool = True,
-                 llm_endpoint: str = "http://127.0.0.1:7860/v1/chat/completions",
+                 llm_endpoint: str = None,
                  llm_model: str = "Qwen3.6-35B-A3B-UD-Q6_K"):
         from chromadb.config import Settings
         import chromadb
 
         self.signals = signals
         self.enabled = enabled
-        self.llm_endpoint = llm_endpoint
+        # Q1 fix: bypass the router (:8080) which has slow cold-start warmup.
+        # Point directly to the pre-warmed llama worker on :28538.
+        # Fall back to bridge (:7860) only if the worker port is unavailable.
+        self.llm_endpoint = llm_endpoint or os.environ.get(
+            "ICARUS_LLM_ENDPOINT",
+            "http://127.0.0.1:28538/v1/chat/completions"
+        )
         self.llm_model = llm_model
 
         # Injection 字段 (Neuro 风格, priority 60)
@@ -161,7 +167,7 @@ class Memory:
                     elif m["role"] == "assistant" and m.get("content"):
                         chat_section += f"{AI_NAME}: {m['content']}\n"
 
-                # 让 LLM 自我总结 (reflection - 慢, 60s timeout)
+                # 让 LLM 自我总结 (reflection - 直连 warm worker, 30s 足够)
                 try:
                     resp = requests.post(
                         self.llm_endpoint,
@@ -173,7 +179,7 @@ class Memory:
                             "max_tokens": 400,
                             "temperature": 0.3
                         },
-                        timeout=120
+                        timeout=30
                     )
                     raw = ""
                     try:
