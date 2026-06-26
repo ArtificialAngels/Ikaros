@@ -1,173 +1,118 @@
 """
-modules/agent_bridge_stub/agent_bridge_stub.py
+agent_bridge_stub - Reverse-proxy router for port 18765
+======================================================
+Quest 修了 webui 聊天挂的问题: stub 占着 :18765 让真 broker 起不来.
+现在我们改成真正的 router: 路径分拣, 部分请求转 :7860 bridge, 其他透传到 :18765 broker.
 
-Minimal TCP stub for the npm hermes-web-ui Agent Bridge broker.
+设计思路 (给 Quest 参考):
+  - 用 fastapi-reverse-proxy 的 proxy_pass 做透传
+  - 路径白名单 (前缀匹配):
+      /v1/reach/*        -> :7860 bridge  (Agent-Reach)
+      /v1/notebooklm/*   -> :7860 bridge  (notebooklm-py)
+      /v1/icarus/*       -> :7860 bridge  (Neuro memory/sessions)
+      /v1/llama/*        -> :7860 bridge  (本地 LLM 管理)
+      /v1/models/*       -> :7860 bridge  (模型 warmup/list)
+      其他路径              -> :18765 broker (webui chat)
+  - 长连接 httpx.AsyncClient (启动时建, 关闭时清)
+  - 日志每条请求 (方法+路径+上游+状态码), 出错带详细错误
 
-Why this exists
----------------
-The npm package `hermes-web-ui@0.6.21` ships a Node backend that, on
-session resume, calls `bridge.statusIfLoaded(session_id)` on a broker
-that is supposed to listen on `tcp://127.0.0.1:18765`. The real broker
-is `hermes_bridge.py` (Python) shipped in the hermes-agent source repo,
-but the npm install in this project can't find that script:
-
-  - webui's `G4I()` searches 3 hardcoded paths:
-      <__dirname>/agent-bridge/python/hermes_bridge.py
-      <__dirname>/services/hermes/agent-bridge/python/hermes_bridge.py
-      <cwd>/packages/server/src/services/hermes/agent-bridge/python/hermes_bridge.py
-  - but the npm install places the script under
-      node_modules/.hermes-web-ui-<hash>/dist/server/agent-bridge/python/hermes_bridge.py
-    (pnpm-style flat-installation cache) -- none of G4I's candidates
-  - so webui's spawn() throws "agent bridge Python script not found"
-    and the broker never starts
-
-The result is that any chat session with `source="api_server"` (which
-is what the local :7860 FastAPI bridge writes into state.db) triggers a
-broker lookup on session resume, which throws:
-
-    Unable to confirm Agent Bridge status while resuming:
-    connect ECONNREFUSED [redacted endpoint]
-
-The real broker runs the "autonomous agent loop" feature. This project
-doesn't use that feature -- the local FastAPI bridge on :7860 covers
-all session / icarus / memory / RAG needs, and the resume path we DO
-care about (Icarus "Resume previous conversation?" toast) is served
-from :7860 by `modules/webui_proxy._proxy_to_bridge()`, which never
-touches the npm broker.
-
-So we stub the broker with a minimal newline-delimited JSON TCP server
-that always answers `{"ok": true, "running": false, ...}`. When webui
-calls `statusIfLoaded()` and gets `running === false`, its
-`reattachBridgeRun()` takes the early-return branch (`if (!a || !Z)
-return;`) and never enters the catch block that emits the error toast.
-
-Wire protocol (recovered from webui's `dist/server/index.js` class
-`_I`, the `request()` method, ~line 1389454):
-   request  := JSON.stringify(payload) + "\\n"
-   response := JSON line `{"ok": bool, ...}`
-
-Actions handled (all return ok:true with running:false -- the stub
-never has running work):
-   ping             -> {ok: true, running: false}
-   status           -> {ok: true, running: false, current_run_id: null}
-   status_if_loaded -> {ok: true, running: false, current_run_id: null}
-   list             -> {ok: true, running: false, runs: []}
-   get_history      -> {ok: true, messages: []}
-   destroy          -> {ok: true}
-   shutdown         -> {ok: true} (then close the connection)
-   anything else    -> {ok: true}
-
-Stdlib only -- no third-party deps. 50 lines.
+历史:
+  - 2026-06-26 Quest 把 stub 禁用 (module.json -> module.json.disabled)
+    原因: stub 是 TCP shim, 占着 :18765 让 webui 真 broker 起不来, 聊天挂
+  - 2026-06-26 Icarus 把 stub 改造成真 router (本文件)
+    新增: 路径分拣, 真透传 (streaming/WebSocket 都支持)
+    依赖: fastapi-reverse-proxy (PyPI) + httpx
 """
-from __future__ import annotations
+import logging
+import os
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import JSONResponse
 
-import json
-import socketserver
-import sys
-import threading
-import time
-from typing import Any
-
+# 配置
+BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:7860")
+BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:18765")
 HOST = "127.0.0.1"
 PORT = 18765
 
-# Lightweight connection / request counters so the operator can spot
-# broker traffic in the supervisor log without enabling TRACE.
-_lock = threading.Lock()
-_active = 0
-_total_conns = 0
-_total_reqs = 0
+# 路径前缀 -> 上游映射
+BRIDGE_PREFIXES = (
+    "/v1/reach",
+    "/v1/notebooklm",
+    "/v1/icarus",
+    "/v1/llama",
+    "/v1/models",
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [stub] %(message)s"
+)
+log = logging.getLogger("agent_bridge_stub")
+
+app = FastAPI(title="agent_bridge_stub (router)", version="2.0.0")
 
 
-def _log(msg: str) -> None:
-    sys.stderr.write(
-        f"[bridge-stub {time.strftime('%H:%M:%S')}] {msg}\n"
-    )
-    sys.stderr.flush()
+@app.on_event("startup")
+async def startup():
+    """建长连接 httpx client"""
+    from fastapi_reverse_proxy import create_httpx_client
+    create_httpx_client(app)
+    log.info(f"router up: bridge={BRIDGE_URL}, broker={BROKER_URL}, "
+             f"bridge_prefixes={BRIDGE_PREFIXES}")
 
 
-def _respond(payload: dict[str, Any]) -> dict[str, Any]:
-    """Build a response for a given action. Always ok:true; never running."""
-    action = str(payload.get("action", ""))
-    base: dict[str, Any] = {"ok": True}
-    if action in ("status", "status_if_loaded", "ping", "list"):
-        base["running"] = False
-        base["current_run_id"] = None
-    if action == "list":
-        base["runs"] = []
-    if action == "get_history":
-        base["messages"] = []
-    # destroy / shutdown / cancel / abort / approve / reject -> ok:true only
-    return base
+@app.on_event("shutdown")
+async def shutdown():
+    """关长连接"""
+    from fastapi_reverse_proxy import close_httpx_client
+    await close_httpx_client(app)
+    log.info("router down")
 
 
-class _Handler(socketserver.StreamRequestHandler):
-    def handle(self) -> None:
-        global _active, _total_conns, _total_reqs
-        with _lock:
-            _active += 1
-            _total_conns += 1
-            conn_id = _total_conns
-        peer = f"{self.client_address[0]}:{self.client_address[1]}"
-        _log(f"client connected from {peer} (id={conn_id}, active={_active})")
-        try:
-            while True:
-                line = self.rfile.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                with _lock:
-                    _total_reqs += 1
-                try:
-                    req = json.loads(line)
-                except json.JSONDecodeError as e:
-                    _log(f"  bad json ({e}); raw={line!r}")
-                    self.wfile.write(
-                        b'{"ok": false, "error": "invalid json"}\n'
-                    )
-                    self.wfile.flush()
-                    continue
-                action = str(req.get("action", "?"))
-                session = req.get("session_id", "") or ""
-                _log(f"  action={action} session={session}")
-                resp = _respond(req)
-                out = (json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8")
-                self.wfile.write(out)
-                self.wfile.flush()
-                if action == "shutdown":
-                    _log("  shutdown requested; closing connection")
-                    break
-        except (ConnectionResetError, BrokenPipeError):
-            pass
-        finally:
-            with _lock:
-                _active -= 1
-            _log(f"client disconnected (id={conn_id}, active={_active})")
+def _route_target(path: str) -> str:
+    """路径分拣: 返回 upstream URL (without trailing slash)"""
+    for prefix in BRIDGE_PREFIXES:
+        if path.startswith(prefix):
+            return BRIDGE_URL
+    return BROKER_URL
 
 
-class _ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+@app.get("/health")
+async def health():
+    """健康检查 (Quest 修的 webui 探活用)"""
+    return {"status": "ok", "router": "agent_bridge_stub v2.0.0",
+            "bridge": BRIDGE_URL, "broker": BROKER_URL}
 
 
-def main() -> int:
-    server = _ThreadedServer((HOST, PORT), _Handler)
-    _log(
-        f"listening on tcp://{HOST}:{PORT} "
-        f"(no real agent work; resume-safe stub; "
-        f"answers status_if_loaded with running:false so webui's "
-        f"reattachBridgeRun takes the early-return path)"
-    )
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def route_http(full_path: str, request: Request):
+    """所有 HTTP 请求都过这里, 按路径分拣"""
+    target = _route_target("/" + full_path)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        _log("shutting down (KeyboardInterrupt)")
-    finally:
-        server.server_close()
-    return 0
+        from fastapi_reverse_proxy import proxy_pass
+        response = await proxy_pass(request, host=target, timeout=60.0)
+        log.info(f"{request.method} /{full_path} -> {target} ({response.status_code})")
+        return response
+    except Exception as e:
+        log.exception(f"proxy failed: {e}")
+        return JSONResponse({"error": str(e), "upstream": target}, status_code=502)
+
+
+@app.websocket("/{full_path:path}")
+async def route_ws(websocket: WebSocket, full_path: str):
+    """WebSocket 透传 - 跟 HTTP 同样的分拣规则"""
+    target = _route_target("/" + full_path)
+    # WebSocket URL 转换: http:// -> ws://
+    ws_target = target.replace("http://", "ws://").replace("https://", "wss://")
+    try:
+        from fastapi_reverse_proxy import proxy_pass_websocket
+        log.info(f"WS /{full_path} -> {ws_target}")
+        await proxy_pass_websocket(websocket, host=ws_target, timeout=10.0)
+    except Exception as e:
+        log.exception(f"WS proxy failed: {e}")
+        await websocket.close(code=1011, reason=str(e)[:100])
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import uvicorn
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
