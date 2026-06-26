@@ -550,6 +550,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         elif self.path == "/_icarus/voice.html":
             # Voice dialogue test page (works without SPA).
             self._serve_file_as_html("voice.html")
+        elif self.path == "/_icarus/neuro.js":
+            # Neuro panel — floating 🧠 widget for Neuro status + control.
+            # Served from module file (git-tracked), injected via _build_recovery_injection.
+            self._serve_file_as_js("neuro.js")
         elif self.path.startswith(ICARUS_RECOVERY_API_PREFIX):
             # /api/hermes/icarus/* → bridge /v1/icarus/* (mapped in WEBUI_TO_BRIDGE_PATHS)
             self._proxy_to_bridge()
@@ -1127,7 +1131,8 @@ def _build_recovery_injection() -> bytes:
     return (
         _INJECTION_SENTINEL
         + b'<script src="/_icarus/recovery.js" defer></script>\n'
-        + b'<script src="/_icarus/voice.js" defer></script>'
+        + b'<script src="/_icarus/voice.js" defer></script>\n'
+        + b'<script src="/_icarus/neuro.js" defer></script>'
     )
 
 
