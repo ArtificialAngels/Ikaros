@@ -195,6 +195,18 @@ bin/.codegraph/
 # --- Reference projects cloned for study (Neuro, etc.) — large, do not track ---
 deps/_src/
 
+# --- Icarus ↔ other-agent coordination log (dynamic, not git-tracked) ---
+# Coordination happens via JSON files in data/icarus-coordination/
+# git is for snapshots, this is the live workbench
+# File naming convention:
+#   - icarus-coordination-schema.json (static schema, tracked)
+#   - README.md (design doc, tracked)
+#   - handshake.*.json (live handoffs, NOT tracked — dynamic)
+!data/icarus-coordination/
+!data/icarus-coordination/README.md
+!data/icarus-coordination/icarus-coordination-schema.json
+data/icarus-coordination/handshake.*.json
+
 # --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
 # These are Icarus' visual identity. Treat as design tokens, not throwaway.
 bin/favicon.ico
