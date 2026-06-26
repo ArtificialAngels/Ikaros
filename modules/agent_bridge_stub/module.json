@@ -1,0 +1,34 @@
+{
+  "name": "agent_bridge_stub",
+  "version": "2.0.0",
+  "description": "Reverse-proxy router for :18765. Routes /v1/reach, /v1/notebooklm, /v1/icarus, /v1/llama, /v1/models to the bridge (:7860); everything else to the webui-managed broker (:18766). The webui's HERMES_AGENT_BRIDGE_ENDPOINT env var is set to tcp://127.0.0.1:18766 in modules/webui/start.ps1 so the broker starts on :18766 instead of the default :18765. See AGENTS.md §0.9.",
+  "type": "service",
+  "runtime": {
+    "kind": "python",
+    "python": "portable-python/python.exe",
+    "script": "agent_bridge_stub.py",
+    "args": [],
+    "working_directory": "."
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 18765,
+    "protocol": "http",
+    "health_endpoint": "/health",
+    "health_timeout_ms": 3000
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "health": "health.ps1",
+    "startup_timeout_s": 30,
+    "shutdown_timeout_s": 5
+  },
+  "depends_on": [
+    { "module": "bridge", "required": true, "reason": "proxies /v1/reach, /v1/icarus etc. to :7860" }
+  ],
+  "env": {
+    "BRIDGE_URL": "http://127.0.0.1:7860",
+    "BROKER_URL": "http://127.0.0.1:18766"
+  }
+}

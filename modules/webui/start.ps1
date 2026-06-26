@@ -95,6 +95,14 @@ $psi.EnvironmentVariables['HERMES_AGENT_CLI_PYTHON']                 = $PYTHON
 # and /chat-run requests never reach the agent (silent hang).
 $psi.EnvironmentVariables['HERMES_AGENT_ROOT']                       = Join-Path $HERMES_ROOT 'hermes-agent'
 
+# Move the webui-managed broker from the default :18765 to :18766.
+# The agent_bridge_stub reverse-proxy router occupies :18765 and routes
+# /v1/reach, /v1/notebooklm, /v1/icarus, /v1/llama, /v1/models to the
+# bridge (:7860); everything else (chat-run etc.) reaches the broker on
+# :18766.  The webui's _I class reads HERMES_AGENT_BRIDGE_ENDPOINT to
+# determine where to spawn/attach the broker (see dist/server/index.js).
+$psi.EnvironmentVariables['HERMES_AGENT_BRIDGE_ENDPOINT']             = 'tcp://127.0.0.1:18766'
+
 # See modules/webui_proxy/start.ps1 for the full rationale: we deliberately
 # do NOT use $psi.RedirectStandardOutput/Error = $true + add_OutputDataReceived
 # to drain the child's stdio, because the callback is a PowerShell script
