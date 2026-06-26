@@ -4,11 +4,15 @@
   "title": "Icarus Coordination Log",
   "description": "Schema for Icarus ↔ other-agent coordination JSON logs. Located in data/icarus-coordination/.",
   "version": "1.0.0",
-
   "type": "object",
-  "required": ["version", "session_id", "created_at", "purpose", "actors"],
-  "additionalProperties": false,
-
+  "required": [
+    "version",
+    "session_id",
+    "created_at",
+    "purpose",
+    "actors"
+  ],
+  "additionalProperties": true,
   "properties": {
     "version": {
       "type": "string",
@@ -30,123 +34,250 @@
       "minLength": 1,
       "description": "Why this log exists"
     },
-
     "actors": {
       "type": "object",
       "description": "Map of agent/human names to their identity",
       "additionalProperties": {
         "type": "object",
-        "required": ["role"],
+        "required": [
+          "role"
+        ],
         "properties": {
-          "role": {"type": "string"},
-          "scope": {"type": "string"},
+          "role": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
           "author_for_git": {
             "type": "string",
             "pattern": "^.+ <.+>$",
             "description": "Git author format: Name <email>"
           },
-          "note": {"type": "string"}
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
-
     "services_current_state": {
       "type": "object",
       "description": "Live service endpoints and PIDs",
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-          "pid": {"type": "integer", "minimum": 1},
-          "url": {"type": "string"},
-          "endpoint": {"type": "string", "description": "For non-HTTP services like TCP brokers"},
-          "model": {"type": "string"},
-          "warmup_slow": {"type": "boolean"},
-          "max_models": {"type": "integer"}
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "For non-HTTP services like TCP brokers"
+          },
+          "model": {
+            "type": "string"
+          },
+          "warmup_slow": {
+            "type": "boolean"
+          },
+          "max_models": {
+            "type": "integer"
+          }
         }
       }
     },
-
     "endpoints_added_by_icarus": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["path", "method"],
+        "required": [
+          "path",
+          "method"
+        ],
         "properties": {
-          "path": {"type": "string", "pattern": "^/"},
-          "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "WS"]},
-          "proxy": {"type": "string"}
+          "path": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "method": {
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "WS"
+            ]
+          },
+          "proxy": {
+            "type": "string"
+          }
         }
       }
     },
-
     "endpoints_routed_through_stub_router": {
       "type": "object",
       "properties": {
-        "stub_router_port": {"type": "integer"},
-        "bridge_prefixes": {"type": "array", "items": {"type": "string"}},
-        "broker_fallback": {"type": "string"},
-        "status": {"type": "string"}
+        "stub_router_port": {
+          "type": "integer"
+        },
+        "bridge_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "broker_fallback": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
       }
     },
-
     "pending_questions_for_quest": {
       "type": "array",
       "description": "Open decisions for Quest (or another agent) to resolve",
       "items": {
         "type": "object",
-        "required": ["id", "topic", "details", "options", "status"],
+        "required": [
+          "id",
+          "topic",
+          "details",
+          "options",
+          "status"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^Q\\d+$"},
-          "topic": {"type": "string"},
-          "details": {"type": "string"},
+          "id": {
+            "type": "string",
+            "pattern": "^Q\\d+$"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          },
           "options": {
             "type": "array",
             "minItems": 2,
             "items": {
               "type": "object",
-              "required": ["id", "desc"],
+              "required": [
+                "id",
+                "desc"
+              ],
               "properties": {
-                "id": {"type": "string", "pattern": "^[A-Z]$"},
-                "desc": {"type": "string"}
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Z]$"
+                },
+                "desc": {
+                  "type": "string"
+                }
               }
             }
           },
           "status": {
-            "enum": ["open", "resolved_by_icarus", "resolved_by_quest", "resolved_by_user", "wontfix"]
+            "enum": [
+              "open",
+              "resolved_by_icarus",
+              "resolved_by_quest",
+              "resolved_by_user",
+              "wontfix"
+            ]
           },
-          "icarus_recommendation": {"type": "string"},
-          "decided_by": {"type": ["string", "null"], "enum": ["icarus", "quest", "user", null]},
-          "decided_at": {"type": ["string", "null"], "format": "date-time"},
-          "decision_notes": {"type": "string"}
+          "icarus_recommendation": {
+            "type": "string"
+          },
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "icarus",
+              "quest",
+              "user",
+              null
+            ]
+          },
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "decision_notes": {
+            "type": "string"
+          }
         }
       }
     },
-
     "completed_tasks": {
       "type": "array",
       "description": "Append-only log of done work",
       "items": {
         "type": "object",
-        "required": ["id", "actor", "task", "completed_at"],
+        "required": [
+          "id",
+          "actor",
+          "task",
+          "completed_at"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^T\\d+$"},
-          "actor": {"enum": ["icarus", "quest", "user", "system"]},
-          "task": {"type": "string"},
-          "result": {"type": "string"},
-          "completed_at": {"type": "string", "format": "date-time"},
-          "commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-          "note": {"type": "string"}
+          "id": {
+            "type": "string",
+            "pattern": "^T\\d+$"
+          },
+          "actor": {
+            "enum": [
+              "icarus",
+              "quest",
+              "user",
+              "system"
+            ]
+          },
+          "task": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{7,40}$"
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
-
     "working_features": {
       "type": "object",
       "description": "Current functional capabilities and their state",
       "additionalProperties": {
         "type": "object",
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
           "status": {
             "enum": [
@@ -159,26 +290,44 @@
               "deprecated"
             ]
           },
-          "evidence": {"type": "string"},
-          "value_to_user": {"type": "string"}
+          "evidence": {
+            "type": "string"
+          },
+          "value_to_user": {
+            "type": "string"
+          }
         }
       }
     },
-
     "next_steps": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
-
     "meta": {
       "type": "object",
       "properties": {
-        "git_author_rule": {"type": "string"},
-        "language": {"type": "string"},
-        "where_this_file_lives": {"type": "string"},
-        "schema_version": {"type": "string"},
-        "extend_by": {"type": "string"}
+        "git_author_rule": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "where_this_file_lives": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "extend_by": {
+          "type": "string"
+        }
       }
+    },
+    "artificial_angel_phases": {
+      "type": "object",
+      "description": "Quest's vision roadmap for '人造天使' lifecycle phases"
     }
   }
 }
