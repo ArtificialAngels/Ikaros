@@ -473,31 +473,46 @@ class IcarusApp:
         log.info("🪶 Icarus Desktop Pet running")
 
         # Start AudioEngine (lazy import so pyaudio doesn't block startup)
-        import sys
-        sys.path.insert(0, str(HERE))
-        from audio_engine import AudioEngine
-        self.audio = AudioEngine()
-        self.audio.on_state = self._on_state
-        self.audio.on_bubble = self._on_bubble
-        self.audio.start()
+        try:
+            import sys
+            sys.path.insert(0, str(HERE))
+            from audio_engine import AudioEngine
+            self.audio = AudioEngine()
+            self.audio.on_state = self._on_state
+            self.audio.on_bubble = self._on_bubble
+            self.audio.start()
+            log.info("✅ audio engine started")
+        except Exception as exc:
+            log.exception(f"❌ audio engine failed: {exc}")
+            self.audio = None
 
         # Create tray with audio reference
-        self.tray = PetTray(self.window, self.bridge, self.audio)
+        try:
+            self.tray = PetTray(self.window, self.bridge, self.audio)
+            log.info("✅ tray created")
+        except Exception as exc:
+            log.exception(f"❌ tray failed: {exc}")
+            self.tray = None
 
         # Start context engine
-        self._context = ContextThread(self.bridge)
-        self._context.start()
+        try:
+            self._context = ContextThread(self.bridge)
+            self._context.start()
+            log.info("✅ context engine started")
+        except Exception as exc:
+            log.warning(f"context engine failed: {exc}")
 
         # Start NeuroClient (1Hz poll to Neuro bridge)
         try:
             from neuro_client import NeuroClient
             self.neuro = NeuroClient(on_status_change=self._on_neuro_update)
             self.neuro.start()
-            log.info("neuro client wired (1Hz poll → /v1/neuro/status)")
+            log.info("✅ neuro client wired (1Hz poll → /v1/neuro/status)")
         except Exception as exc:
-            log.warning("neuro client init failed: %s", exc)
+            log.exception(f"❌ neuro client failed: {exc}")
             self.neuro = None
 
+        log.info("🪶 show window + exec")
         self.window.show()
         return QApplication.exec()
 
