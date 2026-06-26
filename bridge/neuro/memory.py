@@ -52,13 +52,15 @@ class Memory:
     - prompt_injection 注入机制
     """
     def __init__(self, signals, enabled: bool = True,
-                 llm_endpoint: str = "http://127.0.0.1:7860/v1/chat/completions"):
+                 llm_endpoint: str = "http://127.0.0.1:7860/v1/chat/completions",
+                 llm_model: str = "Qwen3.6-35B-A3B-UD-Q6_K"):
         from chromadb.config import Settings
         import chromadb
 
         self.signals = signals
         self.enabled = enabled
         self.llm_endpoint = llm_endpoint
+        self.llm_model = llm_model
 
         # Injection 字段 (Neuro 风格, priority 60)
         self.prompt_injection = {
@@ -159,19 +161,19 @@ class Memory:
                     elif m["role"] == "assistant" and m.get("content"):
                         chat_section += f"{AI_NAME}: {m['content']}\n"
 
-                # 让 LLM 自我总结
+                # 让 LLM 自我总结 (reflection - 慢, 60s timeout)
                 try:
                     resp = requests.post(
                         self.llm_endpoint,
                         json={
-                            "model": "auto",
+                            "model": self.llm_model,
                             "messages": [
                                 {"role": "user", "content": chat_section + MEMORY_PROMPT}
                             ],
                             "max_tokens": 400,
                             "temperature": 0.3
                         },
-                        timeout=30
+                        timeout=120
                     )
                     raw = ""
                     try:
