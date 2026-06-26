@@ -30,7 +30,21 @@ from urllib import request as urlrequest
 from urllib.error import URLError
 
 HERE = Path(__file__).parent
+HERE_ROOT = HERE.parent
 KANBAN_API = "http://127.0.0.1:8648/api/hermes/kanban"
+KANBAN_DIRECT_API = "http://127.0.0.1:8649/api/hermes/kanban"
+_TOKEN_FILE = HERE_ROOT / "data" / "webui" / ".admin-jwt.txt"
+
+
+def _load_token() -> Optional[str]:
+    """Load admin JWT token from disk (used for webui auth)."""
+    try:
+        if _TOKEN_FILE.exists():
+            t = _TOKEN_FILE.read_text(encoding="utf-8").strip()
+            return t or None
+    except OSError:
+        pass
+    return None
 
 # 5-phase 闭环 (哥哥定义)
 PHASES = ["check", "search", "execute", "verify", "test"]
@@ -48,13 +62,17 @@ log = logging.getLogger("loop-workflow")
 # ─── Kanban API helpers ───
 
 def api(method: str, path: str, body: Optional[dict] = None) -> Optional[dict]:
-    """调 webui Kanban API (走 webui_proxy :8648)."""
+    """调 webui Kanban API (走 webui_proxy :8648 with JWT token)."""
+    token = _load_token()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         url = f"{KANBAN_API}{path}"
         data = json.dumps(body).encode("utf-8") if body else None
         req = urlrequest.Request(
             url, data=data, method=method,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         with urlrequest.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8"))

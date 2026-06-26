@@ -202,10 +202,13 @@ deps/_src/
 #   - icarus-coordination-schema.json (static schema, tracked)
 #   - README.md (design doc, tracked)
 #   - handshake.*.json (live handoffs, NOT tracked — dynamic)
+#   - *.md under data/icarus-coordination/ (daily logs, NOT tracked — dynamic)
 !data/icarus-coordination/
 !data/icarus-coordination/README.md
 !data/icarus-coordination/icarus-coordination-schema.json
 data/icarus-coordination/handshake.*.json
+data/icarus-coordination/*.md
+!data/icarus-coordination/README.md
 
 # --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
 # These are Icarus' visual identity. Treat as design tokens, not throwaway.
