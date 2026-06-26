@@ -43,6 +43,10 @@ class SignalBridge(QObject):
     state_changed = pyqtSignal(str)
     bubble_shown = pyqtSignal(str, int)
     context_changed = pyqtSignal(str)
+    # Neuro signals
+    neuro_state_changed = pyqtSignal(str)   # "idle" / "listening" / "thinking" / "speaking" / "bored"
+    neuro_patience_changed = pyqtSignal(float)  # 当前 PATIENCE 值
+    neuro_memory_added = pyqtSignal(str)     # 新记忆文本 (反射触发)
 
 
 # ─── Pet Window ───
@@ -210,6 +214,21 @@ class PetTray:
         menu.addAction(self._wake_action)
         menu.addSeparator()
 
+        # ─── Neuro menu (桌宠 → Neuro 控制) ───
+        neuro_menu = menu.addMenu("🧠 Neuro")
+        neuro_menu.addAction("💬 让伊卡洛斯主动说话", self._trigger_patience)
+        neuro_menu.addSeparator()
+
+        patience_menu = neuro_menu.addMenu("⏱️ PATIENCE 阈值")
+        for label, sec in [("15s (敏感)", 15), ("30s (默认)", 30), ("60s (慢热)", 60), ("120s (极慢)", 120)]:
+            a = patience_menu.addAction(label)
+            a.triggered.connect(lambda checked, s=sec: self._set_patience(s))
+
+        neuro_menu.addAction("🔄 重置说话标志", self._reset_signals)
+        neuro_menu.addAction("🧠 看记忆…", self._show_memories)
+        neuro_menu.addSeparator()
+        neuro_menu.addAction("📝 加一条记忆…", self._add_memory_prompt)
+
         # Wake word submenu (only active in wake mode)
         self._wake_menu = QMenu("🔑 唤醒词")
         self._wake_menu.setEnabled(False)
@@ -251,6 +270,67 @@ class PetTray:
 
     def _set_threshold(self, val: int):
         self.audio.threshold = val
+
+    # ─── Neuro control handlers ───
+
+    def _get_neuro(self):
+        """Get the IcarusApp's NeuroClient via window's app instance."""
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app and hasattr(app, '_icarus_pet'):
+            return app._icarus_pet.neuro
+        return None
+
+    def _trigger_patience(self):
+        """桌宠菜单: 手动触发 PATIENCE (让 AI 主动说话)"""
+        neuro = self._get_neuro()
+        if neuro and neuro.trigger_patience():
+            self.update_status("Neuro triggered")
+        else:
+            self.update_status("Neuro unavailable")
+
+    def _set_patience(self, seconds: float):
+        """桌宠菜单: 调整 PATIENCE 阈值"""
+        neuro = self._get_neuro()
+        if neuro and neuro.set_patience(seconds):
+            self.update_status(f"PATIENCE → {seconds:.0f}s")
+        else:
+            self.update_status("PATIENCE failed")
+
+    def _reset_signals(self):
+        """桌宠菜单: 重置说话标志"""
+        neuro = self._get_neuro()
+        if neuro and neuro.reset_signals():
+            self.update_status("Neuro reset")
+
+    def _show_memories(self):
+        """桌宠菜单: 弹窗显示最近 10 条记忆"""
+        from PyQt6.QtWidgets import QMessageBox
+        neuro = self._get_neuro()
+        if not neuro:
+            QMessageBox.warning(self.window, "Neuro", "Neuro client not available")
+            return
+        mems = neuro.get_memories(limit=10)
+        if not mems:
+            QMessageBox.information(self.window, "Neuro", "(no memories)")
+            return
+        text = "\n".join(
+            f"[{m['metadata'].get('type', '?')}] {m['document']}"
+            for m in mems
+        )
+        QMessageBox.information(self.window, f"Neuro · {len(mems)} 条记忆", text)
+
+    def _add_memory_prompt(self):
+        """桌宠菜单: 弹输入框加记忆"""
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(
+            self.window, "Neuro · 加记忆",
+            "伊卡洛斯要记住的:"
+        )
+        if ok and text.strip():
+            neuro = self._get_neuro()
+            if neuro and neuro.add_memory(text.strip()):
+                self.update_status("记忆已加")
 
     def _toggle_visible(self):
         self.window.setVisible(not self.window.isVisible())
@@ -335,11 +415,15 @@ class IcarusApp:
         self.window = PetWindow(self.bridge)
         self.audio = None
         self.tray = None
+        self.neuro = None  # NeuroClient, set in run()
 
         # Connect signals
         self.bridge.state_changed.connect(self._on_state)
         self.bridge.bubble_shown.connect(self._on_bubble)
         self.bridge.context_changed.connect(self._on_context)
+        # Neuro signals
+        self.bridge.neuro_state_changed.connect(self._on_neuro_state)
+        self.bridge.neuro_patience_changed.connect(self._on_neuro_patience)
 
     def _on_state(self, state: str):
         log.info("state → %s", state)
@@ -358,6 +442,32 @@ class IcarusApp:
             self.window.setWindowTitle("🪶 📝 哥哥在工作")
         else:
             self.window.setWindowTitle("🪶")
+
+    def _on_neuro_state(self, state: str):
+        """Neuro AI 状态变化 → 桌宠表情"""
+        log.debug("neuro state → %s (patience %.1fs, t=%.1f)",
+                  state, self.neuro.patience, self.neuro.time_since_last)
+        # 映射到现有 character state
+        # idle / listening / thinking / speaking / bored
+        self.window.set_state(state)
+
+    def _on_neuro_patience(self, seconds: float):
+        """PATIENCE 变化 → tray tooltip"""
+        if self.tray:
+            self.tray.update_status(f"Neuro {seconds:.0f}s · {self.neuro.history_len} 条记忆")
+
+    def _on_neuro_update(self, status: dict):
+        """NeuroClient 1Hz 回调 → 推到 Qt signal"""
+        # 1) 状态变化
+        new_state = self.neuro.ai_state
+        if not hasattr(self, '_last_neuro_state') or self._last_neuro_state != new_state:
+            self._last_neuro_state = new_state
+            self.bridge.neuro_state_changed.emit(new_state)
+        # 2) PATIENCE 变化
+        new_patience = status.get("patience", 30.0)
+        if not hasattr(self, '_last_patience') or abs(self._last_patience - new_patience) > 0.5:
+            self._last_patience = new_patience
+            self.bridge.neuro_patience_changed.emit(new_patience)
 
     def run(self):
         log.info("🪶 Icarus Desktop Pet running")
@@ -378,6 +488,16 @@ class IcarusApp:
         self._context = ContextThread(self.bridge)
         self._context.start()
 
+        # Start NeuroClient (1Hz poll to Neuro bridge)
+        try:
+            from neuro_client import NeuroClient
+            self.neuro = NeuroClient(on_status_change=self._on_neuro_update)
+            self.neuro.start()
+            log.info("neuro client wired (1Hz poll → /v1/neuro/status)")
+        except Exception as exc:
+            log.warning("neuro client init failed: %s", exc)
+            self.neuro = None
+
         self.window.show()
         return QApplication.exec()
 
@@ -386,6 +506,8 @@ class IcarusApp:
             self.audio.stop()
         if hasattr(self, '_context'):
             self._context.stop()
+        if self.neuro:
+            self.neuro.stop()
 
 
 def register_autostart():
@@ -419,6 +541,8 @@ def main():
     register_autostart()
 
     pet = IcarusApp()
+    # Expose to NeuroClient lookup (tray needs to find pet.neuro)
+    app._icarus_pet = pet
     rc = pet.run()
     pet.cleanup()
     sys.exit(rc)
