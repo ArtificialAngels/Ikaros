@@ -881,11 +881,19 @@ class IcarusApp:
         self.window.installEventFilter(self)
         log.info("✓ pet window event filter installed (double-click → chat dock)")
 
-        # Other components still disabled (tray/context/neuro Quest 状态保留)
+        # Other components still disabled (tray/context Quest 默认)
         self.tray = None
         self._context = None
-        self.neuro = None
-        log.info("⚠ tray/context/neuro still skipped (Quest 默认)")
+
+        # Phase 5: NeuroClient (PATIENCE 主动通知 + AI 状态轮询)
+        try:
+            from neuro_client import NeuroClient as _NeuroClient
+            self.neuro = _NeuroClient(on_status_change=self._on_neuro_update)
+            self.neuro.start()
+            log.info("✓ NeuroClient started (1Hz poll → Live2D 表情 + PATIENCE)")
+        except Exception as exc:
+            log.warning("⚠ NeuroClient start failed: %s", exc)
+            self.neuro = None
 
         log.info("🪶 show window + exec")
         self.window.show()
