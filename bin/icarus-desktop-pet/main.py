@@ -845,8 +845,7 @@ class IcarusApp:
             self._last_patience = new_patience
             self.bridge.neuro_patience_changed.emit(new_patience)
 
-def run(self):
-    def run(self):
+
 
         # 4A: Audio engine re-enabled (sounddevice 替 pyaudio)
         try:
@@ -858,6 +857,13 @@ def run(self):
             log.warning("⚠ audio engine failed to start: %s", exc)
             self.audio = None
 
+        # 4D: Wire audio engine callbacks → SignalBridge → Live2D 表情
+        # audio_engine 在 WS 收到 thinking/SPEAKING/done 等时 emit 状态.
+        # 通过 SignalBridge 推到 _on_state → PetWindow.set_state() → window.setState() JS
+        if self.audio is not None:
+            self.audio.on_state = lambda s: self.bridge.state_changed.emit(s)
+            self.audio.on_bubble = lambda t, d: self.bridge.bubble_shown.emit(t, d)
+            log.info("✓ audio.on_state/on_bubble wired → SignalBridge → Live2D 表情")
         # 4C: Chat dock window (独立 window, 双击桌宠打开)
         try:
             self.chat_dock = ChatDockWindow(
