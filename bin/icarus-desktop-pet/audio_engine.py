@@ -342,24 +342,13 @@ class AudioEngine:
         # Check wake word if enabled
         # (In a real implementation, this would use a lightweight ASR)
         # For now: send all speech through, wake word handled by LLM
+        # 静音5秒后—听歌/睡觉等不会被误触发
         if self._ws:
             try:
-                # Send via the existing websocket
-                loop = asyncio.get_event_loop()
-                loop.call_soon_threadsafe(
-                    asyncio.create_task,
-                    self._ws.send(audio),
-                )
-            except RuntimeError:
-                # No running loop — create a fire-and-forget task
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self._ws.send(audio),
-                        self._aio_loop,
-                    )
-                except Exception:
-                    pass
+                coro = self._ws.send(audio)
+                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
             except Exception:
+                # 如果没有 aio_loop (还未启动 _run_ws), 简单忽略
                 pass
 
         self._emit_state("LISTENING")

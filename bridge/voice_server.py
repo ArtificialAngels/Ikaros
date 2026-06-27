@@ -72,10 +72,10 @@ def _rms_from_webm(data: bytes) -> float:
         return 0.0
 
 
-# ---- Lazy STT (OpenAI Whisper API) ----
+# ---- Lazy STT: faster-whisper local (优先) → OpenAI Whisper API (fallback) ----
 
 def _get_whisper_client():
-    """Lazy import of OpenAI client for Whisper API."""
+    """Lazy import of OpenAI client for Whisper API (fallback only)."""
     try:
         from openai import OpenAI
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -86,30 +86,105 @@ def _get_whisper_client():
         return None
 
 
-async def _transcribe(audio_bytes: bytes, mime_type: str = "audio/webm") -> str:
-    """Send audio to OpenAI Whisper API and return text."""
+async def _transcribe(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    """Transcribe audio bytes to text.
+
+    Priority:
+    1. faster-whisper local (tiny model, ~75MB, CPU ~2x realtime)
+    2. OpenAI Whisper API (OPENAI_API_KEY 需要)
+
+    audio_bytes should be raw PCM 16kHz 16-bit mono (from audio_engine / 4A).
+    """
+    text = await _local_stt(audio_bytes)
+    if text:
+        return text
+    text = await _openai_stt(audio_bytes, mime_type)
+    return text
+
+
+_whisper_model = None
+
+
+async def _local_stt(audio_bytes: bytes) -> str:
+    """Local STT via faster-whisper (tiny model, CPU)."""
+    global _whisper_model
+
+    # Lazy init — download tiny model on first call (~75MB, one-time)
+    if _whisper_model is None:
+        try:
+            from faster_whisper import WhisperModel
+            logger.info("STT: loading faster-whisper tiny model (first call ~5s)...")
+            loop = asyncio.get_event_loop()
+            # 设 HF 镜像 (国内/内网环境, HF 直连常断)
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+            _whisper_model = await loop.run_in_executor(
+                None, lambda: WhisperModel("tiny", device="cpu", compute_type="int8"),
+            )
+            logger.info("STT: faster-whisper tiny loaded")
+        except Exception as exc:
+            logger.warning("STT: faster-whisper init failed: %s", exc)
+            return ""
+
+    try:
+        import io
+        import soundfile as sf
+        import numpy as np
+
+        # audio_bytes is raw PCM 16kHz int16 mono (from audio_engine 4A)
+        # Write as WAV so faster-whisper can parse it
+        wav_buf = io.BytesIO()
+        sf.write(wav_buf, np.frombuffer(audio_bytes, dtype=np.int16), 16000, format="wav")
+        wav_buf.seek(0)
+
+        loop = asyncio.get_event_loop()
+        segments, info = await loop.run_in_executor(
+            None,
+            lambda: _whisper_model.transcribe(
+                wav_buf,
+                language="zh",
+                beam_size=3,
+                vad_filter=True,
+            ),
+        )
+        result = ""
+        for seg in segments:
+            result += seg.text
+        text = result.strip()
+        if text:
+            logger.info("STT(local): %r (%.1fs audio)", text, len(audio_bytes) / 32000)
+            return text
+        return ""
+    except Exception as exc:
+        logger.warning("STT(local) failed: %s", exc)
+        return ""
+
+
+async def _openai_stt(audio_bytes: bytes, mime_type: str) -> str:
+    """Fallback: OpenAI Whisper API."""
     client = _get_whisper_client()
     if client is None:
         return ""
-
+    import io
     try:
-        # Write audio to a temporary file-like object
         audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = f"voice.{mime_type.split('/')[-1].split(';')[0] or 'mp3'}"
-
+        ext = mime_type.split('/')[-1].split(';')[0] or 'wav'
+        audio_file.name = f"voice.{ext}"
         loop = asyncio.get_event_loop()
         transcript = await loop.run_in_executor(
             None,
             lambda: client.audio.transcriptions.create(
-                model=_WHISPER_MODEL,
+                model="whisper-1",
                 file=audio_file,
                 language="zh",
                 response_format="text",
             )
         )
-        return str(transcript).strip()
+        text = str(transcript).strip()
+        if text:
+            logger.info("STT(openai): %r", text)
+        return text
     except Exception as exc:
-        logger.error("Whisper API error: %s", exc)
+        logger.error("OpenAI Whisper API error: %s", exc)
         return ""
 
 
