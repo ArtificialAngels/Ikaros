@@ -43,19 +43,26 @@ _HERMES_HOME = Path(os.environ.get(
 ))
 
 # ---- Provider URL registry ----
+# 哥哥 2026-06-27: minimax 的 host 是 .cn (MiniMax-Text-01 等), 不是 .chat (global)
+# CloudClient 默认会按 provider name 选 host — 但 env var MINIMAX_API_KEY 没有 (哥哥用的是 MINIMAX_CN_API_KEY)
+# 把 cn 视为默认, 加 alias 让 CloudClient 在 "minimax" / "minimax-cn" 都能解析到 cn host
 _PROVIDER_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
-    "minimax": "https://api.minimaxi.chat/v1",
+    "minimax": "https://api.minimaxi.com/v1",  # .cn host, .chat 无 key (哥哥 6-27)
+    "minimax-cn": "https://api.minimaxi.com/v1",  # alias for the same .cn host
     "deepseek": "https://api.deepseek.com/v1",
     "xai": "https://api.x.ai/v1",
 }
 
 # ---- API key env var mapping ----
+# 哥哥 6-27: .env 里写的是 MINIMAX_CN_API_KEY, 不是 MINIMAX_API_KEY
+# 把 minimax-cn 当作 primary env var, minimax 回退
 _PROVIDER_KEY_ENV: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "minimax": "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_CN_API_KEY",  # 哥哥实际的 key (auth.json 也标了这个)
     "deepseek": "DEEPSEEK_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",

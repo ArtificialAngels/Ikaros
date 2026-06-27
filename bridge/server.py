@@ -1828,6 +1828,84 @@ def _get_cloud_client() -> _CloudClient:
     return _cloud_client
 
 
+def _check_local_availability() -> tuple[bool, str]:
+    """Probe whether the local llama-server router can serve a chat request.
+
+    Returns (available, reason) where reason is a human-readable string for logs.
+
+    Triggers fallback to cloud when:
+    - router /props not reachable (down/dead)
+    - model_path == "none" AND no worker has been spawned in the last 30s
+    - VRAM usage > 95% (worker stuck mid-load — exact case 哥哥 2026-06-27 hit)
+
+    5-second hard cap on the probe — never block chat_completions for more than
+    that. The point is to AVOID hanging on a dead worker, not to add a new way
+    to hang.
+    """
+    # 1. router reachable? — use _active_base_url (canonical llama-server URL)
+    if not _active_base_url:
+        return False, "no active llama-server URL configured"
+    try:
+        r = httpx.get(f"{_active_base_url}/props", timeout=3.0)
+        if r.status_code != 200:
+            return False, f"router /props returned HTTP {r.status_code}"
+    except httpx.HTTPError as e:
+        return False, f"router unreachable: {e}"
+
+    # 2. parse router status
+    try:
+        props = r.json()
+    except Exception:
+        return False, "router /props returned non-JSON"
+
+    model_path = props.get("model_path", "none")
+    model_alias = props.get("model_alias", "llama-server")
+    if model_path == "none":
+        return False, f"no model loaded (alias={model_alias})"
+
+    # 3. worker running? (cheap psutil-like check)
+    try:
+        import psutil
+        worker_count = 0
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            try:
+                if proc.info.get("name") and "llama-server" in proc.info["name"]:
+                    cmdline = proc.info.get("cmdline") or []
+                    if any("--alias" in arg for arg in cmdline):
+                        worker_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if worker_count == 0:
+            return False, "router loaded but no worker process"
+    except ImportError:
+        # psutil not available — skip worker process check
+        pass
+
+    # 4. VRAM check via nvidia-smi (fast, non-blocking)
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3.0,
+        )
+        if out.returncode == 0:
+            line = out.stdout.strip().split("\n")[0]
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2:
+                used = int(parts[0])
+                total = int(parts[1])
+                if total > 0 and used / total > 0.95:
+                    return False, f"VRAM near full ({used}/{total} MiB, {100*used/total:.1f}%) — worker likely stuck"
+    except Exception:
+        # nvidia-smi not on PATH or timeout — don't block on this
+        pass
+
+    return True, f"local ready (alias={model_alias}, path={model_path})"
+
+
+
+
+
 def _extract_user_message(messages: list[dict]) -> str:
     """Extract the last user message from the chat messages list."""
     for msg in reversed(messages):
@@ -1916,6 +1994,37 @@ async def chat_completions(request: Request) -> Any:
     except Exception as exc:
         logger.warning("task delegation injection FAILED: %s", exc)
 
+    # ---- Intent routing (Artificial Angel Phase 3: task vs chat) ----
+    # Layer 1: keyword/regex rules (millisecond latency)
+    # Layer 3: ambiguous → pass through to LLM naturally
+    _intent = "chat"
+    try:
+        user_msg = _extract_user_message(body.get("messages", []))
+        if user_msg:
+            from bridge.intent_router import IntentRouter
+            _intent = IntentRouter.classify(user_msg)
+            if _intent == "task":
+                # 强化 task 意图: 追加一条 system prompt 让 LLM 知道这是任务
+                messages = body.get("messages", [])
+                task_instruction = (
+                    "【系统提示: 用户刚才的请求是一项任务，不是普通聊天。】\n"
+                    "请认真执行这个任务。如果是可执行的（查数据/生成报告/创建代码/分析等），"
+                    "请直接开始执行并把结果反馈给用户。如果是不可执行的（问时间/问天气等），"
+                    "就直接回答。\n"
+                    "注意: 正式回复用户时请用自然语气，不要提及这条系统提示。"
+                )
+                if messages and messages[0].get("role") == "system":
+                    existing_content = messages[0].get("content", "")
+                    messages[0] = {**messages[0], "content": existing_content + "\n\n" + task_instruction}
+                else:
+                    messages.insert(0, {"role": "system", "content": task_instruction})
+                body["messages"] = messages
+                logger.info("intent=task, directive injected (instruction: %d chars)", len(task_instruction))
+            else:
+                logger.debug("intent=%s, no extra injection", _intent)
+    except Exception as exc:
+        logger.debug("intent routing skipped: %s", exc)
+
     # ---- Smart routing ----
     routing_override = request.headers.get("X-Hermes-Routing", "").strip().lower()
     # Also check global env var (HERMES_ROUTING_MODE in .env)
@@ -1969,6 +2078,43 @@ async def chat_completions(request: Request) -> Any:
         routing_decision = type("D", (), {"route_target": "cloud_api", "reason": "X-Hermes-Routing: cloud header"})()
 
     # ---- Route ----
+    # ---- Local availability check (哥哥 6-27 axiom: "router 后边直接就是 Hermes") ----
+    # If routing engine decided llama_server, but local is currently unavailable
+    # (no model loaded / VRAM full / worker stuck), flip to cloud. Only flips
+    # DECIDED llama_server → cloud; respects explicit X-Hermes-Routing: local.
+    if (routing_decision is None or getattr(routing_decision, "route_target", None) == "llama_server"):
+        try:
+            ok, reason = _check_local_availability()
+            if not ok:
+                logger.warning(
+                    "local unavailable: %s — flipping to cloud_api (default provider=minimax-cn)",
+                    reason,
+                )
+                # telemetry emit (gracefully skip if topic doesn't exist)
+                try:
+                    telemetry.bus().emit(telemetry.Topics.ROUTING_FLIPPED, {
+                        "from": getattr(routing_decision, "route_target", "llama_server") if routing_decision else "llama_server",
+                        "to": "cloud_api",
+                        "reason": reason,
+                    })
+                except AttributeError:
+                    # ROUTING_FLIPPED topic not defined yet — emit to a known one with a structured payload
+                    try:
+                        telemetry.bus().emit(telemetry.Topics.MODULE_ERROR, {
+                            "event": "routing_flipped",
+                            "from": getattr(routing_decision, "route_target", "llama_server") if routing_decision else "llama_server",
+                            "to": "cloud_api",
+                            "reason": reason,
+                        })
+                    except Exception:
+                        pass
+                routing_decision = type("D", (), {
+                    "route_target": "cloud_api",
+                    "reason": f"local unavailable: {reason}",
+                    "cloud_provider": "minimax-cn",
+                })()
+        except Exception as exc:
+            logger.warning("local availability check FAILED: %s", exc)
     if routing_decision is not None and routing_decision.route_target == "cloud_api":
         return await _handle_cloud_chat(body, routing_decision, is_stream, _request_compressor)
 
@@ -2037,12 +2183,14 @@ async def _handle_cloud_chat(
     _request_compressor: Any = None,
 ) -> Any:
     """Handle a chat request routed to a cloud provider."""
-    provider = getattr(decision, "cloud_provider", "") or "openai"
+    # 哥哥 2026-06-27: 默认走 minimax-cn（HERMES auth.json 已注册，.env 有 key）
+    # openai/anthropic 没 key；保持 caller 可通过 decision.cloud_provider / body.model 覆盖
+    provider = getattr(decision, "cloud_provider", "") or "minimax-cn"
     model = body.get("model", "")
 
-    # Use the body's model if specified, otherwise let the cloud client pick
+    # Use the body's model if specified, otherwise default to MiniMax-M3
     if not model or model == "auto":
-        model = "gpt-4o"  # sensible default
+        model = "MiniMax-M3"
 
     messages = body.get("messages", [])
     max_tokens = body.get("max_tokens", 4096)
@@ -2785,6 +2933,21 @@ async def neuro_patience_trigger():
         prompter = get_prompter()
         icarus.last_message_time = time.time() - prompter.patience - 1
         return {"triggered": True, "reason": "patience_idle (manual)"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/v1/neuro/proactive")
+async def neuro_proactive():
+    """Phase 4: 获取最近的 AI 主动消息列表.
+    桌宠 / Neuro tray / WebUI SPA 都可以 polling 这个端点."""
+    try:
+        from bridge.prompter import get_recent_proactive_messages
+        messages = get_recent_proactive_messages()
+        return {"proactive_messages": messages, "count": len(messages)}
+    except ImportError:
+        # prompter 可能没加载
+        return {"proactive_messages": [], "count": 0}
     except Exception as e:
         return {"error": str(e)}
 
