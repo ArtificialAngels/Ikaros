@@ -64,6 +64,10 @@ L2D_EXPR_BY_STATE = {
 }
 HERMES_ROOT = HERE.parent.parent
 
+# 便携 Python 不自动加 cwd 到 sys.path (python312._pth 机制)
+# 手动加, 让 from audio_engine import AudioEngine 等本地 import 能工作
+sys.path.insert(0, str(HERE))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
 log = logging.getLogger("icarus")
 

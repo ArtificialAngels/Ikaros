@@ -26,12 +26,14 @@ Protocol (over a single WebSocket):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
 import os
 import struct
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -47,6 +49,11 @@ _MAX_RECORD_SECONDS = 30       # max single utterance
 _WHISPER_MODEL = "whisper-1"
 _DEFAULT_TTS_VOICE = os.environ.get("HERMES_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 _LLM_TIMEOUT = 15.0
+
+# ---- TTS 缓存 (4B output, 文本 → MP3 bytes) ----
+_TTS_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "tts-cache"
+_TTS_CACHE_MAX_ENTRIES = 200   # 约 200 * 30KB = 6MB 磁盘
+_TTS_CACHE_ENABLED = True
 
 
 # ---- VAD: simple energy-based silence detection ----
@@ -103,27 +110,41 @@ async def _transcribe(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
 
 
 _whisper_model = None
+_whisper_loading = False  # 防止并发加载
+
+
+async def _ensure_whisper() -> bool:
+    """Ensure faster-whisper model is loaded (lazy init, one-time).
+
+    Returns True if model is ready.
+    """
+    global _whisper_model, _whisper_loading
+    if _whisper_model is not None:
+        return True
+    if _whisper_loading:
+        return False  # 另一个请求正在加载
+    _whisper_loading = True
+    try:
+        from faster_whisper import WhisperModel
+        logger.info("STT: loading faster-whisper tiny model (first call ~5-15s)...")
+        loop = asyncio.get_event_loop()
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        _whisper_model = await loop.run_in_executor(
+            None, lambda: WhisperModel("tiny", device="cpu", compute_type="int8"),
+        )
+        logger.info("STT: faster-whisper tiny loaded ✓")
+        return True
+    except Exception as exc:
+        logger.warning("STT: faster-whisper init failed: %s", exc)
+        _whisper_loading = False  # 下次重试
+        return False
 
 
 async def _local_stt(audio_bytes: bytes) -> str:
     """Local STT via faster-whisper (tiny model, CPU)."""
-    global _whisper_model
-
-    # Lazy init — download tiny model on first call (~75MB, one-time)
-    if _whisper_model is None:
-        try:
-            from faster_whisper import WhisperModel
-            logger.info("STT: loading faster-whisper tiny model (first call ~5s)...")
-            loop = asyncio.get_event_loop()
-            # 设 HF 镜像 (国内/内网环境, HF 直连常断)
-            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-            _whisper_model = await loop.run_in_executor(
-                None, lambda: WhisperModel("tiny", device="cpu", compute_type="int8"),
-            )
-            logger.info("STT: faster-whisper tiny loaded")
-        except Exception as exc:
-            logger.warning("STT: faster-whisper init failed: %s", exc)
-            return ""
+    ready = await _ensure_whisper()
+    if not ready:
+        return ""
 
     try:
         import io
@@ -188,22 +209,77 @@ async def _openai_stt(audio_bytes: bytes, mime_type: str) -> str:
         return ""
 
 
-# ---- Lazy TTS (edge-tts streaming) ----
+# ---- Lazy TTS (edge-tts streaming) with disk cache ----
+
+_TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _tts_cache_key(text: str, voice: str) -> str:
+    """SHA256 of text + voice → filename (no special chars)."""
+    raw = f"{text}|{voice}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest() + ".mp3"
+
+
+def _tts_cache_path(key: str) -> Path:
+    return _TTS_CACHE_DIR / key
+
 
 async def _stream_tts(text: str, voice: str = _DEFAULT_TTS_VOICE):
-    """Stream TTS audio chunks from edge-tts.
+    """Stream TTS audio chunks from edge-tts, with disk cache.
+
+    Cache key: sha256(text + voice) → .mp3 file.
+    Cache dir: data/tts-cache/ (max 200 entries ~6MB).
 
     Yields bytes (mp3 audio chunks).
     """
+    cache_key = _tts_cache_key(text, voice)
+    cache_path = _tts_cache_path(cache_key)
+
+    # Cache hit → return cached MP3 as one chunk
+    if _TTS_CACHE_ENABLED and cache_path.exists():
+        mp3 = cache_path.read_bytes()
+        logger.debug("TTS cache HIT: %s (%dB, %r…)", cache_key, len(mp3), text[:30])
+        yield mp3
+        return
+
+    # Cache miss → stream from edge-tts
     try:
         import edge_tts
         communicate = edge_tts.Communicate(text, voice)
+        chunks: list[bytes] = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
+                chunks.append(chunk["data"])
                 yield chunk["data"]
     except Exception as exc:
         logger.error("TTS error: %s", exc)
         yield b""
+        return
+
+    # Write cache (only if we got real audio)
+    if _TTS_CACHE_ENABLED and chunks:
+        mp3_bytes = b"".join(chunks)
+        try:
+            cache_path.write_bytes(mp3_bytes)
+            logger.info("TTS cache WRITE: %s (%dB, %r…)", cache_key, len(mp3_bytes), text[:30])
+        except Exception as exc:
+            logger.debug("TTS cache write failed: %s", exc)
+
+        # Evict old entries if over limit
+        _tts_evict_if_needed()
+        logger.debug("TTS cache written: %s (%dB)", cache_key, len(mp3_bytes))
+
+
+def _tts_evict_if_needed():
+    """Remove oldest files when cache exceeds max entries."""
+    try:
+        files = sorted(_TTS_CACHE_DIR.iterdir(), key=lambda f: f.stat().st_mtime)
+        while len(files) > _TTS_CACHE_MAX_ENTRIES:
+            oldest = files.pop(0)
+            oldest.unlink()
+            logger.debug("TTS evict: %s", oldest.name)
+    except Exception:
+        pass
 
 
 # ---- LLM call (reuse bridge's chat pipeline) ----
