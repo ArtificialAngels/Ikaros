@@ -846,6 +846,7 @@ class IcarusApp:
             self.bridge.neuro_patience_changed.emit(new_patience)
 
 
+    def run(self):
 
         # 4A: Audio engine re-enabled (sounddevice 替 pyaudio)
         try:
