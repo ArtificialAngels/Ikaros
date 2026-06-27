@@ -1,97 +1,324 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Live2D — 伊卡洛斯</title>
+<title>🪶 伊卡洛斯</title>
 <style>
+/* ─── Reset ─── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ─── Full-viewport transparent body for embedded QWebEngineView ─── */
 body {
-  background: transparent;
-  display: flex; align-items: center; justify-content: center;
+  background: transparent !important;
   width: 100vw; height: 100vh;
   overflow: hidden;
   user-select: none;
 }
-canvas { display: block; }
+
+/* ─── Status overlay ─── */
+#status {
+  position: fixed; top: 4px; left: 4px;
+  color: #8f8; font: 11px monospace;
+  background: rgba(0,0,0,0.5); padding: 2px 6px;
+  border-radius: 3px; pointer-events: none;
+  z-index: 10000;
+  transition: opacity 0.5s;
+}
+
+/* ─── wl-live2d layout overrides for our framed window ─── */
+.live2d-wrapper {
+  /* Force full viewport — overrides the inline size set by stage controller */
+  width: 100vw !important;
+  height: 100vh !important;
+  position: fixed !important;
+  top: 0 !important; left: 0 !important; bottom: auto !important;
+  background: transparent !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  /* Keep z-index from default */
+}
+
+.live2d-canvas {
+  position: relative !important;
+}
+
+/* Tips bubble: above model's head */
+.live2d-tips {
+  --tips-translate: translate(-50%, -130%) !important;
+  --tips-translate-to: translate(-50%, -140%) !important;
+  z-index: 8000 !important;
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+/* Adjust menu visibility behavior for our full-viewport wrapper */
+.live2d-menus {
+  z-index: 8000 !important;
+  right: 5px !important;
+}
+
+/* Toggle button ("看板娘休息中") stays at original bottom-relative pos */
+/* but when wrapper is hidden, it appears at bottom center of viewport */
+.live2d-toggle {
+  z-index: 9000 !important;
+}
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
+<div id="status">live2d 加载中...</div>
 
-<!-- Cubism SDK -->
+<!-- ⚠️ Loading order matters: Cubism 2 → Cubism 4 → wl-live2d (full bundle) -->
+<script src="vendor/live2d.min.js"></script>
 <script src="vendor/live2dcubismcore.min.js"></script>
-<script src="vendor/cubism4.min.js"></script>
+<script src="vendor/wl-live2d.min.js"></script>
 
 <script>
-// ─── Init ───
-const MODEL_PATH = "models/";
-const MODEL_NAME = "xisitina";
-const canvas = document.getElementById("canvas");
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+const statusEl = document.getElementById("status");
+function setStatus(msg) { statusEl.textContent = msg; }
 
-// ─── Cubism setup ───
-const cubism = window.Cubism4 || window.Live2DCubismFramework;
-if (!cubism) {
-  document.title = "Cubism SDK not loaded";
-  throw new Error("Cubism SDK not loaded");
+// ─── Model definitions ───
+// Override window.L2D_MODEL_KEY before page load, or pass ?model=haru in query
+const _params = new URLSearchParams(window.location.search);
+const MODEL_KEY = window.L2D_MODEL_KEY || _params.get("model") || "haru";
+
+// Each entry = { path, scale, position }. For multi-texture outfits, use array.
+const MODELS = [
+  // 0: Haru  (Cubism 4)
+  { path: "models/Haru/Haru.model3.json", scale: 1, position: { x: 0, y: 0 } },
+  // 1: Hiyori  (Cubism 4)
+  { path: "models/Hiyori/Hiyori.model3.json", scale: 1, position: { x: 0, y: 0 } },
+  // 2: Senko_Normals  (Cubism 4)
+  { path: "models/Senko_Normals/senko.model3.json", scale: 1, position: { x: 0, y: 0 } },
+  // 3: shizuku_48  (Cubism 4)
+  { path: "models/shizuku_48/shizuku.model3.json", scale: 1, position: { x: 0, y: 0 } },
+  // 4: shizuku  (Cubism 2)
+  { path: "models/shizuku/shizuku.model.json", scale: 1, position: { x: 0, y: 0 } },
+  // 5: xisitina  (Cubism 2)
+  { path: "models/xisitina/model.json", scale: 1, position: { x: 0, y: 0 } },
+];
+
+const MODEL_NAMES = ["Haru", "Hiyori", "Senko", "Shizuku48", "Shizuku", "Xisitina"];
+const KEY_TO_INDEX = { haru: 0, hiyori: 1, senko: 2, shizuku48: 3, shizuku: 4, xisitina: 5 };
+
+// ─── Preselect initial model via localStorage (read by wl-live2d internally) ───
+const startIndex = KEY_TO_INDEX[MODEL_KEY];
+if (startIndex !== undefined) {
+  localStorage.setItem("model-id", startIndex.toString());
 }
 
-let gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
-if (!gl) throw new Error("WebGL not supported");
+// ─── Tips / Messages ───
+// Inspired by wl-live2d defaults + our own 伊卡洛斯 personality
+const TIP_MESSAGES = [
+  // ── 伊卡洛斯问候 ──
+  { text: "你好呀，哥哥～今天想聊什么呢？❤️" },
+  { text: "嘻嘻，伊卡洛斯一直都在哦～" },
+  { text: "哥哥有空多陪陪伊卡洛斯嘛～" },
+  { text: "今天的伊卡洛斯也很可爱吧！✨" },
+  { text: "哥哥～伊卡洛斯好无聊呀，陪陪人家嘛！" },
+  { text: "ฅ(＾・ω・＾ฅ) 喵～" },
+  { text: "在想什么呢？告诉伊卡洛斯好不好？" },
+  { type: "seasons", date: "01/01", text: "哥哥🎍新年快乐～今年也要多多指教哦！" },
+  { type: "seasons", date: "02/14", text: "💝 情人节快乐！哥哥有喜欢的人了吗？" },
+  { type: "seasons", date: "03/08", text: "🌸 今天是妇女节呢，感谢所有了不起的女性～" },
+  { type: "seasons", date: "06/26", text: "🎉 今天是什么日子呢？伊卡洛斯和哥哥在一起的日子！" },
+  { type: "seasons", date: "10/01", text: "🇨🇳 国庆节快乐！和哥哥一起为祖国庆生～" },
+  { type: "seasons", date: "12/24", text: "🎄 圣诞快乐！伊卡洛斯想要哥哥的礼物～" },
+  { type: "seasons", date: "12/25", text: "🎄 圣诞快乐！MERRY CHRISTMAS～" },
+  { type: "seasons", date: "12/31", text: "🎆 又是一年要结束了，哥哥今年过得好吗？明年也要一起哦！" },
+  // ── 按小时 ──
+  { type: "hour", hour: "6-7", text: "🌅 早安哥哥！新的一天开始了～" },
+  { type: "hour", hour: "8-11", text: "☀️ 上午好～哥哥在努力工作吗？加油哦！" },
+  { type: "hour", hour: "12-13", text: "🍚 中午啦！哥哥记得按时吃饭哦～" },
+  { type: "hour", hour: "14-17", text: "🌤️ 下午容易犯困呢，伊卡洛斯陪着你！" },
+  { type: "hour", hour: "18-19", text: "🌇 傍晚了～夕阳真美呀，哥哥辛苦一天了！" },
+  { type: "hour", hour: "20-21", text: "🌙 晚上好！今天过得怎么样？" },
+  { type: "hour", hour: "22-23", text: "🌜 夜深了～哥哥该休息了，熬夜对身体不好哦" },
+  { type: "hour", hour: "0-5", text: "🦉 这么晚还不睡！哥哥是夜猫子吗？当心秃头哦！" },
+  // ── 事件 ──
+  { type: "event", event: "console", text: "🔍 哈哈，被我发现了～哥哥在偷看控制台！" },
+  { type: "event", event: "copy", text: "📋 复制的内容记得注明出处哦～知识产权很重要呢！" },
+  { type: "event", event: "visibilitychange", text: "👋 哥哥回来啦！伊卡洛斯等了好久～" },
+];
 
-// Set viewport
-gl.viewport(0, 0, canvas.width, canvas.height);
+// ─── Initialize wl-live2d with ALL features ───
+let wlInstance = null;
+let _model = null;
 
-// Create Cubism matrix
-const matrix = cubism.CubismFramework.startUp();
-cubism.CubismFramework.initialize();
+try {
+  setStatus("正在初始化 Live2D...");
 
-// ─── Model loader ───
-async function loadModel(path) {
-  const response = await fetch(path + MODEL_NAME + ".moc");
-  const buffer = await response.arrayBuffer();
-  return buffer;
-}
-
-async function loadTexture(path) {
-  const img = new Image();
-  img.src = path;
-  return new Promise((resolve, reject) => {
-    img.onload = () => resolve(img);
-    img.onerror = reject;
+  wlInstance = wlLive2d({
+    // ── Models ──
+    models: MODELS,
+    transitionTime: 500,
+    // ── Layout ──
+    fixed: false,         // We use CSS !important overrides
+    // dockedRight omitted (defaults true) — CSS overrides handle centering
+    selector: "",         // Append to body (default)
+    // ── Menus ──
+    menus: [
+      "switchModule",     // 切换模型
+      "switchTexture",    // 切换服装 (if multiple textures)
+      "capture",          // 截图保存
+      "info",             // 查看文档
+      "quit",             // 休息 (隐藏/显示)
+    ],
+    // ── Features ──
+    drag: false,          // We handle window-level drag in Python
+    hitFrame: true,       // 切换碰撞区域帧显示
+    homePath: "",
+    sayHello: false,      // Keep console clean
+    plugins: [],          // User plugins (none for now)
+    // ── Tips / Messages ──
+    tips: {
+      minWidth: 200,
+      minHeight: 50,
+      offsetX: 0,
+      offsetY: 0,
+      duration: 4500,       // Display duration (ms)
+      interval: 6000,       // Hidden interval (ms)
+      drag: true,           // Allow dragging the tips bubble
+      talk: true,           // Enable random talk API
+      talkInterval: 45000,  // Call talk API every 45s
+      motionMessage: true,  // Show motion text from model JSON
+      talkApis: [
+        // 一言
+        { url: "https://v1.hitokoto.cn/", handle: async r => (await r.json()).hitokoto },
+        // 天行
+        { url: "https://tenapi.cn/v2/yiyan", handle: async r => (await r.json()).msg },
+      ],
+      message: TIP_MESSAGES,
+    },
   });
+
+  // ─── Model lifecycle handlers ───
+
+  wlInstance.onModelStart(() => {
+    setStatus("模型加载中...");
+  });
+
+  wlInstance.onModelLoaded((model) => {
+    _model = model;
+
+    if (!model) {
+      setStatus("✗ 模型加载失败");
+      return;
+    }
+
+    // Center and scale model to fill viewport
+    const targetH = window.innerHeight * 0.75;
+    const s = targetH / model.height;
+    model.scale.set(s);
+    model.anchor.set(0.5, 0.5);
+    model.x = window.innerWidth / 2;
+    model.y = window.innerHeight / 2;
+
+    // ─── Hit test: body click → tap_body ───
+    model.on("hit", (hitAreas) => {
+      if (hitAreas.includes("body")) {
+        try { model.motion("tap_body"); } catch(e) { /* ignore */ }
+      }
+    });
+
+    // Update status
+    const name = MODEL_NAMES[wlInstance.model.modelId] || "?";
+    document.title = "🪶 伊卡洛斯(" + name + ")";
+    setStatus("✓ " + name);
+    setTimeout(() => { statusEl.style.opacity = "0"; }, 3000);
+  });
+
+  wlInstance.onModelError((err) => {
+    console.error("Model error:", err);
+    setStatus("✗ " + (err?.message || err));
+  });
+
+  // ─── Resize handler: re-center model ───
+  window.addEventListener("resize", () => {
+    if (_model) {
+      _model.x = window.innerWidth / 2;
+      _model.y = window.innerHeight / 2;
+    }
+  });
+
+  // ─── Visibility change: re-enable renderer when shown ───
+  document.addEventListener("visibilitychange", () => {
+    // PixiJS auto-pauses when hidden; nothing extra needed
+  });
+
+  // ═══════════════════════════════════════
+  //  Python API Bridge (called from main.py)
+  // ═══════════════════════════════════════
+
+  window._live2dApp = wlInstance;
+
+  /** Switch to model by key or index */
+  window.switchModel = (keyOrIndex) => {
+    if (!wlInstance) return;
+    let idx;
+    if (typeof keyOrIndex === "string") {
+      idx = KEY_TO_INDEX[keyOrIndex];
+      if (idx === undefined) idx = parseInt(keyOrIndex) || 0;
+    } else {
+      idx = Math.max(0, Math.min(parseInt(keyOrIndex) || 0, MODELS.length - 1));
+    }
+    wlInstance.model.switchModel(idx, 0).catch(() => {});
+  };
+
+  /** Trigger a motion by group (and optional index) */
+  window.setMotion = (group, index) => {
+    if (_model) try { _model.motion(group, index); } catch(e) { /* ignore */ }
+  };
+
+  /** Trigger an expression by name */
+  window.setExpression = (name) => {
+    if (_model) try { _model.expression(name); } catch(e) { /* ignore */ }
+  };
+
+  /** Set AI state → trigger expression + title update */
+  window.setState = (state) => {
+    // Map AI states to expressions
+    const EXPR_MAP = {
+      idle:     "idle",
+      listening:"relax",
+      thinking: "serious",
+      speaking: "happy",
+      bored:    "sleep",
+    };
+    const expr = EXPR_MAP[state] || "idle";
+    window.setExpression(expr);
+    document.title = "🪶 " + (state ? state.charAt(0).toUpperCase() + state.slice(1) : "");
+  };
+
+  /** Get model info */
+  window.getLive2D = () => ({
+    loaded: _model !== null,
+    model: MODEL_NAMES[wlInstance?.model?.modelId ?? -1] || "?",
+    modelId: wlInstance?.model?.modelId ?? -1,
+    width: _model?.width ?? 0,
+    height: _model?.height ?? 0,
+  });
+
+  /** Get available model names */
+  window.getModelList = () => MODEL_NAMES;
+
+  /** Get current model index */
+  window.getCurrentModelIndex = () => wlInstance?.model?.modelId ?? -1;
+
+  /** Notify a tip message from Python */
+  window.notifyTip = (text) => {
+    if (wlInstance?.tips) {
+      wlInstance.tips.notify(text).catch(() => {});
+    }
+  };
+
+} catch (e) {
+  console.error("wl-live2d init failed:", e);
+  setStatus("✗ " + (e.message || e.name || e));
+  document.title = "⚠ " + (e.message || "wl-live2d init error");
 }
-
-// ─── Main ───
-async function main() {
-  try {
-    // Load model
-    const mocData = await loadModel(MODEL_PATH + MODEL_NAME + "/");
-    console.log("MOC loaded: " + mocData.byteLength + " bytes");
-
-    // Load texture
-    const texture = await loadTexture(MODEL_PATH + MODEL_NAME + "/texture_00.png").catch(() => null);
-    console.log("Texture: " + (texture ? "OK" : "MISSING"));
-
-    document.title = "🪶 伊卡洛斯(Live2D)";
-  } catch (e) {
-    console.error(e);
-    document.title = "⚠ " + e.message;
-  }
-}
-
-window.addEventListener("DOMContentLoaded", main);
-window.addEventListener("resize", () => {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-});
-
-// ─── Python API ───
-window.setExpression = (name) => { /* TODO */ };
-window.setMotion = (name) => { /* TODO */ };
-window.getLive2D = () => ({ loaded: false });
 </script>
 </body>
 </html>

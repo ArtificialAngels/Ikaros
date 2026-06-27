@@ -13,10 +13,19 @@ import threading
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject, QUrl
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject, QUrl, QUrlQuery
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
+
+
+class _Live2DPage(QWebEnginePage):
+    """QWebEnginePage subclass that forwards JS console messages to Python log."""
+    _log = logging.getLogger("icarus.live2d")
+
+    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+        self._log.info("[JS] %s (line %d)", message, lineNumber)
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
@@ -31,6 +40,18 @@ LIVE2D_HTML = HERE / "live2d" / "index.html"
 
 # Set to True to use Live2D (WebEngine), False for PNG/SVG rendering
 USE_LIVE2D = True
+# Live2D model key — matches MODELS array in index.html
+# Options: haru, hiyori, senko, shizuku48, shizuku, xisitina
+L2D_MODEL_KEY = "haru"
+# Available models (maps key -> index in JS MODELS[])
+L2D_AVAILABLE_MODELS = {
+    "haru": 0, "hiyori": 1, "senko": 2,
+    "shizuku48": 3, "shizuku": 4, "xisitina": 5,
+}
+L2D_EXPR_BY_STATE = {
+    "idle": "idle", "listening": "relax",
+    "thinking": "serious", "speaking": "happy", "bored": "sleep",
+}
 HERMES_ROOT = HERE.parent.parent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
@@ -70,7 +91,6 @@ class PetWindow(QMainWindow):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Central widget
         central = QWidget()
@@ -83,11 +103,31 @@ class PetWindow(QMainWindow):
         from PyQt6.QtWidgets import QLabel
 
         if USE_LIVE2D and LIVE2D_HTML.exists():
+            # Drag handle at top (30px)
+            self._drag_handle = QWidget(central)
+            self._drag_handle.setFixedSize(self.WIDTH, 30)
+            self._drag_handle.setStyleSheet("background: transparent;")
+            self._drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
+            layout.addWidget(self._drag_handle, 0, Qt.AlignmentFlag.AlignTop)
+
             self._live2d_view = QWebEngineView(central)
+            # Use custom page for JS console logging
+            _page = _Live2DPage(self._live2d_view)
+            self._live2d_view.setPage(_page)
+            # Allow file:// to load local model assets (CORS bypass)
+            _ws = _page.settings()
+            _ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+            _ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+            _ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             self._live2d_view.setFixedSize(self.WIDTH, self.HEIGHT - 40)
-            self._live2d_view.setStyleSheet("background: transparent;")
-            self._live2d_view.page().setBackgroundColor(Qt.GlobalColor.transparent)
-            self._live2d_view.setUrl(QUrl.fromLocalFile(str(LIVE2D_HTML)))
+            self._live2d_view.setStyleSheet("background: transparent; border: none;")
+            _page.setBackgroundColor(Qt.GlobalColor.transparent)
+            _page.loadFinished.connect(self._on_live2d_loaded)
+            _url = QUrl.fromLocalFile(str(LIVE2D_HTML))
+            _query = QUrlQuery()
+            _query.addQueryItem("model", L2D_MODEL_KEY)
+            _url.setQuery(_query)
+            _page.setUrl(_url)
             layout.addWidget(self._live2d_view, 0, Qt.AlignmentFlag.AlignCenter)
             self._character_label = None
         elif CHARACTER_PNG.exists():
@@ -120,7 +160,29 @@ class PetWindow(QMainWindow):
                 (geo.height() - self.HEIGHT) // 2,
             )
 
+        # Install event filter for drag handle
+        if hasattr(self, '_drag_handle'):
+            self._drag_handle.installEventFilter(self)
+
     # ─── Drag support ───
+    def eventFilter(self, obj, event):
+        """Handle mouse events on drag handle."""
+        if obj == self._drag_handle if hasattr(self, '_drag_handle') else None:
+            from PyQt6.QtCore import QEvent
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                    self._is_dragging = True
+                    return True
+            elif event.type() == QEvent.Type.MouseMove:
+                if self._is_dragging:
+                    self.move(event.globalPosition().toPoint() - self._drag_pos)
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self._is_dragging = False
+                return True
+        return super().eventFilter(obj, event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -143,17 +205,75 @@ class PetWindow(QMainWindow):
             self.svg.renderer().setViewBox(self._svg_viewbox_for_state(state.lower()))
             self.svg.update()
         elif hasattr(self, '_live2d_view') and self._live2d_view:
-            # Send state to Live2D via JS
+            # Send state to Live2D via JS (使用新的 setState API)
             try:
+                expr = L2D_EXPR_BY_STATE.get(state.lower(), "idle")
                 self._live2d_view.page().runJavaScript(
-                    f"window.setExpression && window.setExpression('{state.lower()}')"
+                    f"window.setState && window.setState('{expr}')"
                 )
             except Exception:
                 pass
 
+    def switch_live2d_model(self, key_or_index):
+        """Switch Live2D model by key or index."""
+        if not hasattr(self, '_live2d_view') or not self._live2d_view:
+            return
+        # Resolve key to index if needed
+        if isinstance(key_or_index, str):
+            idx = L2D_AVAILABLE_MODELS.get(key_or_index, 0)
+        else:
+            idx = int(key_or_index)
+        try:
+            self._live2d_view.page().runJavaScript(
+                f"window.switchModel && window.switchModel({idx})"
+            )
+        except Exception as e:
+            log.warning("switch_live2d_model: %s", e)
+
+    def notify_live2d_tip(self, text: str):
+        """Show a tip message on the Live2D model."""
+        if not hasattr(self, '_live2d_view') or not self._live2d_view:
+            return
+        # Escape single quotes for JS
+        safe = text.replace("\\", "\\\\").replace("'", "\\'")
+        try:
+            self._live2d_view.page().runJavaScript(
+                f"window.notifyTip && window.notifyTip('{safe}')"
+            )
+        except Exception as e:
+            log.warning("notify_live2d_tip: %s", e)
+
     def _svg_viewbox_for_state(self, state: str) -> QRect:
         # Different viewbox regions for different states (if spritesheet)
         return QRect(0, 0, 200, 280)
+
+    def _on_live2d_loaded(self, ok: bool):
+        """Check Live2D status after page load."""
+        log.info("[live2d] loadFinished: ok=%s", ok)
+        if ok and hasattr(self, '_live2d_view'):
+            # Check model status after 3s delay
+            QTimer.singleShot(3000, self._check_live2d_status)
+
+    def _check_live2d_status(self):
+        """Query JS for Live2D model status."""
+        if not hasattr(self, '_live2d_view'):
+            return
+        page = self._live2d_view.page()
+        # Get model name
+        page.runJavaScript(
+            "window.getLive2D ? JSON.stringify(window.getLive2D()) : 'no getLive2D'",
+            lambda r: log.info("[live2d] model info: %s", r)
+        )
+        # Get model list
+        page.runJavaScript(
+            "window.getModelList ? window.getModelList().join(', ') : 'no list'",
+            lambda r: log.info("[live2d] available: %s", r)
+        )
+        # Get current model index
+        page.runJavaScript(
+            "window.getCurrentModelIndex ? window.getCurrentModelIndex() : -1",
+            lambda r: log.info("[live2d] current index: %s", r)
+        )
 
 
 # ─── System Tray ───
@@ -472,45 +592,15 @@ class IcarusApp:
     def run(self):
         log.info("🪶 Icarus Desktop Pet running")
 
-        # Start AudioEngine (lazy import so pyaudio doesn't block startup)
-        try:
-            import sys
-            sys.path.insert(0, str(HERE))
-            from audio_engine import AudioEngine
-            self.audio = AudioEngine()
-            self.audio.on_state = self._on_state
-            self.audio.on_bubble = self._on_bubble
-            self.audio.start()
-            log.info("✅ audio engine started")
-        except Exception as exc:
-            log.exception(f"❌ audio engine failed: {exc}")
-            self.audio = None
+        # Audio engine disabled — pyaudio crashes on this system
+        self.audio = None
+        log.info("⚠ audio disabled (pyaudio crash)")
 
-        # Create tray with audio reference
-        try:
-            self.tray = PetTray(self.window, self.bridge, self.audio)
-            log.info("✅ tray created")
-        except Exception as exc:
-            log.exception(f"❌ tray failed: {exc}")
-            self.tray = None
-
-        # Start context engine
-        try:
-            self._context = ContextThread(self.bridge)
-            self._context.start()
-            log.info("✅ context engine started")
-        except Exception as exc:
-            log.warning(f"context engine failed: {exc}")
-
-        # Start NeuroClient (1Hz poll to Neuro bridge)
-        try:
-            from neuro_client import NeuroClient
-            self.neuro = NeuroClient(on_status_change=self._on_neuro_update)
-            self.neuro.start()
-            log.info("✅ neuro client wired (1Hz poll → /v1/neuro/status)")
-        except Exception as exc:
-            log.exception(f"❌ neuro client failed: {exc}")
-            self.neuro = None
+        # Other components still disabled
+        self.tray = None
+        self._context = None
+        self.neuro = None
+        log.info("⚠ tray/context/neuro still skipped")
 
         log.info("🪶 show window + exec")
         self.window.show()
