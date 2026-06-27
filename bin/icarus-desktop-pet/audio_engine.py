@@ -1,26 +1,23 @@
 """
-Icarus Audio Engine — persistent microphone capture with VAD + wake word.
+Icarus Audio Engine — persistent microphone capture + TTS playback.
 
 Architecture (inspired by DeskMate's ListenEvent.py):
   sounddevice capture thread (16000Hz, 16-bit mono)         [4A.3: pyaudio → sounddevice]
   → energy-based VAD (RMS threshold)
   → silence detection → flush to bridge WebSocket
   → optional wake-word gating
+  → bridge WS pushes TTS MP3 chunks → pydub decode → sounddevice OutputStream  [4B]
 
 Config options (set via system tray):
   - Continuous mode: always-on, auto detects speech
   - Wake-word mode: listen for "伊卡洛斯" before processing
   - Sensitivity: VAD threshold adjustment
 
-哥哥 2026-06-27 Phase 4A: pyaudio crashes on this system (Quest 注释 line 595).
-sounddevice 用 PortAudio 但 binding 是 ctypes (不是 PyAudio 的 CFFI), 在 Win11 上更稳。
-API 差异:
-  - pyaudio.open(format=paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
-    + stream.read(CHUNK, exception_on_overflow=False)  → 阻塞, 返 bytes
-  - sounddevice.RawInputStream(samplerate=16000, channels=1, dtype='int16',
-                                blocksize=1024, callback=None)  ← callback=None 走 blocking mode
-    + stream.read(1024)  → 返 numpy array, .tobytes() 转 bytes
-VAD / WS / wake-word 流程不变, 只换底层 IO.
+哥哥 2026-06-27 Phase 4B: 接 voice_server TTS MP3 流到扬声器
+  - bridge voice_server 用 edge-tts 输出 MP3 chunk via websocket.send_bytes()
+  - 多个 chunks 累加成完整 MP3 (用 MP3 frame header sync 0xFFE/0xFFF)
+  - pydub 解码 → numpy int16 array → sounddevice.OutputStream 播放
+  - 16kHz mono int16 跟录音同 (降采样如果原始是 24kHz/48kHz)
 """
 
 from __future__ import annotations
@@ -65,6 +62,12 @@ class AudioEngine:
         self._speaking = False
         self._last_audio_ts = 0.0
         self._utterance_start = 0.0
+
+        # 4B: TTS playback state — bridge pushes MP3 chunks via WS
+        self._tts_chunks: list[bytes] = []   # accumulate MP3 chunks
+        self._tts_lock = threading.Lock()
+        self._out_stream: Optional[sd.OutputStream] = None
+        self._out_device_index: Optional[int] = None  # for OutputStream device
 
         # Config (mutable from tray)
         self.continuous_mode = True
@@ -145,8 +148,10 @@ class AudioEngine:
                         try:
                             msg = await asyncio.wait_for(ws.recv(), timeout=0.3)
                             if isinstance(msg, bytes):
-                                # TTS audio — 4B 阶段接 pydub/sounddevice 播放
-                                pass
+                                # 4B: TTS MP3 chunk from edge-tts → accumulate
+                                with self._tts_lock:
+                                    self._tts_chunks.append(msg)
+                                log.debug("TTS chunk: %dB (total %d chunks)", len(msg), len(self._tts_chunks))
                             else:
                                 data = json.loads(msg)
                                 t = data.get("type", "")
@@ -159,6 +164,15 @@ class AudioEngine:
                                 elif t == "done":
                                     self._emit_bubble(data.get("text", "嗯~"), 5000)
                                     self._emit_state("SPEAKING")
+                                    # 4B: done = bridge TTS stream finished → play accumulated MP3
+                                    chunks_count = 0
+                                    with self._tts_lock:
+                                        chunks_count = len(self._tts_chunks)
+                                    if chunks_count > 0:
+                                        # 异步播放 — 不阻塞 WS loop (audio 可能 5-30s)
+                                        self._aio_loop.create_task(self._play_tts_async())
+                                    else:
+                                        log.warning("done 但 _tts_chunks 为空, 没 TTS 音频可播")
                                     await asyncio.sleep(0.5)
                                     self._emit_state("LISTENING")
                                 elif t == "error":
@@ -176,6 +190,71 @@ class AudioEngine:
     def _emit_bubble(self, t: str, d: int = 3000):
         if self.on_bubble:
             self.on_bubble(t, d)
+
+    # ─── TTS playback (4B) ───
+
+    async def _play_tts_async(self):
+        """Decode accumulated MP3 chunks → 16kHz mono int16 → sounddevice OutputStream.
+
+        在 aio_loop 异步任务里跑 — 不阻塞 WS receive.
+        完成后清空 _tts_chunks 准备下一轮.
+        """
+        try:
+            mp3_bytes = b"".join(self._tts_chunks)
+            with self._tts_lock:
+                self._tts_chunks.clear()
+            if not mp3_bytes:
+                return
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.play_mp3_bytes, mp3_bytes,
+            )
+        except Exception as exc:
+            log.error("TTS playback failed: %s", exc)
+
+    def play_mp3_bytes(self, mp3_bytes: bytes):
+        """同步播放 MP3 bytes — 16kHz mono int16 → sounddevice.OutputStream.
+
+        pydub 解码 MP3 (需要 ffmpeg/libav), 输出 numpy int16 array.
+        sounddevice.OutputStream 流式 write, 不要一次性 load 全部 (避免 30s 阻塞).
+
+        Args:
+            mp3_bytes: 完整 MP3 文件 bytes (edge-tts 输出的多 chunk 合并)
+        """
+        from pydub import AudioSegment
+        import io
+
+        try:
+            # 解码 (FFmpeg backend, 需要 ffmpeg.exe 在 PATH 或 pydub 找得到)
+            audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
+            # 重采样到 16kHz mono int16 (跟录音同)
+            audio = audio.set_frame_rate(RATE).set_channels(1).set_sample_width(2)
+
+            import numpy as _np
+            samples = _np.frombuffer(audio.raw_data, dtype=_np.int16)
+            duration_sec = len(samples) / RATE
+            log.info(
+                "TTS playing: %d samples (%.2fs @%dHz), %dB MP3",
+                len(samples), duration_sec, RATE, len(mp3_bytes),
+            )
+
+            # 选 output device (默认)
+            out_kwargs = dict(samplerate=RATE, channels=1, dtype="int16")
+            if self._out_device_index is not None:
+                out_kwargs["device"] = self._out_device_index
+
+            # 流式播放 — 一次 0.5s chunk, 让回调 (如果以后有) 能 trigger
+            with sd.OutputStream(**out_kwargs) as stream:
+                chunk_samples = RATE // 2  # 0.5s
+                for i in range(0, len(samples), chunk_samples):
+                    if not self._running:
+                        break
+                    buf = samples[i:i + chunk_samples]
+                    stream.write(buf)
+        except FileNotFoundError as exc:
+            log.error("FFmpeg not found on PATH — pydub can't decode MP3: %s", exc)
+            log.error("哥哥: 把 runtime/ffmpeg/ 加进 PATH 或装 ffmpeg.exe")
+        except Exception as exc:
+            log.error("TTS playback error: %s", exc)
 
     # ─── Capture thread ───
     # 哥哥 6-27: sounddevice.RawInputStream (blocking mode) 替代 pyaudio.Stream
