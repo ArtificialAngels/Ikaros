@@ -4,16 +4,11 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-26 (disabled `modules/agent_bridge_stub` and added
-> `HERMES_AGENT_ROOT` to `modules/webui/start.ps1`. The stub was occupying
-> :18765 (the npm webui's agent bridge broker endpoint) with a minimal TCP
-> shim that answered `{ok:true, running:false}` to every request — sufficient
-> for session-resume status checks but unable to execute `/chat-run` requests.
-> The npm package v0.6.21 already ships the full broker at
-> `dist/server/agent-bridge/python/hermes_bridge.py`; setting
-> `HERMES_AGENT_ROOT=<HERMES_ROOT>/hermes-agent` lets the webui discover
-> `run_agent.py` and spawn the real broker, restoring end-to-end chat.
-> See §0.9).
+> **Last revised:** 2026-06-27 (icarus-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
+> Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定义语言气泡
+> `#neuro-bubble` 和状态指示器 `#neuro-state`，处理 transcription/thinking/status/done/state
+> 消息类型，自动重连。右键菜单集成全部 wl-live2d 功能（切换模型/服装/截图/帧检测/比例调节），
+> 移除原生菜单按钮，CDN 扩展至 18 个模型。)
 >
 > Previous: 2026-06-16c (added `modules/webui_proxy` as a thin Python
 > reverse-proxy in front of `hermes-web-ui` on :8648. The npm package's
@@ -71,6 +66,14 @@
 
 ## Revision Timeline (chronological; see git log for details)
 
+- **2026-06-27** - icarus-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
+  `live2d/index.html` 新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，
+  自定义语言气泡 `#neuro-bubble`（顶部居中，暗色半透明，自动消失）和状态指示器
+  `#neuro-state`（底部，emoji + 状态文字）。处理消息类型: transcription/thinking/
+  status/done/state，WebSocket 自动重连（3s 间隔）。`main.py` 新增 `show_bubble()`/
+  `show_neuro_state()` Python API。右键菜单集成全部 wl-live2d 功能（切换模型/服装/
+  截图/帧检测/比例调节/随机模型），移除原生菜单按钮（`menus:[]`, `hitFrame:false`），
+  MutationObserver 永久移除 HTML title tooltip，CDN 扩展至 18 个模型，修复循环切换。
 - **2026-06-26** - disable `modules/agent_bridge_stub` (renamed `module.json` to
   `module.json.disabled`), add `HERMES_AGENT_ROOT` env var to
   `modules/webui/start.ps1`. The stub was blocking :18765 so the npm webui's
