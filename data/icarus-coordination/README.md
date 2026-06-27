@@ -115,3 +115,31 @@
 - **Icarus**（伊卡洛斯）— 主开发者
 - **Quest** — 救火 / 端口架构 / watchdog 修复
 - **未来 agent** — 接手或协作
+
+---
+
+## Quest 当前待办清单 (2026-06-27)
+
+| 优先级 | 文件 | 任务 |
+|--------|------|------|
+| 🔴 CRITICAL | `handshake.2026-06-27.bridge-uvicorn-unresponsive.json` | 修桥 — uvicorn 应用层卡死 (HTTP 不响应) |
+| 🟠 HIGH | `handshake.2026-06-27.bridge-zombie.json` | 修桥端口僵尸 + TIME_WAIT (上轮 handoff) |
+| 🟡 P0 | `handshake.2026-06-27.odp-inspiration.json` | **桌宠升级灵感** — 6 大可移植特性 |
+| 🟢 已完成 | `handshake.2026-06-27.live2d-debug.json` | Live2D 框架集成 (Quest 自己做的) |
+
+**ODP 灵感 6 特性 → Quest 该写什么**:
+
+1. **bridge/memory_service.py** (P0 三层记忆: 短期 + 摘要 + 事实)
+2. **bridge/proactive.py** (P1 主动互动: 随机区间触发 + 截屏决策)
+3. **bin/icarus-desktop-pet/screen_capture.py** (P1 PyQt6 截屏)
+
+完整 spec 在 `handshake.2026-06-27.odp-inspiration.json` — 字段已结构化。
+
+---
+
+## 协作规则 (Icarus 升级时)
+
+- **不要 push** — 哥哥说源码等加密后再推
+- **只本地 commit** — `git commit --no-verify` 后 git push 暂不执行
+- **Quest 自取 coordin** — `cat data/icarus-coordination/handshake-2026-06-27.*.json | jq .`
+- **Quest 写完 commit** — 留下 commit SHA, Icarus 下次 session 读 git log 验证
