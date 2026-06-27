@@ -9,6 +9,11 @@ if errorlevel 1 (
 )
 echo Stopping Hermes processes...
 call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --stop
+
+REM ---- Stop Desktop Pet ----
+echo [pet]  Stopping Desktop Pet...
+call "%HERMES_ROOT%\bin\hermes-pet.bat" stop >nul 2>&1
+
 taskkill /F /IM "llama-server.exe" /T >nul 2>&1
 taskkill /F /IM "llama-server-cuda-12.4.exe" /T >nul 2>&1
 taskkill /F /IM "llama-server-vulkan.exe" /T >nul 2>&1

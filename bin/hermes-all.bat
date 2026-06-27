@@ -85,6 +85,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ---- Step 3: Desktop Pet (non-critical, not expected to fail) ----
+echo.
+echo [pet]  Desktop Pet...
+call "%HERMES_BIN%\hermes-pet.bat" start >nul 2>&1
+if errorlevel 1 (
+    echo [pet]  WARNING: Desktop Pet failed to start (non-critical).
+    echo [pet]  See data\logs\icarus-pet.log or run bin\hermes-pet.bat status.
+) else (
+    echo [pet]  ✓
+)
+
 REM ---- Done: open browser ----
 echo.
 echo ============================================================
