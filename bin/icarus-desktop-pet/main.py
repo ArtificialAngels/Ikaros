@@ -30,7 +30,14 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
+    QHBoxLayout, QLineEdit, QTextEdit, QPushButton, QLabel,
 )
+
+# 4C: HTTP bridge to Hermes bridge /v1/chat/completions
+try:
+    import httpx  # 异步 HTTP 客户端 (bridge_intent_router + chat 都会用)
+except ImportError:
+    httpx = None  # fallback: 用 urllib (同步)
 
 # Paths
 HERE = Path(__file__).parent
@@ -56,6 +63,23 @@ HERMES_ROOT = HERE.parent.parent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
 log = logging.getLogger("icarus")
+
+# 4C: IntentRouter (Layer 1 规则 — task/chat/ambiguous)
+# 必须在 HERE + log 都定义之后, 否则 except 分支用 log 会 NameError
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(HERE.parent.parent))  # 让 bridge/ 可导入
+    from bridge.intent_router import IntentRouter as _IntentRouter
+except Exception as _exc:
+    log.warning("IntentRouter import failed: %s — chat 会 fall back 到 LLM 隐式", _exc)
+    _IntentRouter = None
+
+# 4C: edge-tts (TTS) — ChatDockWindow 用它生成回复 MP3
+try:
+    import edge_tts  # Microsoft Edge neural TTS (offline API)
+except ImportError:
+    log.warning("edge-tts not installed — 4C chat 会用 fallback TTS (no playback)")
+    edge_tts = None
 
 
 # ─── Communication bridge (thread-safe) ───
@@ -458,15 +482,247 @@ class PetTray:
     def _sleep(self):
         self.window.hide()
 
-    def _quit(self):
-        QApplication.quit()
+def _quit(self):
+    QApplication.quit()
 
-    def _on_activate(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self._toggle_visible()
 
-    def update_status(self, text: str):
-        self.tray.setToolTip(f"🪶 伊卡洛斯 · {text}")
+# ─── Chat Dock (4C: 文本聊天入口) ───
+
+BRIDGE_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
+BRIDGE_CHAT_TIMEOUT_S = 30.0
+
+
+async def bridge_chat(text: str, *, profile: str = "default", model: str = "MiniMax-M3") -> str:
+    """4C: 调 Hermes bridge /v1/chat/completions — cloud auto-flip 已实现.
+
+    Args:
+        text: 用户输入
+        profile: Hermes profile (default)
+        model: 默认 MiniMax-M3 (bridge 已注册 minimax-cn, .env 有 key)
+
+    Returns:
+        assistant 回复文本 (string)
+    """
+    if httpx is None:
+        # Fallback: urllib (同步, 不优雅但能用)
+        import json, urllib.request
+        body = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": text}],
+            "max_tokens": 200,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            BRIDGE_CHAT_URL,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=BRIDGE_CHAT_TIMEOUT_S) as r:
+            data = json.loads(r.read())
+    else:
+        async with httpx.AsyncClient(timeout=BRIDGE_CHAT_TIMEOUT_S) as c:
+            r = await c.post(BRIDGE_CHAT_URL, json={
+                "model": model,
+                "messages": [{"role": "user", "content": text}],
+                "max_tokens": 200,
+            })
+            data = r.json()
+    return data["choices"][0]["message"]["content"]
+
+
+async def edge_tts_mp3(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
+    """4C: 用 edge-tts 把文字 → MP3 bytes (4B audio_engine.play_mp3_bytes 接).
+
+    Returns:
+        完整 MP3 file bytes (可能空 bytes 如果 edge-tts 失败 — caller 检查)
+    """
+    try:
+        communicate = edge_tts.Communicate(text, voice=voice)
+        chunks = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                chunks.append(chunk["data"])
+        return b"".join(chunks)
+    except Exception as exc:
+        log.warning("edge-tts failed: %s", exc)
+        return b""
+
+
+class ChatDockWindow(QMainWindow):
+    """4C: 独立的 chat dock window — 双击桌宠打开.
+
+    Layout:
+      ┌────────────────────────────────────┐
+      │ ChatDock — 伊卡洛斯 chat            │
+      ├────────────────────────────────────┤
+      │ [QTextEdit history — read-only]     │
+      │                                     │
+      │                                     │
+      ├────────────────────────────────────┤
+      │ [QLineEdit] [Send]  intent: chat   │  ← 输入区 + intent 实时显示
+      └────────────────────────────────────┘
+
+    Connections:
+      - 输入 → IntentRouter.classify() → intent_label
+      - Send → bridge_chat(text) → history append
+      - reply → edge_tts_mp3(reply) → audio_engine.play_mp3_bytes (4B 输出)
+    """
+
+    WIDTH, HEIGHT = 420, 560
+
+    def __init__(self, audio_engine=None, bridge_signal: SignalBridge = None):
+        super().__init__()
+        self.audio = audio_engine  # may be None
+        self.bridge_signal = bridge_signal  # for state broadcasts
+
+        self.setWindowTitle("💬 伊卡洛斯 chat — 双击桌宠收起")
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        v = QVBoxLayout(central)
+        v.setContentsMargins(8, 8, 8, 8)
+
+        # History
+        self.history = QTextEdit()
+        self.history.setReadOnly(True)
+        self.history.setStyleSheet(
+            "QTextEdit { font-family: 'Microsoft YaHei', 'Consolas', monospace;"
+            "            font-size: 12pt; background: #fafafa;"
+            "            border: 1px solid #ccc; border-radius: 4px; }"
+        )
+        v.addWidget(self.history, 1)
+
+        # Input row
+        input_row = QHBoxLayout()
+        self.input_edit = QLineEdit()
+        self.input_edit.setPlaceholderText("跟伊卡洛斯说点啥… (Enter 发送, Shift+Enter 换行)")
+        self.input_edit.setStyleSheet(
+            "QLineEdit { font-size: 12pt; padding: 6px;"
+            "            border: 1px solid #ccc; border-radius: 4px; }"
+        )
+        self.input_edit.returnPressed.connect(self._on_send)
+        input_row.addWidget(self.input_edit, 1)
+
+        self.send_btn = QPushButton("发送")
+        self.send_btn.clicked.connect(self._on_send)
+        input_row.addWidget(self.send_btn)
+
+        v.addLayout(input_row)
+
+        # Status row (intent + hint)
+        self.status_label = QLabel("intent: —  |  cloud auto-flip on (minimax-cn)")
+        self.status_label.setStyleSheet(
+            "QLabel { font-size: 9pt; color: #888; padding: 2px 4px; }"
+        )
+        v.addWidget(self.status_label)
+
+        self._append_history("[伊卡洛斯] 哥哥好, 我在听~")
+
+    def _append_history(self, line: str):
+        self.history.append(line)
+        # auto-scroll
+        sb = self.history.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _set_status(self, text: str):
+        self.status_label.setText(text)
+
+    def _on_send(self):
+        text = self.input_edit.text().strip()
+        if not text:
+            return
+
+        # 1. IntentRouter classify (Layer 1, ms 级)
+        if _IntentRouter is not None:
+            try:
+                intent = _IntentRouter.classify(text)
+            except Exception as exc:
+                log.debug("IntentRouter classify failed: %s", exc)
+                intent = "ambiguous"
+        else:
+            intent = "ambiguous"
+        self._set_status(f"intent: {intent}  |  sending…")
+        self._append_history(f"[你] {text}")
+        self.input_edit.clear()
+
+        # 2. Disable UI during request
+        self.input_edit.setEnabled(False)
+        self.send_btn.setEnabled(False)
+
+        # 3. Async chain — call bridge_chat, then TTS, then re-enable UI
+        self._run_chat_chain(text, intent)
+
+    def _run_chat_chain(self, text: str, intent: str):
+        """QTimer.singleShot 把 coroutine 送进 asyncio loop.
+
+        Qt 没有原生 async 支持, 用 QTimer 0ms 触发 + 在 QThread 里跑 asyncio
+        的常见做法: 用 asyncio.run_coroutine_threadsafe 把 coroutine 送进主 loop.
+        但我们没显式主 loop — 改用 threading 直接 run.
+        """
+        def worker():
+            try:
+                # 在新 loop 里跑 (避免 Qt 主线程 asyncio 冲突)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    reply = loop.run_until_complete(bridge_chat(text))
+                finally:
+                    loop.close()
+                # 回到 Qt 主线程更新 UI
+                QTimer.singleShot(0, lambda: self._on_reply(reply, intent))
+            except Exception as exc:
+                log.error("chat chain failed: %s", exc)
+                QTimer.singleShot(0, lambda: self._on_reply(f"⚠️ {exc}", intent))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_reply(self, reply: str, intent: str):
+        """Reply 回来后: history + TTS + 重启用 UI."""
+        self._append_history(f"[伊卡洛斯] {reply}")
+        self._set_status(f"intent: {intent}  |  cloud ✓")
+        self.input_edit.setEnabled(True)
+        self.send_btn.setEnabled(True)
+        self.input_edit.setFocus()
+
+        # TTS 播 (4B) — 在后台线程跑, 不阻塞 UI
+        if self.audio is not None and reply and not reply.startswith("⚠️"):
+            def tts_worker():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        mp3 = loop.run_until_complete(edge_tts_mp3(reply))
+                        if mp3:
+                            self.audio.play_mp3_bytes(mp3)
+                    finally:
+                        loop.close()
+                except Exception as exc:
+                    log.warning("TTS worker failed: %s", exc)
+            threading.Thread(target=tts_worker, daemon=True).start()
+
+    def show_near_pet(self, pet_window):
+        """显示在桌宠旁边 (右上角偏右)."""
+        if pet_window is None or not pet_window.isVisible():
+            self.show()
+            self.raise_()
+            return
+        pet_geo = pet_window.geometry()
+        # 桌宠右侧 +8px, 垂直居中
+        x = pet_geo.x() + pet_geo.width() + 8
+        y = pet_geo.y() + max(0, (pet_geo.height() - self.HEIGHT) // 2)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.input_edit.setFocus()
+
+
+# ─── Context thread (Neuro context detection) ───
+        self._toggle_visible()
+
+def update_status(self, text: str):
+    self.tray.setToolTip(f"🪶 伊卡洛斯 · {text}")
 
 
 # ─── Context Engine (threaded) ───
@@ -589,22 +845,58 @@ class IcarusApp:
             self._last_patience = new_patience
             self.bridge.neuro_patience_changed.emit(new_patience)
 
+def run(self):
     def run(self):
-        log.info("🪶 Icarus Desktop Pet running")
 
-        # Audio engine disabled — pyaudio crashes on this system
-        self.audio = None
-        log.info("⚠ audio disabled (pyaudio crash)")
+        # 4A: Audio engine re-enabled (sounddevice 替 pyaudio)
+        try:
+            from audio_engine import AudioEngine
+            self.audio = AudioEngine()
+            self.audio.start()
+            log.info("✓ audio engine started (sounddevice mic + TTS playback)")
+        except Exception as exc:
+            log.warning("⚠ audio engine failed to start: %s", exc)
+            self.audio = None
 
-        # Other components still disabled
+        # 4C: Chat dock window (独立 window, 双击桌宠打开)
+        try:
+            self.chat_dock = ChatDockWindow(
+                audio_engine=self.audio,
+                bridge_signal=self.bridge,
+            )
+            log.info("✓ chat dock ready (双击桌宠打开)")
+        except Exception as exc:
+            log.warning("⚠ chat dock init failed: %s", exc)
+            self.chat_dock = None
+
+        # 4C: wire 桌宠 mouseDoubleClickEvent → toggle chat dock
+        # (PetWindow 本身没 mouseDoubleClickEvent, 我们 installEventFilter 或
+        #  改 PetWindow.__init__ 添加 handler — 走 eventFilter 最干净)
+        self.window.installEventFilter(self)
+        log.info("✓ pet window event filter installed (double-click → chat dock)")
+
+        # Other components still disabled (tray/context/neuro Quest 状态保留)
         self.tray = None
         self._context = None
         self.neuro = None
-        log.info("⚠ tray/context/neuro still skipped")
+        log.info("⚠ tray/context/neuro still skipped (Quest 默认)")
 
         log.info("🪶 show window + exec")
         self.window.show()
         return QApplication.exec()
+
+    def eventFilter(self, obj, event):
+        """4C: 拦截 PetWindow 的鼠标双击 → toggle chat dock."""
+        if obj is self.window and event.type() == QEvent.Type.MouseButtonDblClick:
+            if self.chat_dock is not None:
+                if self.chat_dock.isVisible():
+                    self.chat_dock.hide()
+                    log.debug("chat dock hidden")
+                else:
+                    self.chat_dock.show_near_pet(self.window)
+                    log.debug("chat dock shown")
+                return True  # 拦截, 不传给原 handler
+        return super().eventFilter(obj, event)
 
     def cleanup(self):
         if self.audio:
