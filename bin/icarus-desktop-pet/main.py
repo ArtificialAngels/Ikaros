@@ -13,8 +13,8 @@ import threading
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QObject, QUrl, QUrlQuery
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, pyqtSlot, QObject, QUrl, QUrlQuery, QEvent
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap, QColor, QCursor
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
@@ -25,9 +25,12 @@ class _Live2DPage(QWebEnginePage):
     _log = logging.getLogger("icarus.live2d")
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        self._log.info("[JS] %s (line %d)", message, lineNumber)
+        # Log ALL messages (including errors) so we can diagnose rendering issues
+        if "error" in str(level).lower() or "⚠" in message or "✗" in message:
+            self._log.error("[JS:%s] %s (line %d, %s)", level, message, lineNumber, sourceID)
+        else:
+            self._log.info("[JS:%s] %s (line %d)", level, message, lineNumber)
 from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QMenu, QSystemTrayIcon, QWidget, QVBoxLayout,
     QHBoxLayout, QLineEdit, QTextEdit, QPushButton, QLabel,
@@ -94,6 +97,63 @@ class SignalBridge(QObject):
     neuro_memory_added = pyqtSignal(str)     # 新记忆文本 (反射触发)
 
 
+# ─── Drag Bridge (QWebChannel for JS → Python drag communication) ───
+
+class _DragBridge(QObject):
+    """QWebChannel bridge for JS → Python window drag communication.
+
+    JS detects mouse events on the Live2D canvas and calls these methods
+    to drag the window. This approach doesn't block wl-live2d's features.
+    """
+    DRAG_THRESHOLD = 5
+
+    def __init__(self, pet_window: 'PetWindow'):
+        super().__init__()
+        self._pet_window = pet_window
+        self._drag_start_pos = None  # global position at drag start
+        self._window_start_pos = None  # window position at drag start
+        self._is_dragging = False
+
+    @pyqtSlot(int, int)  # onDragStart(globalX, globalY)
+    def onDragStart(self, global_x: int, global_y: int):
+        """JS calls this when mouse press detected."""
+        self._drag_start_pos = QPoint(global_x, global_y)
+        self._window_start_pos = self._pet_window.pos()
+        self._is_dragging = False
+
+    @pyqtSlot(int, int)  # onDragMove(globalX, globalY)
+    def onDragMove(self, global_x: int, global_y: int):
+        """JS calls this on mouse move."""
+        if self._drag_start_pos is None:
+            return
+        current_pos = QPoint(global_x, global_y)
+        delta = (current_pos - self._drag_start_pos).manhattanLength()
+        if delta < self.DRAG_THRESHOLD:
+            return  # Not a drag yet
+        self._is_dragging = True
+        # Move window by the delta from start
+        offset = current_pos - self._drag_start_pos
+        new_pos = self._window_start_pos + offset
+        self._pet_window.move(new_pos)
+
+    @pyqtSlot()  # onDragEnd()
+    def onDragEnd(self):
+        """JS calls this on mouse release."""
+        self._drag_start_pos = None
+        self._window_start_pos = None
+        self._is_dragging = False
+
+    @pyqtSlot(result=bool)  # isDragging()
+    def isDragging(self) -> bool:
+        """JS calls this to check if we're currently dragging."""
+        return self._is_dragging
+
+    @pyqtSlot(int, int)  # onContextMenu(screenX, screenY)
+    def onContextMenu(self, screen_x: int, screen_y: int):
+        """JS calls this on right-click. Show custom Qt context menu."""
+        self._pet_window._show_context_menu(QPoint(screen_x, screen_y))
+
+
 # ─── Pet Window ───
 
 class PetWindow(QMainWindow):
@@ -134,25 +194,47 @@ class PetWindow(QMainWindow):
             self._drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
             layout.addWidget(self._drag_handle, 0, Qt.AlignmentFlag.AlignTop)
 
-            self._live2d_view = QWebEngineView(central)
-            # Use custom page for JS console logging
+            # ── Live2D view container ──
+            self._live2d_container = QWidget(central)
+            self._live2d_container.setFixedSize(self.WIDTH, self.HEIGHT - 40)
+            self._live2d_container.setStyleSheet("background: transparent;")
+            container_layout = QVBoxLayout(self._live2d_container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+
+            self._live2d_view = QWebEngineView(self._live2d_container)
             _page = _Live2DPage(self._live2d_view)
             self._live2d_view.setPage(_page)
-            # Allow file:// to load local model assets (CORS bypass)
             _ws = _page.settings()
             _ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
             _ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             _ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             self._live2d_view.setFixedSize(self.WIDTH, self.HEIGHT - 40)
             self._live2d_view.setStyleSheet("background: transparent; border: none;")
-            _page.setBackgroundColor(Qt.GlobalColor.transparent)
+            # Disable built-in context menu (we handle it via JS → QWebChannel)
+            self._live2d_view.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+            # FIX L2D-001: set page background to transparent (Qt side)
+            # This is REQUIRED for the QWebEngineView to render with alpha channel.
+            # Without this, the page has an opaque white/black background.
+            _page.setBackgroundColor(QColor(0, 0, 0, 0))  # fully transparent
+            self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
             _page.loadFinished.connect(self._on_live2d_loaded)
             _url = QUrl.fromLocalFile(str(LIVE2D_HTML))
             _query = QUrlQuery()
             _query.addQueryItem("model", L2D_MODEL_KEY)
             _url.setQuery(_query)
             _page.setUrl(_url)
-            layout.addWidget(self._live2d_view, 0, Qt.AlignmentFlag.AlignCenter)
+            container_layout.addWidget(self._live2d_view)
+
+            # ── QWebChannel for JS ↔ Python drag communication ──
+            # JS detects mouse events on the canvas and calls Python via
+            # QWebChannel to drag the window. This doesn't block wl-live2d's
+            # built-in features (tips, menus, hit test).
+            self._drag_bridge = _DragBridge(self)
+            self._web_channel = QWebChannel()
+            self._web_channel.registerObject("dragBridge", self._drag_bridge)
+            _page.setWebChannel(self._web_channel)
+
+            layout.addWidget(self._live2d_container, 0, Qt.AlignmentFlag.AlignCenter)
             self._character_label = None
         elif CHARACTER_PNG.exists():
             char_label = QLabel(central)
@@ -188,11 +270,10 @@ class PetWindow(QMainWindow):
         if hasattr(self, '_drag_handle'):
             self._drag_handle.installEventFilter(self)
 
-    # ─── Drag support ───
+    # ─── Drag support (drag handle only; Live2D area uses _DragOverlay) ───
     def eventFilter(self, obj, event):
-        """Handle mouse events on drag handle."""
-        if obj == self._drag_handle if hasattr(self, '_drag_handle') else None:
-            from PyQt6.QtCore import QEvent
+        """Handle mouse events on drag handle for window dragging."""
+        if hasattr(self, '_drag_handle') and obj == self._drag_handle:
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -267,6 +348,29 @@ class PetWindow(QMainWindow):
         except Exception as e:
             log.warning("notify_live2d_tip: %s", e)
 
+    def show_bubble(self, text: str, duration: int = 4000):
+        """Show Neuro speech bubble above the model."""
+        if not hasattr(self, '_live2d_view') or not self._live2d_view:
+            return
+        safe = text.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+        try:
+            self._live2d_view.page().runJavaScript(
+                f"window.showBubble && window.showBubble('{safe}', {duration})"
+            )
+        except Exception as e:
+            log.warning("show_bubble: %s", e)
+
+    def show_neuro_state(self, state: str):
+        """Update Neuro state indicator (emoji + text at bottom)."""
+        if not hasattr(self, '_live2d_view') or not self._live2d_view:
+            return
+        try:
+            self._live2d_view.page().runJavaScript(
+                f"window.showNeuroState && window.showNeuroState('{state}')"
+            )
+        except Exception as e:
+            log.warning("show_neuro_state: %s", e)
+
     def _svg_viewbox_for_state(self, state: str) -> QRect:
         # Different viewbox regions for different states (if spritesheet)
         return QRect(0, 0, 200, 280)
@@ -298,6 +402,157 @@ class PetWindow(QMainWindow):
             "window.getCurrentModelIndex ? window.getCurrentModelIndex() : -1",
             lambda r: log.info("[live2d] current index: %s", r)
         )
+
+    def _show_context_menu(self, global_pos: QPoint):
+        """Show custom right-click context menu (called from JS via QWebChannel)."""
+        menu = QMenu(self)
+        menu.setStyleSheet("")  # empty = follow system theme
+
+        # ── Model info ──
+        def _add_model_info():
+            info_action = menu.addAction("📍 当前模型: 加载中...")
+            info_action.setEnabled(False)
+            if hasattr(self, '_live2d_view') and self._live2d_view:
+                self._live2d_view.page().runJavaScript(
+                    "window.getCurrentModelName ? window.getCurrentModelName() : '?'",
+                    lambda name: info_action.setText(f"📍 当前模型: {name}")
+                )
+        _add_model_info()
+        menu.addSeparator()
+
+        # ── Model switching ──
+        switch_menu = menu.addMenu("🔄 切换模型")
+        switch_menu.addAction("⏮ 上一个", self._ctx_prev_model)
+        switch_menu.addAction("⏭ 下一个", self._ctx_next_model)
+        switch_menu.addSeparator()
+
+        # Add individual model entries
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript(
+                "window.getAllModelNames ? JSON.stringify(window.getAllModelNames()) : '[]'",
+                lambda names_json: self._populate_model_switch_menu(switch_menu, names_json)
+            )
+
+        # ── Switch costume (texture) ──
+        menu.addAction("👗 切换服装", self._ctx_next_texture)
+
+        # ── Scale adjustment ──
+        scale_menu = menu.addMenu("📏 模型比例")
+        for label, multiplier in [("50%", 0.5), ("75%", 0.75), ("100% (默认)", 1.0),
+                                   ("125%", 1.25), ("150%", 1.5), ("200%", 2.0)]:
+            action = scale_menu.addAction(label)
+            action.triggered.connect(lambda checked, m=multiplier: self._ctx_set_scale(m))
+
+        menu.addSeparator()
+
+        # ── Capture screenshot ──
+        menu.addAction("📸 保存图片", self._ctx_capture_model)
+
+        # ── Toggle hit frames ──
+        menu.addAction("🔲 帧检测", self._ctx_toggle_hitframes)
+
+        # ── Random model ──
+        menu.addAction("🔀 随机模型", self._ctx_random_model)
+
+        menu.addSeparator()
+        menu.addAction("💤 隐藏", lambda: self.hide())
+        menu.addAction("❌ 退出", lambda: QApplication.quit())
+
+        # Show menu at cursor position
+        menu.popup(QCursor.pos())
+
+    def _populate_model_switch_menu(self, switch_menu: QMenu, names_json: str):
+        """Populate model switch submenu with individual model names."""
+        import json
+        try:
+            names = json.loads(names_json)
+        except Exception:
+            names = []
+        if not names:
+            return
+        switch_menu.addSeparator()
+        for idx, name in enumerate(names):
+            action = switch_menu.addAction(f"  {idx + 1}. {name}")
+            action.triggered.connect(
+                lambda checked, i=idx: self._ctx_switch_to(i)
+            )
+
+    def _ctx_next_model(self):
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript("window.nextModel && window.nextModel()")
+
+    def _ctx_prev_model(self):
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript("window.prevModel && window.prevModel()")
+
+    def _ctx_switch_to(self, idx: int):
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript(
+                f"window.switchToModel && window.switchToModel({idx})"
+            )
+
+    def _ctx_random_model(self):
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            import random
+            self._live2d_view.page().runJavaScript(
+                "window.getModelCount ? window.getModelCount() : 0",
+                lambda count: self._live2d_view.page().runJavaScript(
+                    f"window.switchToModel && window.switchToModel({random.randint(0, max(0, int(count) - 1))})"
+                ) if count else None
+            )
+
+    def _ctx_set_scale(self, multiplier: float):
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript(
+                f"window.setModelScale && window.setModelScale({multiplier})"
+            )
+
+    def _ctx_next_texture(self):
+        """Switch to next costume/texture for current model."""
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript(
+                "window.nextTexture && window.nextTexture()"
+            )
+
+    def _ctx_capture_model(self):
+        """Capture current model as PNG and save to file."""
+        if not hasattr(self, '_live2d_view') or not self._live2d_view:
+            return
+        self._live2d_view.page().runJavaScript(
+            "window.captureModel && window.captureModel()",
+            lambda data_url: self._save_capture(data_url) if data_url else None
+        )
+
+    def _save_capture(self, data_url: str):
+        """Save base64 PNG data URL to file."""
+        import base64
+        from PyQt6.QtWidgets import QFileDialog
+        # Parse data URL: data:image/png;base64,xxxx
+        try:
+            header, encoded = data_url.split(",", 1)
+            img_data = base64.b64decode(encoded)
+        except Exception as e:
+            log.warning("capture decode failed: %s", e)
+            return
+        # Ask user where to save
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存图片", "live2d_capture.png", "PNG (*.png)"
+        )
+        if path:
+            try:
+                with open(path, "wb") as f:
+                    f.write(img_data)
+                log.info("capture saved: %s", path)
+            except Exception as e:
+                log.warning("capture save failed: %s", e)
+
+    def _ctx_toggle_hitframes(self):
+        """Toggle hit area frame display."""
+        if hasattr(self, '_live2d_view') and self._live2d_view:
+            self._live2d_view.page().runJavaScript(
+                "window.toggleHitFrames && window.toggleHitFrames()",
+                lambda on: log.info("hit frames: %s", "ON" if on else "OFF")
+            )
 
 
 # ─── System Tray ───
@@ -785,8 +1040,9 @@ class ContextThread(threading.Thread):
 
 # ─── Main App ───
 
-class IcarusApp:
+class IcarusApp(QObject):
     def __init__(self):
+        super().__init__()
         self.bridge = SignalBridge()
         self.window = PetWindow(self.bridge)
         self.audio = None
@@ -820,12 +1076,14 @@ class IcarusApp:
             self.window.setWindowTitle("🪶")
 
     def _on_neuro_state(self, state: str):
-        """Neuro AI 状态变化 → 桌宠表情"""
+        """Neuro AI 状态变化 → 桌宠表情 + 状态指示器."""
         log.debug("neuro state → %s (patience %.1fs, t=%.1f)",
                   state, self.neuro.patience, self.neuro.time_since_last)
         # 映射到现有 character state
         # idle / listening / thinking / speaking / bored
         self.window.set_state(state)
+        # 更新 Neuro 状态指示器 (底部 emoji + 文字)
+        self.window.show_neuro_state(state)
 
     def _on_neuro_patience(self, seconds: float):
         """PATIENCE 变化 → tray tooltip"""
