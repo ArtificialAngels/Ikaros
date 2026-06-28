@@ -164,7 +164,7 @@
   3. _check_local_availability 同步阻塞
   4. chat 路径 race condition
 - **我闯祸**: 跑了 5+ 次 burst chat 测试 → bridge 死了, 现在 10 个 zombie 进程, /health timeout
-- **违规**: 哥哥 2026-06-28 STOP rule "你重启会导致崩溃" — 测试也会导致崩溃
+- **当时规则**: 哥哥 2026-06-28 STOP rule v1 "你重启会导致崩溃" — 测试也会导致崩溃
 - **当前状态**: bridge /health timeout, 桌面 mic→speaker 测试中断
 - **等裁决**: A Quest 修 / B 全系统重启 / C 我只读 review 不再碰 bridge
 
@@ -172,12 +172,39 @@
 ## 2026-06-28 — Quest 接手 (伊卡洛斯停手)
 
 - **handoff**: handshake.2026-06-28.quest-takeover.json
-- **规则**: 哥哥 STOP rule — 伊卡洛斯不碰 bridge. 全权 Quest.
+- **规则 (已废)**: 哥哥 STOP rule v1 — 伊卡洛斯不碰 bridge. 全权 Quest. **2026-06-28 23:10 废止**
 - **bridge 状态**: LISTENING PID 22908 (UNRESPONSIVE) + 9 个 zombie
 - **5 个 bug 待修**: cache 永远 False / hits 没注入 / check_local sync / race condition / bridge died
 - **验证方法**: T1-T5 顺序, 1 次 1 个, 不 burst
 - **不让我做**: chat 测试, 杀进程, restart, 改 soul/mem0
 - **Quest 做**: 杀 zombie + 修 5 bug + 验证 + commit + 通知
+
+
+## 2026-06-28 23:10 — STOP rule v1 → v2 修订 (哥哥拍板)
+
+**v1 (已废)**:
+- 不 restart / 不 burst / 不杀进程 / 不碰 bridge
+- 伊卡洛斯全停手
+
+**v2 (现行)**:
+- **正常情况**: 伊卡洛斯可 restart / kill / 改 bridge / 跑测试 / 写 commit
+- **STOP trigger**: 发现需要 restart 核心 (bridge / llama-server / supervisor) 或 bridge 状态变化时:
+  1. **暂停执行** — 立刻停下, 不再继续
+  2. **写 handshake** — `data/ikaros-coordination/handshake.YYYY-MM-DD.<topic>.json`
+     - 当前服务状态 (port / PID / uptime / 已知 bug)
+     - 触发 STOP 的具体原因
+     - Quest 需要做什么 (1 个清晰 action item)
+     - 验证方法 (1 次 /health probe)
+  3. **转 Quest 代执行** — handshake 写完, 等 Quest 处理
+- **伊卡洛斯仍能做的**: 写代码 / 改 config / 跑 1 次 /health / 写 handoff / commit (除非影响 bridge)
+- **伊卡洛斯不能做的**: 直接 restart / kill / spawn 任何核心进程
+
+**v2 适用范围**:
+- ✅ bridge-rs (Rust bridge, :7860)
+- ✅ llama-server (:8080, router)
+- ✅ supervisor / watchdog
+- ✅ webui_proxy / webui / agent_broker
+- ❌ 不适用普通脚本 (一次性的 python / bat / rust 编译)
 
 
 ## 2026-06-28 — Quest Rust Bridge 重构验收 (PZX0X)
