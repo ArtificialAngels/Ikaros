@@ -1,5 +1,5 @@
 # ============================================================
-# Hermes Agent .gitignore
+# Ikaros .gitignore
 # ============================================================
 # IMPORTANT (2026-06-08 portability audit):
 #   The following heavy blobs are NOT in git because of size:
@@ -224,3 +224,23 @@ bin/desktop.ini
 config.yaml.pre-gitnexus.*.bak
 bridge/data/
 data/icarus-memory/
+
+# --- Rust build artifacts (Quest 6-28) ---
+bridge-rs/target/
+
+# --- Llama upgrade test staging (Quest 6-28, not for production) ---
+tools/llama-upgrade-test/
+
+# --- MinGW / MSYS2 toolchain artifacts (Quest 6-28) ---
+deps/mingw.zip
+deps/mingw-linker/
+deps/msys2.exe
+
+# --- 6-27 backup (memory.py before Quest fixed bridge) ---
+*.bak
+*.bak-*
+**/*.bak
+**/*.bak-*
+
+# --- Disabled module markers (local runtime state, not project source) ---
+modules/*/module.json.disabled
