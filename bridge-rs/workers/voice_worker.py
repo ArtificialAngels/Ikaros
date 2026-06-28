@@ -50,24 +50,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("voice_worker")
 
-# Import voice server functions (reuse existing STT/LLM/TTS pipeline)
-sys.path.insert(0, os.path.join(_PROJECT_ROOT, "bridge"))
-try:
-    from voice_server import (
-        _transcribe,
-        _stream_tts,
-        VoiceSession,
-        _SILENCE_THRESHOLD,
-        _SILENCE_TIMEOUT,
-        _MAX_RECORD_SECONDS,
-    )
-    logger.info("imported voice_server functions ✓")
-except ImportError as e:
-    logger.error("failed to import voice_server: %s", e)
-    # Fallback implementations if import fails
-    _transcribe = None
-    _stream_tts = None
-    VoiceSession = None
+# VoiceSession / _transcribe / _stream_tts are now defined INLINE below.
+# Original bridge/voice_server.py was removed 2026-06-28; bridge-rs/workers is fully self-contained.
+# Note: _SILENCE_THRESHOLD / _SILENCE_TIMEOUT / _MAX_RECORD_SECONDS are unused here
+# (audio_engine does VAD client-side; server-side silence is handled by Rust bridge).
+logger.info("voice_worker: self-contained (bridge/voice_server deleted)")
 
 
 # ---- LLM call (direct to llama-server, avoid bridge self-reference) ----
@@ -108,10 +95,9 @@ async def _llm_chat(text: str, model: str = "auto") -> str:
         return ""
 
 
-# ---- VoiceSession (if import failed) ----
-if VoiceSession is None:
+# ---- VoiceSession (always defined; bridge/voice_server was deleted 2026-06-28) ----
 
-    class VoiceSession:  # type: ignore
+class VoiceSession:
         """Minimal VoiceSession fallback."""
 
         def __init__(self, session_id: str, model: str = "auto"):
@@ -148,40 +134,71 @@ if VoiceSession is None:
             return len(self.audio_buffer) > 4096
 
 
-# ---- STT fallback if voice_server import failed ----
-if _transcribe is None:
+# ---- STT: faster-whisper local primary, OpenAI Whisper fallback ----
+async def _transcribe(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    """Transcribe 16kHz mono int16 PCM audio to text.
 
-    async def _transcribe(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:  # type: ignore
-        """Fallback: try OpenAI Whisper API directly."""
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            logger.warning("STT: no OPENAI_API_KEY and faster-whisper unavailable")
-            return ""
-        from openai import OpenAI
-
+    Strategy (哥哥 6-28):
+      1. Try local faster-whisper (no API key, no network, free, fast)
+      2. Fall back to OpenAI Whisper API if OPENAI_API_KEY set
+      3. Return "" on failure (caller treats as no-speech)
+    """
+    # 1) Local faster-whisper
+    try:
+        from faster_whisper import WhisperModel
+        # Lazy singleton (model load is expensive)
+        global _WHISPER_MODEL
         try:
-            client = OpenAI(api_key=api_key)
-            import io
+            _WHISPER_MODEL
+        except NameError:
+            _WHISPER_MODEL = None
+        if _WHISPER_MODEL is None:
+            # tiny = 39M, base = 74M, small = 244M. tiny for speed.
+            _WHISPER_MODEL = WhisperModel("tiny", device="cpu", compute_type="int8")
+        # audio_bytes is raw PCM int16 16kHz mono. faster-whisper needs float32.
+        import numpy as np
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        segments, info = _WHISPER_MODEL.transcribe(
+            audio_np,
+            language="zh",
+            beam_size=1,  # fast (1-pass greedy)
+            vad_filter=False,  # audio_engine already VAD'd
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        if text:
+            logger.info("STT (faster-whisper local): %s", text[:80])
+            return text
+    except Exception as exc:
+        logger.warning("STT faster-whisper failed: %s, trying OpenAI fallback", exc)
 
-            audio_file = io.BytesIO(audio_bytes)
-            ext = mime_type.split("/")[-1].split(";")[0] or "wav"
-            audio_file.name = f"voice.{ext}"
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="zh",
-                response_format="text",
-            )
-            return str(transcript).strip()
-        except Exception as exc:
-            logger.error("STT fallback error: %s", exc)
-            return ""
+    # 2) OpenAI Whisper API fallback
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        logger.warning("STT: no OPENAI_API_KEY, returning empty")
+        return ""
+    try:
+        from openai import OpenAI
+        import io
+
+        client = OpenAI(api_key=api_key)
+        audio_file = io.BytesIO(audio_bytes)
+        ext = mime_type.split("/")[-1].split(";")[0] or "wav"
+        audio_file.name = f"voice.{ext}"
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="zh",
+            response_format="text",
+        )
+        return str(transcript).strip()
+    except Exception as exc:
+        logger.error("STT OpenAI fallback error: %s", exc)
+        return ""
 
 
-# ---- TTS fallback ----
-if _stream_tts is None:
+# ---- TTS: edge-tts streaming (always defined) ----
 
-    async def _stream_tts(text: str, voice: str = "zh-CN-XiaoxiaoNeural"):  # type: ignore
+async def _stream_tts(text: str, voice: str = "zh-CN-XiaoxiaoNeural"):
         """Fallback: try edge-tts directly."""
         try:
             import edge_tts

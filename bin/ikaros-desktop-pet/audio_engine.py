@@ -93,7 +93,7 @@ class AudioEngine:
         # If WS is connected, send set_model action to update server-side
         if self._ws:
             try:
-                coro = self._ws.send(json.dumps({"action": "set_model", "model": model}))
+                coro = self._ws.send(json.dumps({"type": "set_model", "model": model}))
                 asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
             except Exception:
                 pass
@@ -156,7 +156,7 @@ class AudioEngine:
                 async with websockets.connect(uri, proxy=None) as ws:
                     self._ws = ws
                     # Send start with current LLM model
-                    await ws.send(json.dumps({"action": "start", "model": self._llm_model}))
+                    await ws.send(json.dumps({"type": "start", "model": self._llm_model}))
                     self._emit_state("LISTENING")
                     self._emit_bubble("🎤 我在听~", 2000)
 
