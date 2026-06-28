@@ -244,3 +244,19 @@ deps/msys2.exe
 
 # --- Disabled module markers (local runtime state, not project source) ---
 modules/*/module.json.disabled
+
+# sherpa-onnx 模型 (解压后留着, tarball 不要)
+data/models/sense-voice/sense-voice.tar.bz2
+data/models/sense-voice/sense-voice.zip
+data/models/sense-voice/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-*/
+
+# bridge-rs / cargo lock (大文件)
+**/Cargo.lock
+
+# sherpa-onnx prebuilt libs (large, vendor only)
+bridge-rs/sherpa-onnx-prebuilt-extracted/
+bridge-rs/sherpa-onnx-prebuilt.tar.bz2
+
+bridge-rs/sherpa-onnx-shared-extracted/
+bridge-rs/sherpa-onnx-prebuilt.tar.bz2
+bridge-rs/sherpa-onnx-shared.tar.bz2

@@ -16,6 +16,7 @@ pub mod task_delegation;
 pub mod signals;
 pub mod health;
 pub mod telemetry;
+pub mod voice_recognizer;
 
 use telemetry::{SignalBus, RequestLog};
 
@@ -42,8 +43,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{RwLock, Semaphore};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use base64::Engine;
+use tokio::io::AsyncWriteExt;
+use voice_recognizer::VoiceRecognizer;
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -522,6 +523,8 @@ struct AppState {
     modules_cache: RwLock<(Instant, Vec<serde_json::Value>)>,
     /// Neuro/Prompter state (shared, RwLock)
     neuro_state: Arc<RwLock<NeuroState>>,
+    /// Voice recognizer (sherpa-onnx SenseVoice, loaded at startup)
+    voice_recognizer: Option<Arc<VoiceRecognizer>>,
 }
 
 impl AppState {
@@ -548,6 +551,23 @@ impl AppState {
             request_log: Arc::new(RequestLog::new(1000)),
             modules_cache: RwLock::new((Instant::now(), Vec::new())),
             neuro_state: Arc::new(RwLock::new(NeuroState::new())),
+            voice_recognizer: {
+                let model_dir = std::env::var("ICARUS_SENSE_VOICE_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| project_root().join("data").join("models").join("sense-voice"));
+                if model_dir.is_dir() {
+                    match VoiceRecognizer::new(&model_dir) {
+                        Ok(r) => {
+                            info!("VoiceRecognizer loaded from {}", model_dir.display());
+                            Some(Arc::new(r))
+                        }
+                        Err(e) => { warn!("VoiceRecognizer init failed: {}", e); None }
+                    }
+                } else {
+                    info!("SenseVoice model dir not found: {}, voice disabled", model_dir.display());
+                    None
+                }
+            },
         }
     }
 
@@ -810,93 +830,49 @@ fn default_voice_model() -> String {
 
 /// WebSocket endpoint for voice processing
 async fn voice_ws(
+    State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
     Query(query): Query<VoiceWsQuery>,
 ) -> Response {
     info!(model = %query.model, "voice WebSocket connection");
-    ws.on_upgrade(move |socket| handle_voice_socket(socket, query.model))
+    ws.on_upgrade(move |socket| handle_voice_socket(socket, query.model, state))
 }
 
-async fn handle_voice_socket(mut socket: WebSocket, model: String) {
-    info!(model = %model, "voice WebSocket established");
+async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<AppState>) {
+    info!(model = %model, "voice WebSocket established (sherpa-onnx in-process)");
 
     // Send welcome message
     let welcome = serde_json::json!({
         "type": "connected",
         "model": model,
         "bridge": "hermes-bridge-rs",
+        "stt": "sherpa-onnx-sense-voice",
         "version": env!("CARGO_PKG_VERSION"),
     });
-    if socket
-        .send(Message::Text(welcome.to_string().into()))
-        .await
-        .is_err()
-    {
+    if socket.send(Message::Text(welcome.to_string().into())).await.is_err() {
         return;
     }
 
-    // Start voice worker process
-    let python = find_portable_python();
-    let worker_script = project_root().join("bridge-rs").join("workers").join("voice_worker.py");
-    if !worker_script.is_file() {
-        warn!(path = %worker_script.display(), "voice_worker.py not found");
-        let _ = socket.send(Message::Text(
-            serde_json::json!({"type": "error", "message": "voice_worker.py not found"}).to_string().into()
-        )).await;
-        return;
-    }
-
-    let mut child = match tokio::process::Command::new(&python)
-        .arg(worker_script.to_string_lossy().as_ref())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("failed to start voice_worker.py: {}", e);
+    // Get voice recognizer
+    let recognizer = match &state.voice_recognizer {
+        Some(r) => r.clone(),
+        None => {
             let _ = socket.send(Message::Text(
-                serde_json::json!({"type": "error", "message": format!("voice worker failed: {}", e)}).to_string().into()
+                serde_json::json!({"type": "error", "message": "VoiceRecognizer not loaded — check sense-voice model"}).to_string().into()
             )).await;
             return;
         }
     };
 
-    let mut worker_stdin = match child.stdin.take() {
-        Some(s) => s,
-        None => {
-            warn!("voice worker: no stdin");
-            return;
-        }
-    };
-    let worker_stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            warn!("voice worker: no stdout");
-            return;
-        }
-    };
-    let reader = BufReader::new(worker_stdout);
-    let mut worker_lines = reader.lines();
-
-    // Send initial model config
-    let init_msg = serde_json::json!({"type": "set_model", "model": model});
-    let _ = worker_stdin
-        .write_all((serde_json::to_string(&init_msg).unwrap() + "\n").as_bytes())
-        .await;
-    let _ = worker_stdin.flush().await;
-
     let mut request_id = 0u64;
-    let mut audio_buffer: Vec<u8> = Vec::new();
+    let mut audio_buffer: Vec<i16> = Vec::new();
     let mut last_audio_time = tokio::time::Instant::now();
     let mut is_audio_session = false;
-    let base64_engine = base64::engine::general_purpose::STANDARD;
 
-    // Message loop — handle WS and worker concurrently
+    // Message loop
     loop {
         tokio::select! {
-            // ── Read from WebSocket ──
+            // -- Read from WebSocket --
             ws_msg = socket.recv() => {
                 match ws_msg {
                     Some(Ok(Message::Text(text))) => {
@@ -907,56 +883,19 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
                                     .unwrap_or("unknown");
                                 match msg_type {
                                     "start" => {
-                                        // Always reset — user may start a new utterance
-                                        // while the previous worker is still processing.
                                         is_audio_session = true;
                                         audio_buffer.clear();
                                         last_audio_time = tokio::time::Instant::now();
-                                        let m = parsed.get("model")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("auto");
-                                        let msg = serde_json::json!({"type": "set_model", "model": m});
-                                        let _ = worker_stdin
-                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                                            .await;
-                                        let _ = worker_stdin.flush().await;
                                         let resp = serde_json::json!({"type": "status", "message": "listening"});
                                         let _ = socket.send(Message::Text(resp.to_string().into())).await;
                                     }
                                     "stop" => {
-                                        // Flush accumulated audio to worker
-                                        if !audio_buffer.is_empty() {
-                                            request_id += 1;
-                                            let b64 = base64_engine.encode(&audio_buffer);
-                                            let msg = serde_json::json!({
-                                                "type": "audio",
-                                                "request_id": request_id,
-                                                "data": b64,
-                                                "final": true,
-                                            });
-                                            let _ = worker_stdin
-                                                .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                                                .await;
-                                            let _ = worker_stdin.flush().await;
-                                            audio_buffer.clear();
-                                        }
                                         is_audio_session = false;
-                                        // Tell worker to stop
-                                        let msg = serde_json::json!({"type": "stop"});
-                                        let _ = worker_stdin
-                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                                            .await;
-                                        let _ = worker_stdin.flush().await;
-                                    }
-                                    "set_model" => {
-                                        let m = parsed.get("model")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("auto");
-                                        let msg = serde_json::json!({"type": "set_model", "model": m});
-                                        let _ = worker_stdin
-                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                                            .await;
-                                        let _ = worker_stdin.flush().await;
+                                        if !audio_buffer.is_empty() {
+                                            let buf = std::mem::take(&mut audio_buffer);
+                                            request_id += 1;
+                                            process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
+                                        }
                                     }
                                     "ping" => {
                                         let resp = serde_json::json!({"type": "pong"});
@@ -982,7 +921,12 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
                     }
                     Some(Ok(Message::Binary(data))) => {
                         if is_audio_session {
-                            audio_buffer.extend_from_slice(&data);
+                            // Convert u8 bytes to i16 PCM samples (little-endian)
+                            let bytes = &data[..];
+                            for chunk in bytes.chunks_exact(2) {
+                                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                                audio_buffer.push(sample);
+                            }
                             last_audio_time = tokio::time::Instant::now();
                         }
                     }
@@ -994,108 +938,207 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
                         warn!(error = %e, "voice WS error");
                         break;
                     }
-                    None => {
-                        break;
-                    }
+                    None => { break; }
                     _ => {}
                 }
             }
 
-            // ── Check VAD silence timeout (every 500ms) ──
+            // -- VAD silence timeout (every 500ms) --
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
                 if is_audio_session && !audio_buffer.is_empty() {
                     let elapsed = last_audio_time.elapsed();
                     if elapsed > Duration::from_secs_f64(1.5) {
-                        // Silence detected — flush to worker
-                        info!("voice VAD: silence {:.1}s, flushing {}B",
+                        info!("voice VAD: silence {:.1}s, transcribing {} samples",
                               elapsed.as_secs_f64(), audio_buffer.len());
+                        let buf = std::mem::take(&mut audio_buffer);
+                        is_audio_session = false;
                         request_id += 1;
-                        let b64 = base64_engine.encode(&audio_buffer);
-                        let msg = serde_json::json!({
-                            "type": "audio",
-                            "request_id": request_id,
-                            "data": b64,
-                            "final": true,
-                        });
-                        let _ = worker_stdin
-                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                            .await;
-                        let _ = worker_stdin.flush().await;
-                        audio_buffer.clear();
-                    } else if audio_buffer.len() > 1_048_576 {
-                        // 1MB max per utterance — emergency flush
-                        info!("voice buffer: {}B, emergency flush", audio_buffer.len());
+                        process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
+                    } else if audio_buffer.len() > 480_000 {
+                        // 15s at 16kHz — emergency flush
+                        info!("voice buffer: {} samples, emergency flush", audio_buffer.len());
+                        let buf = std::mem::take(&mut audio_buffer);
+                        is_audio_session = false;
                         request_id += 1;
-                        let b64 = base64_engine.encode(&audio_buffer);
-                        let msg = serde_json::json!({
-                            "type": "audio",
-                            "request_id": request_id,
-                            "data": b64,
-                            "final": true,
-                        });
-                        let _ = worker_stdin
-                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
-                            .await;
-                        let _ = worker_stdin.flush().await;
-                        audio_buffer.clear();
-                    }
-                }
-            }
-
-            // ── Read from worker stdout ──
-            worker_line = worker_lines.next_line() => {
-                match worker_line {
-                    Ok(Some(line)) => {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-                        match serde_json::from_str::<serde_json::Value>(trimmed) {
-                            Ok(resp) => {
-                                let resp_type = resp.get("type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-
-                                if resp_type == "mp3" {
-                                    // Decode base64 MP3, send as binary to WS
-                                    if let Some(data_b64) = resp.get("data").and_then(|v| v.as_str()) {
-                                        match base64_engine.decode(data_b64) {
-                                            Ok(mp3_bytes) => {
-                                                let _ = socket.send(Message::Binary(mp3_bytes.into())).await;
-                                            }
-                                            Err(e) => {
-                                                warn!("voice worker: bad base64 in mp3: {}", e);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Forward JSON directly to WebSocket
-                                    let resp_json_str = serde_json::to_string(&resp).unwrap_or_default();
-                                    let _ = socket.send(Message::Text(resp_json_str.into())).await;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("voice worker: bad JSON line ({}): {}", e, trimmed);
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        info!("voice worker: stdout ended");
-                        break;
-                    }
-                    Err(e) => {
-                        warn!("voice worker: stdout error: {}", e);
-                        break;
+                        process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
                     }
                 }
             }
         }
     }
 
-    // Cleanup: kill worker process
-    let _ = worker_stdin.shutdown().await;
-    let _ = child.wait().await;
     info!("voice WebSocket session ended");
+}
+
+/// Process a complete utterance: STT → LLM → TTS
+async fn process_utterance(
+    socket: &mut WebSocket,
+    recognizer: Arc<VoiceRecognizer>,
+    state: &AppState,
+    audio: Vec<i16>,
+    rid: u64,
+) {
+    // 1. STT (in-process, blocking — run on threadpool)
+    let _ = socket.send(Message::Text(
+        serde_json::json!({"type": "status", "request_id": rid, "message": "识别中…"}).to_string().into()
+    )).await;
+
+    let text = tokio::task::spawn_blocking(move || recognizer.transcribe(&audio))
+        .await
+        .unwrap_or(None);
+
+    let text = match text {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let _ = socket.send(Message::Text(
+                serde_json::json!({"type": "status", "request_id": rid, "message": "没听清，请再说一遍"}).to_string().into()
+            )).await;
+            return;
+        }
+    };
+
+    info!(request_id = rid, text = %text, "STT result");
+    let _ = socket.send(Message::Text(
+        serde_json::json!({"type": "transcription", "request_id": rid, "text": text}).to_string().into()
+    )).await;
+
+    // 2. LLM (reqwest to llama-server)
+    let _ = socket.send(Message::Text(
+        serde_json::json!({"type": "thinking", "request_id": rid}).to_string().into()
+    )).await;
+
+    let reply = voice_llm_chat(state, &text).await;
+    if reply.is_empty() {
+        let _ = socket.send(Message::Text(
+            serde_json::json!({"type": "error", "request_id": rid, "message": "思考失败了"}).to_string().into()
+        )).await;
+        return;
+    }
+
+    // 3. TTS (edge-tts subprocess)
+    let _ = socket.send(Message::Text(
+        serde_json::json!({"type": "status", "request_id": rid, "message": "回复中…"}).to_string().into()
+    )).await;
+
+    match voice_tts(&reply).await {
+        Ok(mp3_data) => {
+            let chunk_size = 8192;
+            let mut chunk_count = 0u32;
+            for chunk in mp3_data.chunks(chunk_size) {
+                let _ = socket.send(Message::Binary(chunk.to_vec().into())).await;
+                chunk_count += 1;
+            }
+            let _ = socket.send(Message::Text(
+                serde_json::json!({
+                    "type": "done",
+                    "request_id": rid,
+                    "text": reply,
+                    "chunks": chunk_count,
+                }).to_string().into()
+            )).await;
+        }
+        Err(e) => {
+            error!(request_id = rid, error = %e, "TTS failed");
+            let _ = socket.send(Message::Text(
+                serde_json::json!({"type": "error", "request_id": rid, "message": format!("TTS failed: {}", e)}).to_string().into()
+            )).await;
+        }
+    }
+
+    info!(request_id = rid, "utterance done");
+}
+
+/// Call llama-server directly for voice chat
+async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
+    let model = {
+        let workers = state.worker_pool.workers.read().await;
+        workers.iter()
+            .filter(|w| w.alive)
+            .flat_map(|w| w.models.iter())
+            .find(|m| !m.to_lowercase().contains("mmproj"))
+            .cloned()
+            .unwrap_or_else(|| "auto".to_string())
+    };
+
+    let worker_url = match state.worker_pool.get_alive_worker().await {
+        Some(_) => {
+            let workers = state.worker_pool.workers.read().await;
+            workers.iter().find(|w| w.alive).map(|w| w.url.clone())
+        }
+        None => None,
+    };
+    let worker_url = match worker_url {
+        Some(u) => u,
+        None => { warn!("voice_llm: no alive worker"); return String::new(); }
+    };
+
+    let url = format!("{}/v1/chat/completions", worker_url);
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。"},
+            {"role": "user", "content": user_text},
+        ],
+        "stream": false,
+        "max_tokens": 512,
+    });
+
+    match state.http_client.post(&url).json(&body).timeout(Duration::from_secs(120)).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(json) => json.get("choices")
+                    .and_then(|c| c.as_array())
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Err(e) => { warn!("voice_llm: parse error: {}", e); String::new() }
+            }
+        }
+        Ok(resp) => { warn!("voice_llm: status {}", resp.status()); String::new() }
+        Err(e) => { warn!("voice_llm: error: {}", e); String::new() }
+    }
+}
+
+/// Run edge-tts via a small Python subprocess, return MP3 bytes
+async fn voice_tts(text: &str) -> Result<Vec<u8>, String> {
+    let python = find_portable_python();
+    let worker_script = project_root().join("bridge-rs").join("workers").join("tts_worker.py");
+    if !worker_script.is_file() {
+        return Err(format!("tts_worker.py not found at {}", worker_script.display()));
+    }
+
+    let tts_input = serde_json::json!({
+        "text": text,
+        "voice": "zh-CN-XiaoxiaoNeural",
+    });
+
+    let mut child = tokio::process::Command::new(&python)
+        .arg(worker_script.to_string_lossy().as_ref())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("TTS spawn failed: {}", e))?;
+
+    // Write input JSON to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        let input = format!("{}\n", tts_input);
+        stdin.write_all(input.as_bytes()).await.map_err(|e| format!("TTS stdin: {}", e))?;
+        stdin.shutdown().await.map_err(|e| format!("TTS stdin close: {}", e))?;
+    }
+
+    // Wait and read stdout
+    let output = child.wait_with_output().await.map_err(|e| format!("TTS wait: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("TTS exit {}: {}", output.status.code().unwrap_or(-1), stderr));
+    }
+
+    Ok(output.stdout)
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ regex = "1.10"
 once_cell = "1.19"
 # Parking_lot (faster Mutex/RwLock)
 parking_lot = "0.12"
+sherpa-onnx = { version = "1.13.3", default-features = false, features = ["shared"] }
 
 [profile.release]
 opt-level = 3
