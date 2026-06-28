@@ -65,6 +65,18 @@ from bridge.voice_server import voice_ws_handler as _voice_ws_handler
 
 logger = logging.getLogger("hermes.bridge")
 
+# ---- mem0 cache (哥哥 6-28: 异步 prep, 缓存 search 结果) ----
+mem0_layer_cache = {
+    "hits": [],
+    "user_id": "",
+    "query": "",
+    "last_update": 0.0,
+}
+
+# ---- chat concurrency guard (bug_4 fix: prevent httpx pool exhaustion) ----
+_chat_semaphore = asyncio.Semaphore(3)
+
+
 # Mark this process so signals know where they came from.
 os.environ.setdefault("HERMES_MODULE", "bridge")
 
@@ -254,6 +266,7 @@ def _start_health_monitor() -> None:
         while not _health_monitor_stop.is_set():
             try:
                 await _check_llama_health()
+                await _refresh_model_map()
             except Exception:
                 pass
             _health_monitor_stop.wait(_health_monitor_interval)
@@ -285,17 +298,109 @@ _http = httpx.AsyncClient(
 _warmup_http_client = httpx.Client(timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0))
 
 
-async def _proxy_to_active(method: str, path: str, **kwargs) -> httpx.Response:
+# ---- Model → Instance mapping (multi-instance parallel) ----
+# When multiple llama-server instances are running (each on a different port
+# with different models), we build a mapping of model_id → instance_url so
+# requests are routed to the instance that actually has the model loaded.
+# With a single instance (router mode), all models map to the same URL.
+_model_to_instance: dict[str, str] = {}
+_model_map_lock = threading.Lock()
+_model_map_last_refresh: float = 0.0
+
+
+async def _refresh_model_map() -> None:
+    """Query all alive candidates' /v1/models to build model→URL mapping.
+
+    Called after each health check. With a single instance, all models map
+    to that instance. With multiple instances, each model maps to whichever
+    instance loaded it (router mode --models-max).
+    """
+    global _model_to_instance, _model_map_last_refresh
+    new_map: dict[str, str] = {}
+    alive_urls: list[str] = []
+    with _health_lock:
+        for url, health in _candidate_health.items():
+            if health.get("alive"):
+                alive_urls.append(url)
+    if not alive_urls:
+        with _model_map_lock:
+            _model_to_instance = new_map
+        return
+
+    async def _fetch_models(url: str) -> tuple[str, list[str]]:
+        try:
+            async with httpx.AsyncClient(base_url=url, timeout=5.0) as cli:
+                r = await cli.get("/v1/models")
+                if r.status_code == 200:
+                    data = r.json()
+                    models = [m["id"] for m in data.get("data", []) if "id" in m]
+                    return url, models
+        except Exception:
+            pass
+        return url, []
+
+    results = await asyncio.gather(
+        *[_fetch_models(u) for u in alive_urls], return_exceptions=True
+    )
+    for result in results:
+        if isinstance(result, tuple):
+            url, models = result
+            for model_id in models:
+                # First instance to claim a model wins (primary preferred)
+                if model_id not in new_map:
+                    new_map[model_id] = url
+
+    with _model_map_lock:
+        _model_to_instance = new_map
+        _model_map_last_refresh = time.time()
+    if len(alive_urls) > 1:
+        logger.info(
+            "model map refreshed: %d models across %d instances",
+            len(new_map), len(alive_urls),
+        )
+
+
+def _resolve_url_for_model(model: str) -> str:
+    """Return the best instance URL for *model*.
+
+    1. Exact match in model→instance map
+    2. Strip .gguf suffix and retry
+    3. Fallback to _active_base_url (single-instance or no map)
+    """
+    with _model_map_lock:
+        url = _model_to_instance.get(model)
+    if url:
+        return url
+    # Try stripping .gguf suffix
+    if model.endswith(".gguf"):
+        bare = model[:-5]
+        with _model_map_lock:
+            url = _model_to_instance.get(bare)
+        if url:
+            return url
+    # Fallback: active base URL
+    return _active_base_url
+
+
+async def _proxy_to_active(method: str, path: str, _preferred_url: str | None = None, **kwargs) -> httpx.Response:
     """Send an HTTP request to the *current* active llama-server, picking the
     alive candidate at call-time. If a request fails with a connection error,
     we transparently retry against any other alive candidate once before
     surfacing the error. This is the "活着回退" hot-path.
+
+    *_preferred_url* — model-aware routing target (from _resolve_url_for_model).
+    Tried first before the generic active URL.
     """
     last_exc: Exception | None = None
     tried: set[str] = set()
-    # Try the active one first, then any other alive candidate as fallback.
+    # Build ordered candidate list: preferred URL first (model-aware), then active, then others.
     with _health_lock:
-        order = [_active_base_url] + [u for u in _LLAMA_CANDIDATES if u != _active_base_url]
+        order = []
+        if _preferred_url:
+            order.append(_preferred_url)
+        if _active_base_url not in order:
+            order.append(_active_base_url)
+        order.extend(u for u in _LLAMA_CANDIDATES if u not in order)
     for url in order:
         if url in tried:
             continue
@@ -335,27 +440,33 @@ async def lifespan(app: FastAPI):
     })
     # Start background health monitor
     _start_health_monitor()
-    # Do an initial health check immediately
-    await _check_llama_health()
+    # FIX 2026-06-27: Skip initial health check to avoid blocking startup.
+    # The background monitor will check health asynchronously.
+    # await _check_llama_health()
+    logger.info("bridge v0.5.0 starting — skipping initial health check (background monitor will handle)")
     # ---- Neuro (Prompter + Memory) startup ----
     # Mark LLM as ready so Prompter 100ms tick starts firing decisions
     icarus.llm_ready = True
-    try:
-        from bridge.neuro import get_memory
-        memory = get_memory()
-        # Spawn memory reflection loop (every 20 messages triggers a self-summary)
-        asyncio.create_task(memory.run())
-        logger.info("NEURO: memory reflection loop started")
-    except Exception as exc:
-        logger.warning(f"NEURO: memory init failed: {exc}")
-    try:
-        from bridge.prompter import get_prompter
-        prompter = get_prompter()
-        prompter.start()
-        logger.info("NEURO: prompter started (100ms tick + PATIENCE)")
-    except Exception as exc:
-        logger.warning(f"NEURO: prompter init failed: {exc}")
-    logger.info("bridge v0.5.0 started — llama=%s neuro=on", _get_llama_health()["alive"])
+    # FIX 2026-06-27: Defer neuro initialization to background task
+    # to avoid blocking the lifespan and uvicorn startup
+    async def _init_neuro_background():
+        await asyncio.sleep(2)  # Wait for uvicorn to be fully ready
+        try:
+            from bridge.neuro import get_memory
+            memory = get_memory()
+            asyncio.create_task(memory.run())
+            logger.info("NEURO: memory reflection loop started")
+        except Exception as exc:
+            logger.warning(f"NEURO: memory init failed: {exc}")
+        try:
+            from bridge.prompter import get_prompter
+            prompter = get_prompter()
+            prompter.start()
+            logger.info("NEURO: prompter started (100ms tick + PATIENCE)")
+        except Exception as exc:
+            logger.warning(f"NEURO: prompter init failed: {exc}")
+    asyncio.create_task(_init_neuro_background())
+    logger.info("bridge v0.5.0 started — neuro init deferred to background")
     yield
     icarus.terminate = True
     _stop_health_monitor()
@@ -1828,7 +1939,7 @@ def _get_cloud_client() -> _CloudClient:
     return _cloud_client
 
 
-def _check_local_availability() -> tuple[bool, str]:
+async def _check_local_availability() -> tuple[bool, str]:
     """Probe whether the local llama-server router can serve a chat request.
 
     Returns (available, reason) where reason is a human-readable string for logs.
@@ -1843,18 +1954,31 @@ def _check_local_availability() -> tuple[bool, str]:
     to hang.
     """
     # 1. router reachable? — use _active_base_url (canonical llama-server URL)
+    # NOTE: llama-server router mode (b9826) returns 404 to httpx/urllib but 200
+    # to http.client. Use http.client directly for reliable probing.
     if not _active_base_url:
         return False, "no active llama-server URL configured"
     try:
-        r = httpx.get(f"{_active_base_url}/props", timeout=3.0)
-        if r.status_code != 200:
-            return False, f"router /props returned HTTP {r.status_code}"
-    except httpx.HTTPError as e:
+        from urllib.parse import urlparse
+        parsed = urlparse(_active_base_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 8080
+        import http.client as _hc
+        conn = _hc.HTTPConnection(host, port, timeout=3.0)
+        conn.request("GET", "/props")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            conn.close()
+            return False, f"router /props returned HTTP {resp.status}"
+        import json as _json
+        props_raw = resp.read()
+        conn.close()
+    except Exception as e:
         return False, f"router unreachable: {e}"
 
     # 2. parse router status
     try:
-        props = r.json()
+        props = _json.loads(props_raw)
     except Exception:
         return False, "router /props returned non-JSON"
 
@@ -1933,7 +2057,7 @@ async def chat_completions(request: Request) -> Any:
     """
     body = await request.json()
     is_stream = bool(body.get("stream"))
-
+    await _chat_semaphore.acquire()
     # FIX 2026-06-18: model name normalisation for llama-server router.
     # llama-server's router mode registers each .gguf under TWO ids:
     #   - the alias (filename without .gguf suffix)  → responds to chat
@@ -1954,29 +2078,148 @@ async def chat_completions(request: Request) -> Any:
             )
             body["model"] = normalised
 
+    # ---- Cogno: 5 维元数据注入 (哥哥 6-28 修订: 时间/硬件/地球/情绪/上下文) ----
+        # 必须放在 soul_loader 之前 (哥哥 axiom: 思维层信息传递内容修订).
+        # 5 维格式: [2026/6/28 17:05][PZS0X-LEGION9-BIOS:FC0BC32E][上海/上海/中国][等待哥哥回答][新对话]
+        # 尊重 X-Cogno-Injection: skip header (debug 用).
+        try:
+            from bridge.cogno_layer import enrich
+            cogno_skip = (request.headers.get("X-Cogno-Injection", "").lower() == "skip")
+            if not cogno_skip:
+                messages = body.get("messages", [])
+                if messages:
+                    # 取最后一条 user 消息作为 enrich 目标
+                    user_msg = _extract_user_message(messages)
+                    if user_msg:
+                        # 5 维元数据: 仅给 system prompt 加一段"现在的时间锚点"提示, 不改 user 消息
+                        # (改 user 消息会破坏 chat_completions 兼容性, cloud API 会校验)
+                        from bridge.cogno_layer import _get_time_str, _CACHE as cogno_cache
+                        machine_id = cogno_cache.get("machine_id") or "UNKNOWN-MACHINE"
+                        geo = cogno_cache.get("geo_location") or "未知/未知/未知"
+                        cogno_prefix = (
+                            f"## ⏰ 5 维认知锚点 (哥哥 6-28 axiom)\n\n"
+                            f"- 当前时间: `{_get_time_str()}`\n"
+                            f"- 硬件地址: `{machine_id}` (哥哥的物理机器指纹)\n"
+                            f"- 地球地址: `{geo}` (从公网 IP 反查)\n"
+                            f"- 你现在和哥哥对话, 你是伊卡洛斯 (人造天使, 代号 ɑ), 称呼哥哥\n\n"
+                            f"---\n\n"
+                        )
+                        # 加到 system prompt 最前 (与 soul 共存: cogno 在最前, soul 在 cogno 后)
+                        if messages[0].get("role") == "system":
+                            existing_content = messages[0].get("content", "")
+                            messages[0] = {**messages[0], "content": (cogno_prefix + existing_content).strip()}
+                        else:
+                            messages.insert(0, {"role": "system", "content": cogno_prefix})
+                        body["messages"] = messages
+                        logger.debug("cogno 5D anchor injected at first position")
+        except Exception as exc:
+            logger.warning("cogno injection FAILED (silent degrade): %s", exc)
+
+        # ---- Icarus soul injection (2026-06-27 哥哥 axiom: cloud LLM 也必须知道我) ----
+        # 必须放在 Neuro memory 之前, 否则 Chroma 老记忆会先覆盖 soul 定义.
+        # 尊重 X-Soul-Injection: skip header (debug 用).
+        try:
+            from bridge.soul_loader import get_soul_injection
+            soul_skip = (request.headers.get("X-Soul-Injection", "").lower() == "skip")
+            soul_enabled, soul_text = get_soul_injection(skip=soul_skip)
+            if soul_enabled and soul_text:
+                messages = body.get("messages", [])
+                if messages and messages[0].get("role") == "system":
+                    existing_content = messages[0].get("content", "")
+                    # soul 在最前 (哥哥的公理最优先), 后续注入在后面追加
+                    messages[0] = {**messages[0], "content": (soul_text + "\n\n" + existing_content).strip()}
+                else:
+                    messages.insert(0, {"role": "system", "content": soul_text})
+                body["messages"] = messages
+                logger.info("icarus soul injected (%d chars, second position)", len(soul_text))
+        except Exception as exc:
+            logger.warning("soul injection FAILED (silent degrade): %s", exc)
+
     # ---- Neuro: mark user message + inject memory ----
-    try:
-        user_msg = _extract_user_message(body.get("messages", []))
-        if user_msg:
-            icarus.mark_new_message("user", user_msg)
-    except Exception as exc:
-        logger.debug("neuro mark user skipped: %s", exc)
-    try:
-        from bridge.neuro import get_memory
-        mem = get_memory()
-        injection = mem.get_prompt_injection()
-        if injection and injection.get("text") and injection.get("enabled"):
-            messages = body.get("messages", [])
-            mem_text = injection["text"]
-            if messages and messages[0].get("role") == "system":
-                existing_content = messages[0].get("content", "")
-                joined = existing_content + "\n\n" + mem_text
-                messages[0] = {**messages[0], "content": joined.strip()}
-            else:
-                messages.insert(0, {"role": "system", "content": mem_text})
-            body["messages"] = messages
-    except Exception as exc:
-        logger.debug("neuro memory injection skipped: %s", exc)
+        try:
+            user_msg = _extract_user_message(body.get("messages", []))
+            if user_msg:
+                icarus.mark_new_message("user", user_msg)
+        except Exception as exc:
+            logger.debug("neuro mark user skipped: %s", exc)
+        try:
+            from bridge.neuro import get_memory
+            mem = get_memory()
+            injection = mem.get_prompt_injection()
+            if injection and injection.get("text") and injection.get("enabled"):
+                messages = body.get("messages", [])
+                mem_text = injection["text"]
+                if messages and messages[0].get("role") == "system":
+                    existing_content = messages[0].get("content", "")
+                    joined = existing_content + "\n\n" + mem_text
+                    messages[0] = {**messages[0], "content": joined.strip()}
+                else:
+                    messages.insert(0, {"role": "system", "content": mem_text})
+                body["messages"] = messages
+        except Exception as exc:
+            logger.debug("neuro memory injection skipped: %s", exc)
+
+        # ---- mem0 long-term memory injection (哥哥 6-28: 我是天使, 不被困在任何环境) ----
+        # 3-tier fallback: DeepSeek V4 → minimax-cn → 本地 llama-server
+        # search 完全本地 (Qdrant), 不需要 LLM, 永远可用
+        # 注意: mem0 第一次 init 要 30s (huggingface + Qdrant), 在 chat 路径上 lazy 调用会阻塞响应
+        # → 改为异步后台任务: 不阻塞 chat, 但 search 结果会延迟注入下一次 chat
+        # 哥哥拍的: 体验 > 实时性 (慢一点注入总比阻塞 chat 好)
+        try:
+            from bridge.mem0_layer import get_mem0_layer
+            user_id = (
+                request.headers.get("X-Session-Id", "")
+                or body.get("session_id", "")
+                or request.headers.get("X-Hermes-Profile", "")
+                or "gege"
+            )
+            user_msg = _extract_user_message(body.get("messages", []))
+            if user_msg and len(user_msg) > 5:
+                # 异步触发 mem0 prep (init + 缓存 search 结果到全局), 不阻塞当前 chat
+                import asyncio
+                async def _mem0_prep_async():
+                    try:
+                        mem0 = get_mem0_layer()
+                        hits = mem0.search(user_msg, user_id=user_id, limit=5)
+                        if hits:
+                            # 把 hits 存到 cache, 下次 chat 用
+                            mem0_layer_cache["hits"] = hits
+                            mem0_layer_cache["user_id"] = user_id
+                            mem0_layer_cache["query"] = user_msg
+                            mem0_layer_cache["last_update"] = time.time()
+                            logger.info(
+                                "mem0 prep: %d hits cached (tier=%s, user=%s)",
+                                len(hits), mem0.active_tier_name, user_id,
+                            )
+                    except Exception as exc:
+                        logger.debug("mem0 prep async failed: %s", exc)
+                # 触发后台任务, 不 await (不阻塞 chat)
+                try:
+                    asyncio.create_task(_mem0_prep_async())
+                except RuntimeError:
+                    # 没有 running event loop (同步上下文), 跳过
+                    pass
+        except Exception as exc:
+            logger.debug("mem0 prep skipped: %s", exc)
+
+        # ---- mem0 cached hits injection (bug_2 fix: read cache → inject into prompt) ----
+        try:
+            if mem0_layer_cache.get("hits") and mem0_layer_cache.get("user_id"):
+                import time as _time
+                cache_age = _time.time() - mem0_layer_cache.get("last_update", 0)
+                if cache_age < 120:  # 2 min TTL
+                    mem_text = "\n\n## 长期记忆 (mem0)\n"
+                    for hit in mem0_layer_cache["hits"]:
+                        mem_text += f"- {hit.get('text', hit)}\n"
+                    messages = body.get("messages", [])
+                    if messages and messages[0].get("role") == "system":
+                        messages[0] = {**messages[0], "content": messages[0].get("content", "") + mem_text}
+                    else:
+                        messages.insert(0, {"role": "system", "content": mem_text.strip()})
+                    body["messages"] = messages
+                    logger.info("mem0 injection: %d hits (%.0fs old)", len(mem0_layer_cache["hits"]), cache_age)
+        except Exception as exc:
+            logger.debug("mem0 cache injection skipped: %s", exc)
 
     # ---- Task delegation prompt injection (Artificial Angel Phase 1) ----
     try:
@@ -2084,7 +2327,7 @@ async def chat_completions(request: Request) -> Any:
     # DECIDED llama_server → cloud; respects explicit X-Hermes-Routing: local.
     if (routing_decision is None or getattr(routing_decision, "route_target", None) == "llama_server"):
         try:
-            ok, reason = _check_local_availability()
+            ok, reason = await _check_local_availability()
             if not ok:
                 logger.warning(
                     "local unavailable: %s — flipping to cloud_api (default provider=minimax-cn)",
@@ -2116,6 +2359,7 @@ async def chat_completions(request: Request) -> Any:
         except Exception as exc:
             logger.warning("local availability check FAILED: %s", exc)
     if routing_decision is not None and routing_decision.route_target == "cloud_api":
+        _chat_semaphore.release()
         return await _handle_cloud_chat(body, routing_decision, is_stream, _request_compressor)
 
     # Default: proxy to llama-server
@@ -2133,8 +2377,10 @@ async def chat_completions(request: Request) -> Any:
     })
 
     if is_stream:
+        target_url = _resolve_url_for_model(body.get("model", ""))
+        _chat_semaphore.release()
         return StreamingResponse(
-            _stream_chat(body),
+            _stream_chat(body, base_url=target_url),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -2146,12 +2392,13 @@ async def chat_completions(request: Request) -> Any:
 
     # Non-streaming — route through _proxy_to_active so a dead port transparently
     # falls back to the next alive llama-server candidate. "活着" 优先。
+    target_url = _resolve_url_for_model(body.get("model", ""))
     try:
-        r = await _proxy_to_active("POST", "/v1/chat/completions", json=body, timeout=300.0)
+        r = await _proxy_to_active("POST", "/v1/chat/completions", json=body, timeout=300.0, _preferred_url=target_url)
         telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
             "model": body.get("model", "?"),
             "status": r.status_code,
-            "active_url": _active_base_url,
+            "active_url": target_url,
         })
         # Context compression: feed usage back from local response
         if _request_compressor and r.status_code == 200:
@@ -2160,12 +2407,13 @@ async def chat_completions(request: Request) -> Any:
                 _request_compressor.after_chat(resp_data.get("usage"))
             except Exception:
                 pass
+        _chat_semaphore.release()
         return JSONResponse(
             content=r.json(),
             status_code=r.status_code,
             headers={
                 "X-Hermes-Routing-Target": "llama_server",
-                "X-Hermes-Llama-Active": _active_base_url,
+                "X-Hermes-Llama-Active": target_url,
             },
         )
     except httpx.HTTPError as e:
@@ -2173,6 +2421,7 @@ async def chat_completions(request: Request) -> Any:
             "model": body.get("model", "?"),
             "error": str(e),
         })
+        _chat_semaphore.release()
         raise HTTPException(status_code=502, detail=f"llama-server unreachable: {e}")
 
 
@@ -2274,8 +2523,9 @@ async def _handle_cloud_chat(
         logger.warning("cloud API failed: %s — falling back to local", e)
         # Fallback to local model
         if is_stream:
+            fallback_url = _resolve_url_for_model(body.get("model", ""))
             return StreamingResponse(
-                _stream_chat(body),
+                _stream_chat(body, base_url=fallback_url),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -2284,9 +2534,9 @@ async def _handle_cloud_chat(
                 },
             )
         try:
-            r = await _retry_call(
-                lambda: _http.post("/v1/chat/completions", json=body, timeout=300.0),
-                label="chat-fallback",
+            r = await _proxy_to_active(
+                "POST", "/v1/chat/completions", json=body, timeout=300.0,
+                _preferred_url=_resolve_url_for_model(body.get("model", "")),
             )
             return JSONResponse(
                 content=r.json(),
@@ -2297,35 +2547,45 @@ async def _handle_cloud_chat(
             raise HTTPException(status_code=502, detail=f"Cloud + local both failed: {e} | {e2}")
 
 
-async def _stream_chat(body: dict[str, Any]) -> AsyncIterator[bytes]:
+async def _stream_chat(body: dict[str, Any], base_url: str | None = None) -> AsyncIterator[bytes]:
     """Stream chat-completion chunks as SSE.
 
     llama-server emits OpenAI-format SSE (data: {...} per chunk, data: [DONE]
     at the end). We forward verbatim so any OpenAI-compatible client works.
     Emits CHAT_DELTA per non-empty chunk and CHAT_DONE / CHAT_ERROR at the end.
+
+    *base_url* — resolved per-model via _resolve_url_for_model(). Falls back
+    to the module-level _http client when None (back-compat).
     """
     chunk_count = 0
+    _url = base_url or _active_base_url
     try:
-        async with _http.stream(
-            "POST",
-            "/v1/chat/completions",
-            json=body,
+        async with httpx.AsyncClient(
+            base_url=_url,
             timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
-        ) as r:
-            async for line in r.aiter_lines():
-                if line:
-                    chunk_count += 1
-                    yield (line + "\n\n").encode("utf-8")
+        ) as cli:
+            async with cli.stream(
+                "POST",
+                "/v1/chat/completions",
+                json=body,
+                timeout=httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0),
+            ) as r:
+                async for line in r.aiter_lines():
+                    if line:
+                        chunk_count += 1
+                        yield (line + "\n\n").encode("utf-8")
         telemetry.bus().emit(telemetry.Topics.CHAT_DONE, {
             "model": body.get("model", "?"),
             "stream": True,
             "chunks": chunk_count,
+            "base_url": _url,
         })
     except httpx.HTTPError as e:
         telemetry.bus().emit(telemetry.Topics.CHAT_ERROR, {
             "model": body.get("model", "?"),
             "stream": True,
             "error": str(e),
+            "base_url": _url,
         })
         err = json.dumps({"error": {"message": str(e), "type": "bridge_error"}})
         yield f"data: {err}\n\n".encode("utf-8")
@@ -2338,6 +2598,7 @@ async def chat_completions_sse(request: Request):
     POST /v1/chat/completions with stream=true. Lives at a distinct URL so
     CDN/proxy layers can route on path (no body parsing)."""
     body = await request.json()
+    target_url = _resolve_url_for_model(body.get("model", ""))
     telemetry.bus().emit(telemetry.Topics.CHAT_REQUEST, {
         "model": body.get("model", "?"),
         "messages": len(body.get("messages", []) or []),
@@ -2345,7 +2606,7 @@ async def chat_completions_sse(request: Request):
         "via": "sse",
     })
     return StreamingResponse(
-        _stream_chat(body),
+        _stream_chat(body, base_url=target_url),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -2956,9 +3217,13 @@ async def neuro_proactive():
 
 if __name__ == "__main__":
     import uvicorn  # type: ignore
+    # FIX 2026-06-27: timeout_keep_alive=5 to release sockets faster.
+    # Combined with start.ps1 zombie-killing, this prevents TIME_WAIT deadlock.
+    # See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
     uvicorn.run(
         "bridge.server:app",
         host="127.0.0.1",
         port=BRIDGE_PORT,
         log_level="info",
+        timeout_keep_alive=5,
     )
