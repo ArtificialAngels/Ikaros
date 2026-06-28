@@ -11,6 +11,11 @@
 //!   :7860 — this bridge (replaces Python uvicorn bridge)
 //!   :8080 — llama-server (upstream)
 
+pub mod intent_router;
+pub mod task_delegation;
+pub mod signals;
+pub mod health;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
