@@ -1256,6 +1256,335 @@ async fn health_snapshot(State(state): State<Arc<AppState>>) -> Json<serde_json:
 }
 
 // ---------------------------------------------------------------------------
+// Model management endpoints (proxy to llama-server)
+// ---------------------------------------------------------------------------
+
+/// Normalize model id: strip .gguf suffix if present
+fn normalize_model_id(model: &str) -> &str {
+    model.strip_suffix(".gguf").unwrap_or(model)
+}
+
+/// POST /v1/models/load — proxy to llama-server /models/load with fallback
+async fn load_model(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let model = match body.get("model").and_then(|v| v.as_str()) {
+        Some(m) if !m.is_empty() => m,
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "`model` field is required",
+            }))).into_response();
+        }
+    };
+
+    // Build candidate list: original + fallback (alias <-> .gguf)
+    let base = normalize_model_id(model);
+    let mut candidates = vec![model.to_string()];
+    if base != model {
+        candidates.push(base.to_string());
+    } else {
+        candidates.push(format!("{}.gguf", model));
+    }
+
+    // Find alive worker
+    let worker_idx = match state.worker_pool.get_alive_worker().await {
+        Some(idx) => idx,
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+                "error": "no alive llama-server worker",
+            }))).into_response();
+        }
+    };
+    let worker_url = { state.worker_pool.workers.read().await[worker_idx].url.clone() };
+
+    // Try each candidate
+    for (i, candidate) in candidates.iter().enumerate() {
+        let url = format!("{}/models/load", worker_url);
+        match state.http_client.post(&url)
+            .json(&serde_json::json!({"model": candidate}))
+            .timeout(Duration::from_secs(30))
+            .send().await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.as_u16() == 404 && i + 1 < candidates.len() {
+                    warn!("model-load: '{}' returned 404, trying fallback '{}'", candidate, candidates[i + 1]);
+                    continue;
+                }
+                let body_text = resp.text().await.unwrap_or_default();
+                let json_body: serde_json::Value = serde_json::from_str(&body_text).unwrap_or(serde_json::json!({"raw": body_text}));
+
+                // Emit signal
+                state.signal_bus.emit("model.loaded", serde_json::json!({
+                    "model": candidate, "status": status.as_u16(), "fallback_index": i,
+                })).await;
+
+                // Refresh worker pool after model load
+                state.worker_pool.refresh(&state.http_client).await;
+
+                return (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(json_body)).into_response();
+            }
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({
+                    "error": format!("llama-server unreachable: {}", e),
+                }))).into_response();
+            }
+        }
+    }
+
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        "error": format!("model '{}' not found (tried: {})", model, candidates.join(", ")),
+    }))).into_response()
+}
+
+/// POST /v1/models/swap — alias of /v1/models/load
+async fn swap_model(
+    state: State<Arc<AppState>>,
+    body: Json<serde_json::Value>,
+) -> Response {
+    load_model(state, body).await
+}
+
+/// GET /v1/models/status — report loaded models + VRAM
+async fn models_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let worker_idx = state.worker_pool.get_alive_worker().await;
+    if worker_idx.is_none() {
+        return Json(serde_json::json!({
+            "loaded": [], "available": [], "vram": null, "source": "no-worker",
+        }));
+    }
+    let worker_url = { state.worker_pool.workers.read().await[worker_idx.unwrap()].url.clone() };
+
+    let mut loaded = Vec::new();
+    let mut available = Vec::new();
+    let mut vram: Option<serde_json::Value> = None;
+    let mut source = "unknown".to_string();
+
+    // Probe /props
+    if let Ok(resp) = state.http_client.get(format!("{}/props", worker_url))
+        .timeout(Duration::from_secs(5)).send().await {
+        if resp.status().is_success() {
+            if let Ok(props) = resp.json::<serde_json::Value>().await {
+                let resident = props.get("model_alias")
+                    .or_else(|| props.get("model_path"))
+                    .or_else(|| props.get("model"))
+                    .and_then(|v| v.as_str());
+                if let Some(id) = resident {
+                    loaded.push(serde_json::json!({"id": id, "source": "props.model_alias"}));
+                }
+                vram = props.get("vram_total_size").cloned()
+                    .or_else(|| props.get("vram_used_size").cloned());
+                source = "llama-server-props".to_string();
+            }
+        }
+    }
+
+    // Probe /v1/models
+    if let Ok(resp) = state.http_client.get(format!("{}/v1/models", worker_url))
+        .timeout(Duration::from_secs(5)).send().await {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                    available = data.iter().map(|m| serde_json::json!({
+                        "id": m.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "owned_by": m.get("owned_by").and_then(|v| v.as_str()).unwrap_or("llama-cpp"),
+                    })).collect();
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "loaded": loaded,
+        "available": available,
+        "vram": vram,
+        "source": source,
+    }))
+}
+
+/// POST /v1/models/evict — evict model from llama-server cache
+async fn evict_model(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let worker_idx = match state.worker_pool.get_alive_worker().await {
+        Some(idx) => idx,
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+                "error": "no alive llama-server worker",
+            }))).into_response();
+        }
+    };
+    let worker_url = { state.worker_pool.workers.read().await[worker_idx].url.clone() };
+
+    // Get model from body or detect resident from /props
+    let model = body.get("model").and_then(|v| v.as_str()).map(String::from);
+    let model = if let Some(m) = model {
+        m
+    } else {
+        // Detect resident model from /props
+        match state.http_client.get(format!("{}/props", worker_url))
+            .timeout(Duration::from_secs(5)).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(props) = resp.json::<serde_json::Value>().await {
+                    let resident = props.get("model_alias")
+                        .or_else(|| props.get("model_path"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if resident.is_empty() || resident == "llama-server" || resident == "none" {
+                        return Json(serde_json::json!({
+                            "status": "noop",
+                            "reason": "no resident model — nothing to evict",
+                        })).into_response();
+                    }
+                    resident.to_string()
+                } else {
+                    return Json(serde_json::json!({"status": "noop", "reason": "cannot parse /props"})).into_response();
+                }
+            }
+            _ => {
+                return Json(serde_json::json!({"status": "noop", "reason": "llama-server unreachable"})).into_response();
+            }
+        }
+    };
+
+    // Reload-resident trick: POST /models/load forces slot re-evaluation
+    let url = format!("{}/models/load", worker_url);
+    match state.http_client.post(&url)
+        .json(&serde_json::json!({"model": model}))
+        .timeout(Duration::from_secs(30))
+        .send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            state.signal_bus.emit("model.evicted", serde_json::json!({
+                "model": model, "method": "reload-resident",
+            })).await;
+            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+             Json(serde_json::json!({"status": "ok", "triggered_reload": model, "upstream": body_text}))
+            ).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({
+            "error": format!("llama-server unreachable: {}", e),
+        }))).into_response()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// API endpoints (chat sessions + agent run)
+// ---------------------------------------------------------------------------
+
+/// GET /api/chat/sessions — list sessions from state.db (SQLite)
+async fn list_sessions(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit: usize = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(50).max(1).min(200);
+    let root = project_root();
+    let db_path = root.join("data").join("hermes-agent").join("state.db");
+
+    if !db_path.is_file() {
+        return Json(serde_json::json!({
+            "object": "list", "data": [], "count": 0,
+            "warning": format!("state.db not found at {}", db_path.display()),
+        }));
+    }
+
+    // Use portable-python to query SQLite (avoid adding rusqlite dependency)
+    let python = root.join("portable-python").join("python.exe");
+    let py = if python.is_file() { python.to_string_lossy().to_string() } else { "python".to_string() };
+
+    let script = format!(
+        "import sqlite3,json; c=sqlite3.connect(r'{}'); c.row_factory=sqlite3.Row; \
+         rows=[dict(r) for r in c.execute('SELECT id,title,started_at,model,source FROM sessions ORDER BY started_at DESC LIMIT {}').fetchall()]; \
+         print(json.dumps(rows))",
+        db_path.to_string_lossy().replace('\\', "\\\\"),
+        limit,
+    );
+
+    match tokio::process::Command::new(&py)
+        .arg("-c").arg(&script)
+        .output().await {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            match serde_json::from_str::<Vec<serde_json::Value>>(&stdout) {
+                Ok(sessions) => Json(serde_json::json!({
+                    "object": "list", "data": sessions, "count": sessions.len(),
+                })),
+                Err(_) => Json(serde_json::json!({"object": "list", "data": [], "count": 0, "warning": "parse error"})),
+            }
+        }
+        _ => Json(serde_json::json!({"object": "list", "data": [], "count": 0, "warning": "python query failed"})),
+    }
+}
+
+/// POST /api/agent/run — run AIAgent for a single message
+async fn agent_run(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let message = match body.get("message").and_then(|v| v.as_str()) {
+        Some(m) if !m.is_empty() => m,
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "`message` field is required",
+            }))).into_response();
+        }
+    };
+    if message.len() > 32768 {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "`message` exceeds 32K char limit",
+        }))).into_response();
+    }
+
+    let root = project_root();
+    let python = root.join("portable-python").join("python.exe");
+    let py = if python.is_file() { python.to_string_lossy().to_string() } else { "python".to_string() };
+    let _agent_script = root.join("hermes-agent").join("run_agent.py");
+
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let max_iter = body.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(1);
+
+    // Shell out to Python AIAgent
+    let script = format!(
+        "import sys; sys.path.insert(0, r'{}'); \
+         from run_agent import AIAgent; \
+         a = AIAgent(model=r'{}', session_id=r'{}' or None, quiet_mode=True, \
+                     enabled_toolsets=[], max_iterations={}); \
+         print(a.chat(r'''{}'''))",
+        root.join("hermes-agent").to_string_lossy().replace('\\', "\\\\"),
+        model, session_id, max_iter,
+        message.replace('\'', "\\'").replace('\n', "\\n"),
+    );
+
+    state.signal_bus.emit("agent.run", serde_json::json!({"model": model})).await;
+
+    match tokio::process::Command::new(&py)
+        .arg("-c").arg(&script)
+        .current_dir(&root)
+        .output().await {
+        Ok(output) if output.status.success() => {
+            let response = String::from_utf8_lossy(&output.stdout).to_string();
+            Json(serde_json::json!({
+                "response": response,
+                "session_id": session_id,
+                "model": model,
+            })).into_response()
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": format!("AIAgent failed: {}", stderr.lines().last().unwrap_or("unknown")),
+            }))).into_response()
+        }
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+            "error": format!("cannot spawn python: {}", e),
+        }))).into_response()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Catch-all proxy for other /v1/* paths
 // ---------------------------------------------------------------------------
 
@@ -1360,6 +1689,10 @@ async fn main() {
         // OpenAI-compatible endpoints
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/models", get(list_models))
+        .route("/v1/models/load", post(load_model))
+        .route("/v1/models/swap", post(swap_model))
+        .route("/v1/models/status", get(models_status))
+        .route("/v1/models/evict", post(evict_model))
         // Voice WebSocket
         .route("/v1/voice/ws", get(voice_ws))
         // Icarus endpoints
@@ -1375,6 +1708,9 @@ async fn main() {
         .route("/v1/signals/emit", post(signals_emit))
         .route("/v1/modules", get(list_modules))
         .route("/v1/inspect/{name}", get(inspect_module))
+        // API endpoints
+        .route("/api/chat/sessions", get(list_sessions))
+        .route("/api/agent/run", post(agent_run))
         // Catch-all for other /v1/* paths
         .fallback(proxy_v1)
         .with_state(state);

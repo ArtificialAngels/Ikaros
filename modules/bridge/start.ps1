@@ -60,6 +60,7 @@ if ($useRust) {
 
     # Env vars
     $psi.EnvironmentVariables['RUST_LOG'] = 'hermes_bridge_rs=info'
+    $psi.EnvironmentVariables['HERMES_ROOT'] = $HERMES_ROOT
     $hermesLlamaUrl = [Environment]::GetEnvironmentVariable('HERMES_LLAMA_URL')
     if ($hermesLlamaUrl) {
         $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = $hermesLlamaUrl
