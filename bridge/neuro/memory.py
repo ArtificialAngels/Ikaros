@@ -53,7 +53,7 @@ class Memory:
     """
     def __init__(self, signals, enabled: bool = True,
                  llm_endpoint: str = None,
-                 llm_model: str = "Qwen3.6-35B-A3B-UD-Q6_K"):
+                 llm_model: str = "Qwen3.6-35B-A3B-UD-IQ2_M"):
         from chromadb.config import Settings
         import chromadb
 

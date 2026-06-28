@@ -20,24 +20,35 @@ try {
 Write-Host "[llm-engine] recommended CUDA: $CudaVer"
 
 # ---- Auto-pick the best llama-server binary ----
+# 2026-06-27: b9826 (9bebfcb4b) 已下载, CPU + CUDA 双 backend 完整.
+# runtime/llama-server.exe 现在是 b9826 CUDA 版 (完整 backend + GPU 加速).
+# runtime/cuda/12.4/ 下的旧 b9538 已被 b9826 DLLs 覆盖.
+# 优先用 runtime/llama-server.exe (单目录, worker CWD 直接找到 DLL).
 $Bin = $null
-if ($CudaVer -ne 'cpu') {
-    # Multi-version: runtime/cuda/<ver>/llama-server-cuda-<ver>.exe
+
+# 1. runtime/llama-server.exe (b9826 CUDA, 同目录有所有 DLL)
+$rootCandidate = Join-Path $LLAMACPP_BIN 'llama-server.exe'
+if (Test-Path $rootCandidate) { $Bin = $rootCandidate }
+
+# 2. b9826 CUDA sub-directory (fallback 如果将来想独立部署)
+if (-not $Bin -and $CudaVer -ne 'cpu') {
     $candidates = @(
-        (Join-Path $CudaBase "$CudaVer\llama-server-cuda-$CudaVer.exe"),
-        (Join-Path $CudaBase "$CudaVer\llama-server.exe"),
-        (Join-Path $LLAMACPP_BIN "llama-server-cuda-$CudaVer.exe")
+        (Join-Path $CudaBase "$CudaVer\b9826\llama-server.exe"),
+        (Join-Path $CudaBase "$CudaVer\llama-server-cuda-$CudaVer.exe")
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { $Bin = $c; break }
     }
 }
+
+# 3. b9826 CPU build (无条件可用)
 if (-not $Bin) {
-    foreach ($name in @('llama-server-vulkan.exe', 'llama-server.exe')) {
+    foreach ($name in @('llama-server.exe')) {
         $candidate = Join-Path $LLAMACPP_BIN $name
         if (Test-Path $candidate) { $Bin = $candidate; break }
     }
 }
+
 if (-not $Bin) {
     Write-Host "[ERROR] No llama-server binary found" -ForegroundColor Red
     exit 1
@@ -66,19 +77,94 @@ if ($ggufFiles.Count -eq 0) {
     exit 1
 }
 
-# ---- Compute --models-max based on free VRAM ----
-$modelsMax = 1
+# ---- Read preferred model from last launch ----
+$lastLaunchPath = Join-Path $LogDir 'llm-engine-last-launch.json'
+$preferredModel = $null
+if (Test-Path $lastLaunchPath) {
+    try {
+        $lastLaunch = Get-Content $lastLaunchPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($lastLaunch.preferred_model) { $preferredModel = $lastLaunch.preferred_model }
+    } catch {}
+}
+
+# ---- Read ctx-size per model from router-preset.ini ----
+$presetCtxMap = @{}
+if (Test-Path $PresetPath) {
+    try {
+        $iniLines = Get-Content $PresetPath -Encoding UTF8
+        $curSection = $null
+        foreach ($line in $iniLines) {
+            $trimmed = $line.Trim()
+            if ($trimmed -match '^\[(.+?)\]$') { $curSection = $Matches[1]; continue }
+            if ($trimmed -match '^\s*ctx-size\s*=\s*(\d+)') {
+                if ($curSection) { $presetCtxMap[$curSection] = [int]$Matches[1] }
+            }
+        }
+    } catch {}
+}
+
+# ---- Compute --models-max: continuous VRAM budget (no tiered steps) ----
+# Reserve 1GB for OS/compositor via --fit-target. Use total VRAM (not free)
+# because other GPU consumers may release memory when we load models.
+$modelsMax = 0
+$usableVRAM_MB = 0
+$vramTotalMB = 0
 $vramFreeMB = 0
+$reserveMB = 1024
 try {
-    $smi = (& nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null)
-    if ($smi) {
-        $vramFreeMB = [int]($smi -split "`n" | Select-Object -First 1)
-        if ($vramFreeMB -ge 24000) { $modelsMax = 4 }
-        elseif ($vramFreeMB -ge 16000) { $modelsMax = 3 }
-        elseif ($vramFreeMB -ge 12000) { $modelsMax = 2 }
-        else { $modelsMax = 1 }
+    $smiTotal = (& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null)
+    $smiFree  = (& nvidia-smi --query-gpu=memory.free  --format=csv,noheader,nounits 2>$null)
+    if ($smiTotal) {
+        $vramTotalMB = [int]($smiTotal -split "`n" | Select-Object -First 1)
+        $vramFreeMB  = [int]($smiFree  -split "`n" | Select-Object -First 1)
+        $usableVRAM_MB = $vramTotalMB - $reserveMB
     }
 } catch {}
+
+if ($usableVRAM_MB -le 0) {
+    # Fallback: single model if nvidia-smi unavailable
+    $modelsMax = 1
+    Write-Host "[llm-engine] VRAM query failed, defaulting models-max=1"
+} else {
+    $vramUsed = 0
+    # Priority: preferred model first (it will be auto-loaded by router on first request)
+    if ($preferredModel) {
+        $preferredExists = $ggufFiles | Where-Object { $_.Name -eq $preferredModel }
+        if (-not $preferredExists) { $preferredModel = $null }
+    }
+    # Helper: estimate VRAM for one model
+    function _EstimateModelVRAM($file, $ctxMap) {
+        $sizeMB = [math]::Round($file.Length / 1MB)
+        $ctx = 32768
+        if ($ctxMap.ContainsKey($file.Name)) { $ctx = $ctxMap[$file.Name] }
+        $kvMB = [math]::Round($ctx * 0.0004)
+        return ($sizeMB + $kvMB)
+    }
+    # Try preferred model FIRST (gets the best VRAM slot)
+    if ($preferredModel) {
+        $pf = $ggufFiles | Where-Object { $_.Name -eq $preferredModel } | Select-Object -First 1
+        $modelVRAM = _EstimateModelVRAM $pf $presetCtxMap
+        if ($modelVRAM -le $usableVRAM_MB) {
+            $vramUsed += $modelVRAM
+            $modelsMax += 1
+        }
+    }
+    # Fill remaining budget with other models (sorted by size desc)
+    foreach ($g in $ggufFiles) {
+        if ($g.Name -eq $preferredModel) { continue }  # already placed
+        $modelVRAM = _EstimateModelVRAM $g $presetCtxMap
+        if ($vramUsed + $modelVRAM -le $usableVRAM_MB) {
+            $vramUsed += $modelVRAM
+            $modelsMax += 1
+        }
+    }
+    if ($modelsMax -lt 1) { $modelsMax = 1 }
+    Write-Host "[llm-engine] VRAM: total=$vramTotalMB MB, usable=$usableVRAM_MB MB (reserve $reserveMB MB)"
+    Write-Host "[llm-engine] Models-max: $modelsMax (estimated VRAM budget: $([math]::Round($vramUsed)) MB)"
+}
+if ($preferredModel) {
+    Write-Host "[llm-engine] Preferred model (from last launch): $preferredModel"
+}
 
 Write-Host "============================================================"
 Write-Host "  Hermes - llm-engine (llama-server router mode)"
@@ -88,7 +174,10 @@ Write-Host "  Models dir:  $ModelsDir"
 Write-Host "  Discovered:  $($ggufFiles.Count) GGUF model(s)"
 foreach ($g in $ggufFiles) {
     $szGB = [math]::Round($g.Length / 1GB, 2)
-    Write-Host ("    [{0,6} GB] {1}" -f $szGB, $g.Name)
+    $ctx = if ($presetCtxMap.ContainsKey($g.Name)) { $presetCtxMap[$g.Name] } else { 32768 }
+    $kvMB = [math]::Round($ctx * 0.0004)
+    $pref = if ($g.Name -eq $preferredModel) { ' ★ preferred' } else { '' }
+    Write-Host ("    [{0,6} GB] ctx={1,6} kv~{2,4}MB  {3}{4}" -f $szGB, $ctx, $kvMB, $g.Name, $pref)
 }
 # ---- Auto-generate router-preset.ini from config/models.yaml ----
 $presetGenerated = $false
@@ -140,8 +229,9 @@ if (-not (Test-Path $PresetPath) -and (Test-Path $configYamlPath)) {
 if (-not $presetGenerated) {
     Write-Host "  Preset:      $(if (Test-Path $PresetPath) { $PresetPath } else { '(none -- using global defaults)' })"
 }
-Write-Host "  Models-max:  $modelsMax (LRU eviction)"
-Write-Host "  Free VRAM:   $vramFreeMB MB"
+Write-Host "  Models-max:  $modelsMax (LRU eviction, continuous VRAM)"
+Write-Host "  VRAM:        total=$vramTotalMB usable=$usableVRAM_MB reserve=$reserveMB MB"
+Write-Host ("  Preferred:   {0}" -f $(if ($preferredModel) { $preferredModel } else { '(none)' }))
 Write-Host "  Endpoint:    http://127.0.0.1`:$Port"
 Write-Host "  Hot-switch:  portable-python\python.exe bin\hermes-models.py switch <name>"
 Write-Host "============================================================"
@@ -149,20 +239,24 @@ Write-Host ""
 
 # ---- Build launch args ----
 # Global defaults act as fallback for child processes spawned by the router.
-# Per-model presets in router-preset.ini override these for sections that
-# include ctx-size / n-gpu-layers / temp.  Alias-keyed sections (no .gguf
-# extension) on b9538+ ignore most preset keys, so the global defaults
-# below are what actually reach those child processes.  Without these
-# the child process falls back to llama-server defaults (ctx=4096,
-# ngl=0/CPU), which trips HTTP 400 on any conversation > 4096 tokens.
+# Per-model presets in router-preset.ini override ctx-size / n-gpu-layers / temp.
+# --fit on --fit-target 1024: llama-server auto-adjusts ngl and ctx per model
+# to fit in VRAM with 1GB margin. No need for global --n-gpu-layers.
 $argList = @(
     '--models-dir',   $ModelsDir
     '--models-max',   "$modelsMax"
     '--host',         '127.0.0.1'
     '--port',         "$Port"
     '--jinja'
-    '--ctx-size',     '262144'
-    '--n-gpu-layers', '16'
+    '--fit',          'on'
+    '--fit-target',   "$reserveMB"
+    '--fit-ctx',      '4096'
+    '-ctk',           'q4_0'
+    '-ctv',           'q4_0'
+    '--flash-attn',   'on'
+    '--cont-batching'
+    '--mlock'
+    '--reasoning',    'auto'
     '--temp',         '0.7'
 )
 if (Test-Path $PresetPath) {
@@ -241,16 +335,25 @@ Write-Host "  llm-engine started."
 
 # Persist launch info
 $launchInfo = @{
-    mode        = 'router'
-    binary      = $Bin
-    models_dir  = $ModelsDir
-    models_max  = $modelsMax
-    preset      = if (Test-Path $PresetPath) { $PresetPath } else { $null }
-    vram_free_mb= $vramFreeMB
-    port        = $Port
-    pid         = $llamaPid
-    cuda_version= $CudaVer
-    discovered  = @($ggufFiles | ForEach-Object { $_.Name })
+    mode            = 'router'
+    binary          = $Bin
+    models_dir      = $ModelsDir
+    models_max      = $modelsMax
+    preset          = if (Test-Path $PresetPath) { $PresetPath } else { $null }
+    vram_total_mb   = $vramTotalMB
+    vram_free_mb    = $vramFreeMB
+    vram_usable_mb  = $usableVRAM_MB
+    vram_reserve_mb = $reserveMB
+    preferred_model = $preferredModel
+    port            = $Port
+    pid             = $llamaPid
+    cuda_version    = $CudaVer
+    fit_enabled     = $true
+    kv_cache_type   = 'q4_0'
+    flash_attn      = $true
+    mlock           = $true
+    reasoning       = 'auto'
+    discovered      = @($ggufFiles | ForEach-Object { $_.Name })
 } | ConvertTo-Json -Compress
 $launchInfo | Set-Content -Path (Join-Path $LogDir 'llm-engine-last-launch.json') -Encoding UTF8
 

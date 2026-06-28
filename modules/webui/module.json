@@ -30,6 +30,7 @@
   ],
   "env": {
     "HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART": "1",
-    "CORS_ORIGINS": "*"
+    "CORS_ORIGINS": "*",
+    "HERMES_AGENT_BRIDGE_AUTO_RESTART": "0"
   }
 }

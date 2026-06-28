@@ -229,3 +229,14 @@
 - **设计原则**: 单一真相源 / 失败静默 / token 经济 / 兼容 4 层注入链
 - **意外发现**: 哥哥通过 ipapi.co 识别在 Hong Kong (VPN 出口), 比 hardcoded '上海' 准
 - **下一步**: Quest Phase 4 Rust 镜像 / Phase 5 mem0 拼接 / Phase 6 语音 enrich
+
+
+## 2026-06-28 — 仓库改名 Ikaros (哥哥拍板)
+
+- **报告**: handshake.2026-06-28.repo-rename-to-ikaros-plan.json
+- **3 决策**: display 全替 / 本地目录改名 / GitNexus 重建
+- **保留**: hermes-agent 上游包名 + data/hermes-agent state dir + hermes-agent/ 上游源码 (47 文件)
+- **改 16 文件 + git remote + 本地目录 + GitNexus index**
+- **执行 6 步**: GitHub rename → 改文件 → mv 目录 → 重建 index → 推 → 验证
+- **安全**: 写 handoff 等哥哥 1 词 ship, 不自动执行
+- **回滚**: 30 秒 git checkout + git remote set-url 还原

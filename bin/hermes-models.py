@@ -40,6 +40,17 @@ HERMES_ROOT = _ROOT
 MODELS_DIR = HERMES_ROOT / "data" / "models"
 LLAMA_BASE = "http://127.0.0.1:8080"
 
+# ---- Multi-instance support (parallel llama-server instances) ----
+# Read HERMES_LLAMA_FALLBACKS for additional instances.
+# Primary instance is always tried first; fallbacks are tried in order.
+_LLAMA_CANDIDATES: list[str] = [LLAMA_BASE]
+_fb = os.environ.get("HERMES_LLAMA_FALLBACKS", "").strip()
+if _fb:
+    for u in _fb.split(","):
+        u = u.strip().rstrip("/")
+        if u and u not in _LLAMA_CANDIDATES:
+            _LLAMA_CANDIDATES.append(u)
+
 
 # ---- back-compat aliases (used to live in this file) ----
 def list_models() -> list[dict]:
@@ -55,37 +66,57 @@ def parse_gguf_meta(path: Path) -> dict:
 
 # ---------- router API (replaces switch-model.bat) ----------
 
-def router_get(path: str, timeout: float = 5.0) -> Optional[dict]:
-    try:
-        with urllib.request.urlopen(f"{LLAMA_BASE}{path}", timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception as e:
-        print(f"[router] GET {path} -> {e}")
-        return None
+def router_get(path: str, timeout: float = 5.0, base_url: str | None = None) -> Optional[dict]:
+    """GET from a llama-server instance. Tries base_url first, then candidates."""
+    urls = [base_url] if base_url else _LLAMA_CANDIDATES
+    for url in urls:
+        if url is None:
+            continue
+        try:
+            with urllib.request.urlopen(f"{url}{path}", timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:
+            if len(urls) == 1:
+                print(f"[router] GET {url}{path} -> {e}")
+    return None
 
-def router_post(path: str, body: dict, timeout: float = 180.0) -> Optional[dict]:
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(f"{LLAMA_BASE}{path}", data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        print(f"[router] POST {path} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')}")
-        return None
-    except Exception as e:
-        print(f"[router] POST {path} -> {e}")
-        return None
+def router_post(path: str, body: dict, timeout: float = 180.0, base_url: str | None = None) -> Optional[dict]:
+    """POST to a llama-server instance. Tries base_url first, then candidates."""
+    urls = [base_url] if base_url else _LLAMA_CANDIDATES
+    last_err = None
+    for url in urls:
+        if url is None:
+            continue
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(f"{url}{path}", data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            last_err = f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')}"
+            print(f"[router] POST {url}{path} -> {last_err}")
+        except Exception as e:
+            last_err = str(e)
+    if last_err and len(urls) > 1:
+        print(f"[router] all {len(urls)} candidates failed, last error: {last_err}")
+    return None
 
 
 # ---------- model listing ----------
 
 def print_models(models: list[dict], current: Optional[str] = None,
-                router_models: Optional[list[str]] = None) -> None:
+                router_models: Optional[list[str]] = None,
+                instance_map: Optional[dict[str, str]] = None) -> None:
+    """Print model table. *instance_map* maps model_id → instance URL (multi-instance)."""
     if not models:
         print(f"[!] no .gguf models in {MODELS_DIR}")
         print("    add via: hermes-models.py download <url>")
         return
+    # Show instance header(s)
+    if instance_map:
+        instances = sorted(set(instance_map.values()))
+        print(f"\n  Instances: {', '.join(instances)}")
     print()
     print(f"{'#':<3} {'NAME':<40} {'SIZE':>8} {'QUANT':<10} {'ARCH':<14} {'CTX':>8} {'TENSORS':>8}  ROUTER")
     print("-" * 110)
@@ -107,6 +138,19 @@ def switch_model(model_name: str) -> int:
         print("[FAIL] router /models/load did not return OK")
         return 1
     print(f"[OK] preload accepted; next chat request will route to {model_name}")
+    # Persist preferred_model so start.ps1 re-selects it on next launch
+    try:
+        log_dir = HERMES_ROOT / "data" / "logs"
+        launch_path = log_dir / "llm-engine-last-launch.json"
+        info = {}
+        if launch_path.exists():
+            info = json.loads(launch_path.read_text(encoding="utf-8"))
+        info["preferred_model"] = model_name
+        log_dir.mkdir(parents=True, exist_ok=True)
+        launch_path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+        print(f"[OK] preferred_model = {model_name}")
+    except Exception as e:
+        print(f"[warn] could not persist preferred_model: {e}")
     return 0
 
 
@@ -121,12 +165,13 @@ def main():
     sw = sub.add_parser("switch", help="preload model via router /v1/models/load (no restart)")
     sw.add_argument("name", help="model filename or partial match")
 
+    # Build router state from all instances
+    all_router_models, instance_map = _query_all_instances()
+
     if len(sys.argv) == 1:
         models = list_models()
         current = current_model_from_bat()
-        rm = router_get("/v1/models", timeout=3.0)
-        router_models = [m["id"] for m in (rm.get("data", []) if rm else [])]
-        print_models(models, current, router_models)
+        print_models(models, current, all_router_models, instance_map)
         print()
         print("commands: list | switch <name>")
         return 0
@@ -135,9 +180,7 @@ def main():
     if args.cmd == "list":
         models = list_models()
         current = current_model_from_bat()
-        rm = router_get("/v1/models", timeout=3.0)
-        router_models = [m["id"] for m in (rm.get("data", []) if rm else [])]
-        print_models(models, current, router_models)
+        print_models(models, current, all_router_models, instance_map)
         return 0
     if args.cmd == "switch":
         models = list_models()
@@ -153,6 +196,20 @@ def main():
 
     p.print_help()
     return 1
+
+
+def _query_all_instances() -> tuple[list[str], dict[str, str]]:
+    """Query all llama-server candidates for their loaded models."""
+    all_router_models: list[str] = []
+    instance_map: dict[str, str] = {}  # model_id → instance URL
+    for url in _LLAMA_CANDIDATES:
+        rm = router_get("/v1/models", timeout=3.0, base_url=url)
+        if rm:
+            for m in rm.get("data", []):
+                mid = m.get("id", "")
+                all_router_models.append(mid)
+                instance_map[mid] = url
+    return all_router_models, instance_map
 
 
 if __name__ == "__main__":

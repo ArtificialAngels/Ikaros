@@ -58,7 +58,7 @@ CRITICAL_MARKER_PARTS = ("portable-python", "python.exe")
 CACHE_FILE = ".hermes-root"
 
 # The standard project folder name (used when scanning drives)
-PROJECT_FOLDER_NAME = "Hermes Agent"
+PROJECT_FOLDER_NAME = "Ikaros"
 
 # Exit codes
 EXIT_OK = 0

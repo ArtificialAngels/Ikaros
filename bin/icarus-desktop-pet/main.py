@@ -36,6 +36,61 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QLineEdit, QTextEdit, QPushButton, QLabel,
 )
 
+
+class _DelayedMenu(QMenu):
+    """QMenu subclass that delays hiding when mouse moves toward a submenu.
+
+    Prevents the submenu from closing before the user can move the cursor
+    from the parent item into the submenu area.
+    """
+    _hide_delay_ms = 500
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(self._hide_delay_ms)
+        self._hide_timer.timeout.connect(self._on_delay_expired)
+        self._suppress_hide = False
+
+    def _on_delay_expired(self):
+        """Timer fired — actually hide if mouse is not over any child submenu."""
+        self._suppress_hide = False
+        pos = QCursor.pos()
+        for action in self.actions():
+            sub = action.menu()
+            if sub and sub.isVisible():
+                if sub.geometry().adjusted(-4, -4, 4, 4).contains(pos):
+                    return  # mouse is over a submenu, stay open
+        if not self._suppress_hide:
+            super().hide()
+
+    def hideEvent(self, event):
+        """Intercept hide: delay if mouse is moving toward a submenu."""
+        if self._suppress_hide:
+            self._suppress_hide = False
+            super().hideEvent(event)
+            return
+        pos = QCursor.pos()
+        for action in self.actions():
+            sub = action.menu()
+            if sub and sub.isVisible():
+                if sub.geometry().adjusted(-4, -4, 4, 4).contains(pos):
+                    # Mouse is over a submenu — delay the hide
+                    self._suppress_hide = True
+                    self._hide_timer.start()
+                    # Re-show ourselves (we're in the middle of hiding)
+                    QTimer.singleShot(0, self.show)
+                    event.ignore()
+                    return
+        super().hideEvent(event)
+
+    def enterEvent(self, event):
+        """Mouse entered the menu — cancel any pending hide."""
+        self._suppress_hide = False
+        self._hide_timer.stop()
+        super().enterEvent(event)
+
 # 4C: HTTP bridge to Hermes bridge /v1/chat/completions
 try:
     import httpx  # 异步 HTTP 客户端 (bridge_intent_router + chat 都会用)
@@ -63,6 +118,8 @@ L2D_EXPR_BY_STATE = {
     "thinking": "serious", "speaking": "happy", "bored": "sleep",
 }
 HERMES_ROOT = HERE.parent.parent
+_MODEL_CACHE_PATH = HERE / "llm_model_cache.json"
+
 
 # 便携 Python 不自动加 cwd 到 sys.path (python312._pth 机制)
 # 手动加, 让 from audio_engine import AudioEngine 等本地 import 能工作
@@ -87,6 +144,38 @@ try:
 except ImportError:
     log.warning("edge-tts not installed — 4C chat 会用 fallback TTS (no playback)")
     edge_tts = None
+
+
+# ─── LLM model cache helpers ───
+
+
+def _save_model_cache(models: list[str], cloud_models: list[str]):
+    """Save model list to disk for fast startup."""
+    try:
+        _MODEL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _MODEL_CACHE_PATH.write_text(
+            json.dumps({"models": models, "cloud": cloud_models, "ts": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        log.warning("model cache save FAILED: %s", exc)
+
+
+def _load_model_cache() -> dict | None:
+    """Load cached model list from disk. Returns None if missing or stale (>1h)."""
+    try:
+        if not _MODEL_CACHE_PATH.exists():
+            return None
+        data = json.loads(_MODEL_CACHE_PATH.read_text(encoding="utf-8"))
+        # Stale if older than 1 hour
+        ts = data.get("ts", 0)
+        if time.time() - ts > 3600:
+            return None
+        if not data.get("models"):
+            return None
+        return data
+    except Exception:
+        return None
 
 
 # ─── Communication bridge (thread-safe) ───
@@ -169,6 +258,14 @@ class PetWindow(QMainWindow):
         self._drag_pos = QPoint()
         self._is_dragging = False
         self._current_state = "idle"
+        self._hit_frames_on = False  # track hit frame toggle state
+
+        # LLM model selection (shared across chat dock + voice)
+        self._current_llm_model: str = "MiniMax-M3"  # default
+        self._available_models: list[str] = []  # model IDs from bridge
+        self._cloud_model_set: set[str] = set()  # cloud model IDs for tag display
+        self._models_fetching = False
+        self._pending_llm_menu: QMenu | None = None  # context menu awaiting model list
 
         # Window setup
         self.setWindowTitle("🪶")
@@ -273,6 +370,16 @@ class PetWindow(QMainWindow):
         # Install event filter for drag handle
         if hasattr(self, '_drag_handle'):
             self._drag_handle.installEventFilter(self)
+
+        # Load cached model list for instant right-click menu availability
+        cached = _load_model_cache()
+        if cached:
+            self._available_models = cached["models"]
+            self._cloud_model_set = set(cached["cloud"])
+            log.info("loaded %d models from disk cache", len(cached["models"]))
+
+        # Pre-fetch fresh LLM model list in background
+        QTimer.singleShot(2000, self._fetch_models_async)
 
     # ─── Drag support (drag handle only; Live2D area uses _DragOverlay) ───
     def eventFilter(self, obj, event):
@@ -424,8 +531,9 @@ class PetWindow(QMainWindow):
         _add_model_info()
         menu.addSeparator()
 
-        # ── Model switching ──
-        switch_menu = menu.addMenu("🔄 切换模型")
+        # ── Live2D 模型切换 ──
+        switch_menu = _DelayedMenu("🔄 切换形象", menu)
+        menu.addMenu(switch_menu)
         switch_menu.addAction("⏮ 上一个", self._ctx_prev_model)
         switch_menu.addAction("⏭ 下一个", self._ctx_next_model)
         switch_menu.addSeparator()
@@ -441,7 +549,8 @@ class PetWindow(QMainWindow):
         menu.addAction("👗 切换服装", self._ctx_next_texture)
 
         # ── Scale adjustment ──
-        scale_menu = menu.addMenu("📏 模型比例")
+        scale_menu = _DelayedMenu("📏 模型比例", menu)
+        menu.addMenu(scale_menu)
         for label, multiplier in [("50%", 0.5), ("75%", 0.75), ("100% (默认)", 1.0),
                                    ("125%", 1.25), ("150%", 1.5), ("200%", 2.0)]:
             action = scale_menu.addAction(label)
@@ -452,11 +561,31 @@ class PetWindow(QMainWindow):
         # ── Capture screenshot ──
         menu.addAction("📸 保存图片", self._ctx_capture_model)
 
-        # ── Toggle hit frames ──
-        menu.addAction("🔲 帧检测", self._ctx_toggle_hitframes)
+        # ── Toggle hit frames (checkable, shows current state) ──
+        hit_action = menu.addAction("🔲 帧检测", self._ctx_toggle_hitframes)
+        hit_action.setCheckable(True)
+        hit_action.setChecked(self._hit_frames_on)
 
         # ── Random model ──
         menu.addAction("🔀 随机模型", self._ctx_random_model)
+
+        menu.addSeparator()
+
+        # ── 🤖 LLM 模型切换 ──
+        llm_menu = _DelayedMenu(f"🤖 LLM 模型: {self._current_llm_model}", menu)
+        menu.addMenu(llm_menu)
+
+        if self._available_models:
+            # Models already fetched — populate directly
+            self._populate_llm_menu(llm_menu)
+        else:
+            # Fetch models async, show loading placeholder
+            loading_action = llm_menu.addAction("⏳ 加载模型列表...")
+            loading_action.setEnabled(False)
+            if not self._models_fetching:
+                self._fetch_models_async()
+        # Track current LLM submenu so "🔄 刷新列表" can auto-update it
+        self._pending_llm_menu = llm_menu
 
         menu.addSeparator()
         menu.addAction("💤 隐藏", lambda: self.hide())
@@ -551,12 +680,205 @@ class PetWindow(QMainWindow):
                 log.warning("capture save failed: %s", e)
 
     def _ctx_toggle_hitframes(self):
-        """Toggle hit area frame display."""
+        """Toggle hit area frame display (checkable menu item)."""
+        self._hit_frames_on = not self._hit_frames_on
         if hasattr(self, '_live2d_view') and self._live2d_view:
-            self._live2d_view.page().runJavaScript(
-                "window.toggleHitFrames && window.toggleHitFrames()",
-                lambda on: log.info("hit frames: %s", "ON" if on else "OFF")
+            if self._hit_frames_on:
+                self._live2d_view.page().runJavaScript(
+                    "window.showHitFrames && window.showHitFrames()"
+                )
+            else:
+                self._live2d_view.page().runJavaScript(
+                    "window.hideHitFrames && window.hideHitFrames()"
+                )
+        log.info("hit frames: %s", "ON" if self._hit_frames_on else "OFF")
+
+    # ─── LLM Model switching ───
+
+    # Cloud models by provider (shown when API key is configured)
+    _CLOUD_MODELS = {
+        "minimax-cn": ["MiniMax-M3", "MiniMax-M1", "abab6.5s-chat"],
+        "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+        "openai": ["gpt-4o", "gpt-4o-mini"],
+        "openrouter": ["openrouter/auto"],
+    }
+    # env var → provider name
+    _CLOUD_KEY_MAP = {
+        "MINIMAX_CN_API_KEY": "minimax-cn",
+        "MINIMAX_API_KEY": "minimax-cn",
+        "DEEPSEEK_API_KEY": "deepseek",
+        "OPENAI_API_KEY": "openai",
+        "OPENROUTER_API_KEY": "openrouter",
+    }
+
+    def _fetch_models_async(self):
+        """Fetch available models: llama-server (local) + cloud (by API key)."""
+        self._models_fetching = True
+
+        def worker():
+            import urllib.request
+
+            local_models: list[str] = []
+            cloud_models: list[str] = []
+
+            # 1. Local models — try llama-server :8080 first (always stable),
+            #    fall back to bridge :7860
+            for port in (8080, 7860):
+                try:
+                    url = f"http://127.0.0.1:{port}/v1/models"
+                    req = urllib.request.Request(url, method="GET")
+                    with urllib.request.urlopen(req, timeout=3.0) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                    raw_ids = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+                    # Deduplicate: strip .gguf suffix, remove mmproj
+                    seen: set[str] = set()
+                    for mid in raw_ids:
+                        if "mmproj" in mid.lower():
+                            continue
+                        base = mid.removesuffix(".gguf").removesuffix(".GGUF")
+                        if base not in seen:
+                            seen.add(base)
+                            local_models.append(base)
+                    break  # got response, no need to try next port
+                except Exception as exc:
+                    log.debug("port %d models failed: %s", port, exc)
+                    continue
+
+            # 2. Cloud models — detect API keys from env + HERMES_HOME/.env
+            configured_providers = self._detect_cloud_providers()
+            for provider in configured_providers:
+                cloud_models.extend(self._CLOUD_MODELS.get(provider, []))
+
+            all_models = local_models + cloud_models
+            log.info("models fetched: %d local + %d cloud", len(local_models), len(cloud_models))
+            # Save cache in worker thread (thread-safe: file I/O only, no GUI)
+            _save_model_cache(all_models, cloud_models)
+            QTimer.singleShot(0, lambda: self._on_models_fetched(all_models, cloud_models))
+            self._models_fetching = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _detect_cloud_providers(self) -> list[str]:
+        """Detect which cloud providers have API keys configured."""
+        import os
+        configured: set[str] = set()
+
+        # Check os.environ (loaded from .env at startup)
+        for env_var, provider in self._CLOUD_KEY_MAP.items():
+            key = os.environ.get(env_var, "").strip()
+            if key and not key.startswith("$"):
+                configured.add(provider)
+
+        # Also check HERMES_HOME/.env directly (in case not loaded)
+        try:
+            hermes_env = HERMES_ROOT / "data" / "hermes-agent" / ".env"
+            if hermes_env.exists():
+                for line in hermes_env.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip().strip("'\"").strip()
+                    if v and not v.startswith("$"):
+                        for env_var, provider in self._CLOUD_KEY_MAP.items():
+                            if k == env_var:
+                                configured.add(provider)
+        except Exception:
+            pass
+
+        return list(configured)
+
+    def _on_models_fetched(self, models: list[str], cloud_models: list[str] | None = None):
+        """Called on main thread after models are fetched."""
+        self._available_models = models
+        cloud_list = cloud_models or []
+        self._cloud_model_set = set(cloud_list)
+        log.info("available LLM models: %d total (%d cloud)", len(models), len(cloud_list))
+        # If current model not in list, add it as first option
+        if self._current_llm_model and self._current_llm_model not in models:
+            self._available_models.insert(0, self._current_llm_model)
+        # NOTE: disk cache already saved in worker thread (_fetch_models_async)
+        # Auto-update context menu if it's still visible
+        if self._pending_llm_menu is not None:
+            try:
+                if self._pending_llm_menu.isVisible():
+                    self._pending_llm_menu.clear()
+                    self._populate_llm_menu(self._pending_llm_menu)
+            except RuntimeError:
+                pass  # menu was destroyed
+            self._pending_llm_menu = None
+
+    def _populate_llm_menu(self, llm_menu: QMenu):
+        """Fill LLM model submenu with fetched model list."""
+        if not self._available_models:
+            no_action = llm_menu.addAction("(无可用模型)")
+            no_action.setEnabled(False)
+            retry_action = llm_menu.addAction("🔄 重试")
+            retry_action.triggered.connect(self._fetch_models_async)
+            return
+
+        cloud_set = getattr(self, '_cloud_model_set', set())
+
+        # Current model indicator
+        is_cloud = self._current_llm_model in cloud_set
+        tag = "☁️" if is_cloud else "💻"
+        current_action = llm_menu.addAction(f"✓ {tag} {self._current_llm_model}")
+        current_action.setEnabled(False)
+        llm_menu.addSeparator()
+
+        # Show cloud models first (if any)
+        cloud_shown = False
+        local_shown = False
+        for model_id in self._available_models:
+            if model_id == self._current_llm_model:
+                continue
+            is_cloud = model_id in cloud_set
+            if is_cloud and not cloud_shown:
+                header = llm_menu.addAction("── ☁️ 云端 ──")
+                header.setEnabled(False)
+                cloud_shown = True
+            elif not is_cloud and not local_shown:
+                if cloud_shown:
+                    llm_menu.addSeparator()
+                header = llm_menu.addAction("── 💻 本地 ──")
+                header.setEnabled(False)
+                local_shown = True
+            tag = "☁️" if is_cloud else "💻"
+            action = llm_menu.addAction(f"  {tag} {model_id}")
+            action.triggered.connect(
+                lambda checked, m=model_id: self._ctx_select_model(m)
             )
+
+        llm_menu.addSeparator()
+        llm_menu.addAction("🔄 刷新列表", self._fetch_models_async)
+
+    def _ctx_select_model(self, model_id: str):
+        """Select a different LLM model for chat."""
+        try:
+            old = self._current_llm_model
+            self._current_llm_model = model_id
+            log.info("LLM model: %s → %s", old, model_id)
+            # Notify user via Live2D tip
+            self.notify_live2d_tip(f"切换到 {model_id}")
+            # Update chat dock status if it exists
+            app = QApplication.instance()
+            if app and hasattr(app, '_icarus_pet'):
+                pet = app._icarus_pet
+                if hasattr(pet, 'chat_dock') and pet.chat_dock:
+                    try:
+                        pet.chat_dock.update_model(model_id)
+                    except RuntimeError as exc:
+                        log.warning("chat_dock.update_model failed: %s", exc)
+                # FIX 2026-06-27b: Sync model to audio engine for voice
+                if hasattr(pet, 'audio') and pet.audio:
+                    try:
+                        pet.audio.set_model(model_id)
+                    except RuntimeError as exc:
+                        log.warning("audio.set_model failed: %s", exc)
+            # Also update context menu title for next open
+            self._current_llm_model = model_id
+        except Exception as exc:
+            log.error("_ctx_select_model CRASHED: %s", exc, exc_info=True)
 
 
 # ─── System Tray ───
@@ -616,6 +938,12 @@ class PetTray:
         menu.addAction(self._continuous_action)
         menu.addAction(self._wake_action)
         menu.addSeparator()
+
+        # ─── 🤖 LLM 模型切换 (tray menu) ───
+        self._llm_tray_menu = menu.addMenu("🤖 LLM 模型: MiniMax-M3")
+        self._llm_tray_menu.addAction("⏳ 加载模型列表…", self._fetch_tray_models)
+        # Trigger initial fetch
+        QTimer.singleShot(2000, self._fetch_tray_models)
 
         # ─── Neuro menu (桌宠 → Neuro 控制) ───
         neuro_menu = menu.addMenu("🧠 Neuro")
@@ -741,14 +1069,92 @@ class PetTray:
     def _sleep(self):
         self.window.hide()
 
+    # ─── Tray LLM model submenu ───
+
+    def _fetch_tray_models(self):
+        """Fetch models: reuse PetWindow's data if available, else fetch fresh."""
+        # If PetWindow already fetched models, reuse them
+        if hasattr(self.window, '_available_models') and self.window._available_models:
+            self._populate_tray_llm(
+                self.window._available_models,
+                getattr(self.window, '_cloud_model_set', set()),
+            )
+            return
+        # Otherwise trigger PetWindow's fetch and wait for it
+        if hasattr(self.window, '_fetch_models_async') and not getattr(self.window, '_models_fetching', False):
+            self.window._fetch_models_async()
+        # Poll until PetWindow has data (max 5s)
+        def poll():
+            if hasattr(self.window, '_available_models') and self.window._available_models:
+                self._populate_tray_llm(
+                    self.window._available_models,
+                    getattr(self.window, '_cloud_model_set', set()),
+                )
+            else:
+                QTimer.singleShot(500, poll)
+        QTimer.singleShot(500, poll)
+
+    def _populate_tray_llm(self, models: list[str], cloud_set: set[str] | None = None):
+        """Rebuild the tray LLM submenu with fetched models."""
+        self._llm_tray_menu.clear()
+        # Get current model from PetWindow
+        current = "MiniMax-M3"
+        if hasattr(self.window, '_current_llm_model'):
+            current = self.window._current_llm_model
+        cloud_set = cloud_set or set()
+        is_cloud = current in cloud_set
+        tag = "☁️" if is_cloud else "💻"
+        self._llm_tray_menu.setTitle(f"🤖 LLM: {tag} {current}")
+
+        if not models:
+            no_action = self._llm_tray_menu.addAction("(无可用模型)")
+            no_action.setEnabled(False)
+            self._llm_tray_menu.addAction("🔄 重试", self._fetch_tray_models)
+            return
+
+        # Current model (checked)
+        cur_action = self._llm_tray_menu.addAction(f"✓ {tag} {current}")
+        cur_action.setEnabled(False)
+        self._llm_tray_menu.addSeparator()
+
+        # Other models (cloud first, then local)
+        cloud_models = [m for m in models if m in cloud_set and m != current]
+        local_models = [m for m in models if m not in cloud_set and m != current]
+        for model_id in cloud_models:
+            action = self._llm_tray_menu.addAction(f"  ☁️ {model_id}")
+            action.triggered.connect(
+                lambda checked, m=model_id: self._tray_select_model(m)
+            )
+        if cloud_models and local_models:
+            self._llm_tray_menu.addSeparator()
+        for model_id in local_models:
+            action = self._llm_tray_menu.addAction(f"  💻 {model_id}")
+            action.triggered.connect(
+                lambda checked, m=model_id: self._tray_select_model(m)
+            )
+        self._llm_tray_menu.addSeparator()
+        self._llm_tray_menu.addAction("🔄 刷新列表", self._fetch_tray_models)
+
+    def _tray_select_model(self, model_id: str):
+        """Handle model selection from tray menu."""
+        if hasattr(self.window, '_ctx_select_model'):
+            self.window._ctx_select_model(model_id)
+        # Update tray submenu title
+        self._llm_tray_menu.setTitle(f"🤖 LLM 模型: {model_id}")
+
 def _quit(self):
     QApplication.quit()
 
 
 # ─── Chat Dock (4C: 文本聊天入口) ───
 
-BRIDGE_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
-BRIDGE_CHAT_TIMEOUT_S = 30.0
+LLAMA_CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
+LLAMA_CHAT_TIMEOUT_S = 120.0
+
+# BRIDGE (port 7860) currently unresponsive — using llama-server directly.
+# When bridge is fixed, uncomment the line below and remove the two above.
+# LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
+# LLAMA_CHAT_TIMEOUT_S = 30.0
 
 
 async def bridge_chat(text: str, *, profile: str = "default", model: str = "MiniMax-M3") -> str:
@@ -771,16 +1177,16 @@ async def bridge_chat(text: str, *, profile: str = "default", model: str = "Mini
             "max_tokens": 200,
         }).encode("utf-8")
         req = urllib.request.Request(
-            BRIDGE_CHAT_URL,
+            LLAMA_CHAT_URL,
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=BRIDGE_CHAT_TIMEOUT_S) as r:
+        with urllib.request.urlopen(req, timeout=LLAMA_CHAT_TIMEOUT_S) as r:
             data = json.loads(r.read())
     else:
-        async with httpx.AsyncClient(timeout=BRIDGE_CHAT_TIMEOUT_S) as c:
-            r = await c.post(BRIDGE_CHAT_URL, json={
+        async with httpx.AsyncClient(timeout=LLAMA_CHAT_TIMEOUT_S) as c:
+            r = await c.post(LLAMA_CHAT_URL, json={
                 "model": model,
                 "messages": [{"role": "user", "content": text}],
                 "max_tokens": 200,
@@ -870,7 +1276,7 @@ class ChatDockWindow(QMainWindow):
         v.addLayout(input_row)
 
         # Status row (intent + hint)
-        self.status_label = QLabel("intent: —  |  cloud auto-flip on (minimax-cn)")
+        self.status_label = QLabel("intent: —  |  model: MiniMax-M3")
         self.status_label.setStyleSheet(
             "QLabel { font-size: 9pt; color: #888; padding: 2px 4px; }"
         )
@@ -919,13 +1325,16 @@ class ChatDockWindow(QMainWindow):
         的常见做法: 用 asyncio.run_coroutine_threadsafe 把 coroutine 送进主 loop.
         但我们没显式主 loop — 改用 threading 直接 run.
         """
+        # Get current model from PetWindow (shared state)
+        model = self._get_current_model()
+
         def worker():
             try:
                 # 在新 loop 里跑 (避免 Qt 主线程 asyncio 冲突)
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    reply = loop.run_until_complete(bridge_chat(text))
+                    reply = loop.run_until_complete(bridge_chat(text, model=model))
                 finally:
                     loop.close()
                 # 回到 Qt 主线程更新 UI
@@ -936,10 +1345,20 @@ class ChatDockWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _get_current_model(self) -> str:
+        """Get the currently selected LLM model from PetWindow."""
+        app = QApplication.instance()
+        if app and hasattr(app, '_icarus_pet'):
+            pet = app._icarus_pet
+            if hasattr(pet, 'window') and hasattr(pet.window, '_current_llm_model'):
+                return pet.window._current_llm_model
+        return "MiniMax-M3"  # fallback default
+
     def _on_reply(self, reply: str, intent: str):
         """Reply 回来后: history + TTS + 重启用 UI."""
         self._append_history(f"[伊卡洛斯] {reply}")
-        self._set_status(f"intent: {intent}  |  cloud ✓")
+        model = self._get_current_model()
+        self._set_status(f"intent: {intent}  |  {model} ✓")
         self.input_edit.setEnabled(True)
         self.send_btn.setEnabled(True)
         self.input_edit.setFocus()
@@ -976,9 +1395,16 @@ class ChatDockWindow(QMainWindow):
         self.activateWindow()
         self.input_edit.setFocus()
 
+    def update_model(self, model_id: str):
+        """Update displayed model name when user switches."""
+        current = self.status_label.text()
+        # Replace model portion of status text
+        if "model:" in current:
+            prefix = current.split("|")[0].strip()
+            self.status_label.setText(f"{prefix}  |  model: {model_id}")
+        else:
+            self.status_label.setText(f"{current}  |  model: {model_id}")
 
-# ─── Context thread (Neuro context detection) ───
-        self._toggle_visible()
 
 def update_status(self, text: str):
     self.tray.setToolTip(f"🪶 伊卡洛斯 · {text}")

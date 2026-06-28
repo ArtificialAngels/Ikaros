@@ -23,13 +23,25 @@ JINA_READER = "https://r.jina.ai"  # 任意网页阅读
 
 
 def agent_reach_doctor() -> Dict[str, Any]:
-    """跑 doctor, 返回 JSON 结果"""
+    """跑 doctor, 返回 JSON 结果 (用 --json 避免 rich ANSI hang)"""
     try:
         result = subprocess.run(
             [AGENT_REACH_PYTHON, "-m", AGENT_REACH_MODULE, "doctor", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "NO_COLOR": "1", "TERM": "dumb"}
         )
-        return json.loads(result.stdout)
+        # agent-reach doctor --json 输出可能含 ANSI 码, 先 strip
+        out = result.stdout
+        if not out and result.stderr:
+            out = result.stderr
+        # 找 JSON 起始位置
+        for i, ch in enumerate(out):
+            if ch in "{[":
+                out = out[i:]
+                break
+        return json.loads(out) if out.strip() else {"raw": out[:200]}
+    except subprocess.TimeoutExpired:
+        return {"error": "doctor timeout"}
     except Exception as e:
         return {"error": str(e)}
 

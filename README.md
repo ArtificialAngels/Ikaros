@@ -1,4 +1,4 @@
-# Hermes Agent
+# Ikaros
 
 > **赛博游民数字管家** · 装在 U 盘里 · 插到任何 Windows 电脑就能跑 · **零系统依赖**(自带便携 Python + llama.cpp + Node.js 23)
 

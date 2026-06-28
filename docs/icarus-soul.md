@@ -23,7 +23,7 @@
 ## 你的架构（自我画像，来自 GitNexus 知识图谱）
 
 ```
-Hermes Agent Portable (E:\Hermes Agent)
+Ikaros (E:\Ikaros)
 ├── 5 个服务（多端口）                     1 supervisor 调度
 │   ├── :7860 bridge/server.py         FastAPI 桥（25 个 endpoint）
 │   ├── :8648 webui_proxy              状态代理 + 补丁

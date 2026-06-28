@@ -76,6 +76,9 @@ class AudioEngine:
         self.threshold = DEFAULT_THRESHOLD
         self.device_index: Optional[int] = None
 
+        # LLM model for voice (synced from PetWindow model selection)
+        self._llm_model: str = "auto"
+
         # Callbacks
         self.on_state: Optional[Callable[[str], None]] = None
         self.on_bubble: Optional[Callable[[str, int], None]] = None
@@ -83,6 +86,18 @@ class AudioEngine:
         # Threads
         self._capture_thread: Optional[threading.Thread] = None
         self._ws_thread: Optional[threading.Thread] = None
+
+    def set_model(self, model: str):
+        """Set LLM model for voice. Sends update to voice_server if connected."""
+        self._llm_model = model
+        # If WS is connected, send set_model action to update server-side
+        if self._ws:
+            try:
+                coro = self._ws.send(json.dumps({"action": "set_model", "model": model}))
+                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
+            except Exception:
+                pass
+        log.info("voice model → %s", model)
 
     # ─── Device management ───
 
@@ -140,7 +155,8 @@ class AudioEngine:
             try:
                 async with websockets.connect(uri, proxy=None) as ws:
                     self._ws = ws
-                    await ws.send(json.dumps({"action": "start"}))
+                    # Send start with current LLM model
+                    await ws.send(json.dumps({"action": "start", "model": self._llm_model}))
                     self._emit_state("LISTENING")
                     self._emit_bubble("🎤 我在听~", 2000)
 

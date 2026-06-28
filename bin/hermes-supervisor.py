@@ -278,12 +278,43 @@ def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
         return False
 
 
-def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
-    """Poll until the port is ready or the timeout elapses."""
+def check_http_health(host: str, port: int, endpoint: str = "/health",
+                      timeout_s: float = 3.0) -> bool:
+    """HTTP health probe: does the service respond with 200 OK?
+
+    FIX 2026-06-27: TCP LISTENING doesn't mean the service is actually
+    serving HTTP. A zombie process can bind the port but not respond.
+    This function sends a real HTTP request and checks for 200/204/301/302.
+    Used by start_module() and cmd_status() for more accurate health checks.
+    See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+    """
+    import http.client
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
+        conn.request("GET", endpoint)
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status in (200, 204, 301, 302)
+    except Exception:
+        return False
+
+
+def wait_for_port(host: str, port: int, timeout_s: int,
+                  http_health: bool = False, endpoint: str = "/health") -> bool:
+    """Poll until the port is ready or the timeout elapses.
+
+    If http_health=True, also verify the service responds to HTTP requests
+    (not just TCP LISTENING). This catches zombie processes that bind the
+    port but don't serve HTTP.
+    """
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if check_port(host, port, timeout_s=1.0):
-            return True
+        if http_health:
+            if check_http_health(host, port, endpoint, timeout_s=2.0):
+                return True
+        else:
+            if check_port(host, port, timeout_s=1.0):
+                return True
         time.sleep(1.0)
     return False
 
@@ -366,6 +397,11 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
 
     # port health check
     if m.port:
+        # FIX 2026-06-27: Use TCP probe for all services (fast, reliable).
+        # Zombie process prevention is handled by start.ps1 (kills existing
+        # processes on the port before starting). HTTP health check was too
+        # strict for bridge's slow startup (60s+ init time).
+        # See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
         if wait_for_port(m.host, m.port, m.startup_timeout_s):
             print(f"  {C.GRN}[OK]{C.RST}   {m.name} (:{m.port})")
         else:
@@ -546,6 +582,8 @@ def cmd_status(modules: Dict[str, Module], only: List[str]) -> int:
         if not m.port:
             print(f"  {C.DIM}-{C.RST}  {n:<{name_w}}  (no port)")
             continue
+        # FIX 2026-06-27: Use TCP probe for all services (fast, reliable).
+        # Zombie process prevention is handled by start.ps1.
         if check_port(m.host, m.port, timeout_s=0.5):
             print(f"  {C.GRN}UP{C.RST}    {n:<{name_w}}  http://{m.host}:{m.port}")
         else:

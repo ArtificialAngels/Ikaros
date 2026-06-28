@@ -222,6 +222,27 @@ def check_port(host: str, port: int, timeout_s: float = 1.0) -> bool:
         return False
 
 
+def check_http_health(host: str, port: int, endpoint: str = "/health",
+                      timeout_s: float = 3.0) -> bool:
+    """HTTP health probe: does the service respond with 200 OK?
+
+    FIX 2026-06-27: TCP LISTENING doesn't mean the service is actually
+    serving HTTP. A zombie process can bind the port but not respond.
+    This function sends a real HTTP request and checks for 200/204/301/302.
+    Used for bridge to catch zombie processes.
+    See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+    """
+    import http.client
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
+        conn.request("GET", endpoint)
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status in (200, 204, 301, 302)
+    except Exception:
+        return False
+
+
 # ============================================================
 # Singleton check
 # ============================================================
@@ -410,19 +431,20 @@ def _probe_liveness() -> dict | None:
         {"status": "ok"|"degraded"|"dead", "summary": str, ...}
     and matches the contract of POST /v1/liveness exactly.
 
-    We use a 10s timeout to absorb a slow bridge / slow cloud probe.
+    We use a 20s timeout to absorb a slow bridge / slow cloud probe.
     /v1/liveness runs 4 parallel HTTP probes (local + 3 clouds + maybe
-    Anthropic) with 4s timeout each, so the endpoint can take up to
-    ~5s under normal conditions and ~10s if all clouds time out. The
-    5s timeout in earlier versions was too tight and produced false
-    "dead" verdicts under transient network slowness.
+    Anthropic) with 4s timeout each, but the local llama-server probe
+    can take 12+ seconds when models are loading or slow to respond.
+    The endpoint can take up to ~15s under normal conditions. The 10s
+    timeout in earlier versions produced false "dead" verdicts because
+    it was shorter than the actual response time.
     """
     import json
     import urllib.request
     import urllib.error
     try:
         req = urllib.request.Request("http://127.0.0.1:7860/v1/liveness", method="GET")
-        with urllib.request.urlopen(req, timeout=10.0) as r:
+        with urllib.request.urlopen(req, timeout=20.0) as r:
             payload = r.read().decode("utf-8", errors="replace")
             return json.loads(payload)
     except urllib.error.URLError as e:
@@ -691,9 +713,10 @@ def run() -> int:
             skip_modules: set[str] = set()
             if is_upgrading_lock_active():
                 skip_modules.add("webui")
+                skip_modules.add("webui_proxy")
                 # only announce once per cycle
                 if not getattr(run, "_upgrade_skip_announced", False):
-                    print("[watchdog] upgrading.lock active — skipping webui check",
+                    print("[watchdog] upgrading.lock active — skipping webui/webui_proxy check",
                           flush=True)
                     run._upgrade_skip_announced = True
             else:
@@ -780,7 +803,15 @@ def run() -> int:
                     continue
                 if name in skip_modules:
                     continue
-                port_up = check_port(m.host, m.port, timeout_s=1.0)
+                # FIX 2026-06-27: Use HTTP probe for bridge (catch zombie processes),
+                # TCP probe for other services (fast, reliable).
+                # Zombie process prevention is handled by start.ps1.
+                if m.name == "bridge":
+                    # Bridge needs HTTP health check - TCP LISTENING doesn't mean
+                    # the service is actually responding (uvicorn accept loop can crash)
+                    port_up = check_http_health(m.host, m.port, endpoint="/health", timeout_s=3.0)
+                else:
+                    port_up = check_port(m.host, m.port, timeout_s=1.0)
                 if snapshot is None and name in last_svc_state:
                     # Edge-triggered DOWN detection: if last tick saw it
                     # UP but this tick sees it DOWN, log immediately.

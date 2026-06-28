@@ -284,18 +284,18 @@ def _tts_evict_if_needed():
 
 # ---- LLM call (reuse bridge's chat pipeline) ----
 
-async def _llm_chat(text: str, session_id: str = "") -> str:
+async def _llm_chat(text: str, session_id: str = "", model: str = "auto") -> str:
     """Send text to LLM and return response.
 
-    Uses the bridge's internal chat pipeline if available, otherwise
-    falls back to a direct API call.
+    FIX 2026-06-27: 直接调用 llama-server (:8080) 而不是 bridge (:7860)。
+    避免 voice handler → bridge → voice handler 的自引用死锁。
+    FIX 2026-06-27b: 支持 model 参数，从桌宠/WebUI 传入。
     """
-    # Try direct HTTP call to our own bridge
     import httpx
     try:
-        async with httpx.AsyncClient(base_url="http://127.0.0.1:7860", timeout=_LLM_TIMEOUT) as client:
+        async with httpx.AsyncClient(base_url="http://127.0.0.1:8080", timeout=_LLM_TIMEOUT) as client:
             resp = await client.post("/v1/chat/completions", json={
-                "model": "auto",
+                "model": model,
                 "messages": [
                     {"role": "system", "content": "你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。"},
                     {"role": "user", "content": text},
@@ -316,8 +316,9 @@ async def _llm_chat(text: str, session_id: str = "") -> str:
 class VoiceSession:
     """Manages one voice dialogue session."""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, model: str = "auto"):
         self.session_id = session_id
+        self.model = model  # LLM model for this session (can be updated via set_model)
         self.audio_buffer = bytearray()
         self.last_audio_time = 0.0
         self.is_speaking = False
@@ -401,12 +402,24 @@ async def voice_ws_handler(websocket: WebSocket):
 
                     if action == "start":
                         session_id = msg.get("session_id", f"voice_{int(time.time())}")
-                        session = VoiceSession(session_id)
+                        model = msg.get("model", "auto")
+                        session = VoiceSession(session_id, model=model)
                         await _send_json(websocket, {
                             "type": "status",
-                            "message": f"会话 {session_id} 已开始，请说话"
+                            "message": f"会话 {session_id} 已开始 (模型: {model})，请说话"
                         })
-                        logger.info("voice: session %s started", session_id)
+                        logger.info("voice: session %s started (model=%s)", session_id, model)
+
+                    elif action == "set_model":
+                        # 动态切换 LLM 模型（不中断当前会话）
+                        new_model = msg.get("model", "auto")
+                        if session:
+                            session.model = new_model
+                            await _send_json(websocket, {
+                                "type": "status",
+                                "message": f"模型已切换为: {new_model}"
+                            })
+                            logger.info("voice: session %s model → %s", session.session_id, new_model)
 
                     elif action == "stop":
                         if session and session.has_audio:
@@ -458,7 +471,7 @@ async def _process_utterance(websocket: WebSocket, session: VoiceSession):
 
         # 2. LLM
         await _send_json(websocket, {"type": "thinking"})
-        reply = await _llm_chat(text, session.session_id)
+        reply = await _llm_chat(text, session.session_id, model=session.model)
         if not reply:
             await _send_json(websocket, {
                 "type": "error",

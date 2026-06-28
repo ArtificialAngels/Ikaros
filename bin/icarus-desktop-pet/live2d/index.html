@@ -567,17 +567,16 @@ try {
     wlInstance.model.nextTexture().catch(() => {});
   };
 
-  /** Toggle hit area frame display */
-  let _hitFramesOn = false;
-  window.toggleHitFrames = () => {
-    if (!wlInstance || !wlInstance.model) return _hitFramesOn;
-    _hitFramesOn = !_hitFramesOn;
-    if (_hitFramesOn) {
-      wlInstance.model.showHitAreaFrames();
-    } else {
-      try { wlInstance.model.hideHitAreaFrames(); } catch(e) {}
-    }
-    return _hitFramesOn;
+  /** Show hit area frames */
+  window.showHitFrames = () => {
+    if (!wlInstance || !wlInstance.model) return;
+    try { wlInstance.model.showHitAreaFrames(); } catch(e) { console.warn('show hit frames:', e); }
+  };
+
+  /** Hide hit area frames */
+  window.hideHitFrames = () => {
+    if (!wlInstance || !wlInstance.model) return;
+    try { wlInstance.model.hiddenHitAreaFrames(); } catch(e) { console.warn('hide hit frames:', e); }
   };
 
   /** Get current texture index */

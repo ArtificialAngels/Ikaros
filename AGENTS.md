@@ -1,4 +1,4 @@
-# Hermes Agent — Project Memory Bank
+# Ikaros — Project Memory Bank
 
 > **Read this first** when picking up the project after a break.
 > This file captures the project state, architecture, modification history,
@@ -1321,7 +1321,7 @@ cd D:\Hermes Agent
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **hermes-agent-portable** (4460 symbols, 12896 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Ikaros** (5072 symbols, 14069 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -1345,10 +1345,10 @@ This project is indexed by GitNexus as **hermes-agent-portable** (4460 symbols, 
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/hermes-agent-portable/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/hermes-agent-portable/clusters` | All functional areas |
-| `gitnexus://repo/hermes-agent-portable/processes` | All execution flows |
-| `gitnexus://repo/hermes-agent-portable/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/Ikaros/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Ikaros/clusters` | All functional areas |
+| `gitnexus://repo/Ikaros/processes` | All execution flows |
+| `gitnexus://repo/Ikaros/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

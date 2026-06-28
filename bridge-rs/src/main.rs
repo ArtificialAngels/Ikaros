@@ -41,20 +41,44 @@ use tracing::{error, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Get the project root directory (HERMES_ROOT).
-/// Priority: HERMES_ROOT env > current_exe parent's parent > current_dir
+/// Priority: HERMES_ROOT env > walk up from exe looking for modules/ > current_dir
 fn project_root() -> std::path::PathBuf {
     if let Ok(root) = std::env::var("HERMES_ROOT") {
         return std::path::PathBuf::from(root);
     }
     if let Ok(exe) = std::env::current_exe() {
-        // bridge-rs/target/release/hermes-bridge-rs.exe -> parent.parent.parent = project root
-        if let Some(p) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            if p.join("modules").is_dir() {
-                return p.to_path_buf();
+        let mut dir = exe.parent().expect("exe has no parent");
+        // Walk up parent chain looking for a directory that contains "modules/"
+        // Exe is at: bridge-rs/target/release/hermes-bridge-rs.exe
+        // Project root is where modules/ lives (Hermes Agent/)
+        for _ in 0..8 {
+            if dir.join("modules").is_dir() {
+                return dir.to_path_buf();
             }
+            dir = match dir.parent() {
+                Some(p) => p,
+                None => break,
+            };
         }
     }
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// WebUI SQLite DB path (for session context endpoints)
+fn webui_db_path() -> std::path::PathBuf {
+    std::env::var("HERMES_WEBUI_DB_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| project_root().join("data").join("webui").join("hermes-web-ui.db"))
+}
+
+/// Find portable-python executable path
+fn find_portable_python() -> String {
+    let python = project_root().join("portable-python").join("python.exe");
+    if python.is_file() {
+        python.to_string_lossy().to_string()
+    } else {
+        "python".to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -582,11 +606,11 @@ struct ChatRequest {
     extra: serde_json::Value,
 }
 
-/// POST /v1/chat/completions — proxy to llama-server worker
-async fn chat_completions(
-    State(state): State<Arc<AppState>>,
+/// Shared chat completions implementation (called by both streaming and non-streaming handlers)
+async fn _chat_completions_impl(
+    state: Arc<AppState>,
     headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
+    body: serde_json::Value,
 ) -> Response {
     let req_id = state.request_counter.fetch_add(1, Ordering::Relaxed);
     let start = Instant::now();
@@ -690,6 +714,27 @@ async fn chat_completions(
             }
         }
     }
+}
+
+/// POST /v1/chat/completions — proxy to llama-server worker
+async fn chat_completions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    _chat_completions_impl(state, headers, body).await
+}
+
+/// POST /v1/chat/completions/sse — dedicated streaming SSE endpoint.
+/// Identical to POST /v1/chat/completions with stream=true, but lives at
+/// a distinct URL so CDN/proxy layers can route on path (no body parsing).
+async fn chat_completions_sse(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut body): Json<serde_json::Value>,
+) -> Response {
+    body["stream"] = serde_json::Value::Bool(true);
+    _chat_completions_impl(state, headers, body).await
 }
 
 /// Forward a streaming response from upstream (SSE passthrough)
@@ -1062,6 +1107,206 @@ async fn icarus_awake_briefing() -> Json<serde_json::Value> {
         "current_ts": chrono::Utc::now().timestamp(),
         "memory_dir": icarus_memory_dir().to_string_lossy(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Icarus session context — active-session, tail, resume-context
+// (for UI restart conversation recovery)
+// ---------------------------------------------------------------------------
+
+/// Helper: execute a Python inline script against the webui SQLite DB.
+/// Injects `db_path` as a Posix-style path ready for `sqlite3.connect()`.
+/// Returns stdout on success, None on failure.
+async fn _exec_webui_sql(script: &str) -> Option<String> {
+    let db = webui_db_path();
+    if !db.is_file() {
+        warn!("webui db not found at {}", db.display());
+        return None;
+    }
+    let py = find_portable_python();
+    let escaped_db = db.to_string_lossy().replace('\\', "/");
+    let full_script = format!(
+        "import sqlite3,json,time;\n\
+         c=sqlite3.connect('file:{}?mode=ro', uri=True, timeout=3);\n\
+         c.row_factory=sqlite3.Row;\n\
+         {}\n\
+         c.close()",
+        escaped_db, script,
+    );
+    let output = tokio::process::Command::new(&py)
+        .arg("-c")
+        .arg(&full_script)
+        .current_dir(project_root())
+        .output().await;
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+            Some(stdout)
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+            warn!("webui SQL python failed: exit={:?} stderr={}", o.status.code(), stderr.lines().last().unwrap_or(""));
+            None
+        }
+        Err(e) => {
+            warn!("webui SQL python error: {}", e);
+            None
+        }
+    }
+}
+
+/// GET /v1/icarus/active-session — find the most recent un-ended session
+async fn icarus_active_session(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let max_age_secs: i64 = params.get("max_age_seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86400 * 3); // default 3 days
+
+    let script = format!(
+        concat!(
+            "cutoff=int(time.time())-{};\n",
+            "cur=c.execute('''\n",
+            "    SELECT id,title,source,agent,profile,model,provider,\n",
+            "           message_count,started_at,last_active,workspace\n",
+            "    FROM sessions\n",
+            "    WHERE ended_at IS NULL AND last_active >= ?\n",
+            "    ORDER BY last_active DESC LIMIT 5\n",
+            "''', (cutoff,));\n",
+            "sessions=[dict(r) for r in cur.fetchall()];\n",
+            "if sessions:\n",
+            "    s=sessions[0];\n",
+            "    cur.execute('''\n",
+            "        SELECT role,content,timestamp\n",
+            "        FROM messages WHERE session_id=?\n",
+            "        ORDER BY timestamp DESC LIMIT 3\n",
+            "    ''', (s['id'],));\n",
+            "    msgs=[dict(r) for r in cur.fetchall()];\n",
+            "    msgs.reverse();\n",
+            "    s['last_messages']=msgs;\n",
+            "print(json.dumps({{'found': bool(sessions),\n",
+            "                   'sessions': sessions}}))",
+        ),
+        max_age_secs,
+    );
+
+    match _exec_webui_sql(&script).await {
+        Some(output) => {
+            match serde_json::from_str::<serde_json::Value>(&output) {
+                Ok(val) => Json(val),
+                Err(_) => Json(serde_json::json!({"found": false, "reason": "parse error"})),
+            }
+        }
+        None => Json(serde_json::json!({"found": false, "reason": "webui db not accessible"})),
+    }
+}
+
+/// GET /v1/icarus/session/{id}/tail — get last N messages of a session
+async fn icarus_session_tail(
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit: usize = params.get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
+        .max(1).min(50);
+
+    let escaped_sid = session_id.replace('\\', "\\\\").replace('\'', "\\'");
+
+    let script = format!(
+        concat!(
+            "cur=c.execute('''\n",
+            "    SELECT role,content,timestamp,tool_name\n",
+            "    FROM messages WHERE session_id=?\n",
+            "    ORDER BY timestamp DESC LIMIT {}\n",
+            "''', (r'{}',));\n",
+            "msgs=[dict(r) for r in cur.fetchall()];\n",
+            "msgs.reverse();\n",
+            "print(json.dumps({{'found': True,\n",
+            "                   'session_id': r'{}',\n",
+            "                   'messages': msgs}}))",
+        ),
+        limit,
+        escaped_sid,
+        escaped_sid,
+    );
+
+    match _exec_webui_sql(&script).await {
+        Some(output) => {
+            match serde_json::from_str::<serde_json::Value>(&output) {
+                Ok(val) => Json(val),
+                Err(_) => Json(serde_json::json!({"found": false, "reason": "parse error"})),
+            }
+        }
+        None => Json(serde_json::json!({"found": false, "reason": "webui db not accessible"})),
+    }
+}
+
+/// POST /v1/icarus/session/{id}/resume-context — compose system prompt for resume
+async fn icarus_resume_context(
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let escaped_sid = session_id.replace('\\', "\\\\").replace('\'', "\\'");
+    
+    let script = format!(
+        concat!(
+            "sid=r'{}';\n",
+            "cur=c.execute('SELECT title,message_count,last_active FROM sessions WHERE id=?', (sid,));\n",
+            "sess=cur.fetchone();\n",
+            "if not sess:\n",
+            "    print(json.dumps({{'found': False, 'reason': 'session not found'}}));\n",
+            "else:\n",
+            "    title,msg_count,last_active=sess;\n",
+            "    cur.execute('''\n",
+            "        SELECT role,content,tool_name\n",
+            "        FROM messages\n",
+            "        WHERE session_id=? AND role IN (\"user\",\"assistant\")\n",
+            "          AND content IS NOT NULL AND content != \"\"\n",
+            "        ORDER BY timestamp DESC LIMIT 8\n",
+            "    ''', (sid,));\n",
+            "    rows=[dict(r) for r in cur.fetchall()];\n",
+            "    rows.reverse();\n",
+            "    lines=[];\n",
+            "    if title:\n",
+            "        lines.append(f\"# Previous session: {{title}} ({{msg_count}} messages)\");\n",
+            "    else:\n",
+            "        lines.append(f\"# Previous session ({{msg_count}} messages)\");\n",
+            "    if last_active:\n",
+            "        from datetime import datetime;\n",
+            "        dt=datetime.fromtimestamp(int(last_active));\n",
+            "        lines.append(f\"# Last active: {{dt.isoformat()}}\");\n",
+            "    lines.append(\"\");\n",
+            "    lines.append(\"The user wants to continue this conversation. Recap where you left off, then ask what they want to do next.\");\n",
+            "    lines.append(\"\");\n",
+            "    lines.append(\"## Last messages\");\n",
+            "    for r in rows:\n",
+            "        role=r['role'];\n",
+            "        excerpt=(r['content'] or \"\")[:400].replace(\"\\n\",\" \");\n",
+            "        lines.append(f\"- **{{role}}**: {{excerpt}}\");\n",
+            "    system_prompt=chr(10).join(lines);\n",
+            "    summary=\"\";\n",
+            "    for r in reversed(rows):\n",
+            "        if r['role']=='assistant' and r['content']:\n",
+            "            summary=r['content'][:300];\n",
+            "            break;\n",
+            "    print(json.dumps({{'found': True,\n",
+            "                       'session_id': sid,\n",
+            "                       'system_prompt': system_prompt,\n",
+            "                       'summary': summary,\n",
+            "                       'message_count': msg_count}}))",
+        ),
+        escaped_sid,
+    );
+
+    match _exec_webui_sql(&script).await {
+        Some(output) => {
+            match serde_json::from_str::<serde_json::Value>(&output) {
+                Ok(val) => Json(val),
+                Err(_) => Json(serde_json::json!({"found": false, "reason": "parse error"})),
+            }
+        }
+        None => Json(serde_json::json!({"found": false, "reason": "webui db not accessible"})),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,6 +1933,7 @@ async fn main() {
         .route("/api/bridge/health/snapshot", get(health_snapshot))
         // OpenAI-compatible endpoints
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/chat/completions/sse", post(chat_completions_sse))
         .route("/v1/models", get(list_models))
         .route("/v1/models/load", post(load_model))
         .route("/v1/models/swap", post(swap_model))
@@ -1701,6 +1947,9 @@ async fn main() {
         .route("/v1/icarus/last-session", get(icarus_last_session))
         .route("/v1/icarus/memories", get(icarus_memories))
         .route("/v1/icarus/awake-briefing", get(icarus_awake_briefing))
+        .route("/v1/icarus/active-session", get(icarus_active_session))
+        .route("/v1/icarus/session/{id}/tail", get(icarus_session_tail))
+        .route("/v1/icarus/session/{id}/resume-context", post(icarus_resume_context))
         // Signals / Modules
         .route("/v1/signals", get(signals_snapshot))
         .route("/v1/signals/recent", get(signals_recent))

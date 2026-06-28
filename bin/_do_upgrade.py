@@ -53,7 +53,7 @@ WATCHDOG_PID = LOG_DIR / "hermes-watchdog.pid"
 WEBUI_PORT = 8649
 LOCK_FILE = LOG_DIR / "upgrading.lock"
 
-NEW_VERSION = "0.6.17"
+NEW_VERSION = os.environ.get("UPGRADE_TARGET_VERSION", "0.6.17")
 
 def log(msg):
     ts = time.strftime("%H:%M:%S")

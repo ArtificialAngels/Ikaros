@@ -62,14 +62,26 @@ log = logging.getLogger("loop-workflow")
 # ─── Kanban API helpers ───
 
 def api(method: str, path: str, body: Optional[dict] = None) -> Optional[dict]:
-    """调 webui Kanban API (走 webui_proxy :8648 with JWT token)."""
+    """调 webui Kanban API (走 webui_proxy :8648 with JWT token).
+
+    webui 0.6.21 quirks:
+      - Requires Bearer JWT in Authorization header
+      - For per-profile kanban operations, the active profile is read from
+        the *request body* as the "profile" field, NOT from query string.
+        Query-string ?profile=... is ignored by webui_proxy.
+      - Some endpoints (e.g. /comments) don't require profile in body.
+    """
     token = _load_token()
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
         url = f"{KANBAN_API}{path}"
-        data = json.dumps(body).encode("utf-8") if body else None
+        # 自动注入 profile 到 body (默认 default). 已有 profile 不覆盖.
+        payload = dict(body) if body else {}
+        if "profile" not in payload:
+            payload["profile"] = "default"
+        data = json.dumps(payload).encode("utf-8") if payload else None
         req = urlrequest.Request(
             url, data=data, method=method,
             headers=headers,
