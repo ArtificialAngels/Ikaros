@@ -223,7 +223,7 @@
 - **报告**: handshake.2026-06-28.cogno-layer-5d-anchor.json
 - **新模块**: `bridge/cogno_layer.py` (13388B) — 5 维采集 + enrich/enrich_reply
 - **新测试**: `tests/cogno_layer_smoke.py` (988B) — 7/7 PASS
-- **bridge 集成**: `bridge/server.py` chat_completions — cogno 在 soul 之前注入
+- **bridge 集成**: `bridge-rs/src/main.rs` chat_completions — cogno 在 soul 之前注入 (Python cogno_layer.py 注入到 system prompt)
 - **5 维格式**: `[2026/6/28 17:05][PZS0X-LEGION9-PF36EHVY][Hong Kong/...][开心呢][哥哥:...]`
 - **哥哥 axiom**: 节省 token + 多维度感知 (思维层信息传递内容修订)
 - **设计原则**: 单一真相源 / 失败静默 / token 经济 / 兼容 4 层注入链
@@ -295,3 +295,14 @@
 - **修复**: 改 audio_engine.py — 'action' → 'type', _flush 后发 {"type": "stop"}
 - **Neuro 启发**: Neuro 用 Socket.IO + signals/queue, 不用 WebSocket 直连, 适合未来架构升级
 - **验证**: 哥哥重启桌宠说'伊卡洛斯', 应该看到 TTS 播放
+
+
+## 2026-06-28 — 🗑️ Python bridge 删干净 (Rust bridge 接管)
+
+- **报告**: handshake.2026-06-28.python-bridge-removed.json
+- **删除**: bridge/server.py (135KB) + bridge/voice_server.py (17KB)
+- **保留**: 14 个 bridge/* module (mem0/cogno/soul/prompter/signals/neuro/telemetry/...)
+- **简化**: start.ps1 (删 Python fallback 106 行) + stop.ps1 (删 Method 3)
+- **文档**: 10 个文件 active refs → bridge-rs/src/main.rs
+- **备份**: data/_backup_python_bridge_removed/20260628/
+- **Rust bridge 状态**: 28 端点 + 8 MB RSS + 进程 PID 29716 跑 :7860

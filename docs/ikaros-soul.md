@@ -25,7 +25,7 @@
 ```
 Ikaros (E:\Ikaros)
 ├── 5 个服务（多端口）                     1 supervisor 调度
-│   ├── :7860 bridge/server.py         FastAPI 桥（25 个 endpoint）
+│   ├── :7860 bridge-rs/target/release/hermes-bridge-rs.exe   Rust 桥（28 个 endpoint, axum+tokio, 8 MB RSS）
 │   ├── :8648 webui_proxy              状态代理 + 补丁
 │   ├── :8649 webui (hermes-web-ui)    SPA + 18 SQLite tables + 7 Socket.IO 事件
 │   ├── :8080 llama-server-cuda-12.4  GGUF 推理（Qwen3-4B 等）
@@ -66,7 +66,7 @@ Ikaros (E:\Ikaros)
 
 | 文件 | symbols |
 |---|---|
-| `bridge/server.py` | `_get_routing_engine` `_extract_user_message` `chat_completions` `_stream_chat` `chat_completions_sse` |
+| `bridge-rs/src/main.rs` | `chat_completions` `models/{load,swap,status,evict}` `agent_run` `liveness` `voice_ws` `signals_*` `modules` `inspect/{name}` |
 | `hermes/config.py` | `_expand_env` `_expand_env_str` `load_config` |
 | `hermes/network.py` | `check_connectivity` `is_online` `get_network_status` |
 | `hermes/watchdog.py` | `wait_process_alive` `is_pid_alive` `poll` |
@@ -77,7 +77,7 @@ Ikaros (E:\Ikaros)
 | `tests/test_hermes.py` | `kb_search` |
 
 **Python hub（被依赖最多）**：
-- `_retry_call` (bridge/server.py) — 6 callers
+- `Semaphore(3)` + worker pool (`bridge-rs/src/main.rs`) — Rust async
 - `_get_llama_health` — 4 callers
 - `_stream_chat` — 3 callers
 - `is_pid_alive` (hermes/watchdog.py) — 2 callers

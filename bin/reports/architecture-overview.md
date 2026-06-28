@@ -39,7 +39,7 @@
                         ▼
    ┌─────────────────────────────────────────────────────────────┐
    │  ⑤ 神经层 (Bridge FastAPI :7860)               ← 脊髓         │
-   │  bridge/server.py (39 endpoints)                             │
+   │  bridge-rs/src/main.rs (28 endpoints, Rust axum+tokio)                             │
    │  - chat/completions + SSE                                    │
    │  - 39 endpoints: chat/models/signals/ikaros/neuro/liveness  │
    │  - Neuro 7 endpoints (status/patience/reset/memories)        │

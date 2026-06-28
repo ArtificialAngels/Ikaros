@@ -69,7 +69,7 @@
 - [bin/hermes-supervisor.py](../bin/hermes-supervisor.py) — 进程编排器
 - [modules/](../modules/) — 自描述服务模块
 - [deps/hermes-env.bat](../deps/hermes-env.bat) — 14 个 HERMES_* 变量装载器
-- [bridge/server.py](../bridge/server.py) — FastAPI bridge(:7860)
+- [bridge-rs/src/main.rs](../bridge-rs/src/main.rs) — FastAPI bridge(:7860)
 - [hermes/](../hermes/) — Python 桥接层
 
 ### 上游干净副本(只读)

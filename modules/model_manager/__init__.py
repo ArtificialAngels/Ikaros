@@ -3,7 +3,7 @@
 Retains only the two submodules with real consumers:
 
 * ``gguf.list_gguf_models()`` / ``gguf.parse_gguf_meta()`` — pure-Python
-  GGUF v2/v3 header parser. Used by ``bridge/server.py`` as a cold-boot
+  GGUF v2/v3 header parser. Used by ``bridge-rs/src/main.rs`` (Rust) as a cold-boot
   fallback when llama-server is not yet ready, and by
   ``bin/hermes-models.py`` for offline model listing.
 

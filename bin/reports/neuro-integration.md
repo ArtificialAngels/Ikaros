@@ -108,15 +108,15 @@
 
 | 现有 | 怎么接 Neuro |
 |---|---|
-| `bridge/server.py` (chat_completions) | 在 routing 之前调 `build_system_prompt()` |
-| `bridge/voice_server.py` | STT 收到文本时调 `ikaros.mark_new_message('user', text)` |
+| `bridge-rs/src/main.rs` (chat_completions) | 在 routing 之前调 `build_system_prompt()` |
+| `bridge/voice_worker.py` (Rust bridge subprocess) | STT 收到文本时调 `ikaros.mark_new_message('user', text)` |
 | `bridge/audio_engine.py` (PyQt6 桌宠) | TTS 开始/结束时改 `ikaros.AI_speaking` |
 | `bridge/context_engine.py` | 写入 `ikaros.context` |
 | `bridge/context_middleware.py` | 跟 memory 注入配合，按 token 预算裁剪 |
 
 **最小集成（一行）**：
 ```python
-# 在 bridge/server.py 的 chat_completions handler 顶部
+# 在 bridge-rs chat_completions handler 顶部
 from bridge.neuro import ikaros, get_memory
 ikaros.mark_new_message('user', user_msg)
 inj = get_memory().get_prompt_injection()
@@ -129,8 +129,8 @@ inj = get_memory().get_prompt_injection()
 
 ### 5.1 必做
 
-- ☐ **wire 进 bridge/server.py** —— 实际接 chat_completions 路由
-- ☐ **wire 进 voice_server.py** —— STT/TTS 状态改 signals
+- ☐ **wire 进 bridge-rs** —— 实际接 chat_completions 路由
+- ☐ **wire 进 voice_worker.py** —— STT/TTS 状态改 signals
 - ☐ **PATIENCE 启动 lifespan** —— bridge 启动时 start_prompter()
 
 ### 5.2 可选
@@ -155,4 +155,4 @@ inj = get_memory().get_prompt_injection()
 
 ---
 
-**报告结论**：Neuro 整合 Phase 1 完成。7 个 TODO 全部 ✅。下阶段接进 bridge/server.py。
+**报告结论**：Neuro 整合 Phase 1 完成。7 个 TODO 全部 ✅。下阶段接进 bridge-rs。

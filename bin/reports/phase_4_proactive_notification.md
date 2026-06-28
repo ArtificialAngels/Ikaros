@@ -289,7 +289,7 @@ DEBOUNCE_SECONDS = {
 | 1. 修 prompter callback (Q3-A) |   | ✅ 写 `real_llm_callback` | bridge/prompter.py |
 | 2. 加 completion_event trigger | ✅ 改 `prompt_now` |   | bridge/prompter.py |
 | 3. 注入 Neuro sio_queue event |   | ✅ 改 `real_llm_callback` | bridge/prompter.py |
-| 4. Neuro tray 监听 proactive |   | ✅ 加 `GET /v1/neuro/proactive` + tray 气泡 | bridge/server.py + bin/neuro-tray/ |
+| 4. Neuro tray 监听 proactive |   | ✅ 加 `GET /v1/neuro/proactive` + tray 气泡 | bridge-rs + bin/neuro-tray/ |
 | 5. webui SPA 监听 (Phase 4.1) | ✅ 改 webui SPA |   | (Quest 改) |
 | 6. 离线检测 + Agent-Reach 推送 | ✅ 用 Agent-Reach |   | bridge/icarus_reach.py |
 | 7. 防骚扰去重 |   | ✅ `DEBOUNCE_SECONDS` dict | bridge/prompter.py |

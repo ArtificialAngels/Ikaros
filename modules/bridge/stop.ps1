@@ -1,4 +1,4 @@
-# modules/bridge/stop.ps1 — Stop bridge server (Rust or Python)
+# modules/bridge/stop.ps1 — Stop Rust bridge (Python bridge removed 2026-06-28)
 . $PSScriptRoot\..\..\deps\hermes-env.ps1
 
 $LogDir   = Join-Path $HERMES_ROOT 'data\logs'
@@ -19,12 +19,3 @@ Get-CimInstance Win32_Process -Filter "Name = 'hermes-bridge-rs.exe'" | ForEach-
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-# Method 3: kill Python bridge by command line match
-Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object {
-    $_.CommandLine -match 'bridge\.server'
-} | ForEach-Object {
-    Write-Host "Stopping Python bridge (pid $($_.ProcessId))..."
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-}
-
-exit 0

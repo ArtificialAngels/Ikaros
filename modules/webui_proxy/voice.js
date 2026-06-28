@@ -5,7 +5,7 @@
  * Adds a floating microphone button → WebSocket to bridge → Whisper API (STT)
  * → LLM → edge-tts (TTS streaming) → audio playback.
  *
- * Protocol (see bridge/voice_server.py):
+ * Protocol (see bridge/voice_worker.py (Rust bridge subprocess)):
  *   Client → bridge:  JSON {action:"start"|"stop"|"ping"} + BINARY audio chunks
  *   Bridge → client:  JSON {type:"status"|"transcription"|"thinking"|"done"|"error"}
  *                      + BINARY mp3 audio chunks

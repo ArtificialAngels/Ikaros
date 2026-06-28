@@ -4,7 +4,7 @@
 # The Rust binary is at bridge-rs/target/release/hermes-bridge-rs.exe.
 # It listens on :7860 (same as before), proxies to llama-server :8080.
 #
-# Python bridge preserved at bridge/ (renamed from bridge/server.py).
+# Rust bridge ONLY — Python bridge removed 2026-06-28 (see commit history).
 # To rollback: revert this file to the Python launch version.
 
 [CmdletBinding()]
@@ -102,60 +102,6 @@ if ($useRust) {
     }
 }
 
-if (-not $useRust) {
-    # ── Python bridge fallback ──
-    if (-not (Test-Path $BridgePy)) {
-        Write-Host "[ERROR] Neither Rust bridge nor Python found" -ForegroundColor Red
-        exit 1
-    }
-
-    Write-Host "============================================================"
-    Write-Host "  Hermes - bridge (Python fallback)"
-    Write-Host "  Python:     $BridgePy"
-    Write-Host "  Endpoint:   http://127.0.0.1`:$Port"
-    Write-Host "============================================================"
-
-    $HermesHome  = Join-Path $HERMES_ROOT 'data\hermes-agent'
-    $ModelsDir   = Join-Path $HERMES_ROOT 'data\models'
-    $argList     = @('-m', 'bridge.server', '--host', '127.0.0.1', '--port', "$Port", '--log-level', 'info')
-
-    $innerCmd  = '"' + ($BridgePy -replace '"','\"') + '"'
-    $innerArgs = ($argList | ForEach-Object {
-        if ($_ -match '\s|"') { '"' + ($_ -replace '"','\"') + '"' } else { $_ }
-    }) -join ' '
-
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName               = 'cmd.exe'
-    $psi.Arguments              = '/c "' + $innerCmd + ' ' + $innerArgs + '" < NUL'
-    $psi.WorkingDirectory       = $HERMES_ROOT
-    $psi.UseShellExecute        = $false
-    $psi.CreateNoWindow         = $true
-    $psi.WindowStyle            = 'Hidden'
-    $psi.RedirectStandardInput  = $false
-    $psi.RedirectStandardOutput = $false
-    $psi.RedirectStandardError  = $false
-
-    foreach ($k in @('HERMES_HOME','HERMES_LLAMA_URL','HERMES_MODELS_DIR','HERMES_BRIDGE_PORT')) {
-        $v = [Environment]::GetEnvironmentVariable($k)
-        if ($v) { $psi.EnvironmentVariables[$k] = $v }
-    }
-    $psi.EnvironmentVariables['HERMES_HOME']        = $HermesHome
-    $psi.EnvironmentVariables['HERMES_MODELS_DIR']  = $ModelsDir
-    $psi.EnvironmentVariables['HERMES_BRIDGE_PORT'] = "$Port"
-    $psi.EnvironmentVariables['PYTHONPATH']         = "$HERMES_ROOT;$HERMES_ROOT\hermes-agent"
-
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    Start-Sleep -Seconds 2
-
-    if ($proc.HasExited) {
-        Write-Host "  [FAIL] Python bridge exited with code $($proc.ExitCode)" -ForegroundColor Red
-        $proc.Dispose()
-        exit 1
-    }
-
-    Write-Host "  [pid]   $($proc.Id)"
-    Write-Host "  Python bridge started on :$Port"
-    $proc.Dispose()
-}
-
-exit 0
+# ─── End of Rust bridge launcher ───
+# Python bridge (bridge/server.py + voice_server.py) was removed 2026-06-28 (see git log)
+# Rust bridge fully replaces it. See bridge-rs/src/main.rs

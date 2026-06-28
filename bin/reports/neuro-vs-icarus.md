@@ -154,7 +154,7 @@ class LLMState:
 ```
 
 **伊卡洛斯现状**：
-- bridge/server.py 的 `chat_completions` 是主入口
+- bridge-rs/src/main.rs 的 `chat_completions` 是主入口
 - `context_middleware` 压缩上下文
 - `copilot_bridge` 接 ACP
 - 模型选择靠 `model_groups` 配置

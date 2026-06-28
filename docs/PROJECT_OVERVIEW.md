@@ -47,7 +47,7 @@
 |------|------|---------|
 | `env_bootstrap` | (无) | `modules/env_bootstrap/gpu_detect.py`(559 行,多版本 CUDA 自适应) |
 | `llm_engine` | 8080 | `runtime/llama-server.exe` 或 `runtime/cuda/<v>/llama-server-cuda-<v>.exe` |
-| `bridge` | 7860 | `bridge/server.py`(1534 行,FastAPI) |
+| `bridge-rs` | 7860 | `bridge-rs/src/main.rs`(1761 行, Rust + axum + tokio) |
 | `webui` | 8648 | `runtime/node23/node.exe hermes-web-ui.mjs`(npm global 包) |
 | `model_manager` | (无) | `modules/model_manager/{gguf,mirror}.py`(工具包,被 env_bootstrap 引用) |
 
@@ -85,7 +85,7 @@
 | **守护进程** | `bin/hermes-watchdog.py`(277 行) |
 | **环境变量装载** | `deps/hermes-env.bat` / `.ps1` |
 | **依赖清单** | `deps/manifest.json` |
-| **FastAPI 所有端点** | `bridge/server.py`(1534 行) |
+| **All endpoints** | `bridge-rs/src/main.rs`(1761 行, Rust axum+tokio) |
 | **路由决策引擎** | `hermes/routing.py`(7-tier) |
 | **Workspace 白名单** | `hermes/workspace.py`(524 行) |
 | **GPU 检测 + CUDA 安装** | `modules/env_bootstrap/gpu_detect.py`(559 行) |
@@ -123,7 +123,7 @@
 | **修 bug** | AGENTS.md §7(常见 gotchas)+ §10(历史调试案例) |
 | **加新云端 LLM provider** | `bridge/cloud_client.py` `_PROVIDER_BASE_URLS` / `_PROVIDER_KEY_ENV` + `config/hermes.yaml` `llm.cloud` 段 + `.env` 加 key |
 | **加新模块**(第 6 个自描述服务)| 复制 `modules/env_bootstrap/` 模板,改 `module.json` + `start.ps1` |
-| **强制路由走本地/云端** | `hermes/routing.py` 7-tier + `bridge/server.py` `X-Hermes-Routing` header / `HERMES_ROUTING_MODE` env |
+| **强制路由走本地/云端** | `bridge/cloud_client.py` + `bridge-rs/src/main.rs` `X-Hermes-Routing` header / `HERMES_ROUTING_MODE` env |
 | **加新 skill** | `data/hermes-agent/skills/<category>/`(gitignored,运行时数据) |
 | **改 CUDA 自适应规则** | `modules/env_bootstrap/gpu_detect.py:220 driver_to_cuda_version()` |
 | **迁移到新 U 盘 / 新盘符** | 删 `.hermes-root` cache,`bin/hermes-root.py` 会重扫 D:..Z: |
@@ -137,6 +137,6 @@
 
 - `hermes-agent/`(116 MB,只读副本,NousResearch v0.16.0)提供 `AIAgent`、`hermes_cli`、cron、kanban、plugins、gateway、ACP adapter、tui_gateway
 - `runtime/node23/node_modules/hermes-web-ui/`(npm global,EKKOLearnAI v0.6.x)提供 Web UI
-- **我们只做**:`bridge/server.py` FastAPI 薄壳 + `bridge/sitecustomize.py` Windows-only monkey-patches + 编排层 + 配置注入(`HERMES_HOME=data/hermes-agent`)
+- **我们只做**:`bridge-rs/src/main.rs` Rust reverse proxy + `bridge/cloud_client.py` cloud fallback + `bridge/sitecustomize.py` Windows-only monkey-patches + 编排层 + 配置注入(`HERMES_HOME=data/hermes-agent`)
 - 真功能通过上游 import 复用:`from run_agent import AIAgent` / `from hermes_cli.main import main` / `from hermes_state import SessionDB`
 - 改上游 bug → PR 上游,本地写 sitecustomize.py monkey-patch 兜底
