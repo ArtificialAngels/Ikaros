@@ -1,0 +1,2 @@
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-L", "-C", "link-arg=D:/program64/mingw64/x86_64-w64-mingw32/lib", "-C", "link-arg=-lmcfgthread"]

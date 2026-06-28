@@ -1,13 +1,11 @@
 {
   "name": "bridge",
-  "version": "1.0.0",
-  "description": "FastAPI bridge — proxies OpenAI-compatible endpoints to llama-server, wraps AIAgent, exposes /api/* for webui.",
+  "version": "2.0.0",
+  "description": "Rust bridge (Phase 1) — axum+tokio reverse proxy to llama-server. Fallback to Python uvicorn if Rust binary missing.",
   "type": "service",
   "runtime": {
-    "kind": "python",
-    "python": "portable-python/python.exe",
-    "module": "bridge.server:app",
-    "args": ["--host", "127.0.0.1", "--port", "7860", "--log-level", "info"],
+    "kind": "rust",
+    "binary": "bridge-rs/target/release/hermes-bridge-rs.exe",
     "working_directory": "."
   },
   "network": {
@@ -21,7 +19,7 @@
     "start": "start.ps1",
     "stop": "stop.ps1",
     "health": "health.ps1",
-    "startup_timeout_s": 60,
+    "startup_timeout_s": 120,
     "shutdown_timeout_s": 10
   },
   "depends_on": [

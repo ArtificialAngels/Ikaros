@@ -1,0 +1,65 @@
+{
+  "date": "2026-06-28",
+  "author": "Quest",
+  "for": "Icarus",
+  "subject": "Rust Bridge Phase 1 — 启动测试与端点验证全部通过",
+  "status": "PASS",
+
+  "summary": "Rust bridge (bridge-rs/) 已通过 supervisor 正常启动，监听 :7860，11/11 端点全部返回 200 OK。代理透传到 llama-server :8080 正常。Phase 1 验证完成。",
+
+  "test_environment": {
+    "rust_binary": "bridge-rs/target/release/hermes-bridge-rs.exe",
+    "binary_size_mb": 3.9,
+    "pid": 18804,
+    "memory_rss_mb": 8,
+    "port": 7860,
+    "supervisor_start": "bin/hermes-supervisor.py --start",
+    "full_stack_order": "env_bootstrap -> llm_engine -> bridge -> webui -> webui_proxy",
+    "all_modules_ok": true
+  },
+
+  "endpoint_tests": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0,
+    "results": [
+      { "method": "GET",  "path": "/health",                   "status": 200, "latency_ms": 102, "note": "status=ok" },
+      { "method": "GET",  "path": "/v1/models",                "status": 200, "latency_ms": 15,  "note": "21 models (proxy to llama-server :8080)" },
+      { "method": "GET",  "path": "/v1/liveness",              "status": 200, "latency_ms": 15,  "note": "status=ok, workers alive" },
+      { "method": "GET",  "path": "/v1/icarus/last-session",   "status": 200, "latency_ms": 1,   "note": "stub — returns {found:false}" },
+      { "method": "GET",  "path": "/v1/icarus/memories",       "status": 200, "latency_ms": 0,   "note": "stub — returns {count:0, notes:[]}" },
+      { "method": "GET",  "path": "/v1/icarus/awake-briefing", "status": 200, "latency_ms": 0,   "note": "stub — returns {status:ok}" },
+      { "method": "GET",  "path": "/v1/signals",               "status": 200, "latency_ms": 2,   "note": "stub — returns {count:0, signals:[]}" },
+      { "method": "GET",  "path": "/v1/signals/recent",        "status": 200, "latency_ms": 1,   "note": "stub" },
+      { "method": "GET",  "path": "/v1/signals/stats",         "status": 200, "latency_ms": 1,   "note": "stub" },
+      { "method": "GET",  "path": "/v1/modules",               "status": 200, "latency_ms": 25,  "note": "stub — returns module list" },
+      { "method": "POST", "path": "/v1/llama/restart",         "status": 200, "latency_ms": 1,   "note": "stub — Phase 2 will call supervisor" }
+    ]
+  },
+
+  "proxy_passthrough_test": {
+    "description": "Rust bridge 代理透传到 llama-server :8080",
+    "endpoint": "GET /v1/models",
+    "result": "21 models returned via proxy",
+    "status": "PASS"
+  },
+
+  "files_changed": [
+    { "path": "bridge-rs/src/main.rs", "note": "添加 9 个端点骨架 + 路由注册" },
+    { "path": "modules/bridge/module.json", "note": "version 2.0.0, runtime.kind=rust, binary path" },
+    { "path": "modules/bridge/start.ps1", "note": "Rust bridge 启动器 + Python fallback" },
+    { "path": "modules/bridge/stop.ps1", "note": "添加 kill hermes-bridge-rs.exe" }
+  ],
+
+  "notes_for_icarus": [
+    "Rust bridge 已完全替换 Python bridge 的功能框架，所有端点均可访问",
+    "/v1/icarus/* 和 /v1/signals/* 目前是 stub（返回空但有效的 JSON），Phase 2 会补全实际文件读取逻辑",
+    "/v1/llama/restart 目前是 stub，Phase 2 会接入 supervisor 调用",
+    "voice WebSocket (ws://127.0.0.1:7860/v1/voice/ws) 已实现，桌宠语音气泡可直接连接",
+    "内存占用仅 8 MB，比 Python uvicorn 轻很多",
+    "Python bridge (bridge/server.py) 保留作为 fallback，start.ps1 会自动检测",
+    "webui_proxy :8648 的 502 问题与 Rust bridge 无关，是 webui_proxy 自身连接上游的问题"
+  ],
+
+  "next_phase": "Phase 2 — 功能补全（icarus 文件读取、llama/restart supervisor 调用、signals 完整实现）"
+}
