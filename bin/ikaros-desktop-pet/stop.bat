@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  🪶 Icarus Desktop Pet — Stopper
+REM  🪶 Ikaros Desktop Pet — Stopper
 REM ============================================================
 REM
 REM  Kills all running icarus-desktop-pet python processes.
@@ -8,7 +8,7 @@ REM
 REM ============================================================
 
 echo ============================================================
-echo   🪶 Stopping Icarus Desktop Pet...
+echo   🪶 Stopping Ikaros Desktop Pet...
 echo ============================================================
 
 REM Use wmic to find processes with "icarus-desktop-pet" in command line

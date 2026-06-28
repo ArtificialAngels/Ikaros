@@ -1,5 +1,5 @@
 """
-🪶 Icarus Desktop Pet — PyQt6 Edition
+🪶 Ikaros Desktop Pet — PyQt6 Edition
 Always-on-top transparent window, SVG chibi Ikaros, system tray, voice + context.
 """
 
@@ -1005,7 +1005,7 @@ class PetTray:
     # ─── Neuro control handlers ───
 
     def _get_neuro(self):
-        """Get the IcarusApp's NeuroClient via window's app instance."""
+        """Get the IkarosApp's NeuroClient via window's app instance."""
         from PyQt6.QtWidgets import QApplication
         app = QApplication.instance()
         if app and hasattr(app, '_icarus_pet'):
@@ -1470,7 +1470,7 @@ class ContextThread(threading.Thread):
 
 # ─── Main App ───
 
-class IcarusApp(QObject):
+class IkarosApp(QObject):
     def __init__(self):
         super().__init__()
         self.bridge = SignalBridge()
@@ -1622,7 +1622,7 @@ def register_autostart():
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
                             winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, "IcarusDesktopPet", 0,
+            winreg.SetValueEx(key, "IkarosDesktopPet", 0,
                               winreg.REG_SZ, cmd)
         log.info("autostart: registered")
     except Exception as exc:
@@ -1640,7 +1640,7 @@ def main():
 
     register_autostart()
 
-    pet = IcarusApp()
+    pet = IkarosApp()
     # Expose to NeuroClient lookup (tray needs to find pet.neuro)
     app._icarus_pet = pet
     rc = pet.run()

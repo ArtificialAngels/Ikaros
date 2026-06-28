@@ -1,4 +1,4 @@
-# 🪶 Icarus Desktop Pet — 启动指南
+# 🪶 Ikaros Desktop Pet — 启动指南
 
 ## ⚠️ 重要：桌宠必须在用户桌面 session 启动
 
@@ -18,7 +18,7 @@ E:\Hermes Agent\bin\icarus-desktop-pet\start.bat
 ```
 
 ### 方式 3：HKCU Run 自动启动（开机自启）
-桌宠已注册到 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\IcarusDesktopPet`。
+桌宠已注册到 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\IkarosDesktopPet`。
 每次用户登录时自动启动。**前提是 explorer.exe 在 user session 跑**（默认行为）。
 
 ## 🧠 Neuro 集成

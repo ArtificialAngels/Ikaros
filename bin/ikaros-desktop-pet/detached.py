@@ -1,5 +1,5 @@
 """
-Icarus Desktop Pet — Detached bootstrap.
+Ikaros Desktop Pet — Detached bootstrap.
 Spawns the real pet process with DETACHED_PROCESS so it survives
 parent terminal closure. Logs all output to data/logs/icarus-pet.log.
 

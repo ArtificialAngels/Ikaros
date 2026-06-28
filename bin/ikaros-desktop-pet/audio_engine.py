@@ -1,5 +1,5 @@
 """
-Icarus Audio Engine — persistent microphone capture + TTS playback.
+Ikaros Audio Engine — persistent microphone capture + TTS playback.
 
 Architecture (inspired by DeskMate's ListenEvent.py):
   sounddevice capture thread (16000Hz, 16-bit mono)         [4A.3: pyaudio → sounddevice]

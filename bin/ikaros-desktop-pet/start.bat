@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  🪶 Icarus Desktop Pet — Detached Launcher
+REM  🪶 Ikaros Desktop Pet — Detached Launcher
 REM
 REM  Starts the pet as a fully independent process.
 REM  After window appears, you can close this terminal.
@@ -33,7 +33,7 @@ if not exist "%HERMES_ROOT%\data\logs" mkdir "%HERMES_ROOT%\data\logs"
 
 echo.
 echo ============================================================
-echo   🪶 Icarus Desktop Pet - Detached Launcher
+echo   🪶 Ikaros Desktop Pet - Detached Launcher
 echo ============================================================
 echo.
 echo   Once the pet window appears, you can close this window.

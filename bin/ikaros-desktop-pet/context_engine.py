@@ -1,5 +1,5 @@
 """
-Icarus Context Engine — Windows context awareness.
+Ikaros Context Engine — Windows context awareness.
 
 Monitors the active window (foreground window) via win32gui,
 classifies what the user is doing (gaming/working/browsing/etc.),

@@ -1,5 +1,5 @@
 """
-Icarus Live2D Test - PyQt6 + QWebEngineView
+Ikaros Live2D Test - PyQt6 + QWebEngineView
 ==========================================
 测试 Live2D 渲染伊卡洛斯角色（用 xisitina 模型替代真伊卡洛斯 Live2D）
 """
