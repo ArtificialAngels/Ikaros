@@ -29,9 +29,13 @@ import time
 
 # Add project root to path so we can import bridge modules
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_HERE)
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_HERE))  # bridge-rs/workers/ → ROOT
+_BRIDGE_RS_DIR = os.path.dirname(_HERE)  # bridge-rs/workers/ → bridge-rs/
+
+# Add ROOT (for portable-python etc.) + bridge-rs/ (for workers sibling imports)
+for p in (_PROJECT_ROOT, _BRIDGE_RS_DIR):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 LOG_DIR = os.path.join(_PROJECT_ROOT, "data", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)

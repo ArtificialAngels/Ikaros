@@ -11,10 +11,15 @@ import time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 logger = logging.getLogger("ikaros.e2e")
 
-from bridge.signals import ikaros, AI_NAME, HOST_NAME
-from bridge.prompter import Prompter
-from bridge.neuro.memory import Memory
-from bridge.neuro.module import build_system_prompt
+# OUTDATED (2026-06-28): bridge/ removed.
+# These imports were for Python bridge's signals/prompter/neuro modules.
+# Original code preserved in data/_backup_bridge_removed/20260628/bridge/.
+# Re-implementing these in Rust is tracked as future work — see bridge-rs/README.md.
+#
+# from bridge.signals import ikaros, AI_NAME, HOST_NAME
+# from bridge.prompter import Prompter
+# from bridge.neuro.memory import Memory
+# from bridge.neuro.module import build_system_prompt
 
 
 # Mock LLM 回调

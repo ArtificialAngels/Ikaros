@@ -133,8 +133,9 @@ log = logging.getLogger("ikaros")
 # 必须在 HERE + log 都定义之后, 否则 except 分支用 log 会 NameError
 try:
     import sys as _sys
-    _sys.path.insert(0, str(HERE.parent.parent))  # 让 bridge/ 可导入
-    from bridge.intent_router import IntentRouter as _IntentRouter
+    # IntentRouter 现在是 sibling module (bin/ikaros-desktop-pet/intent_router.py)
+    # 2026-06-28: bridge/ 删除, IntentRouter 移到这里
+    from intent_router import IntentRouter as _IntentRouter
 except Exception as _exc:
     log.warning("IntentRouter import failed: %s — chat 会 fall back 到 LLM 隐式", _exc)
     _IntentRouter = None

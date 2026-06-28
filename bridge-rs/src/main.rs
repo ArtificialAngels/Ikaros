@@ -948,7 +948,7 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
 
     // Start voice worker process
     let python = find_portable_python();
-    let worker_script = project_root().join("bridge").join("voice_worker.py");
+    let worker_script = project_root().join("bridge-rs").join("workers").join("voice_worker.py");
     if !worker_script.is_file() {
         warn!(path = %worker_script.display(), "voice_worker.py not found");
         let _ = socket.send(Message::Text(

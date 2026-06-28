@@ -306,3 +306,17 @@
 - **文档**: 10 个文件 active refs → bridge-rs/src/main.rs
 - **备份**: data/_backup_python_bridge_removed/20260628/
 - **Rust bridge 状态**: 28 端点 + 8 MB RSS + 进程 PID 29716 跑 :7860
+
+
+## 2026-06-28 — 🗑️ bridge/ 目录全删 + 重组
+
+- **报告**: handshake.2026-06-28.bridge-dir-deleted.json
+- **删除**: bridge/ (22 文件, 175KB)
+- **移动 voice_worker.py**: bridge/ → bridge-rs/workers/ (Rust 桥紧密集成)
+- **移动 IntentRouter**: bridge/ → bin/ikaros-desktop-pet/ (桌宠 sibling)
+- **voice_worker.py 自包含**: 替换 from voice_server import 为 inline fallback
+- **bridge-rs/workers/**: 新建 package (含 __init__.py)
+- **测试脚本 deprecation**: cogno_layer_smoke.py SKIP early, neuro_e2e_test.py 4 imports 注释
+- **0 残留 import bridge.*** (active code 全清)
+- **备份**: data/_backup_bridge_removed/20260628/bridge/
+- **下一步**: 哥哥测试 voice pipeline
