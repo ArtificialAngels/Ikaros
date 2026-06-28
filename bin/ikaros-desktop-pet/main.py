@@ -1578,9 +1578,11 @@ class IkarosApp(QObject):
     def _on_state(self, state: str):
         log.info("state → %s", state)
         self.window.set_state(state)
+        self.window.show_neuro_state(state.lower())
 
     def _on_bubble(self, text: str, duration: int):
         self.window.setWindowTitle(f"🪶 {text[:20]}")
+        self.window.show_bubble(text, duration)
 
     def _on_context(self, tag: str):
         log.info("context → %s", tag)

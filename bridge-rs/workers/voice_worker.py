@@ -52,8 +52,10 @@ logger = logging.getLogger("voice_worker")
 
 # VoiceSession / _transcribe / _stream_tts are now defined INLINE below.
 # Original bridge/voice_server.py was removed 2026-06-28; bridge-rs/workers is fully self-contained.
-# Note: _SILENCE_THRESHOLD / _SILENCE_TIMEOUT / _MAX_RECORD_SECONDS are unused here
-# (audio_engine does VAD client-side; server-side silence is handled by Rust bridge).
+# Server-side silence / timeout constants (audio_engine does VAD client-side;
+# these are safety nets for session.timed_out() / session.is_silent()).
+_SILENCE_TIMEOUT = 1.5   # seconds of silence → utterance end (matches Rust VAD)
+_MAX_RECORD_SECONDS = 30  # hard cap per utterance (matches audio_engine MAX_UTTERANCE_SEC)
 logger.info("voice_worker: self-contained (bridge/voice_server deleted)")
 
 

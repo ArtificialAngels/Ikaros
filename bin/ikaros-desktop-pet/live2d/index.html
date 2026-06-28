@@ -653,7 +653,7 @@ try {
 
     _neuroWs.onopen = () => {
       console.log('[neuro-ws] connected');
-      _neuroWs.send(JSON.stringify({ action: 'start', session_id: 'icarus_live2d' }));
+      _neuroWs.send(JSON.stringify({ type: 'start', model: 'auto' }));
       window.showNeuroState('listening');
     };
 
@@ -705,8 +705,12 @@ try {
     }, 3000);
   }
 
-  // Start WebSocket connection after a short delay (let Live2D load first)
-  setTimeout(_connectNeuroWs, 2000);
+  // Auto-connect disabled: in desktop-pet mode, audio_engine.py owns the voice WS.
+  // To enable standalone testing, call window.enableNeuroVoice() from console.
+  // setTimeout(_connectNeuroWs, 2000);
+
+  /** Enable Neuro voice WS (for standalone browser testing) */
+  window.enableNeuroVoice = () => { _connectNeuroWs(); };
 
 } catch (e) {
   console.error("wl-live2d init failed:", e);

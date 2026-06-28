@@ -190,6 +190,14 @@ class AudioEngine:
                                     else:
                                         log.warning("done 但 _tts_chunks 为空, 没 TTS 音频可播")
                                     await asyncio.sleep(0.5)
+                                    # Re-send "start" to re-enable audio session on Rust bridge.
+                                    # Without this, is_audio_session=false on server and new audio
+                                    # arriving before the next explicit "start" would be dropped.
+                                    if self._ws and self._running:
+                                        try:
+                                            await self._ws.send(json.dumps({"type": "start", "model": self._llm_model}))
+                                        except Exception:
+                                            pass
                                     self._emit_state("LISTENING")
                                 elif t == "error":
                                     self._emit_bubble(f"⚠️ {data.get('message', '?')}", 4000)

@@ -15,6 +15,9 @@ pub mod intent_router;
 pub mod task_delegation;
 pub mod signals;
 pub mod health;
+pub mod telemetry;
+
+use telemetry::{SignalBus, RequestLog};
 
 use axum::{
     extract::{
@@ -107,128 +110,9 @@ fn get_upstream_urls() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Signal Bus — in-process telemetry signal bus (mirrors bridge/telemetry.py)
+// Signal Bus + Request Log — now in telemetry.rs module
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, Serialize)]
-struct SignalEnvelope {
-    id: u64,
-    topic: String,
-    payload: serde_json::Value,
-    ts: f64,
-}
-
-struct SignalBus {
-    envelopes: RwLock<Vec<SignalEnvelope>>,
-    next_id: AtomicU64,
-    capacity: usize,
-}
-
-impl SignalBus {
-    fn new(capacity: usize) -> Self {
-        Self {
-            envelopes: RwLock::new(Vec::with_capacity(capacity)),
-            next_id: AtomicU64::new(1),
-            capacity,
-        }
-    }
-
-    async fn emit(&self, topic: &str, payload: serde_json::Value) -> SignalEnvelope {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let env = SignalEnvelope {
-            id,
-            topic: topic.to_string(),
-            payload,
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64(),
-        };
-        let mut buf = self.envelopes.write().await;
-        buf.push(env.clone());
-        if buf.len() > self.capacity {
-            let excess = buf.len() - self.capacity;
-            buf.drain(0..excess);
-        }
-        env
-    }
-
-    async fn recent(&self, topic: Option<&str>, limit: usize) -> Vec<SignalEnvelope> {
-        let buf = self.envelopes.read().await;
-        let mut items: Vec<SignalEnvelope> = buf
-            .iter()
-            .rev()
-            .filter(|e| topic.map_or(true, |t| e.topic.starts_with(t)))
-            .take(limit)
-            .cloned()
-            .collect();
-        items.reverse();
-        items
-    }
-}
-
-/// Simple request log for /v1/signals/stats
-struct RequestLog {
-    entries: RwLock<Vec<RequestEntry>>,
-    start_time: Instant,
-    capacity: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct RequestEntry {
-    path: String,
-    status: u16,
-    elapsed_ms: u64,
-    ts: f64,
-}
-
-impl RequestLog {
-    fn new(capacity: usize) -> Self {
-        Self {
-            entries: RwLock::new(Vec::with_capacity(capacity)),
-            start_time: Instant::now(),
-            capacity,
-        }
-    }
-
-    async fn record(&self, path: &str, status: u16, elapsed_ms: u64) {
-        let entry = RequestEntry {
-            path: path.to_string(),
-            status,
-            elapsed_ms,
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64(),
-        };
-        let mut buf = self.entries.write().await;
-        buf.push(entry);
-        if buf.len() > self.capacity {
-            let excess = buf.len() - self.capacity;
-            buf.drain(0..excess);
-        }
-    }
-
-    async fn stats(&self) -> serde_json::Value {
-        let buf = self.entries.read().await;
-        let total = buf.len();
-        let errors = buf.iter().filter(|e| e.status >= 400).count();
-        let mut by_status: HashMap<String, usize> = HashMap::new();
-        let mut by_path: HashMap<String, usize> = HashMap::new();
-        for e in buf.iter() {
-            *by_status.entry(e.status.to_string()).or_insert(0) += 1;
-            *by_path.entry(e.path.clone()).or_insert(0) += 1;
-        }
-        serde_json::json!({
-            "total": total,
-            "errors": errors,
-            "error_rate": if total > 0 { errors as f64 / total as f64 } else { 0.0 },
-            "uptime_sec": self.start_time.elapsed().as_secs(),
-            "by_status": by_status,
-            "by_path": by_path,
-        })
-    }
-}
+// Re-exported via: use telemetry::{SignalBus, SignalEnvelope, RequestLog, RequestEntry};
 
 // ---------------------------------------------------------------------------
 // Ikaros memory reader
@@ -1023,8 +907,11 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
                                     .unwrap_or("unknown");
                                 match msg_type {
                                     "start" => {
+                                        // Always reset — user may start a new utterance
+                                        // while the previous worker is still processing.
                                         is_audio_session = true;
                                         audio_buffer.clear();
+                                        last_audio_time = tokio::time::Instant::now();
                                         let m = parsed.get("model")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("auto");
