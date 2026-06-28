@@ -61,8 +61,55 @@ logger.info("voice_worker: self-contained (bridge/voice_server deleted)")
 
 # ---- LLM call (direct to llama-server, avoid bridge self-reference) ----
 _LLM_ENDPOINT = os.environ.get("ICARUS_LLM_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions")
-_LLM_MODEL = os.environ.get("ICARUS_LLM_MODEL", "MiniMax-M3")
-_LLM_TIMEOUT = 15.0
+_LLM_MODEL = os.environ.get("ICARUS_LLM_MODEL", "")  # empty → auto-detect from /v1/models
+_LLM_TIMEOUT = 30.0
+
+_RESOLVED_MODEL: str = ""  # cached after first detection
+
+
+def _detect_model() -> str:
+    """Query llama-server /v1/models and return first non-mmproj model ID.
+
+    llama-server may have many models registered but only loads one at a time.
+    We pick the first available model that isn't a vision projector (mmproj).
+    Falls back to first model from data/models/*.gguf scan if HTTP fails.
+    """
+    global _RESOLVED_MODEL
+    if _RESOLVED_MODEL:
+        return _RESOLVED_MODEL
+    # 1) Try HTTP query (bypass proxy — localhost direct)
+    try:
+        import urllib.request
+        models_url = _LLM_ENDPOINT.replace("/chat/completions", "/models")
+        # Bypass system proxy for localhost
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        with opener.open(models_url, timeout=5) as resp:
+            import json as _json
+            data = _json.loads(resp.read())
+            for m in data.get("data", []):
+                mid = m.get("id", "")
+                if mid and "mmproj" not in mid.lower():
+                    _RESOLVED_MODEL = mid
+                    logger.info("auto-detected model: %s", mid)
+                    return mid
+    except Exception as exc:
+        logger.warning("model auto-detect via HTTP failed: %s", exc)
+    # 2) Fallback: scan data/models/*.gguf and pick first
+    try:
+        import glob
+        models_dir = os.path.join(_PROJECT_ROOT, "data", "models")
+        ggufs = sorted(glob.glob(os.path.join(models_dir, "*.gguf")))
+        for g in ggufs:
+            name = os.path.splitext(os.path.basename(g))[0]
+            if "mmproj" not in name.lower():
+                _RESOLVED_MODEL = name
+                logger.info("auto-detected model (filesystem): %s", name)
+                return name
+    except Exception as exc:
+        logger.warning("model filesystem scan failed: %s", exc)
+    _RESOLVED_MODEL = "auto"
+    return "auto"
 
 _SYSTEM_PROMPT = (
     "你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。"
@@ -74,8 +121,8 @@ async def _llm_chat(text: str, model: str = "auto") -> str:
     """Send text to LLM via llama-server, return response string."""
     import httpx
 
-    if model == "auto" or not model:
-        model = _LLM_MODEL
+    if not model or model == "auto" or model == "default":
+        model = _LLM_MODEL if _LLM_MODEL else _detect_model()
     try:
         async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
             resp = await client.post(

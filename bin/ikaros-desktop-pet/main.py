@@ -617,11 +617,18 @@ class PetWindow(QMainWindow):
         # ── 📊 监控日志 (PowerShell tail) ──
         def _open_monitor():
             import subprocess
-            log_path = str(HERMES_ROOT / "data" / "logs" / "ikaros-pet.log")
+            log_dir = HERMES_ROOT / "data" / "logs"
+            log_path = str(log_dir / "ikaros-pet.log")
+            # Use pwsh (PowerShell 7) if available, fall back to powershell (5.1)
+            shell = "pwsh"
+            try:
+                subprocess.run([shell, "-Command", "exit"], capture_output=True, timeout=3)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                shell = "powershell"
             subprocess.Popen(
-                ["powershell", "-NoExit", "-Command",
-                 f"Get-Content -Wait '{log_path}' -Encoding UTF8 -Tail 50"],
-                creationflags=0x00000008,  # DETACHED_PROCESS
+                [shell, "-NoExit", "-Command",
+                 f"Get-Content -Wait -Tail 50 -Encoding utf8 '{log_path}'"],
+                creationflags=0x00000010,  # CREATE_NEW_CONSOLE — 打开新窗口
             )
         menu.addAction("📊 监控日志", _open_monitor)
 

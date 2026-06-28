@@ -347,3 +347,14 @@
 - **0 残留 import bridge.*** (active code 全清)
 - **备份**: data/_backup_bridge_removed/20260628/bridge/
 - **下一步**: 哥哥测试 voice pipeline
+
+
+## 2026-06-28 — 🎤 sherpa-onnx 集成 (哥哥拍板)
+
+- **报告**: handshake.2026-06-28.github-voice-realtime-search.json (调研)
+- **handoff**: handshake.2026-06-28.sherpa-onnx-voice-handoff.json (Quest 代执行)
+- **选型**: k2-fsa/sherpa-onnx Rust 1.13.3 + SenseVoice int8 中文模型
+- **目标**: 替代 voice_worker.py (Python subprocess) + faster-whisper
+- **收益**: STT 延迟 1.5s → 200ms, 边说边转, 中文识别率 ↑, 内存 ↓
+- **5 个 phase**: 依赖下载 → cargo add → voice_recognizer.rs → handle_voice_socket 重构 → verify
+- **Quest 代执行**: Ikaros 按 STOP rule v2 不 restart 核心
