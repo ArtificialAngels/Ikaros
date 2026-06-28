@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""icarus-dojo-daily.py — 每日 dojo 自动循环
+"""ikaros-dojo-daily.py — 每日 dojo 自动循环
 
-由 watchdog 每 24h 触发（或用户手动：`python bin/icarus-dojo-daily.py`）。
+由 watchdog 每 24h 触发（或用户手动：`python bin/ikaros-dojo-daily.py`）。
 设计原则（Ikaros 路径 2）：
   1. 只读分析 + tracker save —— 永不自动 apply/evolve
-  2. 写一个 daily note 到 data/hermes-agent/memories/icarus/dojo-YYYY-MM-DD.md
+  2. 写一个 daily note 到 data/hermes-agent/memories/ikaros/dojo-YYYY-MM-DD.md
   3. 失败 top-3 写入 .proposals/dojo-YYYY-MM-DD.md，等用户确认才 mint
   4. exit code: 0=ok, 1=analyzer error, 2=DB unreadable
 """
@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 ROOT = Path(__file__).resolve().parent.parent
 HERMES_HOME = ROOT / "data" / "hermes-agent"
 DOJO = HERMES_HOME / "skills" / "autonomous-ai-agents" / "hermes-dojo"
-MEM = HERMES_HOME / "memories" / "icarus"
+MEM = HERMES_HOME / "memories" / "ikaros"
 PROP = HERMES_HOME / "skills" / ".proposals"
 
 os.environ["HERMES_HOME"] = str(HERMES_HOME)
@@ -90,7 +90,7 @@ def main():
     print(f"  daily note: {note.relative_to(ROOT)}")
 
     # 4) Emit a heartbeat event so Ikaros timeline sees the dojo tick
-    heartbeat = ROOT / "data" / "logs" / "icarus-heartbeat.jsonl"
+    heartbeat = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
     heartbeat.parent.mkdir(parents=True, exist_ok=True)
     event = {
         "event": "dojo_daily",

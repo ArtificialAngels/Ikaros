@@ -9,12 +9,12 @@
 
 ### 方式 1：双击（推荐给哥哥）
 ```
-E:\Hermes Agent\bin\icarus-desktop-pet\start.bat
+E:\Hermes Agent\bin\ikaros-desktop-pet\start.bat
 ```
 
 ### 方式 2：Python 直接跑（看 log）
 ```bash
-"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\bin\icarus-desktop-pet\main.py"
+"E:\Hermes Agent\portable-python\python.exe" "E:\Hermes Agent\bin\ikaros-desktop-pet\main.py"
 ```
 
 ### 方式 3：HKCU Run 自动启动（开机自启）
@@ -52,13 +52,13 @@ Get-Process python | Where-Object { $_.MainWindowTitle -like '*🪶*' } | Stop-P
 
 ## 📋 日志
 
-`E:\Hermes Agent\data\logs\icarus-pet.log` — 所有 Python logging 输出。
+`E:\Hermes Agent\data\logs\ikaros-pet.log` — 所有 Python logging 输出。
 
 ## 🔧 故障排查
 
 | 现象 | 原因 | 修 |
 |---|---|---|
 | 双击 start.bat 没窗口 | 用户 session 没 explorer.exe | 用 explorer.exe / 重新登录 |
-| 桌宠窗口闪现然后消失 | WebEngine 子进程崩了 | 看 icarus-pet.log 里 NeuroClient 启动后是否抛错 |
+| 桌宠窗口闪现然后消失 | WebEngine 子进程崩了 | 看 ikaros-pet.log 里 NeuroClient 启动后是否抛错 |
 | 桌宠在但 Neuro 菜单点不动 | Neuro bridge (:7860) 没跑 | `python bin/hermes-supervisor.py --start only bridge` |
 | 桌宠完全无响应 | pyaudio 卡 | 重启桌宠 |

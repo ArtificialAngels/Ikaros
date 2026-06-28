@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""icarus-self-score.py — 伊卡洛斯 自我复杂度评分
+"""ikaros-self-score.py — 伊卡洛斯 自我复杂度评分
 
 通过 GitNexus cypher 查询伊卡洛斯自己的代码图谱：
   1. 我现在的形状（节点/边/集群数）
@@ -21,9 +21,9 @@ HERMES_ROOT = Path(__file__).resolve().parent.parent
 ICARUS_TOOLS = {
     "hermes-supervisor.py", "hermes-watchdog.py", "hermes-root.py",
     "hermes-upstream-sync.py", "hermes-models.py",
-    "icarus-self-explore.py", "icarus-self-score.py", "icarus-dojo-daily.py",
-    "icarus-heartbeat-archive.py", "icarus-timeline.py", "icarus-remember.py",
-    "icarus-llama-restart.py", "icarus-awake-briefing.py",
+    "ikaros-self-explore.py", "ikaros-self-score.py", "ikaros-dojo-daily.py",
+    "ikaros-heartbeat-archive.py", "ikaros-timeline.py", "ikaros-remember.py",
+    "ikaros-llama-restart.py", "ikaros-awake-briefing.py",
     "_do_upgrade.py",
 }
 

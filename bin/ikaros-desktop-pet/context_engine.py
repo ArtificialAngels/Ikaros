@@ -20,7 +20,7 @@ import win32gui
 import win32process
 import psutil
 
-logger = logging.getLogger("icarus.context")
+logger = logging.getLogger("ikaros.context")
 
 POLL_INTERVAL = 1.0  # seconds between window checks
 

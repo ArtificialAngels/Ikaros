@@ -34,7 +34,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd  # 哥哥 6-27: pyaudio 弃用, sounddevice 替
 
-log = logging.getLogger("icarus.audio")
+log = logging.getLogger("ikaros.audio")
 
 # Audio config — 16kHz mono int16, 与 Whisper / edge-tts 默认一致
 CHANNELS = 1
@@ -361,16 +361,22 @@ class AudioEngine:
         # 静音5秒后—听歌/睡觉等不会被误触发
         if self._ws:
             try:
+                # Rust bridge /v1/voice/ws protocol:
+                # 1. 累积 raw PCM BINARY chunks to server (audio_buffer on server side)
+                # 2. 发 {"type": "stop"} 触发 server flush audio_buffer → voice_worker.py (STT)
+                # server 自己也有 VAD (1.5s silence auto-flush) 作为 fallback
                 coro = self._ws.send(audio)
                 asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
+                # 然后发 stop 触发 server 立刻 flush (不等 1.5s 静默)
+                import time as _time
+                _time.sleep(0.01)  # ensure BINARY 先到
+                stop_coro = self._ws.send(json.dumps({"type": "stop"}))
+                asyncio.run_coroutine_threadsafe(stop_coro, self._aio_loop)
             except Exception:
                 # 如果没有 aio_loop (还未启动 _run_ws), 简单忽略
                 pass
 
         self._emit_state("LISTENING")
-
-    # ─── Lifecycle ───
-
     def start(self):
         if self._running:
             return

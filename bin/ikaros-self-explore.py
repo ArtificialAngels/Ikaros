@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bin/icarus-self-explore.py — Ikaros self-understanding via GitNexus.
+bin/ikaros-self-explore.py — Ikaros self-understanding via GitNexus.
 
 A meta-tool that wraps the GitNexus MCP-equivalent CLI (gitnexus query/cypher/
 context/impact/trace/list) into a single command, so the agent (or a human)
@@ -8,12 +8,12 @@ can run a battery of self-exploration queries without having to remember the
 17 MCP tool names.
 
 Usage:
-    python bin/icarus-self-explore.py report              # full self-portrait
-    python bin/icarus-self-explore.py hub                  # top callers (Python)
-    python bin/icarus-self-explore.py impact <name>        # blast radius
-    python bin/icarus-self-explore.py trace <from> <to>     # shortest call path
-    python bin/icarus-self-explore.py score <skill-dir>    # skill quality
-    python bin/icarus-self-explore.py score-all            # score all our skills
+    python bin/ikaros-self-explore.py report              # full self-portrait
+    python bin/ikaros-self-explore.py hub                  # top callers (Python)
+    python bin/ikaros-self-explore.py impact <name>        # blast radius
+    python bin/ikaros-self-explore.py trace <from> <to>     # shortest call path
+    python bin/ikaros-self-explore.py score <skill-dir>    # skill quality
+    python bin/ikaros-self-explore.py score-all            # score all our skills
 
 Prereqs:
     GitNexus 1.6.7+ installed at ~/.local/share/gitnexus/gitnexus/
@@ -40,14 +40,14 @@ SKILLS_ROOT = HERMES_ROOT / "data/hermes-agent/skills"
 OUR_SKILLS = [
     "productivity/cad-file-inventory",
     "productivity/file-inventory-excel",
-    "productivity/icarus-meta-skill-miner",
+    "productivity/ikaros-meta-skill-miner",
     "productivity/meta-cad-inventory-pipeline",
     "software-development/hermes-windows-runtime",
     "software-development/hermes-agent-skill-authoring",
     "data-science/dxf-table-extract",
     "autonomous-ai-agents/hermes-dojo",
-    "autonomous-ai-agents/icarus-self-audit",
-    "autonomous-ai-agents/icarus-self-orientation",
+    "autonomous-ai-agents/ikaros-self-audit",
+    "autonomous-ai-agents/ikaros-self-orientation",
 ]
 
 
@@ -218,17 +218,17 @@ def main() -> int:
         cmd_hub()
     elif cmd == "impact":
         if len(sys.argv) < 3:
-            print("usage: icarus-self-explore.py impact <target>")
+            print("usage: ikaros-self-explore.py impact <target>")
             return 2
         cmd_impact(sys.argv[2])
     elif cmd == "trace":
         if len(sys.argv) < 4:
-            print("usage: icarus-self-explore.py trace <from> <to>")
+            print("usage: ikaros-self-explore.py trace <from> <to>")
             return 2
         cmd_trace(sys.argv[2], sys.argv[3])
     elif cmd == "score":
         if len(sys.argv) < 3:
-            print("usage: icarus-self-explore.py score <skill-dir>")
+            print("usage: ikaros-self-explore.py score <skill-dir>")
             return 2
         cmd_score(sys.argv[2])
     elif cmd == "score-all":

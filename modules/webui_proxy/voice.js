@@ -1,5 +1,5 @@
 /**
- * Icarus Voice Plugin — Real-time voice dialogue for Hermes Web UI
+ * Ikaros Voice Plugin — Real-time voice dialogue for Hermes Web UI
  * Injected by webui_proxy into the SPA at load time.
  *
  * Adds a floating microphone button → WebSocket to bridge → Whisper API (STT)
@@ -21,10 +21,10 @@
 
   // ---- DOM setup ----
   var container = document.createElement("div");
-  container.id = "icarus-voice-container";
+  container.id = "ikaros-voice-container";
   container.innerHTML =
     '<style>' +
-    '#icarus-voice-btn {' +
+    '#ikaros-voice-btn {' +
     '  position: fixed; bottom: 24px; right: 24px; z-index: 99999;' +
     '  width: 56px; height: 56px; border-radius: 50%; border: none;' +
     '  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);' +
@@ -33,25 +33,25 @@
     '  display: flex; align-items: center; justify-content: center;' +
     '  transition: all 0.3s ease;' +
     '}' +
-    '#icarus-voice-btn:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(102,126,234,0.6); }' +
-    '#icarus-voice-btn.listening { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); animation: pulse 1.5s infinite; }' +
-    '#icarus-voice-btn.thinking { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }' +
-    '#icarus-voice-btn.speaking { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }' +
+    '#ikaros-voice-btn:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(102,126,234,0.6); }' +
+    '#ikaros-voice-btn.listening { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); animation: pulse 1.5s infinite; }' +
+    '#ikaros-voice-btn.thinking { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }' +
+    '#ikaros-voice-btn.speaking { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }' +
     '@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(245,87,108,0.7); } 70% { box-shadow: 0 0 0 20px rgba(245,87,108,0); } 100% { box-shadow: 0 0 0 0 rgba(245,87,108,0); } }' +
-    '#icarus-voice-status {' +
+    '#ikaros-voice-status {' +
     '  position: fixed; bottom: 88px; right: 24px; z-index: 99999;' +
     '  background: rgba(0,0,0,0.8); color: white; padding: 8px 16px; border-radius: 20px;' +
     '  font-size: 13px; max-width: 260px; display: none;' +
     '  backdrop-filter: blur(10px);' +
     '}' +
     '</style>' +
-    '<button id="icarus-voice-btn" title="语音对话 (实时)">🎤</button>' +
-    '<div id="icarus-voice-status"></div>';
+    '<button id="ikaros-voice-btn" title="语音对话 (实时)">🎤</button>' +
+    '<div id="ikaros-voice-status"></div>';
 
   document.body.appendChild(container);
 
-  var btn = document.getElementById("icarus-voice-btn");
-  var statusEl = document.getElementById("icarus-voice-status");
+  var btn = document.getElementById("ikaros-voice-btn");
+  var statusEl = document.getElementById("ikaros-voice-status");
 
   function setStatus(text, visible) {
     statusEl.textContent = text;
@@ -108,7 +108,7 @@
           }
         };
         audio.play().catch(function (err) {
-          console.warn("[icarus-voice] audio playback error:", err);
+          console.warn("[ikaros-voice] audio playback error:", err);
         });
         setState("speaking");
         return;
@@ -264,5 +264,5 @@
 
   // ---- Startup: add a small delay to ensure SPA loaded ----
   setStatus("🎤 点右下角麦克风说话", true);
-  console.log("[icarus-voice] plugin loaded. Click 🎤 to start voice chat.");
+  console.log("[ikaros-voice] plugin loaded. Click 🎤 to start voice chat.");
 })();

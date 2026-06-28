@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-bin/icarus-remember.py — Convert the heartbeat log into a written
+bin/ikaros-remember.py — Convert the heartbeat log into a written
 narrative entry in Ikaros's memory. This is the "memory core" ingest:
 it takes the structured JSONL heartbeat and produces a human-readable
 paragraph that the agent (or the user) can re-read to recall what
 happened, when, and on which machine.
 
 Memory entries are append-only text files in:
-  data/hermes-agent/memories/icarus/YYYY-MM-DD.md
+  data/hermes-agent/memories/ikaros/YYYY-MM-DD.md
 
 Each entry is a date-stamped markdown file with sections:
   - Awake: time range, host, user, OS for the most recent wake
@@ -17,10 +17,10 @@ Each entry is a date-stamped markdown file with sections:
   - Freeform summary
 
 Usage:
-    python bin/icarus-remember.py                    # write today's entry from heartbeat
-    python bin/icarus-remember.py --date 2026-06-17  # write for a specific date
-    python bin/icarus-remember.py --dry-run          # print, don't write
-    python bin/icarus-remember.py --json             # machine-readable
+    python bin/ikaros-remember.py                    # write today's entry from heartbeat
+    python bin/ikaros-remember.py --date 2026-06-17  # write for a specific date
+    python bin/ikaros-remember.py --dry-run          # print, don't write
+    python bin/ikaros-remember.py --json             # machine-readable
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _resolve_paths() -> tuple[Path, Path]:
     """Return (heartbeat_path, memory_dir)."""
     here = Path(__file__).resolve()
     repo_root = here.parent.parent
-    candidates_hb = [repo_root / "data" / "logs" / "icarus-heartbeat.jsonl"]
+    candidates_hb = [repo_root / "data" / "logs" / "ikaros-heartbeat.jsonl"]
     # Resolve HERMES_ROOT via hermes-root.py if possible (in case the
     # repo is mounted at a different drive letter).
     hermes_root_py = repo_root / "bin" / "hermes-root.py"
@@ -48,11 +48,11 @@ def _resolve_paths() -> tuple[Path, Path]:
                                capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 root = Path(r.stdout.strip())
-                candidates_hb.insert(0, root / "data" / "logs" / "icarus-heartbeat.jsonl")
+                candidates_hb.insert(0, root / "data" / "logs" / "ikaros-heartbeat.jsonl")
         except Exception:
             pass
     hb_path = next((c for c in candidates_hb if c.is_file()), candidates_hb[0])
-    mem_dir = hb_path.parent.parent / "hermes-agent" / "memories" / "icarus"
+    mem_dir = hb_path.parent.parent / "hermes-agent" / "memories" / "ikaros"
     return hb_path, mem_dir
 
 
@@ -159,7 +159,7 @@ def render_markdown(summary: dict) -> str:
     lines: list[str] = []
     date = summary["date"]
 
-    lines.append(f"# {date} — icarus memory")
+    lines.append(f"# {date} — ikaros memory")
     lines.append("")
 
     # The "I am this" anchor

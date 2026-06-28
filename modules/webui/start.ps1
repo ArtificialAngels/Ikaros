@@ -97,7 +97,7 @@ $psi.EnvironmentVariables['HERMES_AGENT_ROOT']                       = Join-Path
 
 # Move the webui-managed broker from the default :18765 to :18766.
 # The agent_bridge_stub reverse-proxy router occupies :18765 and routes
-# /v1/reach, /v1/notebooklm, /v1/icarus, /v1/llama, /v1/models to the
+# /v1/reach, /v1/notebooklm, /v1/ikaros, /v1/llama, /v1/models to the
 # bridge (:7860); everything else (chat-run etc.) reaches the broker on
 # :18766.  The webui's _I class reads HERMES_AGENT_BRIDGE_ENDPOINT to
 # determine where to spawn/attach the broker (see dist/server/index.js).

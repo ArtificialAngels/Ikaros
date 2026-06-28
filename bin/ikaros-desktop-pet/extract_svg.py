@@ -2,7 +2,7 @@
 import re, os
 os.chdir(r"E:\Hermes Agent")
 
-with open('bin/icarus-desktop-pet/character.html', encoding='utf-8') as f:
+with open('bin/ikaros-desktop-pet/character.html', encoding='utf-8') as f:
     html = f.read()
 
 m = re.search(r'<svg viewBox="0 0 200 280"[^>]*>.*?</svg>', html, re.DOTALL)
@@ -17,7 +17,7 @@ if m:
     }
   </style>
 </svg>''')
-    with open('bin/icarus-desktop-pet/character.svg', 'w', encoding='utf-8') as f:
+    with open('bin/ikaros-desktop-pet/character.svg', 'w', encoding='utf-8') as f:
         f.write(svg)
     print(f'✓ character.svg created ({len(svg)} bytes)')
 else:

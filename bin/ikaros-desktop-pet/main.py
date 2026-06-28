@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -22,7 +23,7 @@ from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 
 class _Live2DPage(QWebEnginePage):
     """QWebEnginePage subclass that forwards JS console messages to Python log."""
-    _log = logging.getLogger("icarus.live2d")
+    _log = logging.getLogger("ikaros.live2d")
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         # Log ALL messages (including errors) so we can diagnose rendering issues
@@ -125,8 +126,8 @@ _MODEL_CACHE_PATH = HERE / "llm_model_cache.json"
 # 手动加, 让 from audio_engine import AudioEngine 等本地 import 能工作
 sys.path.insert(0, str(HERE))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [icarus] %(message)s")
-log = logging.getLogger("icarus")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [ikaros] %(message)s")
+log = logging.getLogger("ikaros")
 
 # 4C: IntentRouter (Layer 1 规则 — task/chat/ambiguous)
 # 必须在 HERE + log 都定义之后, 否则 except 分支用 log 会 NameError
@@ -149,6 +150,29 @@ except ImportError:
 # ─── LLM model cache helpers ───
 
 
+def _scan_local_gguf_files() -> list[str]:
+    """Scan data/models/*.gguf and return list of model names (no .gguf suffix)."""
+    models_dir = HERMES_ROOT / "data" / "models"
+    if not models_dir.exists():
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    try:
+        for f in sorted(models_dir.glob("*.gguf")):
+            name = f.stem  # removes .gguf
+            # Exclude: mmproj, split parts (xxxx-of-xxxx)
+            if "mmproj" in name.lower():
+                continue
+            if "-of-" in name and re.search(r'\d{5}-of-\d{5}', name):
+                continue
+            if name not in seen:
+                seen.add(name)
+                result.append(name)
+    except Exception as exc:
+        log.warning("GGUF scan failed: %s", exc)
+    return result
+
+
 def _save_model_cache(models: list[str], cloud_models: list[str]):
     """Save model list to disk for fast startup."""
     try:
@@ -162,14 +186,14 @@ def _save_model_cache(models: list[str], cloud_models: list[str]):
 
 
 def _load_model_cache() -> dict | None:
-    """Load cached model list from disk. Returns None if missing or stale (>1h)."""
+    """Load cached model list from disk. Returns None if missing or stale (>12h)."""
     try:
         if not _MODEL_CACHE_PATH.exists():
             return None
         data = json.loads(_MODEL_CACHE_PATH.read_text(encoding="utf-8"))
-        # Stale if older than 1 hour
+        # Stale if older than 12 hours (模型文件不经常变)
         ts = data.get("ts", 0)
-        if time.time() - ts > 3600:
+        if time.time() - ts > 43200:
             return None
         if not data.get("models"):
             return None
@@ -588,6 +612,18 @@ class PetWindow(QMainWindow):
         self._pending_llm_menu = llm_menu
 
         menu.addSeparator()
+
+        # ── 📊 监控日志 (PowerShell tail) ──
+        def _open_monitor():
+            import subprocess
+            log_path = str(HERMES_ROOT / "data" / "logs" / "ikaros-pet.log")
+            subprocess.Popen(
+                ["powershell", "-NoExit", "-Command",
+                 f"Get-Content -Wait '{log_path}' -Encoding UTF8 -Tail 50"],
+                creationflags=0x00000008,  # DETACHED_PROCESS
+            )
+        menu.addAction("📊 监控日志", _open_monitor)
+
         menu.addAction("💤 隐藏", lambda: self.hide())
         menu.addAction("❌ 退出", lambda: QApplication.quit())
 
@@ -712,7 +748,9 @@ class PetWindow(QMainWindow):
     }
 
     def _fetch_models_async(self):
-        """Fetch available models: llama-server (local) + cloud (by API key)."""
+        """Fetch available models: llama-server (local) + cloud (by API key).
+        Falls back to scanning local GGUF files if server unreachable.
+        """
         self._models_fetching = True
 
         def worker():
@@ -721,8 +759,9 @@ class PetWindow(QMainWindow):
             local_models: list[str] = []
             cloud_models: list[str] = []
 
-            # 1. Local models — try llama-server :8080 first (always stable),
-            #    fall back to bridge :7860
+            # 1. Local models — try llama-server :8080 first (router mode),
+            #    fall back to bridge :7860, then local GGUF scan
+            api_success = False
             for port in (8080, 7860):
                 try:
                     url = f"http://127.0.0.1:{port}/v1/models"
@@ -730,19 +769,30 @@ class PetWindow(QMainWindow):
                     with urllib.request.urlopen(req, timeout=3.0) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
                     raw_ids = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
-                    # Deduplicate: strip .gguf suffix, remove mmproj
+                    # Deduplicate: strip .gguf suffix, remove mmproj and split parts
                     seen: set[str] = set()
                     for mid in raw_ids:
                         if "mmproj" in mid.lower():
+                            continue
+                        # Exclude split parts: xxx-00001-of-00002
+                        if re.search(r'-\d{5}-of-\d{5}', mid):
                             continue
                         base = mid.removesuffix(".gguf").removesuffix(".GGUF")
                         if base not in seen:
                             seen.add(base)
                             local_models.append(base)
+                    api_success = True
                     break  # got response, no need to try next port
                 except Exception as exc:
                     log.debug("port %d models failed: %s", port, exc)
                     continue
+
+            # 1b. Fallback: scan local GGUF files if API failed
+            if not api_success:
+                gguf_models = _scan_local_gguf_files()
+                if gguf_models:
+                    local_models = gguf_models
+                    log.info("fallback: scanned %d local GGUF files", len(gguf_models))
 
             # 2. Cloud models — detect API keys from env + HERMES_HOME/.env
             configured_providers = self._detect_cloud_providers()
@@ -853,13 +903,23 @@ class PetWindow(QMainWindow):
         llm_menu.addAction("🔄 刷新列表", self._fetch_models_async)
 
     def _ctx_select_model(self, model_id: str):
-        """Select a different LLM model for chat."""
+        """Select a different LLM model for chat.
+        Calls bridge API to pre-load model, so next chat request has it ready.
+        """
         try:
             old = self._current_llm_model
             self._current_llm_model = model_id
             log.info("LLM model: %s → %s", old, model_id)
+
             # Notify user via Live2D tip
-            self.notify_live2d_tip(f"切换到 {model_id}")
+            is_cloud = model_id in getattr(self, '_cloud_model_set', set())
+            if is_cloud:
+                self.notify_live2d_tip(f"切换到 ☁️ {model_id}")
+            else:
+                self.notify_live2d_tip(f"正在加载 💻 {model_id}...")
+                # Pre-load local model via bridge API (async, don't block UI)
+                self._preload_model_async(model_id)
+
             # Update chat dock status if it exists
             app = QApplication.instance()
             if app and hasattr(app, '_icarus_pet'):
@@ -869,16 +929,48 @@ class PetWindow(QMainWindow):
                         pet.chat_dock.update_model(model_id)
                     except RuntimeError as exc:
                         log.warning("chat_dock.update_model failed: %s", exc)
-                # FIX 2026-06-27b: Sync model to audio engine for voice
+                # Sync model to audio engine for voice
                 if hasattr(pet, 'audio') and pet.audio:
                     try:
                         pet.audio.set_model(model_id)
                     except RuntimeError as exc:
                         log.warning("audio.set_model failed: %s", exc)
-            # Also update context menu title for next open
-            self._current_llm_model = model_id
         except Exception as exc:
             log.error("_ctx_select_model CRASHED: %s", exc, exc_info=True)
+
+    def _preload_model_async(self, model_id: str):
+        """Pre-load model on llama-server via bridge API (async, non-blocking)."""
+        def worker():
+            import urllib.request
+            try:
+                # Try bridge first (:7860), then llama-server directly (:8080)
+                for port in (7860, 8080):
+                    try:
+                        url = f"http://127.0.0.1:{port}/v1/models/load"
+                        body = json.dumps({"model": model_id}).encode("utf-8")
+                        req = urllib.request.Request(
+                            url, data=body,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=30.0) as resp:
+                            result = resp.read().decode("utf-8")
+                            log.info("model pre-load %s on :%d: %s", model_id, port, result[:100])
+                        break  # success
+                    except urllib.error.HTTPError as exc:
+                        # 400 = already running (not an error), retry for other errors
+                        if exc.code == 400:
+                            log.info("model %s already loaded (bridge says running)", model_id)
+                            break
+                        log.debug("pre-load :%d failed: %s", port, exc)
+                        continue
+                    except Exception as exc:
+                        log.debug("pre-load :%d failed: %s", port, exc)
+                        continue
+            except Exception as exc:
+                log.debug("model pre-load failed: %s", exc)
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
 # ─── System Tray ───
@@ -1148,13 +1240,8 @@ def _quit(self):
 
 # ─── Chat Dock (4C: 文本聊天入口) ───
 
-LLAMA_CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
-LLAMA_CHAT_TIMEOUT_S = 120.0
-
-# BRIDGE (port 7860) currently unresponsive — using llama-server directly.
-# When bridge is fixed, uncomment the line below and remove the two above.
-# LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
-# LLAMA_CHAT_TIMEOUT_S = 30.0
+LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
+LLAMA_CHAT_TIMEOUT_S = 30.0
 
 
 async def bridge_chat(text: str, *, profile: str = "default", model: str = "MiniMax-M3") -> str:

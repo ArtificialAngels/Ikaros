@@ -2,7 +2,7 @@
   "$schema": "https://v2.tauri.app/schema/tauri.json",
   "productName": "伊卡洛斯",
   "version": "0.1.0",
-  "identifier": "com.icarus.desktop-pet",
+  "identifier": "com.ikaros.desktop-pet",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",

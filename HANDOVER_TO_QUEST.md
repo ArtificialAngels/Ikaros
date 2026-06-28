@@ -1,10 +1,10 @@
-# Handover: Icarus → Quest
+# Handover: Ikaros → Quest
 
 **Time**: 2026-06-26
 **Session**: neuro reflection fix
 **Status**: 交给 Quest
 
-## ✅ 我（Icarus）做完的（已 commit）
+## ✅ 我（Ikaros）做完的（已 commit）
 
 ```
 d1a71af fix(neuro): reflection LLM endpoint - use real model name + longer timeout

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-bin/icarus-timeline.py — Reconstruct icarus's awake / asleep timeline
+bin/ikaros-timeline.py — Reconstruct ikaros's awake / asleep timeline
 from the heartbeat log. Answers: when was I alive, when was I asleep,
 when did services die, when did the machine change.
 
 Usage:
-    python bin/icarus-timeline.py
-    python bin/icarus-timeline.py --since 2026-06-18T00:00
-    python bin/icarus-timeline.py --gap-threshold 60  # gaps > 60s = sleep
-    python bin/icarus-timeline.py --json              # machine-readable output
-    python bin/icarus-timeline.py --events restart    # only show events
+    python bin/ikaros-timeline.py
+    python bin/ikaros-timeline.py --since 2026-06-18T00:00
+    python bin/ikaros-timeline.py --gap-threshold 60  # gaps > 60s = sleep
+    python bin/ikaros-timeline.py --json              # machine-readable output
+    python bin/ikaros-timeline.py --events restart    # only show events
 """
 from __future__ import annotations
 
@@ -19,13 +19,13 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Default heartbeat location: $HERMES_ROOT/data/logs/icarus-heartbeat.jsonl
+# Default heartbeat location: $HERMES_ROOT/data/logs/ikaros-heartbeat.jsonl
 # We resolve via hermes-root.py if available, else fall back to CWD-relative.
 def _resolve_heartbeat() -> Path:
     here = Path(__file__).resolve()
     repo_root = here.parent.parent
     candidates = [
-        repo_root / "data" / "logs" / "icarus-heartbeat.jsonl",
+        repo_root / "data" / "logs" / "ikaros-heartbeat.jsonl",
     ]
     # Also try hermes-root.py device-info for absolute resolution
     hermes_root_py = repo_root / "bin" / "hermes-root.py"
@@ -37,7 +37,7 @@ def _resolve_heartbeat() -> Path:
                                capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 root = Path(r.stdout.strip())
-                candidates.insert(0, root / "data" / "logs" / "icarus-heartbeat.jsonl")
+                candidates.insert(0, root / "data" / "logs" / "ikaros-heartbeat.jsonl")
         except Exception:
             pass
     for c in candidates:
@@ -89,7 +89,7 @@ def reconstruct_timeline(records: list[dict], gap_threshold_s: int) -> list[dict
         - duration_s
         - events: list of events during this awake period
 
-    'quarterly' events (added by icarus-heartbeat-archive.py for the
+    'quarterly' events (added by ikaros-heartbeat-archive.py for the
     fuzzy window) are bucketed separately. They represent
     pre-summarised activity from years ago and are not part of the
     active awake timeline. We return them in `quarterlies` so the
@@ -195,7 +195,7 @@ def find_gaps(records: list[dict], threshold_s: int) -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "timeline")
     ap.add_argument("--heartbeat", type=Path, default=None,
-                    help="path to icarus-heartbeat.jsonl (default: auto-resolve)")
+                    help="path to ikaros-heartbeat.jsonl (default: auto-resolve)")
     ap.add_argument("--since", type=str, default=None,
                     help="only show events after this ISO timestamp")
     ap.add_argument("--gap-threshold", type=int, default=60,

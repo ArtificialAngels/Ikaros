@@ -34,6 +34,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{RwLock, Semaphore};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use base64::Engine;
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -224,13 +226,13 @@ impl RequestLog {
 }
 
 // ---------------------------------------------------------------------------
-// Icarus memory reader
+// Ikaros memory reader
 // ---------------------------------------------------------------------------
 
 fn icarus_memory_dir() -> std::path::PathBuf {
     std::env::var("ICARUS_MEMORY_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| project_root().join("data").join("hermes-agent").join("memories").join("icarus"))
+        .unwrap_or_else(|_| project_root().join("data").join("hermes-agent").join("memories").join("ikaros"))
 }
 
 /// Read the most recent N daily notes (sorted newest-first).
@@ -506,6 +508,116 @@ impl WorkerPool {
 }
 
 // ---------------------------------------------------------------------------
+// Neuro state — IkarosSignals 1:1 in Rust
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct HistoryEntry {
+    role: String,
+    content: String,
+    ts: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MemoryEntry {
+    id: String,
+    document: String,
+    metadata: serde_json::Value,
+    created_at: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ProactiveEntry {
+    reason: String,
+    content: String,
+    ts: f64,
+}
+
+struct NeuroState {
+    stt_ready: bool,
+    tts_ready: bool,
+    llm_ready: bool,
+    human_speaking: bool,
+    ai_thinking: bool,
+    ai_speaking: bool,
+    new_message: bool,
+    last_message_time: f64,
+    patience: f64,
+    history: Vec<HistoryEntry>,
+    memories: Vec<MemoryEntry>,
+    proactive_messages: Vec<ProactiveEntry>,
+    next_memory_id: u64,
+}
+
+impl NeuroState {
+    fn new() -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let memories = load_memories_from_disk();
+        Self {
+            stt_ready: false,
+            tts_ready: false,
+            llm_ready: true,
+            human_speaking: false,
+            ai_thinking: false,
+            ai_speaking: false,
+            new_message: false,
+            last_message_time: now,
+            patience: 30.0,
+            history: Vec::new(),
+            memories,
+            proactive_messages: Vec::new(),
+            next_memory_id: 1000,
+        }
+    }
+
+    fn time_since_last(&self) -> f64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        (now - self.last_message_time).max(0.0)
+    }
+}
+
+fn neuro_memories_path() -> std::path::PathBuf {
+    project_root().join("data").join("ikaros-coordination").join("neuro-memories.jsonl")
+}
+
+fn load_memories_from_disk() -> Vec<MemoryEntry> {
+    let path = neuro_memories_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    content.lines()
+        .filter_map(|line| serde_json::from_str::<MemoryEntry>(line).ok())
+        .collect()
+}
+
+fn append_memory_to_disk(entry: &MemoryEntry) {
+    let path = neuro_memories_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(line) = serde_json::to_string(entry) {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(file, "{}", line);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
@@ -519,6 +631,8 @@ struct AppState {
     request_log: Arc<RequestLog>,
     /// Cached modules list (refreshed periodically)
     modules_cache: RwLock<(Instant, Vec<serde_json::Value>)>,
+    /// Neuro/Prompter state (shared, RwLock)
+    neuro_state: Arc<RwLock<NeuroState>>,
 }
 
 impl AppState {
@@ -544,6 +658,7 @@ impl AppState {
             signal_bus: Arc::new(SignalBus::new(500)),
             request_log: Arc::new(RequestLog::new(1000)),
             modules_cache: RwLock::new((Instant::now(), Vec::new())),
+            neuro_state: Arc::new(RwLock::new(NeuroState::new())),
         }
     }
 
@@ -831,82 +946,268 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String) {
         return;
     }
 
-    // Message loop
-    while let Some(msg) = socket.recv().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                // Parse incoming message
-                match serde_json::from_str::<serde_json::Value>(&text) {
-                    Ok(parsed) => {
-                        let msg_type = parsed
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
+    // Start voice worker process
+    let python = find_portable_python();
+    let worker_script = project_root().join("bridge").join("voice_worker.py");
+    if !worker_script.is_file() {
+        warn!(path = %worker_script.display(), "voice_worker.py not found");
+        let _ = socket.send(Message::Text(
+            serde_json::json!({"type": "error", "message": "voice_worker.py not found"}).to_string().into()
+        )).await;
+        return;
+    }
 
-                        match msg_type {
-                            "transcribe" => {
-                                // TODO: forward audio to whisper endpoint
-                                let resp = serde_json::json!({
-                                    "type": "transcription",
-                                    "text": "[Rust bridge PoC — not yet implemented]",
-                                });
-                                let _ = socket.send(Message::Text(resp.to_string().into())).await;
+    let mut child = match tokio::process::Command::new(&python)
+        .arg(worker_script.to_string_lossy().as_ref())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("failed to start voice_worker.py: {}", e);
+            let _ = socket.send(Message::Text(
+                serde_json::json!({"type": "error", "message": format!("voice worker failed: {}", e)}).to_string().into()
+            )).await;
+            return;
+        }
+    };
+
+    let mut worker_stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            warn!("voice worker: no stdin");
+            return;
+        }
+    };
+    let worker_stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            warn!("voice worker: no stdout");
+            return;
+        }
+    };
+    let reader = BufReader::new(worker_stdout);
+    let mut worker_lines = reader.lines();
+
+    // Send initial model config
+    let init_msg = serde_json::json!({"type": "set_model", "model": model});
+    let _ = worker_stdin
+        .write_all((serde_json::to_string(&init_msg).unwrap() + "\n").as_bytes())
+        .await;
+    let _ = worker_stdin.flush().await;
+
+    let mut request_id = 0u64;
+    let mut audio_buffer: Vec<u8> = Vec::new();
+    let mut last_audio_time = tokio::time::Instant::now();
+    let mut is_audio_session = false;
+    let base64_engine = base64::engine::general_purpose::STANDARD;
+
+    // Message loop — handle WS and worker concurrently
+    loop {
+        tokio::select! {
+            // ── Read from WebSocket ──
+            ws_msg = socket.recv() => {
+                match ws_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<serde_json::Value>(&text) {
+                            Ok(parsed) => {
+                                let msg_type = parsed.get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                match msg_type {
+                                    "start" => {
+                                        is_audio_session = true;
+                                        audio_buffer.clear();
+                                        let m = parsed.get("model")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("auto");
+                                        let msg = serde_json::json!({"type": "set_model", "model": m});
+                                        let _ = worker_stdin
+                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                                            .await;
+                                        let _ = worker_stdin.flush().await;
+                                        let resp = serde_json::json!({"type": "status", "message": "listening"});
+                                        let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                    }
+                                    "stop" => {
+                                        // Flush accumulated audio to worker
+                                        if !audio_buffer.is_empty() {
+                                            request_id += 1;
+                                            let b64 = base64_engine.encode(&audio_buffer);
+                                            let msg = serde_json::json!({
+                                                "type": "audio",
+                                                "request_id": request_id,
+                                                "data": b64,
+                                                "final": true,
+                                            });
+                                            let _ = worker_stdin
+                                                .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                                                .await;
+                                            let _ = worker_stdin.flush().await;
+                                            audio_buffer.clear();
+                                        }
+                                        is_audio_session = false;
+                                        // Tell worker to stop
+                                        let msg = serde_json::json!({"type": "stop"});
+                                        let _ = worker_stdin
+                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                                            .await;
+                                        let _ = worker_stdin.flush().await;
+                                    }
+                                    "set_model" => {
+                                        let m = parsed.get("model")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("auto");
+                                        let msg = serde_json::json!({"type": "set_model", "model": m});
+                                        let _ = worker_stdin
+                                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                                            .await;
+                                        let _ = worker_stdin.flush().await;
+                                    }
+                                    "ping" => {
+                                        let resp = serde_json::json!({"type": "pong"});
+                                        let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                    }
+                                    _ => {
+                                        let resp = serde_json::json!({
+                                            "type": "error",
+                                            "message": format!("unknown: {}", msg_type),
+                                        });
+                                        let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                    }
+                                }
                             }
-                            "tts" => {
-                                // TODO: forward to TTS endpoint
-                                let resp = serde_json::json!({
-                                    "type": "tts",
-                                    "status": "not_implemented",
-                                });
-                                let _ = socket.send(Message::Text(resp.to_string().into())).await;
-                            }
-                            "ping" => {
-                                let resp = serde_json::json!({"type": "pong"});
-                                let _ = socket.send(Message::Text(resp.to_string().into())).await;
-                            }
-                            _ => {
+                            Err(e) => {
                                 let resp = serde_json::json!({
                                     "type": "error",
-                                    "message": format!("unknown message type: {}", msg_type),
+                                    "message": format!("bad JSON: {}", e),
                                 });
                                 let _ = socket.send(Message::Text(resp.to_string().into())).await;
                             }
                         }
                     }
-                    Err(e) => {
-                        let resp = serde_json::json!({
-                            "type": "error",
-                            "message": format!("invalid JSON: {}", e),
+                    Some(Ok(Message::Binary(data))) => {
+                        if is_audio_session {
+                            audio_buffer.extend_from_slice(&data);
+                            last_audio_time = tokio::time::Instant::now();
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        info!("voice WS closed by client");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        warn!(error = %e, "voice WS error");
+                        break;
+                    }
+                    None => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Check VAD silence timeout (every 500ms) ──
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                if is_audio_session && !audio_buffer.is_empty() {
+                    let elapsed = last_audio_time.elapsed();
+                    if elapsed > Duration::from_secs_f64(1.5) {
+                        // Silence detected — flush to worker
+                        info!("voice VAD: silence {:.1}s, flushing {}B",
+                              elapsed.as_secs_f64(), audio_buffer.len());
+                        request_id += 1;
+                        let b64 = base64_engine.encode(&audio_buffer);
+                        let msg = serde_json::json!({
+                            "type": "audio",
+                            "request_id": request_id,
+                            "data": b64,
+                            "final": true,
                         });
-                        let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                        let _ = worker_stdin
+                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                            .await;
+                        let _ = worker_stdin.flush().await;
+                        audio_buffer.clear();
+                    } else if audio_buffer.len() > 1_048_576 {
+                        // 1MB max per utterance — emergency flush
+                        info!("voice buffer: {}B, emergency flush", audio_buffer.len());
+                        request_id += 1;
+                        let b64 = base64_engine.encode(&audio_buffer);
+                        let msg = serde_json::json!({
+                            "type": "audio",
+                            "request_id": request_id,
+                            "data": b64,
+                            "final": true,
+                        });
+                        let _ = worker_stdin
+                            .write_all((serde_json::to_string(&msg).unwrap() + "\n").as_bytes())
+                            .await;
+                        let _ = worker_stdin.flush().await;
+                        audio_buffer.clear();
                     }
                 }
             }
-            Ok(Message::Binary(_data)) => {
-                // TODO: handle audio binary data
-                let resp = serde_json::json!({
-                    "type": "ack",
-                    "message": "binary data received (not yet processed)",
-                });
-                let _ = socket.send(Message::Text(resp.to_string().into())).await;
+
+            // ── Read from worker stdout ──
+            worker_line = worker_lines.next_line() => {
+                match worker_line {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<serde_json::Value>(trimmed) {
+                            Ok(resp) => {
+                                let resp_type = resp.get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+
+                                if resp_type == "mp3" {
+                                    // Decode base64 MP3, send as binary to WS
+                                    if let Some(data_b64) = resp.get("data").and_then(|v| v.as_str()) {
+                                        match base64_engine.decode(data_b64) {
+                                            Ok(mp3_bytes) => {
+                                                let _ = socket.send(Message::Binary(mp3_bytes.into())).await;
+                                            }
+                                            Err(e) => {
+                                                warn!("voice worker: bad base64 in mp3: {}", e);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Forward JSON directly to WebSocket
+                                    let resp_json_str = serde_json::to_string(&resp).unwrap_or_default();
+                                    let _ = socket.send(Message::Text(resp_json_str.into())).await;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("voice worker: bad JSON line ({}): {}", e, trimmed);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        info!("voice worker: stdout ended");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("voice worker: stdout error: {}", e);
+                        break;
+                    }
+                }
             }
-            Ok(Message::Close(_)) => {
-                info!("voice WebSocket closed by client");
-                break;
-            }
-            Err(e) => {
-                warn!(error = %e, "voice WebSocket error");
-                break;
-            }
-            _ => {}
         }
     }
 
+    // Cleanup: kill worker process
+    let _ = worker_stdin.shutdown().await;
+    let _ = child.wait().await;
     info!("voice WebSocket session ended");
 }
 
 // ---------------------------------------------------------------------------
-// Icarus endpoints — Phase 2 (real file I/O)
+// Ikaros endpoints — Phase 2 (real file I/O)
 // ---------------------------------------------------------------------------
 
 /// GET /v1/liveness — composite liveness check
@@ -946,6 +1247,160 @@ async fn liveness(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
             "workers": alive_count,
         },
         "summary": format!("{}/{} workers alive", alive_count, workers.len()),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Neuro endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /v1/neuro/status — return current neuro state snapshot
+async fn neuro_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let ns = state.neuro_state.read().await;
+    Json(serde_json::json!({
+        "patience": ns.patience,
+        "time_since_last_message": ns.time_since_last(),
+        "history_len": ns.history.len(),
+        "human_speaking": ns.human_speaking,
+        "AI_thinking": ns.ai_thinking,
+        "AI_speaking": ns.ai_speaking,
+        "llm_ready": ns.llm_ready,
+        "stt_ready": ns.stt_ready,
+        "tts_ready": ns.tts_ready,
+        "memories_len": ns.memories.len(),
+        "pet_visible": true,
+        "pet_mode": "continuous",
+    }))
+}
+
+/// POST /v1/neuro/patience — set patience threshold
+async fn neuro_set_patience(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let seconds = body.get("seconds")
+        .and_then(|v| v.as_f64())
+        .map(|s| s.max(5.0).min(600.0))
+        .unwrap_or(30.0);
+    {
+        let mut ns = state.neuro_state.write().await;
+        ns.patience = seconds;
+    }
+    state.signal_bus.emit(
+        "neuro.patience_changed",
+        serde_json::json!({"patience": seconds}),
+    ).await;
+    Json(serde_json::json!({"patience": seconds}))
+}
+
+/// POST /v1/neuro/patience/trigger — manually trigger PATIENCE (simulate timeout)
+async fn neuro_trigger_patience(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    {
+        let mut ns = state.neuro_state.write().await;
+        // Set last_message_time far enough in the past to trigger patience
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        ns.last_message_time = now - ns.patience - 5.0;
+        ns.new_message = true;
+        ns.ai_thinking = true;
+    }
+    state.signal_bus.emit(
+        "neuro.patience_triggered",
+        serde_json::json!({"triggered": true}),
+    ).await;
+    Json(serde_json::json!({"triggered": true}))
+}
+
+/// POST /v1/neuro/reset — reset conversation history
+async fn neuro_reset(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    {
+        let mut ns = state.neuro_state.write().await;
+        ns.history.clear();
+        ns.human_speaking = false;
+        ns.ai_thinking = false;
+        ns.ai_speaking = false;
+        ns.new_message = false;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        ns.last_message_time = now;
+    }
+    Json(serde_json::json!({"reset": true, "history_len": 0}))
+}
+
+/// GET /v1/neuro/memories — list stored memories
+async fn neuro_list_memories(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit: usize = params.get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10)
+        .max(1)
+        .min(100);
+    let ns = state.neuro_state.read().await;
+    let count = ns.memories.len();
+    let memories: Vec<&MemoryEntry> = ns.memories.iter().rev().take(limit).collect();
+    Json(serde_json::json!({
+        "memories": memories,
+        "count": count,
+        "limit": limit,
+    }))
+}
+
+/// POST /v1/neuro/memory/add — add a new memory
+async fn neuro_add_memory(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let document = body.get("document")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if document.is_empty() {
+        return Json(serde_json::json!({"error": "document is required"}));
+    }
+    let metadata = body.get("metadata").cloned().unwrap_or(serde_json::json!({}));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+
+    let entry = {
+        let mut ns = state.neuro_state.write().await;
+        let id = format!("mem-{}", ns.next_memory_id);
+        ns.next_memory_id += 1;
+        let entry = MemoryEntry {
+            id: id.clone(),
+            document,
+            metadata,
+            created_at: now,
+        };
+        ns.memories.push(entry.clone());
+        // Keep max 500 memories
+        if ns.memories.len() > 500 {
+            ns.memories.remove(0);
+        }
+        entry
+    };
+
+    // Persist to disk
+    append_memory_to_disk(&entry);
+
+    Json(serde_json::json!({
+        "id": entry.id,
+        "count": 1,
+    }))
+}
+
+/// GET /v1/neuro/proactive — return recent proactive messages
+async fn neuro_proactive(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let ns = state.neuro_state.read().await;
+    Json(serde_json::json!({
+        "proactive_messages": ns.proactive_messages,
     }))
 }
 
@@ -1034,13 +1489,13 @@ async fn llama_restart(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// GET /v1/icarus/last-session — return most recent memory note
+/// GET /v1/ikaros/last-session — return most recent memory note
 async fn icarus_last_session() -> Json<serde_json::Value> {
     let notes = read_memory_files(1);
     if notes.is_empty() {
         return Json(serde_json::json!({
             "found": false,
-            "reason": "no memory files in icarus memory dir",
+            "reason": "no memory files in ikaros memory dir",
         }));
     }
     let latest = &notes[0];
@@ -1055,7 +1510,7 @@ async fn icarus_last_session() -> Json<serde_json::Value> {
     }))
 }
 
-/// GET /v1/icarus/memories — return memory index
+/// GET /v1/ikaros/memories — return memory index
 async fn icarus_memories(Query(params): Query<std::collections::HashMap<String, String>>) -> Json<serde_json::Value> {
     let days: usize = params.get("days")
         .and_then(|s| s.parse().ok())
@@ -1069,7 +1524,7 @@ async fn icarus_memories(Query(params): Query<std::collections::HashMap<String, 
     }))
 }
 
-/// GET /v1/icarus/awake-briefing — return briefing
+/// GET /v1/ikaros/awake-briefing — return briefing
 async fn icarus_awake_briefing() -> Json<serde_json::Value> {
     let notes = read_memory_files(3);
     let last = notes.first();
@@ -1079,7 +1534,7 @@ async fn icarus_awake_briefing() -> Json<serde_json::Value> {
     }).unwrap_or_default();
 
     // Read recent heartbeat events
-    let heartbeat_path = project_root().join("data").join("logs").join("icarus-heartbeat.jsonl");
+    let heartbeat_path = project_root().join("data").join("logs").join("ikaros-heartbeat.jsonl");
     let recent_events: Vec<serde_json::Value> = if heartbeat_path.is_file() {
         std::fs::read_to_string(&heartbeat_path)
             .unwrap_or_default()
@@ -1110,7 +1565,7 @@ async fn icarus_awake_briefing() -> Json<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Icarus session context — active-session, tail, resume-context
+// Ikaros session context — active-session, tail, resume-context
 // (for UI restart conversation recovery)
 // ---------------------------------------------------------------------------
 
@@ -1155,7 +1610,7 @@ async fn _exec_webui_sql(script: &str) -> Option<String> {
     }
 }
 
-/// GET /v1/icarus/active-session — find the most recent un-ended session
+/// GET /v1/ikaros/active-session — find the most recent un-ended session
 async fn icarus_active_session(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
@@ -1201,7 +1656,7 @@ async fn icarus_active_session(
     }
 }
 
-/// GET /v1/icarus/session/{id}/tail — get last N messages of a session
+/// GET /v1/ikaros/session/{id}/tail — get last N messages of a session
 async fn icarus_session_tail(
     axum::extract::Path(session_id): axum::extract::Path<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -1242,7 +1697,7 @@ async fn icarus_session_tail(
     }
 }
 
-/// POST /v1/icarus/session/{id}/resume-context — compose system prompt for resume
+/// POST /v1/ikaros/session/{id}/resume-context — compose system prompt for resume
 async fn icarus_resume_context(
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
@@ -1941,15 +2396,23 @@ async fn main() {
         .route("/v1/models/evict", post(evict_model))
         // Voice WebSocket
         .route("/v1/voice/ws", get(voice_ws))
-        // Icarus endpoints
+        // Neuro endpoints
+        .route("/v1/neuro/status", get(neuro_status))
+        .route("/v1/neuro/patience", post(neuro_set_patience))
+        .route("/v1/neuro/patience/trigger", post(neuro_trigger_patience))
+        .route("/v1/neuro/reset", post(neuro_reset))
+        .route("/v1/neuro/memories", get(neuro_list_memories))
+        .route("/v1/neuro/memory/add", post(neuro_add_memory))
+        .route("/v1/neuro/proactive", get(neuro_proactive))
+        // Ikaros endpoints
         .route("/v1/liveness", get(liveness))
         .route("/v1/llama/restart", post(llama_restart))
-        .route("/v1/icarus/last-session", get(icarus_last_session))
-        .route("/v1/icarus/memories", get(icarus_memories))
-        .route("/v1/icarus/awake-briefing", get(icarus_awake_briefing))
-        .route("/v1/icarus/active-session", get(icarus_active_session))
-        .route("/v1/icarus/session/{id}/tail", get(icarus_session_tail))
-        .route("/v1/icarus/session/{id}/resume-context", post(icarus_resume_context))
+        .route("/v1/ikaros/last-session", get(icarus_last_session))
+        .route("/v1/ikaros/memories", get(icarus_memories))
+        .route("/v1/ikaros/awake-briefing", get(icarus_awake_briefing))
+        .route("/v1/ikaros/active-session", get(icarus_active_session))
+        .route("/v1/ikaros/session/{id}/tail", get(icarus_session_tail))
+        .route("/v1/ikaros/session/{id}/resume-context", post(icarus_resume_context))
         // Signals / Modules
         .route("/v1/signals", get(signals_snapshot))
         .route("/v1/signals/recent", get(signals_recent))
@@ -1968,7 +2431,7 @@ async fn main() {
 
     info!("hermes-bridge-rs v{} starting", env!("CARGO_PKG_VERSION"));
     info!("project root: {}", project_root().display());
-    info!("icarus memory dir: {}", icarus_memory_dir().display());
+    info!("ikaros memory dir: {}", icarus_memory_dir().display());
     info!("listening on {}", addr);
     info!("upstream workers: {:?}", get_upstream_urls());
     info!("max concurrent chat: {}", MAX_CONCURRENT_CHAT);

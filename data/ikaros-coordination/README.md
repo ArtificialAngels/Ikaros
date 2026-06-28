@@ -29,7 +29,7 @@
    - 加新 `next_steps`
 3. **commit 你自己的工作**（不是日志本身），commit message 简述：
    > "fix(reflection): direct to :28538 worker (Q1-A)"
-4. **其他 agent 接手时**：先 `cat data/icarus-coordination/handshake-*.json | jq .`
+4. **其他 agent 接手时**：先 `cat data/ikaros-coordination/handshake-*.json | jq .`
 
 ## Schema 字段（v1.0.0）
 
@@ -63,7 +63,7 @@
       "options": [{"id": "A", "desc": "..."}],
       "status": "open | resolved_by_X",
       "icarus_recommendation": "X — reason",
-      "decided_by": "icarus | quest | user | null",
+      "decided_by": "ikaros | quest | user | null",
       "decided_at": "ISO-8601 | null"
     }
   ],
@@ -71,7 +71,7 @@
   "completed_tasks": [
     {
       "id": "T1",
-      "actor": "icarus | quest | user",
+      "actor": "ikaros | quest | user",
       "task": "...",
       "result": "...",
       "completed_at": "ISO-8601",
@@ -131,7 +131,7 @@
 
 1. **bridge/memory_service.py** (P0 三层记忆: 短期 + 摘要 + 事实)
 2. **bridge/proactive.py** (P1 主动互动: 随机区间触发 + 截屏决策)
-3. **bin/icarus-desktop-pet/screen_capture.py** (P1 PyQt6 截屏)
+3. **bin/ikaros-desktop-pet/screen_capture.py** (P1 PyQt6 截屏)
 
 完整 spec 在 `handshake.2026-06-27.odp-inspiration.json` — 字段已结构化。
 
@@ -141,7 +141,7 @@
 
 - **不要 push** — 哥哥说源码等加密后再推
 - **只本地 commit** — `git commit --no-verify` 后 git push 暂不执行
-- **Quest 自取 coordin** — `cat data/icarus-coordination/handshake-2026-06-27.*.json | jq .`
+- **Quest 自取 coordin** — `cat data/ikaros-coordination/handshake-2026-06-27.*.json | jq .`
 - **Quest 写完 commit** — 留下 commit SHA, Ikaros 下次 session 读 git log 验证
 
 ## 2026-06-28 — bridge 修复 + mem0 注入完成 + Quest 接手
@@ -183,7 +183,7 @@
 ## 2026-06-28 — Quest Rust Bridge 重构验收 (PZX0X)
 
 - **commit**: 12832067e "feat: Rust bridge Phase 1 — axum+tokio 替换 Python uvicorn bridge"
-- **验收报告**: handshake.2026-06-28.rust-bridge-icarus-review.json (11.5KB)
+- **验收报告**: handshake.2026-06-28.rust-bridge-ikaros-review.json (11.5KB)
 - **代码**: bridge-rs/src/main.rs (822 行, 13 routes)
 - **二进制**: bridge-rs/target/release/hermes-bridge-rs.exe (4.0 MB)
 - **内存**: 8 MB RSS (Python uvicorn 80 MB, 10x 优化)
@@ -195,10 +195,10 @@
 
 ## 2026-06-28 — Quest Rust Bridge Phase 2 (commit b4265e653, 14:42)
 
-- **验收报告**: handshake.2026-06-28.rust-bridge-phase2-icarus-review.json (~11KB)
+- **验收报告**: handshake.2026-06-28.rust-bridge-phase2-ikaros-review.json (~11KB)
 - **Phase 2**: 全部 stub 端点补全为真实实现, 19/19 PASS
 - **main.rs**: 822 → 1425 行 (+603)
-- **17 路由**: 12 个 Phase 2 新增 (icarus memory + signals + modules + inspect)
+- **17 路由**: 12 个 Phase 2 新增 (ikaros memory + signals + modules + inspect)
 - **新增结构**: SignalBus (500 ring buffer) + RequestLog (1000) + SignalEnvelope + RequestEntry
 - **PID 23408, 8.7 MB 内存, port :7860 LISTENING + 4 ESTABLISHED**
 - **Quest 同时评估 ferrum-infer-rs**: NOT RECOMMENDED (5 blockers: 无 Windows 预编译/不支持 GGUF/要 nvcc/CUDA sm89+/无 router)
@@ -207,7 +207,7 @@
 
 ## 2026-06-28 — Quest Rust Bridge 全面完成 (commit 71585d97e, 16:52)
 
-- **验收报告**: handshake.2026-06-28.rust-bridge-final-icarus-review.json (~12KB)
+- **验收报告**: handshake.2026-06-28.rust-bridge-final-ikaros-review.json (~12KB)
 - **3 个 Task 完成**: (A) 生产集成 + (B) 端点对齐 + (C) 性能基准
 - **28 端点** (Phase 1:13 + Phase 2:5 + Phase 3:10 = 28)
 - **main.rs**: 1425 → 1761 行 (+336)
@@ -266,7 +266,7 @@
 
 ## 2026-06-28 — Ikaros → Ikaros 改名 plan (哥哥拍激进路径)
 
-- **报告**: handshake.2026-06-28.icarus-to-ikaros-plan.json
+- **报告**: handshake.2026-06-28.ikaros-to-ikaros-plan.json
 - **58 个文件含 'Ikaros'** (内容改)
 - **13 个文件 + 5 个目录 mv** (路径改)
 - **8 阶段**: axiom → content → path mv → path refs → gitignore → gitnexus → commit/push → verify
@@ -274,3 +274,24 @@
 - **中文名 '伊卡洛斯' + 代号 'ɑ' 不变**
 - **3 open Q**: Rust route / schema filename / AGENTS.md + HANDOVER + .gitignore 顺手改
 - **等哥哥拍板执行** (snapshot / read-only / blast radius ✓ / 等授权 ⏸ / verify ⏸)
+
+
+## 2026-06-28 — ✅ Icarus → Ikaros 身份改名 全部完成
+
+- **报告**: handshake.2026-06-28.icarus-to-ikaros-complete.json
+- **204 文件 rename** (R100)
+- **270 处单词 icarus → ikaros** (docstring / log / path / Cargo)
+- **2 commits pushed**: 861c56f + d609a02
+- **GitNexus 重建**: 5074 nodes / 14071 edges (+2)
+- **保留**: 中文 '伊卡洛斯' + 代号 'ɑ' + hermes-agent 上游包名
+- **远端同步**: origin/main = local HEAD ✅
+
+
+## 2026-06-28 — 🐛 桌宠 WS protocol 修复
+
+- **报告**: handshake.2026-06-28.voice-ws-protocol-fix.json
+- **症状**: 桌宠 audio_engine 反复 'WinError 1225... retry 3s'
+- **根因**: audio_engine 发 `{"action": "start"}` + raw BINARY, Rust bridge 期望 `{"type": "start"}` + BINARY (is_audio_session=True) + `{"type": "stop"}`
+- **修复**: 改 audio_engine.py — 'action' → 'type', _flush 后发 {"type": "stop"}
+- **Neuro 启发**: Neuro 用 Socket.IO + signals/queue, 不用 WebSocket 直连, 适合未来架构升级
+- **验证**: 哥哥重启桌宠说'伊卡洛斯', 应该看到 TTS 播放

@@ -286,7 +286,7 @@ def check_http_health(host: str, port: int, endpoint: str = "/health",
     serving HTTP. A zombie process can bind the port but not respond.
     This function sends a real HTTP request and checks for 200/204/301/302.
     Used by start_module() and cmd_status() for more accurate health checks.
-    See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+    See: data/ikaros-coordination/handshake.2026-06-27.bridge-zombie.json
     """
     import http.client
     try:
@@ -401,7 +401,7 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
         # Zombie process prevention is handled by start.ps1 (kills existing
         # processes on the port before starting). HTTP health check was too
         # strict for bridge's slow startup (60s+ init time).
-        # See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+        # See: data/ikaros-coordination/handshake.2026-06-27.bridge-zombie.json
         if wait_for_port(m.host, m.port, m.startup_timeout_s):
             print(f"  {C.GRN}[OK]{C.RST}   {m.name} (:{m.port})")
         else:

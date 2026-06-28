@@ -11,7 +11,7 @@
 
 ```
 伊卡洛斯 Neuro 整合
-├─ bridge/signals.py         117行  IcarusSignals 全局状态总线 (Neuro signals.py 1:1)
+├─ bridge/signals.py         117行  IkarosSignals 全局状态总线 (Neuro signals.py 1:1)
 ├─ bridge/prompter.py        130行  100ms 心跳 + PATIENCE 主动说话 (Neuro prompter.py 1:1)
 ├─ bridge/neuro/
 │  ├─ __init__.py             17行  统一入口
@@ -30,7 +30,7 @@
 
 **Neuro 范式**：所有模块读/写一个全局 `Signals` 对象，互不直接耦合。
 
-**伊卡洛斯版** (`IcarusSignals`)：
+**伊卡洛斯版** (`IkarosSignals`)：
 - Neuro 字段：`terminate` / `stt_ready` / `tts_ready` / `human_speaking` / `AI_thinking` / `AI_speaking` / `new_message` / `history` / `last_message_time`
 - 伊卡洛斯扩展：`patience` / `time_since_last_message` / `context` (屏幕感知) / `sio_queue` / `pet_visible` / `pet_mode` / `recent_remote_messages`
 - 统一接口：`mark_new_message(role, content)` —— 任何地方收到消息都这么调
@@ -58,7 +58,7 @@
 **Neuro 范式**：每 20 条新消息 → 调 LLM 让它自我总结 3 个 Q&A → 存 Chroma 向量库。
 
 **伊卡洛斯版**：
-- Chroma DB 路径：`E:\Hermes Agent\data\icarus-memory\chroma.db`
+- Chroma DB 路径：`E:\Hermes Agent\data\ikaros-memory\chroma.db`
 - 默认 3 条 init 记忆（哥哥性格/伊卡洛斯身份/哥哥偏好）
 - 检索时按相关度排序输出
 - prompt_injection 机制：自动塞到 system prompt 的固定位置（priority=60）
@@ -109,16 +109,16 @@
 | 现有 | 怎么接 Neuro |
 |---|---|
 | `bridge/server.py` (chat_completions) | 在 routing 之前调 `build_system_prompt()` |
-| `bridge/voice_server.py` | STT 收到文本时调 `icarus.mark_new_message('user', text)` |
-| `bridge/audio_engine.py` (PyQt6 桌宠) | TTS 开始/结束时改 `icarus.AI_speaking` |
-| `bridge/context_engine.py` | 写入 `icarus.context` |
+| `bridge/voice_server.py` | STT 收到文本时调 `ikaros.mark_new_message('user', text)` |
+| `bridge/audio_engine.py` (PyQt6 桌宠) | TTS 开始/结束时改 `ikaros.AI_speaking` |
+| `bridge/context_engine.py` | 写入 `ikaros.context` |
 | `bridge/context_middleware.py` | 跟 memory 注入配合，按 token 预算裁剪 |
 
 **最小集成（一行）**：
 ```python
 # 在 bridge/server.py 的 chat_completions handler 顶部
-from bridge.neuro import icarus, get_memory
-icarus.mark_new_message('user', user_msg)
+from bridge.neuro import ikaros, get_memory
+ikaros.mark_new_message('user', user_msg)
 inj = get_memory().get_prompt_injection()
 # 把 inj['text'] 拼到 system prompt 里
 ```

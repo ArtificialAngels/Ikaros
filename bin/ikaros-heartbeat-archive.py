@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bin/icarus-heartbeat-archive.py — Compact the heartbeat log to bound its
+bin/ikaros-heartbeat-archive.py — Compact the heartbeat log to bound its
 size as it grows. The watchdog writes one line per tick (10s) + one
 line per service_status (60s) + wake/sleep/restart/system_change events
 on transition. At 10s tick rate + 60s snapshot, the file grows at
@@ -34,12 +34,12 @@ Default thresholds can be overridden via flags. Re-runnable and
 idempotent (re-running on already-archived data is a no-op).
 
 Usage:
-    python bin/icarus-heartbeat-archive.py             # do it
-    python bin/icarus-heartbeat-archive.py --dry-run   # report only
-    python bin/icarus-heartbeat-archive.py --compress-days 60
-    python bin/icarus-heartbeat-archive.py --fuzzy-days 365
-    python bin/icarus-heartbeat-archive.py --delete-days 730
-    python bin/icarus-heartbeat-archive.py --json
+    python bin/ikaros-heartbeat-archive.py             # do it
+    python bin/ikaros-heartbeat-archive.py --dry-run   # report only
+    python bin/ikaros-heartbeat-archive.py --compress-days 60
+    python bin/ikaros-heartbeat-archive.py --fuzzy-days 365
+    python bin/ikaros-heartbeat-archive.py --delete-days 730
+    python bin/ikaros-heartbeat-archive.py --json
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _resolve_heartbeat() -> Path:
     here = Path(__file__).resolve()
     repo_root = here.parent.parent
     candidates = [
-        repo_root / "data" / "logs" / "icarus-heartbeat.jsonl",
+        repo_root / "data" / "logs" / "ikaros-heartbeat.jsonl",
     ]
     hermes_root_py = repo_root / "bin" / "hermes-root.py"
     py = repo_root / "portable-python" / "python.exe"
@@ -67,7 +67,7 @@ def _resolve_heartbeat() -> Path:
                                capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 root = Path(r.stdout.strip())
-                candidates.insert(0, root / "data" / "logs" / "icarus-heartbeat.jsonl")
+                candidates.insert(0, root / "data" / "logs" / "ikaros-heartbeat.jsonl")
         except Exception:
             pass
     for c in candidates:
@@ -280,7 +280,7 @@ def plan_archival(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "archive")
     ap.add_argument("--heartbeat", type=Path, default=None,
-                    help="path to icarus-heartbeat.jsonl (default: auto-resolve)")
+                    help="path to ikaros-heartbeat.jsonl (default: auto-resolve)")
     ap.add_argument("--compress-days", type=int, default=60,
                     help="records older than this many days get noisy events dropped (default 60 = 2 months)")
     ap.add_argument("--fuzzy-days", type=int, default=365,

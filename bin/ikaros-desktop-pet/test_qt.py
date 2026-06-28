@@ -26,7 +26,7 @@ w.setCentralWidget(c)
 layout = QVBoxLayout(c)
 layout.setContentsMargins(0, 0, 0, 0)
 
-svg = QSvgWidget("bin/icarus-desktop-pet/character.svg")
+svg = QSvgWidget("bin/ikaros-desktop-pet/character.svg")
 svg.setFixedSize(180, 260)
 svg.setStyleSheet("background: transparent;")
 layout.addWidget(svg, 0, Qt.AlignmentFlag.AlignCenter)

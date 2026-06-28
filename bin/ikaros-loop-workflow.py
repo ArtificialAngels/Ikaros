@@ -7,7 +7,7 @@ Ikaros Loop Workflow — 闭环迭代式长周期任务管理器
 实现:
   - 一个 task = 一个长周期目标
   - task body 包含 goal + 当前 cycle_n + phase + outcome + 备注
-  - 每个 phase 完成后用 /v1/icarus/kanban/comments API 记录
+  - 每个 phase 完成后用 /v1/ikaros/kanban/comments API 记录
   - 失败 → 回到 check phase, 重新分析
   - 全 cycle 完 → /complete 总结
 
@@ -203,13 +203,13 @@ class LoopRunner:
 
     def _post_comment(self, text: str):
         """把进展写到 task comment (哥哥在 webui 能看到)."""
-        api("POST", f"/{self.task_id}/comments", {"body": text, "author": "icarus"})
+        api("POST", f"/{self.task_id}/comments", {"body": text, "author": "ikaros"})
         log.info("comment posted: %s", text[:80])
 
     def _post_specify(self, body: str):
         """更新 task body (哥哥看 task 详情时看到)."""
-        api("POST", f"/{self.task_id}/specify", {"author": "icarus"})
-        api("POST", f"/{self.task_id}/comments", {"body": body, "author": "icarus"})
+        api("POST", f"/{self.task_id}/specify", {"author": "ikaros"})
+        api("POST", f"/{self.task_id}/comments", {"body": body, "author": "ikaros"})
 
     def run(self):
         log.info("=" * 60)

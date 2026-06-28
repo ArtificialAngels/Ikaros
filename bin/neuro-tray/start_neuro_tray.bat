@@ -22,7 +22,7 @@ if not exist "%PY%" (
 echo ============================================================
 echo   🧠 Neuro Tray starting...
 echo   Right-click tray icon for menu.
-echo   Double-click to let Icarus speak.
+echo   Double-click to let Ikaros speak.
 echo ============================================================
 
 "%PY%" "%MAIN%"

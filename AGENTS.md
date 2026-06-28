@@ -4,7 +4,7 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-27 (icarus-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
+> **Last revised:** 2026-06-27 (ikaros-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
 > Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定义语言气泡
 > `#neuro-bubble` 和状态指示器 `#neuro-state`，处理 transcription/thinking/status/done/state
 > 消息类型，自动重连。右键菜单集成全部 wl-live2d 功能（切换模型/服装/截图/帧检测/比例调节），
@@ -66,11 +66,11 @@
 
 ## Revision Timeline (chronological; see git log for details)
 
-- **2026-06-27 (Quest handoff)** - 灵感挖掘 + 桥问题交接。Icarus 不写代码改自己, 把 OpenDesktop-Pet 6 大特性写到
-  `data/icarus-coordination/handshake.2026-06-27.odp-inspiration.json` (7415B): P0 三层记忆 / P1 主动互动循环 / P1 截屏视觉 / P2 TTS 多引擎 / P3 身体分区点击。
+- **2026-06-27 (Quest handoff)** - 灵感挖掘 + 桥问题交接。Ikaros 不写代码改自己, 把 OpenDesktop-Pet 6 大特性写到
+  `data/ikaros-coordination/handshake.2026-06-27.odp-inspiration.json` (7415B): P0 三层记忆 / P1 主动互动循环 / P1 截屏视觉 / P2 TTS 多引擎 / P3 身体分区点击。
   桥 uvicorn 应用层卡死问题写到 `handshake.2026-06-27.bridge-uvicorn-unresponsive.json` (7519B): 7 修复建议 + 测试命令。
   协作 README 更新 (tracked), git commit + **不 push** (哥哥等加密源码)。
-- **2026-06-27** - icarus-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
+- **2026-06-27** - ikaros-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
   `live2d/index.html` 新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，
   自定义语言气泡 `#neuro-bubble`（顶部居中，暗色半透明，自动消失）和状态指示器
   `#neuro-state`（底部，emoji + 状态文字）。处理消息类型: transcription/thinking/
@@ -1321,7 +1321,7 @@ cd D:\Hermes Agent
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Ikaros** (5072 symbols, 14069 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Ikaros** (5074 symbols, 14071 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

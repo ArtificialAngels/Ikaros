@@ -9,7 +9,7 @@ Quest 修了 webui 聊天挂的问题: stub 占着 :18765 让真 broker 起不�
   - 路径白名单 (前缀匹配):
       /v1/reach/*        -> :7860 bridge  (Agent-Reach)
       /v1/notebooklm/*   -> :7860 bridge  (notebooklm-py)
-      /v1/icarus/*       -> :7860 bridge  (Neuro memory/sessions)
+      /v1/ikaros/*       -> :7860 bridge  (Neuro memory/sessions)
       /v1/llama/*        -> :7860 bridge  (本地 LLM 管理)
       /v1/models/*       -> :7860 bridge  (模型 warmup/list)
       其他路径              -> :18765 broker (webui chat)
@@ -19,7 +19,7 @@ Quest 修了 webui 聊天挂的问题: stub 占着 :18765 让真 broker 起不�
 历史:
   - 2026-06-26 Quest 把 stub 禁用 (module.json -> module.json.disabled)
     原因: stub 是 TCP shim, 占着 :18765 让 webui 真 broker 起不来, 聊天挂
-  - 2026-06-26 Icarus 把 stub 改造成真 router (本文件)
+  - 2026-06-26 Ikaros 把 stub 改造成真 router (本文件)
     新增: 路径分拣, 真透传 (streaming/WebSocket 都支持)
     依赖: fastapi-reverse-proxy (PyPI) + httpx
 """
@@ -38,7 +38,7 @@ PORT = 18765
 BRIDGE_PREFIXES = (
     "/v1/reach",
     "/v1/notebooklm",
-    "/v1/icarus",
+    "/v1/ikaros",
     "/v1/llama",
     "/v1/models",
 )

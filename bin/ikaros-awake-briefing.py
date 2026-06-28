@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""icarus-awake-briefing.py — 伊卡洛斯唤醒简报
+"""ikaros-awake-briefing.py — 伊卡洛斯唤醒简报
 
-Agent 启动新会话时，自动调一次 `/v1/icarus/awake-briefing`，
+Agent 启动新会话时，自动调一次 `/v1/ikaros/awake-briefing`，
 打印一份人/agent 都易读的"上次我干了啥"摘要。
 
 用法：
-  python bin/icarus-awake-briefing.py              # 打印彩色摘要
-  python bin/icarus-awake-briefing.py --quiet      # 仅 OK/无记忆
-  python bin/icarus-awake-briefing.py --json       # 输出 raw JSON
+  python bin/ikaros-awake-briefing.py              # 打印彩色摘要
+  python bin/ikaros-awake-briefing.py --quiet      # 仅 OK/无记忆
+  python bin/ikaros-awake-briefing.py --json       # 输出 raw JSON
 
 Ikaros 设计原则：每次醒来先看一遍自己昨天写了什么——避免"失忆式启动"。
 """
@@ -15,7 +15,7 @@ import argparse, json, sys, urllib.request, urllib.error
 from pathlib import Path
 
 BRIDGE_URL = "http://127.0.0.1:7860"
-ENDPOINT = "/v1/icarus/awake-briefing"
+ENDPOINT = "/v1/ikaros/awake-briefing"
 
 
 def fetch():

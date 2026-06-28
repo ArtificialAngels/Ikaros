@@ -1,5 +1,5 @@
 """
-Context compression middleware for the Icarus bridge.
+Context compression middleware for the Ikaros bridge.
 
 Integrates upstream ``agent.context_compressor.ContextCompressor`` into
 the bridge's chat_completions flow so long conversations stay within

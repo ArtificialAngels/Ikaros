@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import Optional, List, Dict, Any
 
-logger = logging.getLogger("icarus.notebooklm")
+logger = logging.getLogger("ikaros.notebooklm")
 
 # 路径常量
 NOTEBOOKLM_HOME = os.environ.get("NOTEBOOKLM_HOME", os.path.expanduser("~/.notebooklm"))

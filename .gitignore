@@ -195,23 +195,23 @@ bin/.codegraph/
 # --- Reference projects cloned for study (Neuro, etc.) — large, do not track ---
 deps/_src/
 
-# --- Icarus ↔ other-agent coordination log (dynamic, not git-tracked) ---
-# Coordination happens via JSON files in data/icarus-coordination/
+# --- Ikaros ↔ other-agent coordination log (dynamic, not git-tracked) ---
+# Coordination happens via JSON files in data/ikaros-coordination/
 # git is for snapshots, this is the live workbench
 # File naming convention:
-#   - icarus-coordination-schema.json (static schema, tracked)
+#   - ikaros-coordination-schema.json (static schema, tracked)
 #   - README.md (design doc, tracked)
 #   - handshake.*.json (live handoffs, NOT tracked — dynamic)
-#   - *.md under data/icarus-coordination/ (daily logs, NOT tracked — dynamic)
-!data/icarus-coordination/
-!data/icarus-coordination/README.md
-!data/icarus-coordination/icarus-coordination-schema.json
-data/icarus-coordination/handshake.*.json
-data/icarus-coordination/*.md
-!data/icarus-coordination/README.md
+#   - *.md under data/ikaros-coordination/ (daily logs, NOT tracked — dynamic)
+!data/ikaros-coordination/
+!data/ikaros-coordination/README.md
+!data/ikaros-coordination/ikaros-coordination-schema.json
+data/ikaros-coordination/handshake.*.json
+data/ikaros-coordination/*.md
+!data/ikaros-coordination/README.md
 
 # --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
-# These are Icarus' visual identity. Treat as design tokens, not throwaway.
+# These are Ikaros' visual identity. Treat as design tokens, not throwaway.
 bin/favicon.ico
 bin/logo.png
 ArtificialAngel.ico
@@ -223,7 +223,7 @@ package-lock.json
 bin/desktop.ini
 config.yaml.pre-gitnexus.*.bak
 bridge/data/
-data/icarus-memory/
+data/ikaros-memory/
 
 # --- Rust build artifacts (Quest 6-28) ---
 bridge-rs/target/

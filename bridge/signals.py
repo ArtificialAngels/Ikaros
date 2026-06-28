@@ -1,5 +1,5 @@
 """
-Icarus Signals - Neuro signals.py 1:1 移植
+Ikaros Signals - Neuro signals.py 1:1 移植
 ============================================
 全程序唯一的全局状态。伊卡洛斯所有模块读/写它，互不直接耦合。
 """
@@ -9,7 +9,7 @@ import time
 
 
 @dataclass
-class IcarusSignals:
+class IkarosSignals:
     """伊卡洛斯全局信号总线 (Neuro 风格)"""
     # --- 控制 ---
     terminate: bool = False
@@ -61,7 +61,7 @@ class IcarusSignals:
 
 
 # 全局单例
-icarus = IcarusSignals()
+ikaros = IkarosSignals()
 
 
 # === Neuro 风格常量（伊卡洛斯版） ===

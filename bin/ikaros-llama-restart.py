@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-icarus-llama-restart.py — end-to-end helper around `POST /v1/llama/restart`.
+ikaros-llama-restart.py — end-to-end helper around `POST /v1/llama/restart`.
 
 Why this exists
 ---------------
@@ -10,7 +10,7 @@ add/remove a model in data/models/, you have to restart llama-server to
 make it re-scan --models-dir and router-preset.ini.
 
 The simplest way for a human is:
-    portable-python/python.exe bin/icarus-llama-restart.py
+    portable-python/python.exe bin/ikaros-llama-restart.py
 
 What it does
 ------------
@@ -87,7 +87,7 @@ def main() -> int:
     ap.add_argument("--bridge", default=BRIDGE_URL, help="bridge base URL")
     args = ap.parse_args()
 
-    print(f"== icarus-llama-restart  bridge={args.bridge} ==")
+    print(f"== ikaros-llama-restart  bridge={args.bridge} ==")
     print()
     print("Snapshot before:")
     before = fetch_model_ids()

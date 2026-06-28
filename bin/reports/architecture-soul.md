@@ -229,13 +229,13 @@ LLM call (cloud / local)
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Chroma (向量记忆, icarus-memory/)            │
+│  Chroma (向量记忆, ikaros-memory/)            │
 │    neuro/memory.py — LLM reflection          │
 │    → 哥哥说过的话 + 我反思后存                  │
 │                                              │
 │  Vault (Ferret+PBKDF2)                       │
 │    credentials: webui 管理员账户               │
-│    key: ~/.icarus/identity.key (跟人走)       │
+│    key: ~/.ikaros/identity.key (跟人走)       │
 │                                              │
 │  state.db (Hermes 会话)                       │
 │    webui sessions + usage stats              │
@@ -246,7 +246,7 @@ LLM call (cloud / local)
 │  Kanban DB (SQLite)                          │
 │    boards / tasks / events                   │
 │                                              │
-│  icarus-coordination/ (JSON 日志)             │
+│  ikaros-coordination/ (JSON 日志)             │
 │    handshake.*.json — 与 Quest 通信           │
 │    结构化的 cross-agent 消息                   │
 │                                              │
@@ -297,7 +297,7 @@ LLM call (cloud / local)
 │    30s 背景扫描                               │
 │                                              │
 │  Heartbeat (JSONL)                           │
-│    data/logs/icarus-heartbeat.jsonl           │
+│    data/logs/ikaros-heartbeat.jsonl           │
 └─────────────────────────────────────────────┘
 ```
 
@@ -325,7 +325,7 @@ axiom.md (7 rules)
   └─────────────────────────────────────────────┘
 
 vault (Fernet)
-  ArtificialAngel / AngelIcarus (webui 管理员)
+  ArtificialAngel / AngelIkaros (webui 管理员)
 
 gatekeeper (PyQt6)
   verify_gege() — 密码 Iamyourgege 不入文件

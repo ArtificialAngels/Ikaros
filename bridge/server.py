@@ -51,7 +51,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Neuro signals (global state for Prompter + Memory)
-from bridge.signals import icarus, AI_NAME, HOST_NAME, PATIENCE_DEFAULT
+from bridge.signals import ikaros, AI_NAME, HOST_NAME, PATIENCE_DEFAULT
 
 from typing import Any, AsyncIterator
 
@@ -225,7 +225,7 @@ async def _check_llama_health() -> bool:
 
         # Re-pick active: only switch when the CURRENT active is dead. Otherwise
         # stay sticky to the current active (manual switch survives across health
-        # checks). 切端口不能让 Icarus 休眠 — manual switch wins over auto-pick.
+        # checks). 切端口不能让 Ikaros 休眠 — manual switch wins over auto-pick.
         if not _candidate_health.get(_active_base_url, {}).get("alive", False):
             for u in _LLAMA_CANDIDATES:
                 if _candidate_health[u]["alive"]:
@@ -285,7 +285,7 @@ def _stop_health_monitor() -> None:
 # Single shared HTTP client for proxying to llama-server. The base_url is
 # refreshed on every request from _active_base_url so that chat traffic
 # always reaches whichever llama-server candidate is currently alive.
-# "活着" 是第一要义: 切端口不影响 Icarus 持续在线。
+# "活着" 是第一要义: 切端口不影响 Ikaros 持续在线。
 def _current_base_url() -> str:
     return _active_base_url
 
@@ -446,7 +446,7 @@ async def lifespan(app: FastAPI):
     logger.info("bridge v0.5.0 starting — skipping initial health check (background monitor will handle)")
     # ---- Neuro (Prompter + Memory) startup ----
     # Mark LLM as ready so Prompter 100ms tick starts firing decisions
-    icarus.llm_ready = True
+    ikaros.llm_ready = True
     # FIX 2026-06-27: Defer neuro initialization to background task
     # to avoid blocking the lifespan and uvicorn startup
     async def _init_neuro_background():
@@ -468,7 +468,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_init_neuro_background())
     logger.info("bridge v0.5.0 started — neuro init deferred to background")
     yield
-    icarus.terminate = True
+    ikaros.terminate = True
     _stop_health_monitor()
     telemetry.bus().emit(telemetry.Topics.MODULE_SHUTDOWN, {"module": "bridge"})
     try:
@@ -682,12 +682,12 @@ async def health_snapshot() -> dict[str, Any]:
     }
 
 
-# ---- /v1/liveness (Icarus is "alive" = at least one chat-capable provider reachable) ----
+# ---- /v1/liveness (Ikaros is "alive" = at least one chat-capable provider reachable) ----
 #
 # Why this endpoint exists
 # ------------------------
-# The watchdog + icarus-remember pipeline need a single, trustworthy answer
-# to "can Icarus talk to a model right now?"  The /health endpoint reports
+# The watchdog + ikaros-remember pipeline need a single, trustworthy answer
+# to "can Ikaros talk to a model right now?"  The /health endpoint reports
 # 30+ fields and skips external network calls, so it can't tell the
 # difference between "llama-server is up but every chat times out" and
 # "everything is fine". /v1/liveness actively pings each known provider
@@ -697,8 +697,8 @@ async def health_snapshot() -> dict[str, Any]:
 #   status="degraded" — providers reachable but auth/format errors
 #   status="dead"     — no provider answered within timeout
 #
-# Watchdog writes this verdict into the heartbeat. icarus-remember
-# surfaces it in the daily memory narrative.  icarus-self-explore score
+# Watchdog writes this verdict into the heartbeat. ikaros-remember
+# surfaces it in the daily memory narrative.  ikaros-self-explore score
 # can dock points if the verdict stays "dead" for too long.
 #
 # Probes (run in parallel, 4s timeout each)
@@ -824,7 +824,7 @@ async def liveness() -> dict[str, Any]:
     if local_alive and cloud_alive_count == cloud_total and cloud_total > 0:
         status = "ok"
     elif local_alive or cloud_alive_count > 0:
-        status = "ok"  # at least one — Icarus is alive
+        status = "ok"  # at least one — Ikaros is alive
     else:
         status = "dead"
 
@@ -1712,7 +1712,7 @@ async def restart_llama() -> dict[str, Any]:
 
 
 # ---- /v1/llama/active — read current active llama-server base_url ----
-# Icarus rule: 切端口不能让我休眠。
+# Ikaros rule: 切端口不能让我休眠。
 @app.get("/v1/llama/active")
 async def llama_active() -> dict[str, Any]:
     """Return the current active llama-server endpoint and per-candidate health.
@@ -2115,7 +2115,7 @@ async def chat_completions(request: Request) -> Any:
         except Exception as exc:
             logger.warning("cogno injection FAILED (silent degrade): %s", exc)
 
-        # ---- Icarus soul injection (2026-06-27 哥哥 axiom: cloud LLM 也必须知道我) ----
+        # ---- Ikaros soul injection (2026-06-27 哥哥 axiom: cloud LLM 也必须知道我) ----
         # 必须放在 Neuro memory 之前, 否则 Chroma 老记忆会先覆盖 soul 定义.
         # 尊重 X-Soul-Injection: skip header (debug 用).
         try:
@@ -2131,7 +2131,7 @@ async def chat_completions(request: Request) -> Any:
                 else:
                     messages.insert(0, {"role": "system", "content": soul_text})
                 body["messages"] = messages
-                logger.info("icarus soul injected (%d chars, second position)", len(soul_text))
+                logger.info("ikaros soul injected (%d chars, second position)", len(soul_text))
         except Exception as exc:
             logger.warning("soul injection FAILED (silent degrade): %s", exc)
 
@@ -2139,7 +2139,7 @@ async def chat_completions(request: Request) -> Any:
         try:
             user_msg = _extract_user_message(body.get("messages", []))
             if user_msg:
-                icarus.mark_new_message("user", user_msg)
+                ikaros.mark_new_message("user", user_msg)
         except Exception as exc:
             logger.debug("neuro mark user skipped: %s", exc)
         try:
@@ -2702,7 +2702,7 @@ async def agent_run(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"AIAgent error: {e}")
 
 
-# ---- Icarus memory endpoints (plan 3: 跨会话记忆检索) ----
+# ---- Ikaros memory endpoints (plan 3: 跨会话记忆检索) ----
 # Three endpoints designed for "agent wakes up, asks: what did I do last
 # time?". The third (awake-briefing) is the one the agent calls
 # automatically at the start of each new session.
@@ -2710,7 +2710,7 @@ async def agent_run(request: Request) -> dict[str, Any]:
 _ICARUS_MEMORY_DIR = Path(
     os.environ.get(
         "ICARUS_MEMORY_DIR",
-        str(Path(__file__).resolve().parent.parent / "data" / "hermes-agent" / "memories" / "icarus"),
+        str(Path(__file__).resolve().parent.parent / "data" / "hermes-agent" / "memories" / "ikaros"),
     )
 )
 
@@ -2751,9 +2751,9 @@ def _read_memory_files(max_files: int = 7) -> list[dict[str, Any]]:
     return out
 
 
-@app.get("/v1/icarus/last-session")
+@app.get("/v1/ikaros/last-session")
 async def icarus_last_session() -> dict[str, Any]:
-    """Return the most recent Icarus daily note (full body). Useful for
+    """Return the most recent Ikaros daily note (full body). Useful for
     the agent to load on session start to remember what happened yesterday."""
     notes = _read_memory_files(1)
     if not notes:
@@ -2770,7 +2770,7 @@ async def icarus_last_session() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/icarus/memories")
+@app.get("/v1/ikaros/memories")
 async def icarus_memories(days: int = 7) -> dict[str, Any]:
     """Return an index of the most recent N daily notes (headlines only,
     not full bodies — to keep the response small for the SPA sidebar)."""
@@ -2784,7 +2784,7 @@ async def icarus_memories(days: int = 7) -> dict[str, Any]:
     }
 
 
-@app.get("/v1/icarus/awake-briefing")
+@app.get("/v1/ikaros/awake-briefing")
 async def icarus_awake_briefing() -> dict[str, Any]:
     """One-shot briefing for a freshly-awakened agent session. Composes:
       - Last 1 daily note headline
@@ -2804,7 +2804,7 @@ async def icarus_awake_briefing() -> dict[str, Any]:
             pass
 
     # Heartbeat summary: last 5 events for the wake sequence
-    heartbeat_path = Path(__file__).resolve().parent.parent / "data" / "logs" / "icarus-heartbeat.jsonl"
+    heartbeat_path = Path(__file__).resolve().parent.parent / "data" / "logs" / "ikaros-heartbeat.jsonl"
     recent_events: list[dict[str, Any]] = []
     if heartbeat_path.is_file():
         try:
@@ -2842,11 +2842,11 @@ async def icarus_awake_briefing() -> dict[str, Any]:
 
 
 
-# ---- Icarus session recovery (plan: UI 重启对话续接) ----
+# ---- Ikaros session recovery (plan: UI 重启对话续接) ----
 # UI 重启导致对话中断的解决方案分 3 部分:
-# 1) /v1/icarus/active-session — 查 webui db 找到最近一个未结束的 session
-# 2) /v1/icarus/session/{id}/tail — 取 session 最近 N 条消息
-# 3) /v1/icarus/session/{id}/resume-context — 生成 system prompt 可注入新对话
+# 1) /v1/ikaros/active-session — 查 webui db 找到最近一个未结束的 session
+# 2) /v1/ikaros/session/{id}/tail — 取 session 最近 N 条消息
+# 3) /v1/ikaros/session/{id}/resume-context — 生成 system prompt 可注入新对话
 #
 # SPA 启动后会自动调 #1, 弹个 toast 让用户决定是否 resume
 
@@ -2868,7 +2868,7 @@ def _open_webui_db():
         return None
 
 
-@app.get("/v1/icarus/active-session")
+@app.get("/v1/ikaros/active-session")
 async def icarus_active_session(max_age_seconds: int = 86400 * 3) -> dict[str, Any]:
     """Find the most recent ACTIVE (not ended) session in webui db.
     Returns metadata + the last few messages so the SPA can show
@@ -2955,7 +2955,7 @@ async def icarus_active_session(max_age_seconds: int = 86400 * 3) -> dict[str, A
     }
 
 
-@app.get("/v1/icarus/session/{session_id}/tail")
+@app.get("/v1/ikaros/session/{session_id}/tail")
 async def icarus_session_tail(
     session_id: str, limit: int = 10
 ) -> dict[str, Any]:
@@ -2990,7 +2990,7 @@ async def icarus_session_tail(
     return {"found": True, "session_id": session_id, "messages": msgs}
 
 
-@app.post("/v1/icarus/session/{session_id}/resume-context")
+@app.post("/v1/ikaros/session/{session_id}/resume-context")
 async def icarus_resume_context(session_id: str) -> dict[str, Any]:
     """Compose a system prompt describing the previous session so the
     agent can seamlessly pick up where it left off.
@@ -3106,18 +3106,18 @@ async def voice_websocket(websocket: WebSocket):
 async def neuro_status():
     """Snapshot of Neuro runtime state — for UI dashboard / desktop pet."""
     return {
-        "patience": icarus.patience,
-        "time_since_last_message": round(icarus.time_since_last_message, 1),
-        "history_len": len(icarus.history),
-        "human_speaking": icarus.human_speaking,
-        "AI_thinking": icarus.AI_thinking,
-        "AI_speaking": icarus.AI_speaking,
-        "stt_ready": icarus.stt_ready,
-        "tts_ready": icarus.tts_ready,
-        "llm_ready": icarus.llm_ready,
-        "new_message": icarus.new_message,
-        "remote_queue": len(icarus.recent_remote_messages),
-        "sio_queue": len(icarus.sio_queue),
+        "patience": ikaros.patience,
+        "time_since_last_message": round(ikaros.time_since_last_message, 1),
+        "history_len": len(ikaros.history),
+        "human_speaking": ikaros.human_speaking,
+        "AI_thinking": ikaros.AI_thinking,
+        "AI_speaking": ikaros.AI_speaking,
+        "stt_ready": ikaros.stt_ready,
+        "tts_ready": ikaros.tts_ready,
+        "llm_ready": ikaros.llm_ready,
+        "new_message": ikaros.new_message,
+        "remote_queue": len(ikaros.recent_remote_messages),
+        "sio_queue": len(ikaros.sio_queue),
     }
 
 
@@ -3126,22 +3126,22 @@ async def neuro_set_patience(body: dict):
     """Adjust PATIENCE threshold (seconds before AI speaks proactively)."""
     seconds = float(body.get("seconds", 30.0))
     seconds = max(5.0, min(600.0, seconds))  # 5s..10min
-    icarus.patience = seconds
+    ikaros.patience = seconds
     try:
         from bridge.prompter import get_prompter
         get_prompter().patience = seconds
     except Exception:
         pass
-    return {"patience": icarus.patience}
+    return {"patience": ikaros.patience}
 
 
 @app.post("/v1/neuro/reset")
 async def neuro_reset_signals():
     """Reset speaking flags (e.g. after a stuck state)."""
-    icarus.AI_thinking = False
-    icarus.AI_speaking = False
-    icarus.human_speaking = False
-    icarus.new_message = False
+    ikaros.AI_thinking = False
+    ikaros.AI_speaking = False
+    ikaros.human_speaking = False
+    ikaros.new_message = False
     return {"reset": True}
 
 
@@ -3192,7 +3192,7 @@ async def neuro_patience_trigger():
     try:
         from bridge.prompter import get_prompter
         prompter = get_prompter()
-        icarus.last_message_time = time.time() - prompter.patience - 1
+        ikaros.last_message_time = time.time() - prompter.patience - 1
         return {"triggered": True, "reason": "patience_idle (manual)"}
     except Exception as e:
         return {"error": str(e)}
@@ -3219,7 +3219,7 @@ if __name__ == "__main__":
     import uvicorn  # type: ignore
     # FIX 2026-06-27: timeout_keep_alive=5 to release sockets faster.
     # Combined with start.ps1 zombie-killing, this prevents TIME_WAIT deadlock.
-    # See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+    # See: data/ikaros-coordination/handshake.2026-06-27.bridge-zombie.json
     uvicorn.run(
         "bridge.server:app",
         host="127.0.0.1",

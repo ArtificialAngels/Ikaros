@@ -51,7 +51,7 @@ class Signals:
 - bridge 层用 FastAPI app.state
 - voice 层用 asyncio.Event
 
-**移植价值**：⭐⭐⭐⭐⭐ —— **可以马上做**。定义一个 `IcarusSignals` dataclass，所有模块读它。
+**移植价值**：⭐⭐⭐⭐⭐ —— **可以马上做**。定义一个 `IkarosSignals` dataclass，所有模块读它。
 
 ### 2.2 `Prompter` 心跳循环 (prompter.py, 65 行)
 
@@ -179,7 +179,7 @@ class LLMState:
 
 ### 🚀 Phase 1: 立刻做（基础设施）
 
-1. **`IcarusSignals` 单例**（neuro.signals.py 等价）
+1. **`IkarosSignals` 单例**（neuro.signals.py 等价）
    - 一个 Python dataclass，存所有全局状态
    - 所有新模块读/写它
    - 文件：`bridge/signals.py` (~100 行)
@@ -207,7 +207,7 @@ class LLMState:
    - 文件：`bridge/memory.py` (~180 行)
 
 6. **统一 Persona 入口**
-   - `data/hermes-agent/persona/icarus.py`
+   - `data/hermes-agent/persona/ikaros.py`
    - 单一入口加载 axiom + SOUL + humor profile
    - 供 PromptBuilder 注入
 
@@ -335,7 +335,7 @@ def abort_current(self):  self.stream.stop()  # 用户打断时
 | prompter.py | `bridge/prompter.py` | ~80 | neuro/prompter.py |
 | prompt_builder.py | `bridge/prompt_builder.py` | ~120 | neuro/modules/module.py |
 | memory.py | `bridge/memory.py` | ~180 | neuro/modules/memory.py |
-| persona/icarus.py | `data/hermes-agent/persona/icarus.py` | ~80 | 整合 SOUL+axiom+humor |
+| persona/ikaros.py | `data/hermes-agent/persona/ikaros.py` | ~80 | 整合 SOUL+axiom+humor |
 
 **总计：~560 行新代码，对比当前 15000 行只是 4%。**
 

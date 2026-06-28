@@ -30,7 +30,7 @@
    ┌─────────────────────────────────────────────────────────────┐
    │  ⑥ 表象层 (Webui SPA + 桌宠 + Neuro tray)     ← 脸/手/表情   │
    │  webui:8649 (Node + Vue) | webui_proxy:8648 (Python)        │
-   │  bin/icarus-desktop-pet/ | bin/neuro-tray/                    │
+   │  bin/ikaros-desktop-pet/ | bin/neuro-tray/                    │
    │  - 234 SPA OpenAPI 端点                                       │
    │  - PyQt6 透明桌宠 (天降之物伊卡洛斯)                          │
    │  - 系统托盘 Neuro 状态指示                                    │
@@ -41,7 +41,7 @@
    │  ⑤ 神经层 (Bridge FastAPI :7860)               ← 脊髓         │
    │  bridge/server.py (39 endpoints)                             │
    │  - chat/completions + SSE                                    │
-   │  - 39 endpoints: chat/models/signals/icarus/neuro/liveness  │
+   │  - 39 endpoints: chat/models/signals/ikaros/neuro/liveness  │
    │  - Neuro 7 endpoints (status/patience/reset/memories)        │
    │  - context_middleware 128 sessions LRU                       │
    │  - copilot_bridge ACP client                                 │
@@ -70,7 +70,7 @@
                         ▼
    ┌─────────────────────────────────────────────────────────────┐
    │  ② 消化层 (Hermes Vector Memory + Skills)      ← 胃/吸收      │
-   │  data/icarus-memory/chroma.db | data/hermes-agent/skills/   │
+   │  data/ikaros-memory/chroma.db | data/hermes-agent/skills/   │
    │  - 130+ skills (Humor, content-humanizer, image_gen...)     │
    │  - Chroma 持久化 reflection memory                            │
    │  - 跨会话记忆注入 (chat_completions 自动)                    │
@@ -141,12 +141,12 @@
   /v1/llama/switch-active     POST   切换 worker
 
 会话续接 (Quest 加):
-  /v1/icarus/active-session           GET    当前 session
-  /v1/icarus/last-session            GET    上次 session
-  /v1/icarus/awake-briefing          GET    醒来简报
-  /v1/icarus/memories                GET    记忆列表
-  /v1/icarus/session/{id}/tail       GET    会话尾巴
-  /v1/icarus/session/{id}/resume-context POST  续接 context
+  /v1/ikaros/active-session           GET    当前 session
+  /v1/ikaros/last-session            GET    上次 session
+  /v1/ikaros/awake-briefing          GET    醒来简报
+  /v1/ikaros/memories                GET    记忆列表
+  /v1/ikaros/session/{id}/tail       GET    会话尾巴
+  /v1/ikaros/session/{id}/resume-context POST  续接 context
 
 Neuro (我加, 7 endpoints):
   /v1/neuro/status                   GET    PATIENCE + 状态
@@ -195,7 +195,7 @@ Write Gate (4)   /api/write-gate
 
 ```
 Bridge prefixes (走 :7860):
-  /v1/reach, /v1/notebooklm, /v1/icarus, /v1/llama, /v1/models
+  /v1/reach, /v1/notebooklm, /v1/ikaros, /v1/llama, /v1/models
 
 其他 (走 :18766 broker):
   /v1/chat, /api/*, /health (broker), ...
@@ -219,16 +219,16 @@ WebSocket 透传: 全部按同样规则
   fix-eol.py                EOL 修复 (.bat/.ps1 → CRLF)
 
 伊卡洛斯 (我):
-  icarus-self-explore.py    自探索架构
-  icarus-self-score.py      GitNexus 自评分
-  icarus-dojo-daily.py      每日自改进循环
-  icarus-remember.py        持久记忆
-  icarus-awake-briefing.py  醒来简报
-  icarus-heartbeat-archive.py 心跳归档
-  icarus-timeline.py        时间线 (gap-threshold 60min)
-  icarus-llama-restart.py   llama 重启
-  icarus-loop-workflow.py   Kanban 5-phase 闭环
-  icarus-gatekeeper.py      哥哥身份验证 (Rule 7)
+  ikaros-self-explore.py    自探索架构
+  ikaros-self-score.py      GitNexus 自评分
+  ikaros-dojo-daily.py      每日自改进循环
+  ikaros-remember.py        持久记忆
+  ikaros-awake-briefing.py  醒来简报
+  ikaros-heartbeat-archive.py 心跳归档
+  ikaros-timeline.py        时间线 (gap-threshold 60min)
+  ikaros-llama-restart.py   llama 重启
+  ikaros-loop-workflow.py   Kanban 5-phase 闭环
+  ikaros-gatekeeper.py      哥哥身份验证 (Rule 7)
 ```
 
 ---
@@ -239,7 +239,7 @@ WebSocket 透传: 全部按同样规则
 |---|---|---|---|
 | **8080** | llama router | 30736 | ✅ |
 | **28538** | llama worker Qwen3.6-35B | 32048 | ✅ 预热 |
-| **7860** | bridge (Icarus Neuro wired) | 14024 | ✅ |
+| **7860** | bridge (Ikaros Neuro wired) | 14024 | ✅ |
 | **8648** | webui_proxy | 15604 | ✅ |
 | **8649** | webui (Node) | 31116 | ✅ |
 | **18765** | agent_bridge_stub router | (live) | ✅ |
@@ -254,7 +254,7 @@ WebSocket 透传: 全部按同样规则
 
 - **依赖图清晰** (topo-sort in supervisor): env_bootstrap → llm_engine → bridge → webui → webui_proxy; agent_bridge_stub → bridge
 - **心跳 + 自动重启** (watchdog.py 10s tick)
-- **24h 心跳归档** (icarus-heartbeat-archive.py)
+- **24h 心跳归档** (ikaros-heartbeat-archive.py)
 - **端口契约明示** (每个 module.json 都有 port/depends)
 - **多端口并存** (8080/7860/8648/8649/18765/18766 互不干扰)
 - **WebSocket 透传** (FastAPI reverse-proxy 支持)

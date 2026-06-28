@@ -1,5 +1,5 @@
 @echo off
-REM icarus-llama-restart.bat — convenience wrapper for the human.
+REM ikaros-llama-restart.bat — convenience wrapper for the human.
 REM
 REM Forces llama-server to re-scan --models-dir + router-preset.ini, which
 REM is the only way to make WebUI's model dropdown reflect a change to

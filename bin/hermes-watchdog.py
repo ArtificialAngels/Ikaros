@@ -99,7 +99,7 @@ PID_FILE = LOG_DIR / "hermes-watchdog.pid"
 # delete or rotate it; the user inspects it to see "when was I asleep
 # / when did the drive change / when did service X die".
 # Each line is independently parseable (one JSON object per line).
-HEARTBEAT_FILE = LOG_DIR / "icarus-heartbeat.jsonl"
+HEARTBEAT_FILE = LOG_DIR / "ikaros-heartbeat.jsonl"
 
 # Watchdog cycle (seconds). Too short wastes CPU; too long delays restart.
 INTERVAL_S = 10
@@ -115,13 +115,13 @@ SNAPSHOT_EVERY_TICKS = 6
 # init` and diff against last seen fingerprint. If anything changed
 # (user/host/bios_uuid/drive/serial), emit a system_change event.
 SYSTEM_PROBE_EVERY_TICKS = 30  # every ~5min
-# Memory ingest: every N ticks, run bin/icarus-remember.py to write
-# today's narrative entry into data/hermes-agent/memories/icarus/.
+# Memory ingest: every N ticks, run bin/ikaros-remember.py to write
+# today's narrative entry into data/hermes-agent/memories/ikaros/.
 # This is the "memory core" ingest — converts the structured heartbeat
 # into a human-readable paragraph that the agent can re-read later.
 # Default ~6h (6h * 360 ticks) so we get 4 entries/day without flooding.
 MEMORY_INGEST_EVERY_TICKS = 2160
-# Heartbeat archival: every N ticks, run bin/icarus-heartbeat-archive.py
+# Heartbeat archival: every N ticks, run bin/ikaros-heartbeat-archive.py
 # to bound the log file size. At 10s tick that's every ~24h. Old logs
 # are compressed (FRESHFUZZY) or dropped (DROP). Failure mode: silent.
 ARCHIVE_EVERY_TICKS = 8640  # ~24h at 10s/tick
@@ -129,14 +129,14 @@ ARCHIVE_EVERY_TICKS = 8640  # ~24h at 10s/tick
 # the verdict (ok / degraded / dead) into the heartbeat. 4 ticks =
 # 40s with default 10s tick. Per plan G (liveness 守护).
 LIVENESS_PROBE_EVERY_TICKS = 4
-# Dojo daily loop (plan 2): every N ticks run bin/icarus-dojo-daily.py
+# Dojo daily loop (plan 2): every N ticks run bin/ikaros-dojo-daily.py
 # which calls monitor.py → tracker.py save → writes a daily note.
 # Always read-only (no auto-apply). At 10s tick, 8640 = ~24h. Run it
 # shortly after the archive tick so the daily note isn't shadowed by
 # the archive summary.
 DOJO_DAILY_EVERY_TICKS = 8640  # ~24h at 10s/tick
 # Liveness dead-threshold: after N consecutive "dead" verdicts, emit
-# a special alert event (so icarus-remember surfaces it in the daily
+# a special alert event (so ikaros-remember surfaces it in the daily
 # narrative as "I lost all providers for X minutes").
 LIVENESS_DEAD_ALERT_AFTER = 5  # ~3min20s at 40s/probe × 5
 
@@ -230,7 +230,7 @@ def check_http_health(host: str, port: int, endpoint: str = "/health",
     serving HTTP. A zombie process can bind the port but not respond.
     This function sends a real HTTP request and checks for 200/204/301/302.
     Used for bridge to catch zombie processes.
-    See: data/icarus-coordination/handshake.2026-06-27.bridge-zombie.json
+    See: data/ikaros-coordination/handshake.2026-06-27.bridge-zombie.json
     """
     import http.client
     try:
@@ -424,7 +424,7 @@ def _service_status_snapshot() -> dict:
 
 # ---- Liveness probe (talks to bridge /v1/liveness) ----
 def _probe_liveness() -> dict | None:
-    """Ask bridge whether Icarus can talk to a model right now.
+    """Ask bridge whether Ikaros can talk to a model right now.
 
     Returns the verdict dict on success, None on bridge unreachable.
     The dict is shaped like:
@@ -448,7 +448,7 @@ def _probe_liveness() -> dict | None:
             payload = r.read().decode("utf-8", errors="replace")
             return json.loads(payload)
     except urllib.error.URLError as e:
-        # Bridge down — by definition Icarus is "dead" until it comes back.
+        # Bridge down — by definition Ikaros is "dead" until it comes back.
         return {"status": "dead", "summary": f"bridge unreachable: {type(e).__name__}: {e}",
                 "local": None, "cloud": {}}
     except Exception as e:
@@ -468,12 +468,12 @@ def _detect_system_change(prev: dict | None) -> tuple[dict, list[str]]:
 
 
 def _run_archive() -> bool:
-    """Run icarus-heartbeat-archive.py to bound log size. Returns True
+    """Run ikaros-heartbeat-archive.py to bound log size. Returns True
     if it actually wrote (i.e. records were dropped). Watchdog invokes
     this every ARCHIVE_EVERY_TICKS ticks (default ~24h). Failures are
     non-fatal: archive logs its own errors and watchdog keeps going.
     """
-    script = HERE.parent / "icarus-heartbeat-archive.py"
+    script = HERE.parent / "ikaros-heartbeat-archive.py"
     if not script.is_file():
         return False
     try:
@@ -503,13 +503,13 @@ def _run_archive() -> bool:
 
 
 def _run_memory_ingest() -> bool:
-    """Run icarus-remember.py to write today's narrative entry to
-    data/hermes-agent/memories/icarus/YYYY-MM-DD.md. This is the
+    """Run ikaros-remember.py to write today's narrative entry to
+    data/hermes-agent/memories/ikaros/YYYY-MM-DD.md. This is the
     "memory core" ingest — converts structured heartbeat into
     human-readable text the agent can re-read. Runs every
     MEMORY_INGEST_EVERY_TICKS ticks (~6h by default).
     """
-    script = HERE.parent / "icarus-remember.py"
+    script = HERE.parent / "ikaros-remember.py"
     if not script.is_file():
         return False
     try:
@@ -531,11 +531,11 @@ def _run_memory_ingest() -> bool:
 
 
 def _run_dojo_daily() -> bool:
-    """Run icarus-dojo-daily.py (plan 2). Always read-only: never
-    auto-applies skill fixes. Emits a heartbeat event so Icarus'
+    """Run ikaros-dojo-daily.py (plan 2). Always read-only: never
+    auto-applies skill fixes. Emits a heartbeat event so Ikaros'
     timeline sees the dojo tick. Failures are non-fatal.
     """
-    script = HERE.parent / "icarus-dojo-daily.py"
+    script = HERE.parent / "ikaros-dojo-daily.py"
     if not script.is_file():
         return False
     try:
@@ -625,12 +625,12 @@ def run() -> int:
     )
     # Plan 3: emit an awake-briefing on every wake so the heartbeat has
     # a "what did I do last" snapshot at the start of every session.
-    # The actual memory fetch is in bridge (via /v1/icarus/awake-briefing).
+    # The actual memory fetch is in bridge (via /v1/ikaros/awake-briefing).
     # Here we just trigger it; failures are silent (the bridge may not
     # be up yet on a cold start).
     try:
         import urllib.request as _url
-        with _url.urlopen("http://127.0.0.1:7860/v1/icarus/awake-briefing",
+        with _url.urlopen("http://127.0.0.1:7860/v1/ikaros/awake-briefing",
                           timeout=4) as _r:
             _brief = json.loads(_r.read().decode("utf-8"))
             _hb_event(
@@ -740,7 +740,7 @@ def run() -> int:
             # call bridge /v1/liveness and emit a `liveness` event with the
             # verdict (ok / degraded / dead). If `dead` persists for
             # LIVENESS_DEAD_ALERT_AFTER consecutive probes, emit a
-            # `liveness_dead_alert` so icarus-remember surfaces it in
+            # `liveness_dead_alert` so ikaros-remember surfaces it in
             # the daily narrative ("lost all providers at 03:14 UTC").
             if tick_count % LIVENESS_PROBE_EVERY_TICKS == 0:
                 lv = _probe_liveness()
@@ -783,14 +783,14 @@ def run() -> int:
 
             # Memory core ingest: every MEMORY_INGEST_EVERY_TICKS ticks
             # (~6h) write today's narrative entry to
-            # data/hermes-agent/memories/icarus/YYYY-MM-DD.md. This
+            # data/hermes-agent/memories/ikaros/YYYY-MM-DD.md. This
             # converts the structured heartbeat into human-readable
             # text the agent can re-read on session start.
             if tick_count % MEMORY_INGEST_EVERY_TICKS == 0:
                 _run_memory_ingest()
 
             # Dojo daily loop (plan 2): every DOJO_DAILY_EVERY_TICKS ticks
-            # (~24h) run icarus-dojo-daily.py → monitor.py + tracker save
+            # (~24h) run ikaros-dojo-daily.py → monitor.py + tracker save
             # + daily note. Read-only: never auto-applies skill fixes.
             # The dojo-daily script emits its own heartbeat event.
             if tick_count % DOJO_DAILY_EVERY_TICKS == 0:

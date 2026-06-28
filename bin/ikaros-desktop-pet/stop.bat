@@ -3,7 +3,7 @@ REM ============================================================
 REM  🪶 Ikaros Desktop Pet — Stopper
 REM ============================================================
 REM
-REM  Kills all running icarus-desktop-pet python processes.
+REM  Kills all running ikaros-desktop-pet python processes.
 REM
 REM ============================================================
 
@@ -11,10 +11,10 @@ echo ============================================================
 echo   🪶 Stopping Ikaros Desktop Pet...
 echo ============================================================
 
-REM Use wmic to find processes with "icarus-desktop-pet" in command line
+REM Use wmic to find processes with "ikaros-desktop-pet" in command line
 set "KILLED=0"
 
-for /f "tokens=*" %%P in ('wmic process where "name='python.exe' and commandline like '%%icarus-desktop-pet%%'" get processid 2^>nul ^| findstr /R "^[0-9]"') do (
+for /f "tokens=*" %%P in ('wmic process where "name='python.exe' and commandline like '%%ikaros-desktop-pet%%'" get processid 2^>nul ^| findstr /R "^[0-9]"') do (
     echo   killing PID %%P...
     taskkill /F /PID %%P >nul 2>&1
     if !ERRORLEVEL! EQU 0 set "KILLED=1"

@@ -1,5 +1,5 @@
 """
-Icarus Neuro Tray — Standalone system-tray indicator for Neuro state.
+Ikaros Neuro Tray — Standalone system-tray indicator for Neuro state.
 
 不嵌入 webui. 独立的 PyQt6 system tray icon, 显示 Neuro 状态:
 - 托盘图标根据 AI 状态变色 (idle/bored/listening/thinking/speaking)

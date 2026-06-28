@@ -15,16 +15,16 @@ set "SCRIPT_DIR=%~dp0"
 for %%A in ("%SCRIPT_DIR%..") do set "HERMES_ROOT=%%~fA"
 set "PY=%HERMES_ROOT%\portable-python\python.exe"
 set "LAUNCHER=%SCRIPT_DIR%detached.py"
-set "LOG=%HERMES_ROOT%\data\logs\icarus-pet.log"
+set "LOG=%HERMES_ROOT%\data\logs\ikaros-pet.log"
 
 if not exist "%PY%" (
-    echo [icarus] ERROR: python not found at %PY%
+    echo [ikaros] ERROR: python not found at %PY%
     pause
     exit /b 1
 )
 
 if not exist "%LAUNCHER%" (
-    echo [icarus] ERROR: detached.py not found at %LAUNCHER%
+    echo [ikaros] ERROR: detached.py not found at %LAUNCHER%
     pause
     exit /b 1
 )
@@ -49,8 +49,8 @@ start "" /B "%PY%" "%LAUNCHER%"
 REM Wait a moment then check
 timeout /t 4 /nobreak >nul
 
-echo [icarus] Pet launched (check task tray for the icon).
-echo [icarus] Log: %LOG%
-echo [icarus] Use stop.bat to exit.
+echo [ikaros] Pet launched (check task tray for the icon).
+echo [ikaros] Log: %LOG%
+echo [ikaros] Use stop.bat to exit.
 echo.
 exit /b 0

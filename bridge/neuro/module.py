@@ -1,5 +1,5 @@
 """
-Icarus Module - Neuro module.py 1:1 移植
+Ikaros Module - Neuro module.py 1:1 移植
 =========================================
 所有模块继承 Module,统一接口:init_event_loop / run / prompt_injection / API
 """
@@ -8,7 +8,7 @@ import logging
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 
-logger = logging.getLogger("icarus.module")
+logger = logging.getLogger("ikaros.module")
 
 
 @dataclass

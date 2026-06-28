@@ -1,5 +1,5 @@
 """
-Icarus Memory - Neuro memory.py 1:1 移植
+Ikaros Memory - Neuro memory.py 1:1 移植
 ==========================================
 Reflection memory: 每 20 条新消息,让 LLM 自我总结 3 个 Q&A 存 Chroma 向量库。
 查询时自动从最近的对话/事件构造 query,拉取相关记忆注入 prompt。
@@ -15,11 +15,11 @@ import requests
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-logger = logging.getLogger("icarus.memory")
+logger = logging.getLogger("ikaros.memory")
 
 # 路径配置
 ICARUS_ROOT = Path(__file__).resolve().parent.parent
-MEMORY_DIR = ICARUS_ROOT / "data" / "icarus-memory"
+MEMORY_DIR = ICARUS_ROOT / "data" / "ikaros-memory"
 CHROMA_DIR = MEMORY_DIR / "chroma.db"
 CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -263,6 +263,6 @@ _memory: Optional[Memory] = None
 def get_memory(signals=None) -> Memory:
     global _memory
     if _memory is None:
-        from bridge.signals import icarus
-        _memory = Memory(icarus)
+        from bridge.signals import ikaros
+        _memory = Memory(ikaros)
     return _memory

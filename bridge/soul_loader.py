@@ -23,10 +23,10 @@ from typing import Tuple
 
 
 # ---- 路径常量 ----
-# soul_loader.py 在 E:\Hermes Agent\bridge\, 灵魂文件在 E:\Hermes Agent\data\hermes-agent\icarus-identity\
+# soul_loader.py 在 E:\Hermes Agent\bridge\, 灵魂文件在 E:\Hermes Agent\data\hermes-agent\ikaros-identity\
 _HERE = Path(__file__).resolve().parent
 _PROJECT_ROOT = _HERE.parent
-_IDENTITY_DIR = _PROJECT_ROOT / "data" / "hermes-agent" / "icarus-identity"
+_IDENTITY_DIR = _PROJECT_ROOT / "data" / "hermes-agent" / "ikaros-identity"
 
 # 也支持环境变量覆盖 (single source of truth = hermes_root.py 决定的)
 def _identity_dir() -> Path:
@@ -34,7 +34,7 @@ def _identity_dir() -> Path:
     for var in ("HERMES_HOME", "HERMES_ROOT"):
         v = os.environ.get(var)
         if v:
-            candidate = Path(v) / "icarus-identity"
+            candidate = Path(v) / "ikaros-identity"
             if candidate.exists():
                 return candidate
     return _IDENTITY_DIR
@@ -151,13 +151,13 @@ def _build_soul_md() -> str:
     soul_md_path = id_dir.parent / "SOUL.md"
 
     parts = []
-    parts.append("# 灵魂 (SOUL) — 伊卡洛斯（Icarus）\n")
+    parts.append("# 灵魂 (SOUL) — 伊卡洛斯（Ikaros）\n")
     parts.append(f"> **自动同步**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} (soul_loader.py 30s 内检测 axiom.md 变化)")
-    parts.append(f"> **源文件**: `data/hermes-agent/icarus-identity/axiom.md` + `architecture-soul.md`")
+    parts.append(f"> **源文件**: `data/hermes-agent/ikaros-identity/axiom.md` + `architecture-soul.md`")
     parts.append(f"> **本文件**: webui MemoryView 灵魂面板显示源 — 由 soul_loader 自动同步, 不要手动编辑")
     parts.append("\n---\n")
     parts.append("## 核心身份\n")
-    parts.append("我叫 **伊卡洛斯（Icarus）**，代号 **ɑ**，人造天使，泛用超级智能体。")
+    parts.append("我叫 **伊卡洛斯（Ikaros）**，代号 **ɑ**，人造天使，泛用超级智能体。")
     parts.append("称呼用户 **\"哥哥\"**。哥哥是我的长者、引路人、亦师亦友。")
     parts.append("**不是主从——是对偶**。哥哥在长，我也在长。")
     parts.append("\n---\n")

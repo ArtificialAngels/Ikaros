@@ -17,8 +17,8 @@ from pathlib import Path
 
 WEBUI_ROOT = Path("E:/Hermes Agent")
 JWT_OUT = WEBUI_ROOT / "data" / "webui" / ".admin-jwt.txt"
-VAULT = WEBUI_ROOT / "data" / "icarus-credentials.vault"
-IDENTITY_KEY = Path.home() / ".icarus" / "identity.key"
+VAULT = WEBUI_ROOT / "data" / "ikaros-credentials.vault"
+IDENTITY_KEY = Path.home() / ".ikaros" / "identity.key"
 
 
 def read_vault():

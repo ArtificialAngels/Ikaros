@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger("icarus.completion_drain")
+logger = logging.getLogger("ikaros.completion_drain")
 
 # session_id -> list of completion event dicts
 _pending_completions: Dict[str, List[Dict[str, Any]]] = {}

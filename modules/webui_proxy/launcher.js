@@ -1,7 +1,7 @@
 // Hermes Desktop launcher — runs in webui SPA context
 // Loaded by webui_proxy via <script defer> injected into the SPA HTML head.
 // Click handler POSTs to /api/hermes/launch/desktop which spawns
-// bin\hermes-desktop.bat detached (the .bat calls icarus-desktop-pet.exe).
+// bin\hermes-desktop.bat detached (the .bat calls ikaros-desktop-pet.exe).
 //
 // Design notes (mirror of recovery.js / voice.js siblings):
 //   - Pure vanilla JS, no framework deps (loaded before SPA hydrates)

@@ -1,7 +1,7 @@
 """
 Ikaros Desktop Pet — Detached bootstrap.
 Spawns the real pet process with DETACHED_PROCESS so it survives
-parent terminal closure. Logs all output to data/logs/icarus-pet.log.
+parent terminal closure. Logs all output to data/logs/ikaros-pet.log.
 
 NOTE on detached mode:
 A truly detached process runs in its own session without an interactive
@@ -26,7 +26,7 @@ HERE = Path(__file__).parent
 HERMES_ROOT = HERE.parent.parent
 PY = HERMES_ROOT / "portable-python" / "python.exe"
 MAIN = HERE / "main.py"
-LOG = HERMES_ROOT / "data" / "logs" / "icarus-pet.log"
+LOG = HERMES_ROOT / "data" / "logs" / "ikaros-pet.log"
 
 # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP = 0x00000008 | 0x00000200
 DETACHED_PROCESS = 0x00000008

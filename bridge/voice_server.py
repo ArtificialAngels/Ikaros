@@ -1,5 +1,5 @@
 """
-Real-time voice dialogue server for Icarus.
+Real-time voice dialogue server for Ikaros.
 
 Architecture:
   Browser MediaRecorder → WebSocket (binary audio chunks)

@@ -260,7 +260,26 @@ $argList = @(
     '--temp',         '0.7'
 )
 if (Test-Path $PresetPath) {
-    $argList = @('--models-preset', $PresetPath) + $argList
+    # ── Fix router mode: --models-dir 在 b9826 中不被 model= 路径解析使用 ──
+    # child process CWD = $LLAMACPP_BIN (runtime\), 所以相对路径找不到.
+    # 策略: 把 model=xxx.gguf 替换为绝对路径 $ModelsDir\xxx.gguf
+    $presetContent = Get-Content $PresetPath -Encoding UTF8
+    $fixedContent = $presetContent | ForEach-Object {
+        if ($_ -match '^model\s*=\s*(.+)$') {
+            $rawPath = $Matches[1].Trim()
+            if ($rawPath -notmatch '^[A-Za-z]:\\') {
+                "model = $ModelsDir\$rawPath"
+            } else {
+                $_
+            }
+        } else {
+            $_
+        }
+    }
+    $fixedPresetPath = Join-Path $LogDir 'router-preset-abs.ini'
+    # MUST be UTF8 without BOM — llama-server's config parser rejects BOM
+    [System.IO.File]::WriteAllText($fixedPresetPath, ($fixedContent -join "`r`n"), [System.Text.UTF8Encoding]::new($false))
+    $argList = @('--models-preset', $fixedPresetPath) + $argList
 }
 
 # ---- Truncate log files ----

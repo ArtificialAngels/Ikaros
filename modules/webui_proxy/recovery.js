@@ -1,11 +1,11 @@
-// Icarus session recovery — runs in webui SPA context
+// Ikaros session recovery — runs in webui SPA context
 // Loaded by webui_proxy via <script defer>. Talks to bridge via webui_proxy.
 //
 // What this does:
-//   1. On page load, fetches /api/hermes/icarus/active-session
+//   1. On page load, fetches /api/hermes/ikaros/active-session
 //   2. If a recent active session exists, shows a "Resume previous conversation?"
 //      toast in the corner
-//   3. On Resume click, calls /api/hermes/icarus/session/{id}/resume-context,
+//   3. On Resume click, calls /api/hermes/ikaros/session/{id}/resume-context,
 //      stores the system prompt in localStorage, then navigates to /chat
 //   4. SPA chat page (when loaded) can read the stored context and seed
 //      the new conversation with the previous context
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const API = "/api/hermes/icarus";
+  const API = "/api/hermes/ikaros";
   const STORAGE_KEY = "icarus_recovery_state";
   const RESUME_CONTEXT_KEY = "icarus_resume_context";
   let shown = false;
@@ -31,7 +31,7 @@
 
   function mountToast(html) {
     const div = document.createElement("div");
-    div.id = "icarus-recovery-toast";
+    div.id = "ikaros-recovery-toast";
     div.setAttribute("role", "alert");
     div.style.cssText = [
       "position:fixed", "top:16px", "right:16px", "z-index:999999",
@@ -39,14 +39,14 @@
       "border:1px solid #4b5563", "border-radius:8px",
       "padding:14px 18px", "font:13px/1.5 system-ui,-apple-system,sans-serif",
       "box-shadow:0 6px 24px rgba(0,0,0,.45)",
-      "animation:icarus-fade-in .3s ease-out"
+      "animation:ikaros-fade-in .3s ease-out"
     ].join(";");
     div.innerHTML = html;
     document.body.appendChild(div);
   }
 
   function dismiss(reason) {
-    const el = document.getElementById("icarus-recovery-toast");
+    const el = document.getElementById("ikaros-recovery-toast");
     if (el) el.remove();
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -101,18 +101,18 @@
       excerpt ? ('<div style="opacity:.7;margin-bottom:12px;font-style:italic;border-left:2px solid #4b5563;padding-left:8px">&quot;' +
         safeExcerpt + '&quot;</div>') : '',
       '<div style="display:flex;gap:8px;margin-top:8px">',
-        '<button id="icarus-resume" style="background:#10b981;color:#fff;border:0;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:500">继续上次</button>',
-        '<button id="icarus-dismiss" style="background:transparent;color:#9ca3af;border:1px solid #4b5563;padding:6px 14px;border-radius:4px;cursor:pointer">以后再说</button>',
-        '<button id="icarus-dismiss-session" style="background:transparent;color:#6b7280;border:0;padding:6px 14px;cursor:pointer;text-decoration:underline;font-size:12px">不再提醒</button>',
+        '<button id="ikaros-resume" style="background:#10b981;color:#fff;border:0;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:500">继续上次</button>',
+        '<button id="ikaros-dismiss" style="background:transparent;color:#9ca3af;border:1px solid #4b5563;padding:6px 14px;border-radius:4px;cursor:pointer">以后再说</button>',
+        '<button id="ikaros-dismiss-session" style="background:transparent;color:#6b7280;border:0;padding:6px 14px;cursor:pointer;text-decoration:underline;font-size:12px">不再提醒</button>',
       '</div>',
     ].join("");
 
     function showNow() {
       if (document.body) {
         mountToast(html);
-        const resumeBtn = document.getElementById("icarus-resume");
-        const dismissBtn = document.getElementById("icarus-dismiss");
-        const neverBtn = document.getElementById("icarus-dismiss-session");
+        const resumeBtn = document.getElementById("ikaros-resume");
+        const dismissBtn = document.getElementById("ikaros-dismiss");
+        const neverBtn = document.getElementById("ikaros-dismiss-session");
         if (resumeBtn) resumeBtn.onclick = () => resume(info);
         if (dismissBtn) dismissBtn.onclick = () => dismiss("later");
         if (neverBtn) neverBtn.onclick = () => dismiss("never");
@@ -124,7 +124,7 @@
   }
 
   async function resume(info) {
-    const btn = document.getElementById("icarus-resume");
+    const btn = document.getElementById("ikaros-resume");
     if (btn) {
       btn.disabled = true;
       btn.textContent = "加载上下文...";
@@ -161,10 +161,10 @@
 
   // Inject a small CSS animation for fade-in
   function injectCss() {
-    if (document.getElementById("icarus-recovery-css")) return;
+    if (document.getElementById("ikaros-recovery-css")) return;
     const s = document.createElement("style");
-    s.id = "icarus-recovery-css";
-    s.textContent = "@keyframes icarus-fade-in { from { opacity:0; transform:translateY(-8px) } to { opacity:1; transform:translateY(0) } }";
+    s.id = "ikaros-recovery-css";
+    s.textContent = "@keyframes ikaros-fade-in { from { opacity:0; transform:translateY(-8px) } to { opacity:1; transform:translateY(0) } }";
     (document.head || document.documentElement).appendChild(s);
   }
 

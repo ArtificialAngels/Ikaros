@@ -21,7 +21,7 @@ from typing import Optional, Callable
 from urllib import request as urlrequest
 from urllib.error import URLError, HTTPError
 
-log = logging.getLogger("icarus.neuro")
+log = logging.getLogger("ikaros.neuro")
 
 # Neuro bridge base URL
 NEURO_BASE = "http://127.0.0.1:7860"

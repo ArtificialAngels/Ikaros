@@ -1,5 +1,5 @@
 """
-Icarus Prompter - Neuro prompter.py 1:1 移植
+Ikaros Prompter - Neuro prompter.py 1:1 移植
 =============================================
 100ms 心跳循环：决定"什么时候该问 AI"。
 关键创新：PATIENCE 机制 — 沉默久了 AI 主动说话（哥哥想要的"和 neuro 一样陪我"）。
@@ -14,22 +14,22 @@ from typing import Optional, Callable, Awaitable, Dict, Any
 
 import httpx
 
-from bridge.signals import icarus, PATIENCE_DEFAULT
+from bridge.signals import ikaros, PATIENCE_DEFAULT
 
-logger = logging.getLogger("icarus.prompter")
+logger = logging.getLogger("ikaros.prompter")
 
 # Ensure logger emits to stderr at INFO level.
 # (When bridge.start.ps1 runs via supervisor, stderr is inherited but
 #  not captured into bridge.err - so we ALSO add a FileHandler that
-#  writes to data/logs/icarus-prompter.log, so reflective events are
+#  writes to data/logs/ikaros-prompter.log, so reflective events are
 #  inspectable after the fact.)
 if not logger.handlers and os.environ.get("ICARUS_PROMPTER_LOG") != "off":
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s [icarus.prompter] %(message)s"))
+    handler.setFormatter(logging.Formatter("%(asctime)s [ikaros.prompter] %(message)s"))
     logger.addHandler(handler)
     try:
         from pathlib import Path
-        log_file = Path(__file__).resolve().parent.parent / "data" / "logs" / "icarus-prompter.log"
+        log_file = Path(__file__).resolve().parent.parent / "data" / "logs" / "ikaros-prompter.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(str(log_file), encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
@@ -97,17 +97,17 @@ class Prompter:
         # 避免 uvicorn 还没完全 ready 就收到自调用请求。
         if time.time() < self._ready_at:
             return None
-        if not icarus.llm_ready:
+        if not ikaros.llm_ready:
             return None
-        if icarus.human_speaking or icarus.AI_thinking or icarus.AI_speaking:
+        if ikaros.human_speaking or ikaros.AI_thinking or ikaros.AI_speaking:
             return None
 
         # 用户消息
-        if icarus.new_message:
+        if ikaros.new_message:
             return "user_message"
 
         # 远程消息 (LAN 设备 / WebUI 等)
-        if len(icarus.recent_remote_messages) > 0:
+        if len(ikaros.recent_remote_messages) > 0:
             return "remote_message"
 
         # Phase 4: 后台任务完成事件
@@ -117,7 +117,7 @@ class Prompter:
                 return reason
 
         # PATIENCE — 哥哥的关键需求
-        if icarus.time_since_last_message > self.patience:
+        if ikaros.time_since_last_message > self.patience:
             now = time.time()
             patience_debounce = DEBOUNCE_SECONDS.get("patience_idle", 60)
             if now - self._last_patience_trigger > max(self.patience, patience_debounce):
@@ -182,16 +182,16 @@ class Prompter:
 
     async def _tick(self):
         """100ms 心跳"""
-        while not icarus.terminate:
+        while not ikaros.terminate:
             try:
-                icarus.update_time_since_last()
+                ikaros.update_time_since_last()
 
                 # 系统就绪检查
                 # 只要求 llm_ready (reflection 必要条件). STT/TTS 是 voice 用,
                 # 文字反思不需要. 如果 llm_ready=true 但 STT/TTS=false, 仍要 PATIENCE.
-                if icarus.last_message_time == 0.0 or not icarus.llm_ready:
-                    icarus.last_message_time = time.time()
-                    icarus.time_since_last_message = 0.0
+                if ikaros.last_message_time == 0.0 or not ikaros.llm_ready:
+                    ikaros.last_message_time = time.time()
+                    ikaros.time_since_last_message = 0.0
                 else:
                     if not self.system_ready:
                         logger.info("ICARUS_SYSTEM_READY")
@@ -201,9 +201,9 @@ class Prompter:
                 reason = self.prompt_now()
                 if reason:
                     logger.info(f"PROMPTING_AI: {reason}")
-                    icarus.last_message_time = time.time()
-                    icarus.new_message = False
-                    icarus.AI_thinking = True
+                    ikaros.last_message_time = time.time()
+                    ikaros.new_message = False
+                    ikaros.AI_thinking = True
                     try:
                         # 构造 prompt 上下文
                         if reason == "completion_event":
@@ -212,12 +212,12 @@ class Prompter:
                             ctx = self.patience_prompts[self._patience_idx % len(self.patience_prompts)]
                             self._patience_idx += 1
                         elif reason == "remote_message":
-                            ctx = icarus.recent_remote_messages.pop(0) if icarus.recent_remote_messages else {}
+                            ctx = ikaros.recent_remote_messages.pop(0) if ikaros.recent_remote_messages else {}
                         else:  # user_message
-                            ctx = icarus.history[-1]["content"] if icarus.history else ""
+                            ctx = ikaros.history[-1]["content"] if ikaros.history else ""
 
                         # 推送给 sio (WebUI)
-                        icarus.sio_queue.append({"type": "prompter_trigger", "reason": reason, "ctx": ctx})
+                        ikaros.sio_queue.append({"type": "prompter_trigger", "reason": reason, "ctx": ctx})
                         # 触发 LLM
                         reply = await self.llm_callback(ctx, reason=reason)
                         # 记录主动消息
@@ -230,7 +230,7 @@ class Prompter:
                             if len(_recent_proactive_messages) > _MAX_PROACTIVE_HISTORY:
                                 _recent_proactive_messages.pop(0)
                     finally:
-                        icarus.AI_thinking = False
+                        ikaros.AI_thinking = False
 
             except Exception as e:
                 logger.exception(f"prompter tick error: {e}")
@@ -249,7 +249,7 @@ class Prompter:
         if self._task:
             self._task.cancel()
             self._task = None
-        icarus.terminate = True
+        ikaros.terminate = True
 
 
 # === Phase 4: 真实 LLM 回调 ===
@@ -317,8 +317,8 @@ async def real_llm_callback(ctx: str, reason: str = "user_message") -> Optional[
                 logger.warning(f"PROMPTER_LLM: empty content, body={r.text[:300]}")
                 return None
             if reply:
-                icarus.mark_new_message("assistant", reply)
-                icarus.sio_queue.append({
+                ikaros.mark_new_message("assistant", reply)
+                ikaros.sio_queue.append({
                     "type": "neuro_proactive",
                     "reason": reason,
                     "content": reply,

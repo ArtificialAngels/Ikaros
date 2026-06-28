@@ -1,7 +1,7 @@
 {
   "name": "bridge",
   "version": "2.1.0",
-  "description": "Rust bridge (Phase 2) — axum+tokio reverse proxy with icarus memory, signals bus, module scanner. Fallback to Python uvicorn if Rust binary missing.",
+  "description": "Rust bridge (Phase 2) — axum+tokio reverse proxy with ikaros memory, signals bus, module scanner. Fallback to Python uvicorn if Rust binary missing.",
   "type": "service",
   "runtime": {
     "kind": "rust",

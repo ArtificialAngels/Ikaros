@@ -45,7 +45,7 @@ E:\Hermes Agent\bin\neuro-tray\start_neuro_tray.bat
 每 60 秒最多弹一次 (防骚扰)。
 
 ## 自启动
-已注册到 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\IcarusNeuroTray`。
+已注册到 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\IkarosNeuroTray`。
 用户登录时自动启动。
 
 ## 故障排查
@@ -57,7 +57,7 @@ E:\Hermes Agent\bin\neuro-tray\start_neuro_tray.bat
 | 菜单点不开 | tray 被卡 | 任务管理器结束 python.exe 重启 |
 
 ## 与桌宠关系
-- 桌宠 (`bin/icarus-desktop-pet`) = PyQt6 透明窗口 + 角色
+- 桌宠 (`bin/ikaros-desktop-pet`) = PyQt6 透明窗口 + 角色
 - Neuro tray (`bin/neuro-tray`) = system tray icon
 - 两者独立, 都连 Neuro bridge (:7860)
 - 可以单独跑任意一个

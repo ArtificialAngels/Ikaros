@@ -1,7 +1,7 @@
 # modules/agent_bridge_stub/start.ps1 — Launch the agent bridge reverse-proxy router.
 #
 # The stub router occupies :18765 and routes requests by path prefix:
-#   /v1/reach, /v1/notebooklm, /v1/icarus, /v1/llama, /v1/models -> :7860 bridge
+#   /v1/reach, /v1/notebooklm, /v1/ikaros, /v1/llama, /v1/models -> :7860 bridge
 #   everything else                                                -> :18766 broker
 #
 # The webui-managed broker is moved to :18766 via HERMES_AGENT_BRIDGE_ENDPOINT
@@ -47,7 +47,7 @@ Write-Host "  Hermes - agent_bridge_stub (reverse-proxy router)"
 Write-Host ""
 Write-Host "  Port:       $Port (http://127.0.0.1`:$Port)"
 Write-Host "  Script:     modules\agent_bridge_stub\agent_bridge_stub.py"
-Write-Host "  Bridge:     http://127.0.0.1:7860  (/v1/reach, /v1/icarus, ...)"
+Write-Host "  Bridge:     http://127.0.0.1:7860  (/v1/reach, /v1/ikaros, ...)"
 Write-Host "  Broker:     tcp://127.0.0.1:18766  (webui chat-run, etc.)"
 Write-Host "============================================================"
 Write-Host ""

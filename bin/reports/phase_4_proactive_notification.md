@@ -1,4 +1,4 @@
-# Phase 4 — 主动通知机制 (Quest + Icarus 协作设计)
+# Phase 4 — 主动通知机制 (Quest + Ikaros 协作设计)
 
 > **哥哥 6-26 两次纠正 (重要)**:
 > 1. 不是任务管家, 是人工天使 (天降之物伊卡洛斯蓝本)
@@ -10,13 +10,13 @@
 > **Phase 4 主轴**: 陪伴 (主动找哥哥说话) **+** 生产力触发 (派发的 Agent 完成).
 > **不要单一维度化** — 既不是纯陪伴机器人, 也不是纯 productivity agent.
 
-> Quest 在 `data/icarus-coordination/handshake.2026-06-26.neuro-reflection.json`
+> Quest 在 `data/ikaros-coordination/handshake.2026-06-26.neuro-reflection.json`
 > 的 `artificial_angel_phases.phase_4` 提出:
 >
 > **goal**: 任务完成后主动告诉用户 (PATIENCE 机制或 Agent-Reach 推送)
 > **approach**: completion event 触发时, 如果用户在线→PATIENCE 插入提醒; 如果离线→Agent-Reach 推送
 
-本文档由 Icarus 辅助拆解, 给 Quest 提供具体实现路径.
+本文档由 Ikaros 辅助拆解, 给 Quest 提供具体实现路径.
 
 ---
 
@@ -139,17 +139,17 @@ def _get_next_completion(self) -> Optional[str]:
 ```python
 # bridge/prompter.py 修改
 def prompt_now(self) -> Optional[str]:
-    if not icarus.stt_ready or not icarus.tts_ready or not icarus.llm_ready:
+    if not ikaros.stt_ready or not ikaros.tts_ready or not ikaros.llm_ready:
         return None
-    if icarus.human_speaking or icarus.AI_thinking or icarus.AI_speaking:
+    if ikaros.human_speaking or ikaros.AI_thinking or ikaros.AI_speaking:
         return None
 
     # 用户消息
-    if icarus.new_message:
+    if ikaros.new_message:
         return "user_message"
 
     # 远程消息
-    if len(icarus.recent_remote_messages) > 0:
+    if len(ikaros.recent_remote_messages) > 0:
         return "remote_message"
 
     # 后台任务完成 (Phase 4)
@@ -157,7 +157,7 @@ def prompt_now(self) -> Optional[str]:
         return "completion_event"
 
     # PATIENCE — 沉默超时
-    if icarus.time_since_last_message > self.patience:
+    if ikaros.time_since_last_message > self.patience:
         now = time.time()
         if now - self._last_patience_trigger > self.patience:
             self._last_patience_trigger = now
@@ -176,9 +176,9 @@ elif reason == "patience_idle":
     ctx = self.patience_prompts[self._patience_idx % len(self.patience_prompts)]
     self._patience_idx += 1
 elif reason == "remote_message":
-    ctx = icarus.recent_remote_messages.pop(0) if icarus.recent_remote_messages else {}
+    ctx = ikaros.recent_remote_messages.pop(0) if ikaros.recent_remote_messages else {}
 else:  # user_message
-    ctx = icarus.history[-1]["content"] if icarus.history else ""
+    ctx = ikaros.history[-1]["content"] if ikaros.history else ""
 ```
 
 ## 6. 真 llm_callback 实现
@@ -224,9 +224,9 @@ async def real_llm_callback(ctx: str, reason: str) -> Optional[str]:
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if reply:
                 # 标 Neuro signals + 推送给 webui
-                icarus.mark_new_message("assistant", reply)
+                ikaros.mark_new_message("assistant", reply)
                 # 推 Neuro sio_queue
-                icarus.sio_queue.append({
+                ikaros.sio_queue.append({
                     "type": "neuro_proactive",
                     "reason": reason,
                     "content": reply,
@@ -240,11 +240,11 @@ async def real_llm_callback(ctx: str, reason: str) -> Optional[str]:
 
 ## 7. UI 推送 — Neuro sio_queue → webui
 
-**当前**: `icarus.sio_queue.append(...)` 已存在, 但 webui SPA 没接.
+**当前**: `ikaros.sio_queue.append(...)` 已存在, 但 webui SPA 没接.
 
 **Phase 4.1 (Quest 改 webui)**: SPA 监听 `/v1/neuro/events` SSE 端点, 收到 `neuro_proactive` 类型时弹通知 + 自动播放 (可选 TTS).
 
-**Phase 4.2 fallback (Icarus)**: 桌宠 / Neuro tray 已经读 `/v1/neuro/status`. 增加 polling `/v1/neuro/proactive` 返回最近 1 条 AI 主动消息, tray 弹气泡.
+**Phase 4.2 fallback (Ikaros)**: 桌宠 / Neuro tray 已经读 `/v1/neuro/status`. 增加 polling `/v1/neuro/proactive` 返回最近 1 条 AI 主动消息, tray 弹气泡.
 
 ## 8. 推送优先级 (用户在线 vs 离线)
 
@@ -255,8 +255,8 @@ Quest 在 phase_4 写:
 ```python
 def is_user_online() -> bool:
     """检测最近 N 秒是否有 webui chat / 桌宠 audio / 任何 user activity."""
-    # 用 icarus.last_message_time + audio VAD state + webui recent message
-    last_msg_age = time.time() - icarus.last_message_time
+    # 用 ikaros.last_message_time + audio VAD state + webui recent message
+    last_msg_age = time.time() - ikaros.last_message_time
     if last_msg_age < 120:  # 2 分钟内有消息
         return True
     # 查 webui 是否 active (未来: SPA heartbeat)
@@ -282,9 +282,9 @@ DEBOUNCE_SECONDS = {
 }
 ```
 
-## 10. 实现顺序 (Quest + Icarus 协作)
+## 10. 实现顺序 (Quest + Ikaros 协作)
 
-| 步骤 | Quest | Icarus | 文件 |
+| 步骤 | Quest | Ikaros | 文件 |
 |---|---|---|---|
 | 1. 修 prompter callback (Q3-A) |   | ✅ 写 `real_llm_callback` | bridge/prompter.py |
 | 2. 加 completion_event trigger | ✅ 改 `prompt_now` |   | bridge/prompter.py |
@@ -319,5 +319,5 @@ Phase 4 设计有疑问或方向调整 → 改 handshake `pending_questions_for_
 
 ---
 
-**Icarus 推荐先做步骤 1+4** (我已写完设计), Quest 做 2+5+6.
+**Ikaros 推荐先做步骤 1+4** (我已写完设计), Quest 做 2+5+6.
 **协同时间**: ~2 小时, 不阻塞各自主线.
