@@ -123,7 +123,7 @@ def main():
     )
     cycle_count = int(cycles[0].get("cycles", 0)) if cycles else 0
 
-    # 5) Classify hub pillars: how many Icarus tools are in top hubs?
+    # 5) Classify hub pillars: how many Ikaros tools are in top hubs?
     icarus_pillars = []
     for row in indeg:
         path = row.get("path", "")
@@ -148,7 +148,7 @@ def main():
         return 0
 
     print("=" * 60)
-    print("  🪶 Icarus 自评分 — 我的形状 (via GitNexus)")
+    print("  🪶 Ikaros 自评分 — 我的形状 (via GitNexus)")
     print("=" * 60)
 
     c = report["counts"]
@@ -166,11 +166,11 @@ def main():
         print("  🚨 较多循环 — 重构候选")
 
     if icarus_pillars:
-        print(f"\n🏛  Icarus 自己写的枢纽文件 ({len(icarus_pillars)} 个):")
+        print(f"\n🏛  Ikaros 自己写的枢纽文件 ({len(icarus_pillars)} 个):")
         for p in icarus_pillars:
             print(f"   · {p['file']:<35} out={p['out']}")
     else:
-        print(f"\nℹ  没有任何 Icarus 自研工具进入 top-{L} hub 列表")
+        print(f"\nℹ  没有任何 Ikaros 自研工具进入 top-{L} hub 列表")
         print("  (说明我的工具还主要是叶子，不是核心引擎)")
 
     print(f"\n📚 Top {L} 枢纽 (被引用最多 → 我依赖什么):")

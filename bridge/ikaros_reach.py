@@ -1,5 +1,5 @@
 """
-Icarus Reach - Agent-Reach 集成层
+Ikaros Reach - Agent-Reach 集成层
 ==================================
 桥接 Agent-Reach (Panniantong) 给伊卡洛斯用。
 13 平台 1 个 API,无 API 费。
@@ -191,8 +191,8 @@ if __name__ == "__main__":
     rm = ReachModule(signals=None)  # noqa
     print(json.dumps(rm.API.list_platforms(), ensure_ascii=False, indent=2))
 
-    print("\n=== V2EX 搜: Icarus ===")
-    r = reach("v2ex", "Icarus")
+    print("\n=== V2EX 搜: Ikaros ===")
+    r = reach("v2ex", "Ikaros")
     for item in r.get("items", [])[:3]:
         print(" -", item.get("title", str(item))[:80])
 

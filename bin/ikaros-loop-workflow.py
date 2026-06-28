@@ -1,5 +1,5 @@
 """
-Icarus Loop Workflow — 闭环迭代式长周期任务管理器
+Ikaros Loop Workflow — 闭环迭代式长周期任务管理器
 
 模式 (哥哥 6-26):
   Check → Search → Execute → Verify → Test → [回到 Check] → ... → Done

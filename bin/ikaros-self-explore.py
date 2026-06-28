@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bin/icarus-self-explore.py — Icarus self-understanding via GitNexus.
+bin/icarus-self-explore.py — Ikaros self-understanding via GitNexus.
 
 A meta-tool that wraps the GitNexus MCP-equivalent CLI (gitnexus query/cypher/
 context/impact/trace/list) into a single command, so the agent (or a human)

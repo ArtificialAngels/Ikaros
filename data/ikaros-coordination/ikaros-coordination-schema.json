@@ -1,8 +1,8 @@
 {
   "$id": "https://github.com/ArtificialAngels/hermes-agent-portable/icarus-coordination/schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Icarus Coordination Log",
-  "description": "Schema for Icarus ↔ other-agent coordination JSON logs. Located in data/icarus-coordination/.",
+  "title": "Ikaros Coordination Log",
+  "description": "Schema for Ikaros ↔ other-agent coordination JSON logs. Located in data/icarus-coordination/.",
   "version": "1.0.0",
   "type": "object",
   "required": [

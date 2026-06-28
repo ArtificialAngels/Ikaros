@@ -9,7 +9,7 @@ Agent 启动新会话时，自动调一次 `/v1/icarus/awake-briefing`，
   python bin/icarus-awake-briefing.py --quiet      # 仅 OK/无记忆
   python bin/icarus-awake-briefing.py --json       # 输出 raw JSON
 
-Icarus 设计原则：每次醒来先看一遍自己昨天写了什么——避免"失忆式启动"。
+Ikaros 设计原则：每次醒来先看一遍自己昨天写了什么——避免"失忆式启动"。
 """
 import argparse, json, sys, urllib.request, urllib.error
 from pathlib import Path
@@ -32,17 +32,17 @@ def render(d, args):
         return
 
     if "_error" in d:
-        print(f"⚠  Icarus 无法唤醒: {d['_error']}")
+        print(f"⚠  Ikaros 无法唤醒: {d['_error']}")
         print("   (可能 bridge 没启动；先跑 bin/hermes-supervisor.py --start bridge)")
         return
 
     ls = d.get("last_session", {})
     if not ls.get("date"):
-        print("🪶 Icarus 第一次醒来。还没有任何记忆。")
+        print("🪶 Ikaros 第一次醒来。还没有任何记忆。")
         return
 
     print("=" * 60)
-    print(f"  🪶 Icarus 唤醒简报")
+    print(f"  🪶 Ikaros 唤醒简报")
     print("=" * 60)
     print(f"\n📅 上次会话: {ls['date']}")
     print(f"   标题: {ls['headline']}")

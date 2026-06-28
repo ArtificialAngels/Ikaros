@@ -2,7 +2,7 @@
 """icarus-dojo-daily.py — 每日 dojo 自动循环
 
 由 watchdog 每 24h 触发（或用户手动：`python bin/icarus-dojo-daily.py`）。
-设计原则（Icarus 路径 2）：
+设计原则（Ikaros 路径 2）：
   1. 只读分析 + tracker save —— 永不自动 apply/evolve
   2. 写一个 daily note 到 data/hermes-agent/memories/icarus/dojo-YYYY-MM-DD.md
   3. 失败 top-3 写入 .proposals/dojo-YYYY-MM-DD.md，等用户确认才 mint
@@ -34,7 +34,7 @@ def run(cmd, timeout=60):
 
 def main():
     today = datetime.now().strftime("%Y-%m-%d")
-    print(f"=== Icarus dojo-daily {today} ===", flush=True)
+    print(f"=== Ikaros dojo-daily {today} ===", flush=True)
 
     # 1) monitor.py (per-tool success rates)
     rc, out, err = run(
@@ -89,7 +89,7 @@ def main():
         f.write("(`fixer.py` → review → `fixer.py --apply`) to act on findings.\n")
     print(f"  daily note: {note.relative_to(ROOT)}")
 
-    # 4) Emit a heartbeat event so Icarus timeline sees the dojo tick
+    # 4) Emit a heartbeat event so Ikaros timeline sees the dojo tick
     heartbeat = ROOT / "data" / "logs" / "icarus-heartbeat.jsonl"
     heartbeat.parent.mkdir(parents=True, exist_ok=True)
     event = {

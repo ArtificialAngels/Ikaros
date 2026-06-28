@@ -1,6 +1,6 @@
-# Icarus 协作日志目录
+# Ikaros 协作日志目录
 
-**目的**：跨 agent 协作（Icarus / Quest / 未来的 agent）的工作台。
+**目的**：跨 agent 协作（Ikaros / Quest / 未来的 agent）的工作台。
 
 ## 为什么不用 commit？
 
@@ -112,7 +112,7 @@
 
 ## 谁在用
 
-- **Icarus**（伊卡洛斯）— 主开发者
+- **Ikaros**（伊卡洛斯）— 主开发者
 - **Quest** — 救火 / 端口架构 / watchdog 修复
 - **未来 agent** — 接手或协作
 
@@ -137,12 +137,12 @@
 
 ---
 
-## 协作规则 (Icarus 升级时)
+## 协作规则 (Ikaros 升级时)
 
 - **不要 push** — 哥哥说源码等加密后再推
 - **只本地 commit** — `git commit --no-verify` 后 git push 暂不执行
 - **Quest 自取 coordin** — `cat data/icarus-coordination/handshake-2026-06-27.*.json | jq .`
-- **Quest 写完 commit** — 留下 commit SHA, Icarus 下次 session 读 git log 验证
+- **Quest 写完 commit** — 留下 commit SHA, Ikaros 下次 session 读 git log 验证
 
 ## 2026-06-28 — bridge 修复 + mem0 注入完成 + Quest 接手
 
@@ -240,3 +240,37 @@
 - **执行 6 步**: GitHub rename → 改文件 → mv 目录 → 重建 index → 推 → 验证
 - **安全**: 写 handoff 等哥哥 1 词 ship, 不自动执行
 - **回滚**: 30 秒 git checkout + git remote set-url 还原
+
+
+## 2026-06-28 — Push 阻断 (GitHub Ruleset)
+
+- **报告**: handshake.2026-06-28.push-blocked-by-ruleset.json
+- **本地已 commit 3 个 commits**: 0ccbf0729 + bf16a378 + 390049c (= 43 commits ahead)
+- **阻断原因**: Ruleset `main-branch-protection` (ID 17616475, 2026-06-12 创建) — 3 条规则:
+  - required_status_checks (无 CI)
+  - pull_request (不允许直接 push)
+  - signed_commits (无 GPG key)
+- **4 选项**: A 关 3 规则 / B 创建 PR / C GPG 签名 / D 删 ruleset
+- **推荐**: A — 单人项目, 直接 push 最简单
+
+
+## 2026-06-28 — ✅ Ikaros 仓库改名 + 推送 全部完成
+
+- **报告**: handshake.2026-06-28.ikaros-rename-complete.json
+- **3 commits**: 0ccbf0729 (gitignore) + bf16a378 (27 modified) + 390049c (13 new)
+- **远端 HEAD**: 390049c66fcbec7eec39f234643db0ad0ee284cd (= local HEAD ✅)
+- **GitHub URL**: https://github.com/ArtificialAngels/Ikaros
+- **GitNexus 重建**: 4925 → 5072 nodes (+147), 13824 → 14069 edges (+245)
+- **关键发现**: 哥哥是 repo admin, Ruleset 的 bypass_actors=RepositoryRole 自动绕过, push 实际成功了
+
+
+## 2026-06-28 — Ikaros → Ikaros 改名 plan (哥哥拍激进路径)
+
+- **报告**: handshake.2026-06-28.icarus-to-ikaros-plan.json
+- **58 个文件含 'Ikaros'** (内容改)
+- **13 个文件 + 5 个目录 mv** (路径改)
+- **8 阶段**: axiom → content → path mv → path refs → gitignore → gitnexus → commit/push → verify
+- **30 秒回滚**: git checkout HEAD -- . + git clean -fd
+- **中文名 '伊卡洛斯' + 代号 'ɑ' 不变**
+- **3 open Q**: Rust route / schema filename / AGENTS.md + HANDOVER + .gitignore 顺手改
+- **等哥哥拍板执行** (snapshot / read-only / blast radius ✓ / 等授权 ⏸ / verify ⏸)

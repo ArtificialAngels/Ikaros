@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 bin/icarus-remember.py — Convert the heartbeat log into a written
-narrative entry in Icarus's memory. This is the "memory core" ingest:
+narrative entry in Ikaros's memory. This is the "memory core" ingest:
 it takes the structured JSONL heartbeat and produces a human-readable
 paragraph that the agent (or the user) can re-read to recall what
 happened, when, and on which machine.
@@ -174,7 +174,7 @@ def render_markdown(summary: dict) -> str:
         serial = wake.get("serial", "?")
         hermes_root = wake.get("hermes_root", "?")
         wd_pid = wake.get("watchdog_pid", "?")
-        lines.append(f"- **Who**: I am Icarus (伊卡洛斯) on **{host}** as **{user}**")
+        lines.append(f"- **Who**: I am Ikaros (伊卡洛斯) on **{host}** as **{user}**")
         lines.append(f"- **OS**: {os_}")
         lines.append(f"- **Identity**: BIOS UUID `{uuid_}`, serial `{serial}`")
         lines.append(f"- **Workspace**: `{hermes_root}`")

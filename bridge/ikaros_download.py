@@ -1,5 +1,5 @@
 """
-Icarus Downloader - 备选下载通道
+Ikaros Downloader - 备选下载通道
 ================================
 优先用 aria2c（轻量、CLI 集成），复杂任务用 Gopeed REST API。
 两个都用上：覆盖简单到复杂的所有下载场景。

@@ -1,4 +1,4 @@
-"""Icarus Gatekeeper — verify 哥哥身份 via password prompt.
+"""Ikaros Gatekeeper — verify 哥哥身份 via password prompt.
 
 设计 (per axiom Rule 7):
 - 默认信任 PZS0X 物理登录本机 = 哥哥

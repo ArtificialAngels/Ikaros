@@ -1,5 +1,5 @@
 """
-Icarus NotebookLM - notebooklm-py 0.7.2 集成
+Ikaros NotebookLM - notebooklm-py 0.7.2 集成
 ============================================
 伊卡洛斯用 Google NotebookLM 做研究/写报告/生成 podcast/quiz。
 需要 `notebooklm login` 一次性认证。

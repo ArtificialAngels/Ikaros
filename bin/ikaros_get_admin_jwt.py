@@ -1,7 +1,7 @@
 """Get admin JWT by logging in with vault credentials.
 
 设计:
-- vault 里有 ArtificialAngel / AngelIcarus (哥哥给的专属账号)
+- vault 里有 ArtificialAngel / AngelIkaros (哥哥给的专属账号)
 - 不重置密码! 用 vault credentials 直接 login
 - login API 返回 token, 存到 data/webui/.admin-jwt.txt
 - 文件 gitignored
@@ -22,7 +22,7 @@ IDENTITY_KEY = Path.home() / ".icarus" / "identity.key"
 
 
 def read_vault():
-    """Decrypt Icarus vault -> {username, password}."""
+    """Decrypt Ikaros vault -> {username, password}."""
     if not IDENTITY_KEY.exists():
         print(f"ERROR: identity key not found at {IDENTITY_KEY}", file=sys.stderr)
         sys.exit(1)

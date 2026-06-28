@@ -1,8 +1,8 @@
 [package]
 name = "icarus-desktop-pet"
 version = "0.1.0"
-description = "🪶 Icarus Desktop Pet"
-authors = ["Icarus"]
+description = "🪶 Ikaros Desktop Pet"
+authors = ["Ikaros"]
 edition = "2021"
 
 [lib]

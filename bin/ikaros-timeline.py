@@ -245,7 +245,7 @@ def main() -> int:
         return 0
 
     # Human-readable output.
-    print(f"🧠  Icarus Timeline — {hb_path}")
+    print(f"🧠  Ikaros Timeline — {hb_path}")
     print(f"    records: {len(records)}")
     if not records:
         return 0
