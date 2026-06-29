@@ -65,12 +65,13 @@ if ($useRust) {
     if ($hermesLlamaUrl) {
         $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = $hermesLlamaUrl
     }
-    # Add Phi-4-Mini dedicated instance (:19934) as second upstream for voice chat
+    # Add Phi-4-Mini dedicated (:19934) + Qwen3.5-9B (:8081) as upstreams for voice chat
+    # 2026-06-29 哥哥拍板: 桥支持多端口并联 (:8080 phi4 + :8081 qwen3.5-9b + :19934 phi4-voice)
+    # HERMES_LLAMA_UPSTREAMS 逗号分隔, 桥自动 health check 跟 supervisor 监控
     $existing = $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS']
-    if ($existing) {
-        $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = "$existing,http://127.0.0.1:19934"
-    } else {
-        $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = 'http://127.0.0.1:8080,http://127.0.0.1:19934'
+    if (-not $existing) {
+        # 默认 3 个 upstreams (哥哥 6-29 Plan A: phi4 全 GPU + qwen35-9b CPU 混合 + phi4-voice 专用)
+        $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = 'http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:19934'
     }
 
     $hermesFallbacks = [Environment]::GetEnvironmentVariable('HERMES_LLAMA_FALLBACKS')
