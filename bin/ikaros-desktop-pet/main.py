@@ -1458,19 +1458,45 @@ async def bridge_chat(text: str, *, profile: str = "default",
 async def edge_tts_mp3(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
     """4C: 用 edge-tts 把文字 → MP3 bytes (4B audio_engine.play_mp3_bytes 接).
 
+    B (哥哥 6-29 拍板): SHA256(text+voice) LRU 200 缓存, 命中 <1ms, miss 才调 edge-tts.
+
     Returns:
         完整 MP3 file bytes (可能空 bytes 如果 edge-tts 失败 — caller 检查)
     """
     # 2026-06-29 哥哥 axiom Rule 8: TTS 禁念 markdown 强调符号
     # edge-tts 把 ** 念成"星号", 听感差. LLM 应该已禁, 但兜底 strip 一下.
     tts_text = _strip_markdown_emphasis(text)
+
+    # B: 缓存查 (HIT <1ms, miss 才调 edge-tts)
+    try:
+        from tts_cache import get_cache as _tts_cache_get
+        cache = _tts_cache_get()
+        cached = cache.get(tts_text, voice)
+        if cached:
+            log.debug("TTS cache HIT (text len=%d)", len(tts_text))
+            return cached
+    except ImportError:
+        pass  # tts_cache.py 缺失 → 降级到原行为
+
     try:
         communicate = edge_tts.Communicate(tts_text, voice=voice)
         chunks = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 chunks.append(chunk["data"])
-        return b"".join(chunks)
+        mp3 = b"".join(chunks)
+
+        # B: miss 写入缓存 (为下次命中)
+        try:
+            from tts_cache import get_cache as _tts_cache_get
+            cache = _tts_cache_get()
+            cache.put(tts_text, voice, mp3)
+        except ImportError:
+            pass
+        except Exception as exc:
+            log.warning("TTS cache write failed: %s", exc)
+
+        return mp3
     except Exception as exc:
         log.warning("edge-tts failed: %s", exc)
         return b""

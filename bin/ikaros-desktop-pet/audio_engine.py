@@ -34,6 +34,12 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd  # 哥哥 6-27: pyaudio 弃用, sounddevice 替
 
+# B: TTS 答缓存 (哥哥 6-29 拍板)
+try:
+    from tts_cache import get_cache as _tts_cache
+except ImportError:
+    _tts_cache = None  # tts_cache.py 缺失时降级到原行为
+
 log = logging.getLogger("ikaros.audio")
 
 # Audio config — 16kHz mono int16, 与 Whisper / edge-tts 默认一致
@@ -68,6 +74,13 @@ class AudioEngine:
         self._tts_lock = threading.Lock()
         self._out_stream: Optional[sd.OutputStream] = None
         self._out_device_index: Optional[int] = None  # for OutputStream device
+
+        # A: TTS 打断 + 优先级 (哥哥 6-29 拍板)
+        self._tts_playing: bool = False
+        self._tts_queue: asyncio.Queue = None  # 初始化在 aio_loop 启动后
+        self._tts_interrupted: bool = False
+        self._tts_play_lock = threading.Lock()  # 跟 _tts_lock 区分
+        self._user_spoke_recently: float = 0.0  # 用户最近说话时间戳 (unix)
 
         # Config (mutable from tray)
         self.continuous_mode = True
@@ -185,8 +198,31 @@ class AudioEngine:
                                     with self._tts_lock:
                                         chunks_count = len(self._tts_chunks)
                                     if chunks_count > 0:
-                                        # 异步播放 — 不阻塞 WS loop (audio 可能 5-30s)
-                                        self._aio_loop.create_task(self._play_tts_async())
+                                        # A: 不再 create_task, 改入队列 + 单 worker 顺序播放
+                                        # 排队的 mp3 bytes 走 _tts_play_worker (单线程顺序)
+                                        with self._tts_lock:
+                                            mp3_bytes = b"".join(self._tts_chunks)
+                                            self._tts_chunks.clear()
+                                        # 排队 (maxsize=3 防内存爆, 满了丢最旧)
+                                        if self._tts_queue is not None:
+                                            try:
+                                                self._tts_queue.put_nowait(mp3_bytes)
+                                            except asyncio.QueueFull:
+                                                # 丢最旧, 入新
+                                                try:
+                                                    self._tts_queue.get_nowait()
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    self._tts_queue.put_nowait(mp3_bytes)
+                                                except Exception:
+                                                    pass
+                                                log.warning("TTS queue full, dropped oldest")
+                                        else:
+                                            # 兜底: aio_loop 还没启, 同步播
+                                            self._tts_playing = True
+                                            self.play_mp3_bytes(mp3_bytes)
+                                            self._tts_playing = False
                                     else:
                                         log.warning("done 但 _tts_chunks 为空, 没 TTS 音频可播")
                                     await asyncio.sleep(0.5)
@@ -224,8 +260,9 @@ class AudioEngine:
         完成后清空 _tts_chunks 准备下一轮.
         """
         try:
-            mp3_bytes = b"".join(self._tts_chunks)
+            # 原子地取出所有 chunks，避免竞态
             with self._tts_lock:
+                mp3_bytes = b"".join(self._tts_chunks)
                 self._tts_chunks.clear()
             if not mp3_bytes:
                 return
@@ -248,8 +285,23 @@ class AudioEngine:
         import io
 
         try:
+            # Debug: save raw MP3 for inspection
+            try:
+                debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'logs', 'tts-debug-last.mp3')
+                os.makedirs(os.path.dirname(debug_path), exist_ok=True)
+                with open(debug_path, 'wb') as _f:
+                    _f.write(mp3_bytes)
+                log.info("TTS MP3 saved to %s (%d bytes)", debug_path, len(mp3_bytes))
+            except Exception as _e:
+                log.warning("TTS debug save failed: %s", _e)
+
             # 解码 (FFmpeg backend, 需要 ffmpeg.exe 在 PATH 或 pydub 找得到)
             audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
+            log.info(
+                "TTS decoded: %dHz %dch %d-bit, %.2fs, %dB MP3",
+                audio.frame_rate, audio.channels, audio.sample_width * 8,
+                len(audio) / 1000.0, len(mp3_bytes),
+            )
             # 重采样到 16kHz mono int16 (跟录音同)
             audio = audio.set_frame_rate(RATE).set_channels(1).set_sample_width(2)
 
@@ -257,9 +309,18 @@ class AudioEngine:
             samples = _np.frombuffer(audio.raw_data, dtype=_np.int16)
             duration_sec = len(samples) / RATE
             log.info(
-                "TTS playing: %d samples (%.2fs @%dHz), %dB MP3",
-                len(samples), duration_sec, RATE, len(mp3_bytes),
+                "TTS playing: %d samples (%.2fs @%dHz)",
+                len(samples), duration_sec, RATE,
             )
+
+            # Debug: save decoded PCM for inspection
+            try:
+                pcm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'logs', 'tts-debug-last.pcm')
+                with open(pcm_path, 'wb') as _f:
+                    _f.write(samples.tobytes())
+                log.info("TTS PCM saved to %s (%d samples)", pcm_path, len(samples))
+            except Exception as _e:
+                log.warning("TTS PCM save failed: %s", _e)
 
             # 选 output device (默认)
             out_kwargs = dict(samplerate=RATE, channels=1, dtype="int16")
@@ -317,10 +378,18 @@ class AudioEngine:
                 rms = self._rms(data)
                 now = time.time()
 
-                if rms > self.threshold:
+                # C: TTS 串扰抑制 (哥哥 6-29 拍板)
+                # TTS 播放时 VAD 阈值 +50%, 扬声器出声不误触发 mic
+                effective_threshold = self.threshold
+                if self._tts_playing:
+                    effective_threshold = int(self.threshold * 1.5)
+
+                if rms > effective_threshold:
                     # Voice detected
                     self._buffer.extend(data)
                     self._last_audio_ts = now
+                    # A: 标记用户最近说话, TTS worker 用来打断旧答
+                    self._user_spoke_recently = now
                     if not self._speaking:
                         self._speaking = True
                         self._utterance_start = now
@@ -399,10 +468,57 @@ class AudioEngine:
     def _run_ws(self):
         self._aio_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._aio_loop)
+        # A: 初始化 TTS 队列 + 启动单 worker (哥哥 6-29 拍板)
+        self._tts_queue = asyncio.Queue(maxsize=3)
+        # 注意: create_task 必须 await, 这里用 ensure_future 同步提交
+        asyncio.ensure_future(self._tts_play_worker(), loop=self._aio_loop)
         try:
             self._aio_loop.run_until_complete(self._ws_loop())
         finally:
             self._aio_loop.close()
+
+    async def _tts_play_worker(self):
+        """A: TTS 单 worker 顺序播放 — 排队 + 打断检查.
+
+        设计:
+        - 顺序消费 _tts_queue (FIFO)
+        - 每段 mp3 播前检查 _user_spoke_recently (3s 内说话就打断当前)
+        - 播完继续下一个, 不阻塞 WS loop
+        - 任何一段失败 (pydub 解码 etc) 跳过不中断 worker
+        """
+        log.info("[TTS worker] started")
+        while self._running:
+            try:
+                mp3_bytes = await asyncio.wait_for(
+                    self._tts_queue.get(), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                continue
+            except Exception as exc:
+                log.warning("[TTS worker] queue get failed: %s", exc)
+                continue
+
+            if not mp3_bytes:
+                continue
+
+            # 打断检查: 用户 3s 内说话, 跳过这答 (让位给新对话)
+            now = time.time()
+            if (now - self._user_spoke_recently) < 3.0:
+                log.info("[TTS worker] user spoke recently, skip this reply")
+                continue
+
+            self._tts_playing = True
+            try:
+                # B: 优先查缓存 (同 text+voice 直接拿 mp3)
+                # 注意: 缓存 key 是 mp3 内容 hash, 这里 mp3 已生成, 直接播
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self.play_mp3_bytes, mp3_bytes,
+                )
+            except Exception as exc:
+                log.error("[TTS worker] play failed: %s", exc)
+            finally:
+                self._tts_playing = False
+        log.info("[TTS worker] stopped")
 
     def stop(self):
         self._running = False
