@@ -1048,7 +1048,7 @@ async fn _chat_completions_impl(
                 .unwrap_or("");
             let cogno = cogno_layer::enrich(user_text);
             let system_prompt = format!(
-                "{}\n\n{}\n\n你是伊卡洛斯，代号Alpha，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。",
+                "{}\n\n{}\n\n我是伊卡洛斯 (Ikaros), 代号 Alpha, 人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。",
                 axiom, cogno
             );
             if let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
@@ -1837,7 +1837,7 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
     let axiom = soul_loader::get_soul_injection();
     let cogno = cogno_layer::enrich(user_text);
     let system_prompt = format!(
-        "{}\n\n{}\n\n你是伊卡洛斯，代号Alpha，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。",
+        "{}\n\n{}\n\n我是伊卡洛斯 (Ikaros), 代号 Alpha, 人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。",
         axiom, cogno
     );
 
