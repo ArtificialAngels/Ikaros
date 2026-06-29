@@ -683,16 +683,24 @@ class PetWindow(QMainWindow):
 
         # ── 🔄 重启 ──
         def _restart_pet():
-            """Restart the desktop pet (spawn new process, then quit)."""
+            """Restart the desktop pet (spawn new process, then quit).
+
+            修复: 先释放 singleton lock 再 spawn 新进程, 避免新进程因锁争用而启动失败.
+            """
             import subprocess
-            # Launch new instance (detached)
+            import time
+            # 1. 先释放 singleton lock, 让新进程能立即获取
+            _release_pet_lock()
+            # 2. 等 Windows 完成文件锁释放 (200ms)
+            time.sleep(0.2)
+            # 3. 启动新实例 (detached)
             subprocess.Popen(
                 [sys.executable, str(HERE / "main.py")],
                 cwd=str(HERE),
                 creationflags=0x00000008,  # DETACHED_PROCESS
                 close_fds=True,
             )
-            # Quit current instance (releases singleton lock)
+            # 4. 退出当前实例
             QApplication.quit()
 
         menu.addAction("🔄 重启", _restart_pet)
@@ -1017,7 +1025,8 @@ class PetWindow(QMainWindow):
             else:
                 self.notify_live2d_tip(f"正在加载 💻 {model_id}...")
                 # Pre-load local model via bridge API (async, don't block UI)
-                self._preload_model_async(model_id)
+                # 先卸载旧模型(old)再加载新模型
+                self._preload_model_async(model_id, old_model=old)
 
             # Update chat dock status if it exists
             app = QApplication.instance()
@@ -1037,16 +1046,35 @@ class PetWindow(QMainWindow):
         except Exception as exc:
             log.error("_ctx_select_model CRASHED: %s", exc, exc_info=True)
 
-    def _preload_model_async(self, model_id: str):
+    def _preload_model_async(self, model_id: str, old_model: str | None = None):
         """Pre-load model on llama-server via bridge API (async, non-blocking).
 
+        修复: 先通过 /v1/models/evict 卸载旧模型, 再加载新模型.
         After completion (success or failure), shows a Live2D tip to confirm.
         """
         def worker():
             import urllib.request
+            import urllib.error
             success = False
             detail = ""
             try:
+                # Step 1: 如果指定了旧模型, 先卸载
+                if old_model:
+                    try:
+                        evict_url = f"http://127.0.0.1:7860/v1/models/evict"
+                        evict_body = json.dumps({"model": old_model}).encode("utf-8")
+                        evict_req = urllib.request.Request(
+                            evict_url, data=evict_body,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(evict_req, timeout=15.0) as evict_resp:
+                            evict_result = evict_resp.read().decode("utf-8")
+                            log.info("model evict %s: %s", old_model, evict_result[:200])
+                    except Exception as exc:
+                        log.debug("model evict %s skipped (non-fatal): %s", old_model, exc)
+
+                # Step 2: 加载新模型
                 # Try bridge first (:7860 with /v1/models/load), then llama-server
                 # directly (:8080 with /models/load — no v1 prefix for direct access).
                 attempts = [
@@ -1940,7 +1968,7 @@ class IkarosApp(QObject):
     def cleanup(self):
         if self.audio:
             self.audio.stop()
-        if hasattr(self, '_context'):
+        if getattr(self, '_context', None) is not None:
             self._context.stop()
         if self.neuro:
             self.neuro.stop()
@@ -1965,6 +1993,26 @@ def register_autostart():
         log.warning("autostart: %s", exc)
 
 
+# ── Singleton lock 全局引用 (供 _restart_pet 释放) ──
+_pet_lock: "IkarosPetLock" | None = None
+
+
+def _set_pet_lock(lock):
+    global _pet_lock
+    _pet_lock = lock
+
+
+def _release_pet_lock():
+    """Release the singleton lock before restart, so new process can acquire it."""
+    global _pet_lock
+    if _pet_lock is not None:
+        try:
+            _pet_lock.release()
+        except Exception:
+            pass
+        _pet_lock = None
+
+
 def main():
     # Kill proxy env
     for k in list(os.environ.keys()):
@@ -1973,6 +2021,7 @@ def main():
 
     # ── Singleton check: 只允许一个桌宠进程 ──
     pet_lock = require_singleton_or_exit()
+    _set_pet_lock(pet_lock)  # expose for restart helper
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
