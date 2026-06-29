@@ -12,6 +12,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, pyqtSlot, QObject, QUrl, QUrlQuery, QEvent
@@ -120,6 +121,7 @@ L2D_EXPR_BY_STATE = {
 }
 HERMES_ROOT = HERE.parent.parent
 _MODEL_CACHE_PATH = HERE / "llm_model_cache.json"
+_LLM_MODEL_PERSIST_PATH = HERE / "last_llm_model.json"  # persists across restarts
 
 
 # 便携 Python 不自动加 cwd 到 sys.path (python312._pth 机制)
@@ -184,6 +186,46 @@ def _save_model_cache(models: list[str], cloud_models: list[str]):
         )
     except Exception as exc:
         log.warning("model cache save FAILED: %s", exc)
+
+
+def _save_last_llm_model(model_id: str):
+    """Persist the last-selected LLM model ID across restarts."""
+    try:
+        _LLM_MODEL_PERSIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LLM_MODEL_PERSIST_PATH.write_text(
+            json.dumps({"model": model_id, "ts": time.time()}),
+            encoding="utf-8",
+        )
+        log.info("persisted last LLM model: %s", model_id)
+    except Exception as exc:
+        log.warning("save last LLM model FAILED: %s", exc)
+
+    # Also sync to llm-engine-last-launch.json so llama-server router knows preferred model
+    try:
+        llm_launch_path = HERMES_ROOT / "data" / "logs" / "llm-engine-last-launch.json"
+        if llm_launch_path.exists():
+            info = json.loads(llm_launch_path.read_text(encoding="utf-8"))
+        else:
+            info = {}
+        info["preferred_model"] = model_id
+        llm_launch_path.parent.mkdir(parents=True, exist_ok=True)
+        llm_launch_path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        log.debug("sync preferred_model to llm-engine-last-launch.json FAILED: %s", exc)
+
+
+def _load_last_llm_model() -> str | None:
+    """Load the persisted last LLM model ID. Returns None if missing or stale."""
+    try:
+        if not _LLM_MODEL_PERSIST_PATH.exists():
+            return None
+        data = json.loads(_LLM_MODEL_PERSIST_PATH.read_text(encoding="utf-8"))
+        model = data.get("model")
+        if model:
+            return model
+    except Exception:
+        pass
+    return None
 
 
 def _load_model_cache() -> dict | None:
@@ -286,7 +328,10 @@ class PetWindow(QMainWindow):
         self._hit_frames_on = False  # track hit frame toggle state
 
         # LLM model selection (shared across chat dock + voice)
-        self._current_llm_model: str = "MiniMax-M3"  # default
+        persisted = _load_last_llm_model()
+        self._current_llm_model: str = persisted or "Phi-4-Mini-3.8B-Q4_K_L"  # default
+        if persisted:
+            log.info("restored last LLM model: %s", persisted)
         self._available_models: list[str] = []  # model IDs from bridge
         self._cloud_model_set: set[str] = set()  # cloud model IDs for tag display
         self._models_fetching = False
@@ -852,9 +897,19 @@ class PetWindow(QMainWindow):
         cloud_list = cloud_models or []
         self._cloud_model_set = set(cloud_list)
         log.info("available LLM models: %d total (%d cloud)", len(models), len(cloud_list))
-        # If current model not in list, add it as first option
+        # If current model not in list, auto-select first local model
         if self._current_llm_model and self._current_llm_model not in models:
-            self._available_models.insert(0, self._current_llm_model)
+            local_only = [m for m in models if m not in cloud_list]
+            if local_only:
+                fallback = local_only[0]
+                log.warning("current model '%s' not in available list — falling back to '%s'",
+                            self._current_llm_model, fallback)
+                self._current_llm_model = fallback
+                _save_last_llm_model(fallback)
+                self.notify_live2d_tip(f"模型切换: {fallback}")
+            else:
+                self._available_models.insert(0, self._current_llm_model)
+                log.warning("current model '%s' not in available list — added anyway", self._current_llm_model)
         # NOTE: disk cache already saved in worker thread (_fetch_models_async)
         # Auto-update context menu if it's still visible
         if self._pending_llm_menu is not None:
@@ -919,6 +974,9 @@ class PetWindow(QMainWindow):
             self._current_llm_model = model_id
             log.info("LLM model: %s → %s", old, model_id)
 
+            # Persist the selection immediately
+            _save_last_llm_model(model_id)
+
             # Notify user via Live2D tip
             is_cloud = model_id in getattr(self, '_cloud_model_set', set())
             if is_cloud:
@@ -947,14 +1005,24 @@ class PetWindow(QMainWindow):
             log.error("_ctx_select_model CRASHED: %s", exc, exc_info=True)
 
     def _preload_model_async(self, model_id: str):
-        """Pre-load model on llama-server via bridge API (async, non-blocking)."""
+        """Pre-load model on llama-server via bridge API (async, non-blocking).
+
+        After completion (success or failure), shows a Live2D tip to confirm.
+        """
         def worker():
             import urllib.request
+            success = False
+            detail = ""
             try:
-                # Try bridge first (:7860), then llama-server directly (:8080)
-                for port in (7860, 8080):
+                # Try bridge first (:7860 with /v1/models/load), then llama-server
+                # directly (:8080 with /models/load — no v1 prefix for direct access).
+                attempts = [
+                    (7860, "/v1/models/load"),
+                    (8080, "/models/load"),
+                ]
+                for port, path in attempts:
                     try:
-                        url = f"http://127.0.0.1:{port}/v1/models/load"
+                        url = f"http://127.0.0.1:{port}{path}"
                         body = json.dumps({"model": model_id}).encode("utf-8")
                         req = urllib.request.Request(
                             url, data=body,
@@ -963,20 +1031,41 @@ class PetWindow(QMainWindow):
                         )
                         with urllib.request.urlopen(req, timeout=30.0) as resp:
                             result = resp.read().decode("utf-8")
-                            log.info("model pre-load %s on :%d: %s", model_id, port, result[:100])
+                            log.info("model pre-load %s on :%d%s: %s", model_id, port, path, result[:200])
+                        success = True
+                        detail = f":{port}{path}"
                         break  # success
                     except urllib.error.HTTPError as exc:
-                        # 400 = already running (not an error), retry for other errors
+                        body_text = exc.read().decode("utf-8", errors="replace")
+                        # 400 = already running (not an error)
                         if exc.code == 400:
-                            log.info("model %s already loaded (bridge says running)", model_id)
+                            log.info("model %s already loaded (bridge says running): %s", model_id, body_text[:100])
+                            success = True
+                            detail = "(already loaded)"
                             break
-                        log.debug("pre-load :%d failed: %s", port, exc)
+                        log.debug("pre-load :%d%s failed HTTP %d: %s", port, path, exc.code, body_text[:100])
+                        detail = f"HTTP {exc.code}: {body_text[:80]}"
                         continue
                     except Exception as exc:
-                        log.debug("pre-load :%d failed: %s", port, exc)
+                        log.debug("pre-load :%d%s failed: %s", port, path, exc)
+                        detail = str(exc)[:80]
                         continue
             except Exception as exc:
                 log.debug("model pre-load failed: %s", exc)
+                detail = str(exc)[:80]
+
+            # Show Live2D tip on main thread
+
+            def tip():
+                if success:
+                    is_cloud = model_id in getattr(self, '_cloud_model_set', set())
+                    tag = "☁️" if is_cloud else "💻"
+                    self.notify_live2d_tip(f"{tag} {model_id} ✓")
+                    log.info("model pre-load SUCCESS: %s (%s)", model_id, detail)
+                else:
+                    self.notify_live2d_tip(f"⚠️ 模型加载失败: {detail}")
+                    log.warning("model pre-load FAILED for %s: %s", model_id, detail)
+            QTimer.singleShot(0, tip)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1040,7 +1129,8 @@ class PetTray:
         menu.addSeparator()
 
         # ─── 🤖 LLM 模型切换 (tray menu) ───
-        self._llm_tray_menu = menu.addMenu("🤖 LLM 模型: MiniMax-M3")
+        tray_model_label = self.window._current_llm_model if hasattr(self.window, '_current_llm_model') else "Phi-4-Mini-3.8B-Q4_K_L"
+        self._llm_tray_menu = menu.addMenu(f"🤖 LLM 模型: {tray_model_label}")
         self._llm_tray_menu.addAction("⏳ 加载模型列表…", self._fetch_tray_models)
         # Trigger initial fetch
         QTimer.singleShot(2000, self._fetch_tray_models)
@@ -1198,9 +1288,7 @@ class PetTray:
         """Rebuild the tray LLM submenu with fetched models."""
         self._llm_tray_menu.clear()
         # Get current model from PetWindow
-        current = "MiniMax-M3"
-        if hasattr(self.window, '_current_llm_model'):
-            current = self.window._current_llm_model
+        current = getattr(self.window, '_current_llm_model', "Phi-4-Mini-3.8B-Q4_K_L")
         cloud_set = cloud_set or set()
         is_cloud = current in cloud_set
         tag = "☁️" if is_cloud else "💻"
@@ -1252,23 +1340,30 @@ LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
 LLAMA_CHAT_TIMEOUT_S = 30.0
 
 
-async def bridge_chat(text: str, *, profile: str = "default", model: str = "MiniMax-M3") -> str:
+async def bridge_chat(text: str, *, profile: str = "default",
+                   history: list = None, model: str = "Phi-4-Mini-3.8B-Q4_K_L") -> str:
     """4C: 调 Hermes bridge /v1/chat/completions — cloud auto-flip 已实现.
 
     Args:
         text: 用户输入
         profile: Hermes profile (default)
-        model: 默认 MiniMax-M3 (bridge 已注册 minimax-cn, .env 有 key)
+        history: A — 之前对话列表 [{role:user|assistant, content:str}, ...]
+                 (默认 None — 单条消息)
+        model: 默认 Phi-4-Mini-3.8B-Q4_K_L (Quest Path A 改默认值)
 
     Returns:
         assistant 回复文本 (string)
     """
+    # A: 拼 messages = [*history, {user msg}]
+    msgs = list(history) if history else []
+    msgs.append({"role": "user", "content": text})
+
     if httpx is None:
         # Fallback: urllib (同步, 不优雅但能用)
         import json, urllib.request
         body = json.dumps({
             "model": model,
-            "messages": [{"role": "user", "content": text}],
+            "messages": msgs,
             "max_tokens": 200,
         }).encode("utf-8")
         req = urllib.request.Request(
@@ -1283,7 +1378,7 @@ async def bridge_chat(text: str, *, profile: str = "default", model: str = "Mini
         async with httpx.AsyncClient(timeout=LLAMA_CHAT_TIMEOUT_S) as c:
             r = await c.post(LLAMA_CHAT_URL, json={
                 "model": model,
-                "messages": [{"role": "user", "content": text}],
+                "messages": msgs,
                 "max_tokens": 200,
             })
             data = r.json()
@@ -1377,6 +1472,10 @@ class ChatDockWindow(QMainWindow):
         )
         v.addWidget(self.status_label)
 
+        # In-memory chat history (A: in-memory persistence within pet lifetime)
+        self._chat_history: deque = deque(maxlen=40)  # 最近 20 轮 (40 条)
+        self._session_id: str = f"pet_{int(time.time())}_{id(self)}"
+
         self._append_history("[伊卡洛斯] 哥哥好, 我在听~")
 
     def _append_history(self, line: str):
@@ -1406,19 +1505,26 @@ class ChatDockWindow(QMainWindow):
         self._append_history(f"[你] {text}")
         self.input_edit.clear()
 
+        # A: append user message to in-memory history (before chat call)
+        self._chat_history.append({"role": "user", "content": text})
+
         # 2. Disable UI during request
         self.input_edit.setEnabled(False)
         self.send_btn.setEnabled(False)
 
         # 3. Async chain — call bridge_chat, then TTS, then re-enable UI
-        self._run_chat_chain(text, intent)
+        # Pass history (snapshot) so bridge sees full conversation context
+        history_snapshot = list(self._chat_history)
+        self._run_chat_chain(text, intent, history_snapshot)
 
-    def _run_chat_chain(self, text: str, intent: str):
+    def _run_chat_chain(self, text: str, intent: str, history: list = None):
         """QTimer.singleShot 把 coroutine 送进 asyncio loop.
 
         Qt 没有原生 async 支持, 用 QTimer 0ms 触发 + 在 QThread 里跑 asyncio
         的常见做法: 用 asyncio.run_coroutine_threadsafe 把 coroutine 送进主 loop.
         但我们没显式主 loop — 改用 threading 直接 run.
+
+        A: history 参数携带完整对话上下文, 让 LLM 看到之前的对话.
         """
         # Get current model from PetWindow (shared state)
         model = self._get_current_model()
@@ -1429,7 +1535,11 @@ class ChatDockWindow(QMainWindow):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    reply = loop.run_until_complete(bridge_chat(text, model=model))
+                    # A: pass history (excluding the just-appended user msg, since
+                    # bridge_chat also appends it; or include it — either works)
+                    reply = loop.run_until_complete(
+                        bridge_chat(text, history=history, model=model)
+                    )
                 finally:
                     loop.close()
                 # 回到 Qt 主线程更新 UI
@@ -1447,10 +1557,13 @@ class ChatDockWindow(QMainWindow):
             pet = app._icarus_pet
             if hasattr(pet, 'window') and hasattr(pet.window, '_current_llm_model'):
                 return pet.window._current_llm_model
-        return "MiniMax-M3"  # fallback default
+        return "Phi-4-Mini-3.8B-Q4_K_L"  # fallback default
 
     def _on_reply(self, reply: str, intent: str):
         """Reply 回来后: history + TTS + 重启用 UI."""
+        # A: append assistant reply to history (so next round sees it)
+        if reply and not reply.startswith("⚠️"):
+            self._chat_history.append({"role": "assistant", "content": reply})
         self._append_history(f"[伊卡洛斯] {reply}")
         model = self._get_current_model()
         self._set_status(f"intent: {intent}  |  {model} ✓")
