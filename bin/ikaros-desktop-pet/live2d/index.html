@@ -144,17 +144,24 @@ html, body {
 <script src="vendor/wl-live2d.min.js"></script>
 <!-- QWebChannel for JS ↔ Python communication (drag window) -->
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
-
 <script>
+// QWebChannel fallback guard (in case qrc:// fails in file:// context)
+if (typeof QWebChannel === 'undefined') {
+  console.warn('[QWebChannel] qrc:// failed to load, drag bridge disabled');
+  window.QWebChannel = null;
+}
+
 const statusEl = document.getElementById("status");
 function setStatus(msg) { statusEl.textContent = msg; }
 
 // ─── QWebChannel: Python drag bridge ───
 let _dragBridge = null;
-new QWebChannel(qt.webChannelTransport, (channel) => {
-  _dragBridge = channel.objects.dragBridge;
-  console.log("[QWebChannel] dragBridge connected");
-});
+if (typeof QWebChannel === 'function') {
+  new QWebChannel(qt.webChannelTransport, (channel) => {
+    _dragBridge = channel.objects.dragBridge;
+    console.log("[QWebChannel] dragBridge connected");
+  });
+}
 
 // ─── Disable native context menu (right-click) ───
 // We forward right-clicks to Python for a custom Qt menu
@@ -345,10 +352,8 @@ try {
       talkInterval: 45000,  // Call talk API every 45s
       motionMessage: true,  // Show motion text from model JSON
       talkApis: [
-        // 一言
+        // 一言 (hitokoto supports CORS)
         { url: "https://v1.hitokoto.cn/", handle: async r => (await r.json()).hitokoto },
-        // 天行
-        { url: "https://tenapi.cn/v2/yiyan", handle: async r => (await r.json()).msg },
       ],
       message: TIP_MESSAGES,
     },
@@ -437,6 +442,10 @@ try {
   /** Switch to model by key or index */
   window.switchModel = (keyOrIndex) => {
     if (!wlInstance) return;
+    if (!wlInstance.model) {
+      console.error('[switchModel] wlInstance.model not ready');
+      return;
+    }
     let idx;
     if (typeof keyOrIndex === "string") {
       idx = KEY_TO_INDEX[keyOrIndex];
@@ -444,7 +453,11 @@ try {
     } else {
       idx = Math.max(0, Math.min(parseInt(keyOrIndex) || 0, MODELS.length - 1));
     }
-    wlInstance.model.switchModel(idx, 0).catch(() => {});
+    setStatus('正在切换模型 ' + (MODEL_NAMES[idx] || idx) + '...');
+    wlInstance.model.switchModel(idx, 0).catch((err) => {
+      console.error('[switchModel] FAILED:', err);
+      setStatus('✗ 切换失败: ' + (err?.message || err));
+    });
   };
 
   /** Trigger a motion by group (and optional index) */
@@ -503,25 +516,50 @@ try {
   /** Switch to a specific model by index */
   window.switchToModel = (idx) => {
     if (!wlInstance || idx < 0 || idx >= MODELS.length) return;
-    wlInstance.model.switchModel(idx, 0).catch(() => {});
+    if (!wlInstance.model) {
+      console.error('[switchToModel] wlInstance.model not ready');
+      setStatus('✗ 模型未就绪, 请稍后再试');
+      return;
+    }
+    setStatus('正在切换模型 ' + (MODEL_NAMES[idx] || idx) + '...');
+    wlInstance.model.switchModel(idx, 0).catch((err) => {
+      console.error('[switchToModel] FAILED:', err);
+      setStatus('✗ 切换失败: ' + (err?.message || err));
+    });
   };
 
   /** Switch to next model (with looping) */
   window.nextModel = () => {
     if (!wlInstance) return;
+    if (!wlInstance.model) {
+      console.error('[nextModel] wlInstance.model not ready');
+      return;
+    }
     const total = MODELS.length;
     const current = wlInstance.model.modelId;
     const next = (current + 1) % total;
-    wlInstance.model.switchModel(next, 0).catch(() => {});
+    setStatus('正在切换模型 ' + (MODEL_NAMES[next] || next) + '...');
+    wlInstance.model.switchModel(next, 0).catch((err) => {
+      console.error('[nextModel] FAILED:', err);
+      setStatus('✗ 切换失败: ' + (err?.message || err));
+    });
   };
 
   /** Switch to previous model (with looping) */
   window.prevModel = () => {
     if (!wlInstance) return;
+    if (!wlInstance.model) {
+      console.error('[prevModel] wlInstance.model not ready');
+      return;
+    }
     const total = MODELS.length;
     const current = wlInstance.model.modelId;
     const prev = (current - 1 + total) % total;
-    wlInstance.model.switchModel(prev, 0).catch(() => {});
+    setStatus('正在切换模型 ' + (MODEL_NAMES[prev] || prev) + '...');
+    wlInstance.model.switchModel(prev, 0).catch((err) => {
+      console.error('[prevModel] FAILED:', err);
+      setStatus('✗ 切换失败: ' + (err?.message || err));
+    });
   };
 
   /** Set model scale (multiplier, e.g. 0.5 = half, 1.0 = normal, 2.0 = double) */
