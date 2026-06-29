@@ -1845,8 +1845,21 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
     let mut messages: Vec<serde_json::Value> = Vec::new();
     messages.push(serde_json::json!({"role": "system", "content": system_prompt}));
 
-    // Load voice chat history (last N turns)
-    {
+    // Inject webui SQLite session history (跨重启, 跨进程, 跟 webui 共享)
+    // B 方案: 每次 chat 调 _exec_webui_sql 拉最近 6 轮 (12 条) user/assistant pair
+    // 失败兜底: db 不可达 / query 失败 → 静默 None, 走 fallback
+    let webui_history = build_webui_history_injection(6).await;
+    let webui_history_count = webui_history.len();
+    for msg in webui_history {
+        messages.push(msg);
+    }
+    if webui_history_count > 0 {
+        info!("[chat] injected {} webui history turns", webui_history_count / 2);
+    }
+
+    // Fallback: voice chat history (in-process RwLock, 仅桌宠 mic/speaker 写)
+    // webui chat 不写这个, 但保留作为 voice 入口的兜底
+    if webui_history_count == 0 {
         let history = state.voice_chat_history.read().await;
         for msg in history.iter() {
             messages.push(msg.clone());
@@ -2344,6 +2357,77 @@ async fn icarus_awake_briefing() -> Json<serde_json::Value> {
 // Ikaros session context — active-session, tail, resume-context
 // (for UI restart conversation recovery)
 // ---------------------------------------------------------------------------
+
+/// Helper: execute a Python inline script against the webui SQLite DB.
+/// Injects `db_path` as a Posix-style path ready for `sqlite3.connect()`.
+/// Returns stdout on success, None on failure.
+/// B 方案: 从 webui SQLite 拉最近 N 轮 user/assistant 对话
+/// (跨重启, 跨进程, 跟 webui 共享同一个 SQLite, 不需要新写盘)
+/// 失败兜底: db 不存在 / 查询失败 / 解析失败 → 静默返回空 Vec
+/// max_turns: 拉多少轮 (1 turn = 1 user + 1 assistant)
+async fn build_webui_history_injection(max_turns: usize) -> Vec<serde_json::Value> {
+    let limit = (max_turns * 2).min(50); // 限 50 防爆
+
+    let script = format!(
+        concat!(
+            "cutoff=int(time.time())-604800;\n", // 7 天内
+            "cur=c.execute('''\n",
+            "    SELECT s.id FROM sessions s\n",
+            "    WHERE s.ended_at IS NULL AND s.last_active >= ?\n",
+            "    ORDER BY s.last_active DESC LIMIT 1\n",
+            "''');\n",
+            "row=cur.fetchone();\n",
+            "if not row: print(json.dumps({{'found': False}})); raise SystemExit(0);\n",
+            "sid=row[0];\n",
+            "cur=c.execute('''\n",
+            "    SELECT role,content FROM (\n",
+            "        SELECT role,content,timestamp FROM messages\n",
+            "        WHERE session_id=? AND role IN ('user','assistant')\n",
+            "            AND content IS NOT NULL AND content != ''\n",
+            "        ORDER BY timestamp DESC LIMIT {}\n",
+            "    ) ORDER BY timestamp ASC\n",
+            "''');\n",
+            "msgs=[{{'role': r[0], 'content': r[1]}} for r in cur.fetchall()];\n",
+            "print(json.dumps({{'found': True, 'session_id': sid, 'messages': msgs}}))",
+        ),
+        limit,
+    );
+
+    let output = match _exec_webui_sql(&script).await {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let val: serde_json::Value = match serde_json::from_str(&output) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    if !val.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Vec::new();
+    }
+
+    let msgs = match val.get("messages").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+
+    msgs.iter()
+        .filter_map(|m| {
+            let role = m.get("role")?.as_str()?;
+            let content = m.get("content")?.as_str()?;
+            if role != "user" && role != "assistant" {
+                return None;
+            }
+            if content.is_empty() {
+                return None;
+            }
+            // 截断单条到 4000 字符 (防 context 爆)
+            let truncated: String = content.chars().take(4000).collect();
+            Some(serde_json::json!({"role": role, "content": truncated}))
+        })
+        .collect()
+}
 
 /// Helper: execute a Python inline script against the webui SQLite DB.
 /// Injects `db_path` as a Posix-style path ready for `sqlite3.connect()`.
