@@ -65,11 +65,19 @@ if ($useRust) {
     if ($hermesLlamaUrl) {
         $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = $hermesLlamaUrl
     }
+    # Add Phi-4-Mini dedicated instance (:19934) as second upstream for voice chat
+    $existing = $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS']
+    if ($existing) {
+        $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = "$existing,http://127.0.0.1:19934"
+    } else {
+        $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = 'http://127.0.0.1:8080,http://127.0.0.1:19934'
+    }
+
     $hermesFallbacks = [Environment]::GetEnvironmentVariable('HERMES_LLAMA_FALLBACKS')
     if ($hermesFallbacks) {
-        $existing = $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS']
-        if ($existing) {
-            $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = "$existing,$hermesFallbacks"
+        $existing2 = $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS']
+        if ($existing2) {
+            $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = "$existing2,$hermesFallbacks"
         } else {
             $psi.EnvironmentVariables['HERMES_LLAMA_UPSTREAMS'] = $hermesFallbacks
         }

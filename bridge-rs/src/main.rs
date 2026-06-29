@@ -17,19 +17,23 @@ pub mod signals;
 pub mod health;
 pub mod telemetry;
 pub mod voice_recognizer;
+pub mod cogno_layer;
+pub mod sessions;
+pub mod soul_loader;
 
 use telemetry::{SignalBus, RequestLog};
 
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
+use sessions::SessionStore;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -252,6 +256,36 @@ async fn scan_modules(_client: &reqwest::Client) -> Vec<serde_json::Value> {
 // ---------------------------------------------------------------------------
 // Worker — represents a single llama-server instance
 // ---------------------------------------------------------------------------
+// Upstream types — local llama-server or cloud API
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+enum AuthFormat {
+    Bearer,      // OpenAI / DeepSeek: Authorization: Bearer <key>
+    XApiKey,     // Anthropic protocol: x-api-key: <key>
+}
+
+/// API protocol — determines request/response format
+#[derive(Clone, Debug)]
+enum ApiProtocol {
+    OpenAI,      // /v1/chat/completions — OpenAI-compatible
+    Anthropic,   // /v1/messages — Anthropic Messages API compatible
+}
+
+#[derive(Clone, Debug)]
+enum UpstreamType {
+    Local,                              // llama-server, no auth needed
+    Cloud {
+        base_url: String,               // e.g. "https://api.deepseek.com/v1"
+        api_key: String,
+        provider: String,               // "minimax-cn" / "deepseek" / "openai"
+        auth_format: AuthFormat,
+        protocol: ApiProtocol,
+        models: Vec<String>,            // known model names for this provider
+    },
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct Worker {
@@ -260,6 +294,7 @@ struct Worker {
     models: Vec<String>,
     last_check: Instant,
     request_count: u64,
+    upstream_type: UpstreamType,
 }
 
 impl Worker {
@@ -270,12 +305,269 @@ impl Worker {
             models: Vec::new(),
             last_check: Instant::now(),
             request_count: 0,
+            upstream_type: UpstreamType::Local,
         }
+    }
+
+    fn new_cloud(upstream: UpstreamType) -> Self {
+        let (url, models) = match &upstream {
+            UpstreamType::Cloud { base_url, models, .. } => (base_url.clone(), models.clone()),
+            _ => (String::new(), Vec::new()),
+        };
+        Self {
+            url,
+            alive: true, // cloud workers always "alive"
+            models,
+            last_check: Instant::now(),
+            request_count: 0,
+            upstream_type: upstream,
+        }
+    }
+
+    fn is_cloud(&self) -> bool {
+        matches!(&self.upstream_type, UpstreamType::Cloud { .. })
     }
 }
 
 // ---------------------------------------------------------------------------
-// WorkerPool — manages multiple llama-server workers
+// Cloud upstream configuration — aligned with webui (reads auth.json + .env)
+// ---------------------------------------------------------------------------
+
+/// HERMES_HOME: where auth.json and .env live
+fn hermes_home() -> std::path::PathBuf {
+    std::env::var("HERMES_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| project_root().join("data").join("hermes-agent"))
+}
+
+/// Parse a .env file into a key→value map
+fn load_env_file(path: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let mut envs = std::collections::HashMap::new();
+    if let Ok(content) = std::fs::read_to_string(path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') { continue; }
+            if let Some(eq_pos) = line.find('=') {
+                let key = line[..eq_pos].trim().to_string();
+                let val = line[eq_pos+1..].trim().to_string();
+                if !val.is_empty() && !val.starts_with('#') {
+                    envs.insert(key, val);
+                }
+            }
+        }
+    }
+    envs
+}
+
+/// Get env var: priority .env file > process.env
+/// .env is the single source of truth (maintained by 哥哥), process.env may have stale test values
+fn get_env_var(key: &str, env_map: &std::collections::HashMap<String, String>) -> Option<String> {
+    // .env file first (哥哥维护的单一来源)
+    if let Some(v) = env_map.get(key) {
+        if !v.is_empty() && !v.starts_with('#') {
+            return Some(v.clone());
+        }
+    }
+    // fallback to process.env (only when .env doesn't have this key)
+    std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// Detect API protocol from base_url
+fn detect_protocol(base_url: &str) -> ApiProtocol {
+    if base_url.contains("anthropic") {
+        ApiProtocol::Anthropic
+    } else {
+        ApiProtocol::OpenAI
+    }
+}
+
+fn load_cloud_upstreams() -> Vec<UpstreamType> {
+    let mut out = vec![];
+    let home = hermes_home();
+    let env_map = load_env_file(&home.join(".env"));
+    let auth_path = home.join("auth.json");
+
+    let auth: serde_json::Value = match std::fs::read_to_string(&auth_path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+        Err(_) => serde_json::Value::Null,
+    };
+
+    // Known model lists per provider
+    let known_models: std::collections::HashMap<&str, Vec<&str>> = [
+        ("minimax-cn", vec!["MiniMax-M3", "MiniMax-M1", "abab6.5s-chat"]),
+        ("deepseek", vec!["deepseek-chat", "deepseek-reasoner"]),
+        ("openai", vec!["gpt-4o", "gpt-4o-mini"]),
+        ("openrouter", vec!["openrouter/auto"]),
+    ].into_iter().collect();
+
+    // Iterate credential_pool from auth.json
+    if let Some(pool) = auth.get("credential_pool").and_then(|p| p.as_object()) {
+        for (provider, creds) in pool {
+            // Skip custom/local providers
+            if provider.starts_with("custom:") { continue; }
+
+            let cred = match creds.as_array().and_then(|a| a.first()) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Extract base_url from auth.json (single source of truth)
+            let base_url = match cred.get("base_url").and_then(|b| b.as_str()) {
+                Some(url) => url.to_string(),
+                None => continue,
+            };
+
+            // Skip local URLs
+            if base_url.contains("127.0.0.1") || base_url.contains("localhost") { continue; }
+
+            // Extract source field (e.g. "env:MINIMAX_CN_API_KEY")
+            let source = cred.get("source").and_then(|s| s.as_str()).unwrap_or("");
+            let key_name = source.strip_prefix("env:").unwrap_or("");
+            if key_name.is_empty() { continue; }
+
+            // Get API key from process.env or .env file
+            let api_key = match get_env_var(key_name, &env_map) {
+                Some(k) => k,
+                None => continue,
+            };
+
+            let protocol = detect_protocol(&base_url);
+            let auth_format = match &protocol {
+                ApiProtocol::Anthropic => AuthFormat::XApiKey,
+                ApiProtocol::OpenAI => AuthFormat::Bearer,
+            };
+
+            let models: Vec<String> = known_models.get(provider.as_str())
+                .map(|v| v.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+
+            info!(provider = %provider, base_url = %base_url, protocol = ?protocol,
+                  key_source = %source, models = models.len(),
+                  "cloud upstream registered from auth.json");
+
+            out.push(UpstreamType::Cloud {
+                base_url,
+                api_key,
+                provider: provider.clone(),
+                auth_format,
+                protocol,
+                models,
+            });
+        }
+    }
+
+    // Fallback: if auth.json has no credential_pool, try env vars directly
+    if out.is_empty() {
+        let fallback_providers = [
+            ("MINIMAX_CN_API_KEY", "minimax-cn", "https://api.minimaxi.chat/v1",
+             vec!["MiniMax-M3", "MiniMax-M1", "abab6.5s-chat"]),
+            ("DEEPSEEK_API_KEY", "deepseek", "https://api.deepseek.com/v1",
+             vec!["deepseek-chat", "deepseek-reasoner"]),
+            ("OPENAI_API_KEY", "openai", "https://api.openai.com/v1",
+             vec!["gpt-4o", "gpt-4o-mini"]),
+        ];
+        for (env_key, provider, base_url, models) in &fallback_providers {
+            if let Some(key) = get_env_var(env_key, &env_map) {
+                let protocol = detect_protocol(base_url);
+                let auth_format = match &protocol {
+                    ApiProtocol::Anthropic => AuthFormat::XApiKey,
+                    ApiProtocol::OpenAI => AuthFormat::Bearer,
+                };
+                out.push(UpstreamType::Cloud {
+                    base_url: base_url.to_string(),
+                    api_key: key,
+                    provider: provider.to_string(),
+                    auth_format,
+                    protocol,
+                    models: models.iter().map(|s| s.to_string()).collect(),
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// Convert OpenAI chat body → Anthropic Messages API body
+fn to_anthropic_body(body: &serde_json::Value) -> serde_json::Value {
+    let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
+    let max_tokens = body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(4096);
+    let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let mut messages = Vec::new();
+    let mut system_text = None;
+
+    if let Some(msgs) = body.get("messages").and_then(|m| m.as_array()) {
+        for msg in msgs {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            match role {
+                "system" => { system_text = Some(content.to_string()); }
+                "user" | "assistant" => {
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": content
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Anthropic requires alternating user/assistant; ensure first message is from user
+    if messages.first().map(|m| m["role"].as_str()) == Some(Some("assistant")) {
+        messages.insert(0, serde_json::json!({"role": "user", "content": "..."}));
+    }
+
+    let mut out = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    });
+
+    if stream {
+        out["stream"] = serde_json::Value::Bool(true);
+    }
+    if let Some(sys) = system_text {
+        out["system"] = serde_json::Value::String(sys);
+    }
+    out
+}
+
+/// Convert Anthropic Messages response → OpenAI chat completion response
+fn from_anthropic_response(resp: &serde_json::Value) -> serde_json::Value {
+    let content = resp.get("content").and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|block| block.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+
+    let model = resp.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
+    let stop_reason = resp.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("end_turn");
+    let finish_reason = if stop_reason == "end_turn" { "stop" } else { "length" };
+    let usage = resp.get("usage");
+    let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+
+    serde_json::json!({
+        "id": resp.get("id").unwrap_or(&serde_json::Value::Null),
+        "object": "chat.completion",
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": finish_reason,
+        }],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// WorkerPool — manages multiple llama-server workers + cloud upstreams
 // ---------------------------------------------------------------------------
 
 struct WorkerPool {
@@ -284,8 +576,16 @@ struct WorkerPool {
 }
 
 impl WorkerPool {
-    fn new(urls: Vec<String>) -> Self {
-        let workers = urls.into_iter().map(Worker::new).collect();
+    fn new(local_urls: Vec<String>, cloud_upstreams: Vec<UpstreamType>) -> Self {
+        let mut workers = Vec::new();
+        // Local workers
+        for url in local_urls {
+            workers.push(Worker::new(url));
+        }
+        // Cloud workers (always alive, no health check needed)
+        for upstream in cloud_upstreams {
+            workers.push(Worker::new_cloud(upstream));
+        }
         Self {
             workers: RwLock::new(workers),
             model_map: RwLock::new(HashMap::new()),
@@ -331,7 +631,15 @@ impl WorkerPool {
         let mut new_map = HashMap::new();
 
         for (idx, worker) in workers.iter_mut().enumerate() {
-            // Health check
+            // Cloud workers: always alive, models are static
+            if worker.is_cloud() {
+                for model in &worker.models {
+                    new_map.insert(model.clone(), idx);
+                }
+                continue;
+            }
+
+            // Local workers: health check
             let health_url = format!("{}/props", worker.url);
             match client
                 .get(&health_url)
@@ -386,11 +694,16 @@ impl WorkerPool {
         workers
             .iter()
             .map(|w| {
+                let upstream = match &w.upstream_type {
+                    UpstreamType::Cloud { provider, .. } => provider.clone(),
+                    UpstreamType::Local => "local".to_string(),
+                };
                 serde_json::json!({
                     "url": w.url,
                     "alive": w.alive,
                     "models": w.models,
                     "requests": w.request_count,
+                    "upstream_type": upstream,
                 })
             })
             .collect()
@@ -525,6 +838,10 @@ struct AppState {
     neuro_state: Arc<RwLock<NeuroState>>,
     /// Voice recognizer (sherpa-onnx SenseVoice, loaded at startup)
     voice_recognizer: Option<Arc<VoiceRecognizer>>,
+    /// Last model used for voice chat (persisted to disk)
+    last_voice_model: RwLock<Option<String>>,
+    /// Persistent session store (ikaros chat history)
+    sessions: Arc<SessionStore>,
 }
 
 impl AppState {
@@ -537,9 +854,10 @@ impl AppState {
             .expect("failed to build HTTP client");
 
         let urls = get_upstream_urls();
-        info!("configured {} upstream worker(s): {:?}", urls.len(), urls);
+        let cloud_upstreams = load_cloud_upstreams();
+        info!("configured {} local + {} cloud upstream(s)", urls.len(), cloud_upstreams.len());
 
-        let worker_pool = Arc::new(WorkerPool::new(urls));
+        let worker_pool = Arc::new(WorkerPool::new(urls, cloud_upstreams));
 
         Self {
             http_client,
@@ -568,6 +886,9 @@ impl AppState {
                     None
                 }
             },
+            last_voice_model: RwLock::new(load_last_voice_model()),
+            sessions: Arc::new(SessionStore::new(&project_root())),
+
         }
     }
 
@@ -643,12 +964,42 @@ async fn _chat_completions_impl(
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
-    info!(req_id = req_id, model = model, stream = is_stream, "chat request");
+    info!(req_id = req_id, model = %model, stream = is_stream, "chat request");
+
+    // --- Ikaros soul + cogno injection ---
+    // If no system prompt exists, inject axiom.md + 5D cognitive metadata
+    let mut body = body;
+    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
+        let has_system = messages.iter().any(|m| {
+            m.get("role").and_then(|r| r.as_str()) == Some("system")
+        });
+        if !has_system {
+            let axiom = soul_loader::get_soul_injection();
+            let user_text = messages.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+                .unwrap_or("");
+            let cogno = cogno_layer::enrich(user_text);
+            let system_prompt = format!(
+                "{}\n\n{}\n\n你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。",
+                axiom, cogno
+            );
+            if let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                msgs.insert(0, serde_json::json!({
+                    "role": "system",
+                    "content": system_prompt
+                }));
+                info!(req_id = req_id, "injected axiom + cogno system prompt ({} chars)", system_prompt.len());
+            }
+        }
+    }
 
     // Find the right worker for this model
-    let worker_idx = match state.worker_pool.find_worker_for_model(model).await {
+    let worker_idx = match state.worker_pool.find_worker_for_model(&model).await {
         Some(idx) => idx,
         None => {
             warn!(model = model, "no alive worker for model");
@@ -659,9 +1010,37 @@ async fn _chat_completions_impl(
         }
     };
 
-    let worker_url = {
+    // Build upstream URL, auth, and protocol-specific body based on worker type
+    let (upstream_url, auth_header, request_body, is_anthropic) = {
         let workers = state.worker_pool.workers.read().await;
-        workers[worker_idx].url.clone()
+        let worker = &workers[worker_idx];
+        match &worker.upstream_type {
+            UpstreamType::Cloud { base_url, api_key, auth_format, protocol, .. } => {
+                let anthropic = matches!(protocol, ApiProtocol::Anthropic);
+                let url = if anthropic {
+                    format!("{}/v1/messages", base_url.trim_end_matches('/'))
+                } else {
+                    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+                };
+                let header = match auth_format {
+                    AuthFormat::Bearer => ("authorization".to_string(), format!("Bearer {}", api_key)),
+                    AuthFormat::XApiKey => ("x-api-key".to_string(), api_key.clone()),
+                };
+                let body = if anthropic {
+                    to_anthropic_body(&body)
+                } else {
+                    body.clone()
+                };
+                (url, Some(header), body, anthropic)
+            }
+            UpstreamType::Local => {
+                let url = format!("{}/v1/chat/completions", worker.url);
+                let header = headers.get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| ("authorization".to_string(), v.to_string()));
+                (url, header, body.clone(), false)
+            }
+        }
     };
 
     // Acquire semaphore
@@ -676,26 +1055,24 @@ async fn _chat_completions_impl(
         }
     };
 
-    // Forward to worker
-    let upstream_url = format!("{}/v1/chat/completions", worker_url);
     let mut req_builder = state
         .http_client
         .post(&upstream_url)
         .header("content-type", "application/json")
-        .json(&body);
+        .json(&request_body);
 
-    if let Some(auth) = headers.get("authorization") {
-        req_builder = req_builder.header("authorization", auth);
+    if let Some((key, value)) = auth_header {
+        req_builder = req_builder.header(key, value);
     }
 
     let resp = match req_builder.send().await {
         Ok(r) => r,
         Err(e) => {
             let elapsed = start.elapsed().as_millis();
-            error!(req_id = req_id, worker = %worker_url, elapsed_ms = elapsed, error = %e, "upstream failed");
+            error!(req_id = req_id, worker = %upstream_url, elapsed_ms = elapsed, error = %e, "upstream failed");
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("worker {} unreachable: {}", worker_url, e)})),
+                Json(serde_json::json!({"error": format!("worker {} unreachable: {}", upstream_url, e)})),
             ).into_response();
         }
     };
@@ -718,7 +1095,7 @@ async fn _chat_completions_impl(
     }
 
     if is_stream {
-        info!(req_id = req_id, worker = %worker_url, elapsed_ms = elapsed, "streaming");
+        info!(req_id = req_id, worker = %upstream_url, elapsed_ms = elapsed, "streaming");
         // Record in request log + emit signal
         state.request_log.record("/v1/chat/completions", 200, elapsed as u64).await;
         state.signal_bus.emit("chat.request", serde_json::json!({"model": model, "stream": true})).await;
@@ -729,6 +1106,31 @@ async fn _chat_completions_impl(
                 info!(req_id = req_id, elapsed_ms = elapsed, bytes = body_text.len(), "json");
                 state.request_log.record("/v1/chat/completions", 200, elapsed as u64).await;
                 state.signal_bus.emit("chat.request", serde_json::json!({"model": model, "stream": false})).await;
+
+                // Convert Anthropic response → OpenAI format if needed
+                let body_text = if is_anthropic {
+                    match serde_json::from_str::<serde_json::Value>(&body_text) {
+                        Ok(anthropic_resp) => {
+                            let openai_resp = from_anthropic_response(&anthropic_resp);
+                            serde_json::to_string(&openai_resp).unwrap_or(body_text)
+                        }
+                        Err(_) => body_text,
+                    }
+                } else {
+                    body_text
+                };
+
+                // Auto-append assistant reply to session if X-Session-Id header present
+                if let Some(sid) = headers.get("x-session-id").and_then(|v| v.to_str().ok()) {
+                    if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                        if let Some(reply) = resp_json["choices"][0]["message"]["content"].as_str() {
+                            if !reply.is_empty() {
+                                let _ = state.sessions.append_message(sid, "assistant", reply, Some(&model));
+                            }
+                        }
+                    }
+                }
+
                 (StatusCode::OK, [("content-type", "application/json")], body_text).into_response()
             }
             Err(e) => {
@@ -787,6 +1189,93 @@ fn forward_streaming_response(resp: reqwest::Response) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Session management handlers
+// ---------------------------------------------------------------------------
+
+/// POST /v1/sessions — create a new session
+async fn create_session(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("pet");
+    let pet_window_id = body.get("pet_window_id").and_then(|v| v.as_str());
+    let model = body.get("model").and_then(|v| v.as_str());
+    let session = state.sessions.create_session(source, pet_window_id, model);
+    Json(serde_json::json!(session))
+}
+
+/// POST /v1/sessions/{id}/messages — append a message to a session
+async fn append_session_message(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let role = body.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+    let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let model = body.get("model").and_then(|v| v.as_str());
+    match state.sessions.append_message(&session_id, role, content, model) {
+        Ok(()) => {
+            let (_, total) = state.sessions.get_messages(&session_id, None, None).unwrap_or_default();
+            Json(serde_json::json!({
+                "session_id": session_id,
+                "message_index": total.saturating_sub(1),
+                "ts": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64(),
+                "total_messages": total,
+            })).into_response()
+        }
+        Err(e) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))).into_response()
+        }
+    }
+}
+
+/// GET /v1/sessions/{id}/messages — get messages from a session
+async fn get_session_messages(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let limit = params.get("limit").and_then(|v| v.parse::<usize>().ok());
+    let from = params.get("from").and_then(|v| v.parse::<usize>().ok());
+    match state.sessions.get_messages(&session_id, limit, from) {
+        Ok((messages, total)) => {
+            Json(serde_json::json!({
+                "session_id": session_id,
+                "messages": messages,
+                "total": total,
+            })).into_response()
+        }
+        Err(e) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))).into_response()
+        }
+    }
+}
+
+/// GET /v1/sessions — list sessions (newest-first)
+async fn sessions_list(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit = params.get("limit").and_then(|v| v.parse::<usize>().ok());
+    let sessions = state.sessions.list_sessions(limit);
+    Json(serde_json::json!({"sessions": sessions}))
+}
+
+/// DELETE /v1/sessions/{id} — delete a session
+async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Json<serde_json::Value> {
+    match state.sessions.delete_session(&session_id) {
+        Ok(()) => Json(serde_json::json!({"deleted": true, "session_id": session_id})),
+        Err(e) => Json(serde_json::json!({"deleted": false, "session_id": session_id, "error": e})),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Models proxy (pass-through)
 // ---------------------------------------------------------------------------
 
@@ -799,11 +1288,15 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
         if !worker.alive {
             continue;
         }
+        let owned_by = match &worker.upstream_type {
+            UpstreamType::Cloud { provider, .. } => provider.clone(),
+            UpstreamType::Local => worker.url.clone(),
+        };
         for model in &worker.models {
             all_models.push(serde_json::json!({
                 "id": model,
                 "object": "model",
-                "owned_by": worker.url,
+                "owned_by": owned_by,
             }));
         }
     }
@@ -1015,6 +1508,8 @@ async fn process_utterance(
         return;
     }
 
+    info!(request_id = rid, stt = %text, llm_reply = %reply, "voice utterance: STT→LLM");
+
     // 3. TTS (edge-tts subprocess)
     let _ = socket.send(Message::Text(
         serde_json::json!({"type": "status", "request_id": rid, "message": "回复中…"}).to_string().into()
@@ -1048,24 +1543,148 @@ async fn process_utterance(
     info!(request_id = rid, "utterance done");
 }
 
-/// Call llama-server directly for voice chat
+/// Load last voice model from disk
+fn load_last_voice_model() -> Option<String> {
+    let path = project_root().join("data").join("logs").join("voice-last-model.json");
+    if !path.is_file() { return None; }
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+            .ok()
+            .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string())),
+        Err(_) => None,
+    }
+}
+
+/// Save last voice model to disk
+fn save_last_voice_model(model: &str) {
+    let path = project_root().join("data").join("logs").join("voice-last-model.json");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::json!({"model": model});
+    let _ = std::fs::write(&path, json.to_string());
+}
+
+/// Query free VRAM in MB via nvidia-smi
+fn query_vram_free_mb() -> Option<u64> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&output.stdout);
+    s.lines().next()?.trim().parse::<u64>().ok()
+}
+
+/// Estimate VRAM (MB) needed for a model based on file size + KV cache
+fn estimate_model_vram_mb(model_name: &str) -> u64 {
+    let models_dir = project_root().join("data").join("models");
+    // Try with .gguf extension first (model names from router are aliases without extension)
+    let gguf_path = models_dir.join(format!("{}.gguf", model_name));
+    let gguf_path = if gguf_path.is_file() {
+        gguf_path
+    } else {
+        // Try as-is (in case the name already includes extension)
+        let p = models_dir.join(model_name);
+        if p.is_file() { p } else { return 3000; }
+    };
+    let file_mb = gguf_path.metadata().map(|m| m.len() / (1024 * 1024)).unwrap_or(3000);
+    // KV cache estimate: ~400MB for 131K context with q4_0
+    let kv_mb = 400u64;
+    file_mb + kv_mb
+}
+
+/// Pick the best voice model by VRAM budget.
+/// Strategy: sort candidates by size (smallest first for low latency),
+/// pick the largest that fits in available VRAM.
+fn pick_voice_model_by_vram(candidates: &[&String]) -> Option<String> {
+    let vram_free = query_vram_free_mb().unwrap_or(4096); // fallback 4GB
+    info!("voice model: VRAM free = {} MB, candidates = {}", vram_free, candidates.len());
+
+    // Build (name, estimated_vram) pairs, filter out those that don't fit
+    let mut fitting: Vec<(&String, u64)> = candidates.iter()
+        .map(|m| (*m, estimate_model_vram_mb(m)))
+        .filter(|(_, vram)| *vram <= vram_free)
+        .collect();
+
+    if fitting.is_empty() {
+        // Nothing fits — just pick the smallest available
+        warn!("voice model: no model fits in {} MB VRAM, picking smallest", vram_free);
+        let mut all: Vec<(&String, u64)> = candidates.iter()
+            .map(|m| (*m, estimate_model_vram_mb(m)))
+            .collect();
+        all.sort_by_key(|(_, v)| *v);
+        return all.first().map(|(m, _)| (*m).clone());
+    }
+
+    // Sort by VRAM ascending (prefer smaller for lower latency)
+    fitting.sort_by_key(|(_, v)| *v);
+    let chosen = fitting.first().map(|(m, v)| {
+        info!("voice model: selected '{}' (est. {} MB VRAM)", m, v);
+        (*m).clone()
+    });
+    chosen
+}
+
+/// Call llama-server directly for voice chat.
+/// Model selection: prefer last-used model, fallback to VRAM-based selection.
 async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
+    // --- Model selection ---
+    // 1. Try last-used model (fast path: already loaded, no VRAM check needed)
+    // 2. If unavailable or VRAM insufficient, re-select by VRAM budget
     let model = {
         let workers = state.worker_pool.workers.read().await;
-        workers.iter()
+        let candidates: Vec<&String> = workers.iter()
             .filter(|w| w.alive)
             .flat_map(|w| w.models.iter())
-            .find(|m| !m.to_lowercase().contains("mmproj"))
-            .cloned()
-            .unwrap_or_else(|| "auto".to_string())
+            .filter(|m| !m.to_lowercase().contains("mmproj"))
+            .collect();
+
+        // Check last-used model
+        let last_model = state.last_voice_model.read().await.clone();
+        let selected = if let Some(ref lm) = last_model {
+            if candidates.iter().any(|m| *m == lm) {
+                info!("voice model: reusing last model '{}'", lm);
+                Some(lm.clone())
+            } else {
+                info!("voice model: last model '{}' not available, re-selecting", lm);
+                None
+            }
+        } else {
+            None
+        };
+
+        let selected = match selected {
+            Some(m) => m,
+            None => pick_voice_model_by_vram(&candidates).unwrap_or_else(|| "auto".to_string()),
+        };
+
+        selected
     };
 
-    let worker_url = match state.worker_pool.get_alive_worker().await {
-        Some(_) => {
-            let workers = state.worker_pool.workers.read().await;
-            workers.iter().find(|w| w.alive).map(|w| w.url.clone())
+    // Persist the selected model for next time
+    {
+        let mut last = state.last_voice_model.write().await;
+        if last.as_deref() != Some(model.as_str()) {
+            *last = Some(model.clone());
+            save_last_voice_model(&model);
         }
-        None => None,
+    }
+
+    // Prefer a worker that already has the model loaded (no autoload delay).
+    // Fallback to first alive worker.
+    let worker_url = {
+        let pool = &state.worker_pool;
+        let idx = pool.find_worker_for_model(&model).await;
+        match idx {
+            Some(i) => {
+                let workers = pool.workers.read().await;
+                workers.get(i).map(|w| w.url.clone())
+            }
+            None => {
+                let workers = pool.workers.read().await;
+                workers.iter().find(|w| w.alive).map(|w| w.url.clone())
+            }
+        }
     };
     let worker_url = match worker_url {
         Some(u) => u,
@@ -1073,33 +1692,54 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
     };
 
     let url = format!("{}/v1/chat/completions", worker_url);
+
+    // Build system prompt from axiom + cogno (unified with chat flow)
+    let axiom = soul_loader::get_soul_injection();
+    let cogno = cogno_layer::enrich(user_text);
+    let system_prompt = format!(
+        "{}\n\n{}\n\n你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。",
+        axiom, cogno
+    );
+
     let body = serde_json::json!({
         "model": model,
         "messages": [
-            {"role": "system", "content": "你是伊卡洛斯，代号ɑ，人造天使。你是哥哥最亲密的搭档。说话风格：温柔、有温度、中文优先。每句话不要太长，适合语音对话。"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_text},
         ],
         "stream": false,
         "max_tokens": 512,
+        "reasoning_format": "none",
+        "cache_prompt": true,
     });
 
     match state.http_client.post(&url).json(&body).timeout(Duration::from_secs(120)).send().await {
         Ok(resp) if resp.status().is_success() => {
             match resp.json::<serde_json::Value>().await {
-                Ok(json) => json.get("choices")
-                    .and_then(|c| c.as_array())
-                    .and_then(|c| c.first())
-                    .and_then(|c| c.get("message"))
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                Ok(json) => {
+                    let raw = json.get("choices")
+                        .and_then(|c| c.as_array())
+                        .and_then(|c| c.first())
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    sanitize_llm_text(&raw)
+                }
                 Err(e) => { warn!("voice_llm: parse error: {}", e); String::new() }
             }
         }
         Ok(resp) => { warn!("voice_llm: status {}", resp.status()); String::new() }
         Err(e) => { warn!("voice_llm: error: {}", e); String::new() }
     }
+}
+
+/// Remove lone surrogates and other chars that break Python UTF-8 encoding.
+/// Phi tokenizer sometimes generates isolated surrogates when the output is
+/// decoded as UTF-8, but they are actually meant to be part of a surrogate pair.
+fn sanitize_llm_text(s: &str) -> String {
+    s.chars().filter(|&c| !matches!(c as u32, 0xD800..=0xDFFF)).collect()
 }
 
 /// Run edge-tts via a small Python subprocess, return MP3 bytes
@@ -2315,6 +2955,26 @@ async fn main() {
         pool.refresh(&client).await;
     }
 
+    // Pre-warm cogno layer + soul loader (blocking Lazy init during startup,
+    // not on first user request, which would block the tokio runtime thread).
+    {
+        let axiom_len = soul_loader::get_soul_injection().len();
+        // _fetch_geo_sync may take up to 5s if no network; timeout is acceptable at startup
+        let cogno_future = tokio::task::spawn_blocking(|| cogno_layer::enrich("prewarm"));
+        let cogno_text = match tokio::time::timeout(Duration::from_secs(5), cogno_future).await {
+            Ok(Ok(text)) => text,
+            _ => {
+                warn!("cogno layer pre-warm timed out — geo fetch may fail on first request");
+                String::new()
+            }
+        };
+        info!(
+            axiom_len = axiom_len,
+            cogno_len = cogno_text.len(),
+            "cogno layer + soul loader pre-warmed"
+        );
+    }
+
     // Build router
     let app = Router::new()
         // Health checks
@@ -2348,6 +3008,12 @@ async fn main() {
         .route("/v1/ikaros/active-session", get(icarus_active_session))
         .route("/v1/ikaros/session/{id}/tail", get(icarus_session_tail))
         .route("/v1/ikaros/session/{id}/resume-context", post(icarus_resume_context))
+        // Session persistence (Part B — ikaros chat history)
+        .route("/v1/sessions", post(create_session))
+        .route("/v1/sessions", get(sessions_list))
+        .route("/v1/sessions/{id}/messages", post(append_session_message))
+        .route("/v1/sessions/{id}/messages", get(get_session_messages))
+        .route("/v1/sessions/{id}", delete(delete_session))
         // Signals / Modules
         .route("/v1/signals", get(signals_snapshot))
         .route("/v1/signals/recent", get(signals_recent))
@@ -2368,7 +3034,7 @@ async fn main() {
     info!("project root: {}", project_root().display());
     info!("ikaros memory dir: {}", icarus_memory_dir().display());
     info!("listening on {}", addr);
-    info!("upstream workers: {:?}", get_upstream_urls());
+    info!("upstream workers: {:?} (local) + {} cloud", get_upstream_urls(), load_cloud_upstreams().len());
     info!("max concurrent chat: {}", MAX_CONCURRENT_CHAT);
 
     let listener = tokio::net::TcpListener::bind(addr)
