@@ -20,6 +20,7 @@ pub mod voice_recognizer;
 pub mod cogno_layer;
 pub mod sessions;
 pub mod soul_loader;
+pub mod supervisor;
 
 use telemetry::{SignalBus, RequestLog};
 
@@ -46,7 +47,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{watch, RwLock, Semaphore};
 use tokio::io::AsyncWriteExt;
 use voice_recognizer::VoiceRecognizer;
 use tracing::{error, info, warn};
@@ -570,25 +571,66 @@ fn from_anthropic_response(resp: &serde_json::Value) -> serde_json::Value {
 // WorkerPool — manages multiple llama-server workers + cloud upstreams
 // ---------------------------------------------------------------------------
 
-struct WorkerPool {
+pub struct WorkerPool {
     workers: RwLock<Vec<Worker>>,
     model_map: RwLock<HashMap<String, usize>>, // model_name -> worker index
+    /// Per-worker supervisor state (哥哥 6-29 axiom: suspend + crash_log).
+    /// 跟 zeptoclaw SupervisorEntry 同结构 (restart_count / last_restart / started).
+    supervisor_state: Arc<supervisor::SupervisorState>,
 }
 
 impl WorkerPool {
     fn new(local_urls: Vec<String>, cloud_upstreams: Vec<UpstreamType>) -> Self {
         let mut workers = Vec::new();
         // Local workers
-        for url in local_urls {
-            workers.push(Worker::new(url));
+        for url in &local_urls {
+            workers.push(Worker::new(url.clone()));
         }
         // Cloud workers (always alive, no health check needed)
         for upstream in cloud_upstreams {
             workers.push(Worker::new_cloud(upstream));
         }
+
+        // 注册到 supervisor (按 url last segment 作为 name, e.g. "8080" 或 "deepseek.com")
+        let supervisor_state = Arc::new(supervisor::SupervisorState::new());
+        for w in &workers {
+            let name = w.url.rsplit("://").next()
+                .and_then(|s| s.rsplit('/').next())
+                .unwrap_or(&w.url)
+                .to_string();
+            supervisor_state.register(&name, &w.url);
+        }
+
         Self {
             workers: RwLock::new(workers),
             model_map: RwLock::new(HashMap::new()),
+            supervisor_state,
+        }
+    }
+
+    /// 异步版: 给 supervisor tick 用.
+    pub async fn is_worker_alive(&self, name: &str) -> bool {
+        let workers = self.workers.read().await;
+        if let Some(idx) = workers.iter().position(|w| {
+            let last = w.url.rsplit('/').next().unwrap_or(&w.url);
+            last == name || w.url.ends_with(name)
+        }) {
+            workers[idx].alive
+        } else {
+            true  // 找不到, 避免 false positive
+        }
+    }
+
+    pub async fn mark_worker_alive(&self, name: &str) -> bool {
+        let mut workers = self.workers.write().await;
+        if let Some(idx) = workers.iter().position(|w| {
+            let last = w.url.rsplit('/').next().unwrap_or(&w.url);
+            last == name || w.url.ends_with(name)
+        }) {
+            workers[idx].alive = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -840,8 +882,12 @@ struct AppState {
     voice_recognizer: Option<Arc<VoiceRecognizer>>,
     /// Last model used for voice chat (persisted to disk)
     last_voice_model: RwLock<Option<String>>,
+    /// Voice conversation history (per-session messages, max 10 turns)
+    voice_chat_history: RwLock<Vec<serde_json::Value>>,
     /// Persistent session store (ikaros chat history)
     sessions: Arc<SessionStore>,
+    /// Per-worker supervisor state (哥哥 6-29 axiom: suspend + crash_log)
+    supervisor_state: Arc<supervisor::SupervisorState>,
 }
 
 impl AppState {
@@ -858,6 +904,8 @@ impl AppState {
         info!("configured {} local + {} cloud upstream(s)", urls.len(), cloud_upstreams.len());
 
         let worker_pool = Arc::new(WorkerPool::new(urls, cloud_upstreams));
+        // supervisor_state 跟 worker_pool.supervisor_state 共享 (同一个 Arc)
+        let supervisor_state = worker_pool.supervisor_state.clone();
 
         Self {
             http_client,
@@ -887,8 +935,9 @@ impl AppState {
                 }
             },
             last_voice_model: RwLock::new(load_last_voice_model()),
+            voice_chat_history: RwLock::new(Vec::new()),
             sessions: Arc::new(SessionStore::new(&project_root())),
-
+            supervisor_state,
         }
     }
 
@@ -912,6 +961,20 @@ impl AppState {
                 tokio::time::sleep(Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS)).await;
             }
         });
+    }
+
+    /// Start per-worker supervisor (哥哥 6-29 axiom).
+    /// 跟 zeptoclaw SUPERVISOR_POLL_SECS=15 + COOLDOWN=60 + MAX_RESTARTS=5 同结构.
+    fn start_supervisor(&self) {
+        // supervisor 用自己的 watch::Receiver, 进程退出时 task 自动 drop 关闭
+        // (不存 sender, 避免 blocking_write 在 async 上下文 panic)
+        let (_tx, rx) = watch::channel(false);
+        let _handle = supervisor::spawn_supervisor(
+            self.worker_pool.clone(),
+            self.supervisor_state.clone(),
+            rx,
+        );
+        info!("supervisor: spawn task registered");
     }
 }
 
@@ -1357,10 +1420,25 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
         }
     };
 
+    // Channel: main loop → spawned task (audio buffer to process)
+    let (job_tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<(Vec<i16>, u64)>();
+    // Channel: spawned task → main loop (WS messages to send back)
+    let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+
+    // Spawn single utterance processor — receives audio from main loop, sends responses back
+    let proc_state = state.clone();
+    let proc_rec = recognizer.clone();
+    tokio::spawn(async move {
+        while let Some((audio, rid)) = job_rx.recv().await {
+            process_utterance_channel(resp_tx.clone(), proc_rec.clone(), &proc_state, audio, rid).await;
+        }
+    });
+
     let mut request_id = 0u64;
     let mut audio_buffer: Vec<i16> = Vec::new();
     let mut last_audio_time = tokio::time::Instant::now();
     let mut is_audio_session = false;
+    let mut first_start = true;  // Clear voice history on first "start" after WS connect
 
     // Message loop
     loop {
@@ -1379,6 +1457,12 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                         is_audio_session = true;
                                         audio_buffer.clear();
                                         last_audio_time = tokio::time::Instant::now();
+                                        // Clear voice history on first start of a new WS session
+                                        if first_start {
+                                            first_start = false;
+                                            state.voice_chat_history.write().await.clear();
+                                            info!("voice: new session, history cleared");
+                                        }
                                         let resp = serde_json::json!({"type": "status", "message": "listening"});
                                         let _ = socket.send(Message::Text(resp.to_string().into())).await;
                                     }
@@ -1387,12 +1471,22 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                         if !audio_buffer.is_empty() {
                                             let buf = std::mem::take(&mut audio_buffer);
                                             request_id += 1;
-                                            process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
+                                            let _ = job_tx.send((buf, request_id));
                                         }
                                     }
                                     "ping" => {
                                         let resp = serde_json::json!({"type": "pong"});
                                         let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                    }
+                                    "set_model" => {
+                                        if let Some(m) = parsed.get("model").and_then(|v| v.as_str()) {
+                                            info!(model = %m, "voice model updated via WS");
+                                            let mut last = state.last_voice_model.write().await;
+                                            *last = Some(m.to_string());
+                                            save_last_voice_model(m);
+                                            let resp = serde_json::json!({"type": "status", "message": "model updated"});
+                                            let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                        }
                                     }
                                     _ => {
                                         let resp = serde_json::json!({
@@ -1414,7 +1508,6 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                     }
                     Some(Ok(Message::Binary(data))) => {
                         if is_audio_session {
-                            // Convert u8 bytes to i16 PCM samples (little-endian)
                             let bytes = &data[..];
                             for chunk in bytes.chunks_exact(2) {
                                 let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
@@ -1436,6 +1529,16 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                 }
             }
 
+            // -- Forward response from spawned task to WebSocket --
+            resp_msg = resp_rx.recv() => {
+                match resp_msg {
+                    Some(msg) => {
+                        let _ = socket.send(msg).await;
+                    }
+                    None => { break; }
+                }
+            }
+
             // -- VAD silence timeout (every 500ms) --
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
                 if is_audio_session && !audio_buffer.is_empty() {
@@ -1446,14 +1549,13 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                         let buf = std::mem::take(&mut audio_buffer);
                         is_audio_session = false;
                         request_id += 1;
-                        process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
+                        let _ = job_tx.send((buf, request_id));
                     } else if audio_buffer.len() > 480_000 {
-                        // 15s at 16kHz — emergency flush
                         info!("voice buffer: {} samples, emergency flush", audio_buffer.len());
                         let buf = std::mem::take(&mut audio_buffer);
                         is_audio_session = false;
                         request_id += 1;
-                        process_utterance(&mut socket, recognizer.clone(), &state, buf, request_id).await;
+                        let _ = job_tx.send((buf, request_id));
                     }
                 }
             }
@@ -1463,18 +1565,18 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
     info!("voice WebSocket session ended");
 }
 
-/// Process a complete utterance: STT → LLM → TTS
-async fn process_utterance(
-    socket: &mut WebSocket,
+/// Process utterance from mpsc channel: STT → LLM → TTS, send responses via channel
+async fn process_utterance_channel(
+    resp_tx: tokio::sync::mpsc::UnboundedSender<Message>,
     recognizer: Arc<VoiceRecognizer>,
     state: &AppState,
     audio: Vec<i16>,
     rid: u64,
 ) {
     // 1. STT (in-process, blocking — run on threadpool)
-    let _ = socket.send(Message::Text(
+    let _ = resp_tx.send(Message::Text(
         serde_json::json!({"type": "status", "request_id": rid, "message": "识别中…"}).to_string().into()
-    )).await;
+    ));
 
     let text = tokio::task::spawn_blocking(move || recognizer.transcribe(&audio))
         .await
@@ -1483,60 +1585,60 @@ async fn process_utterance(
     let text = match text {
         Some(t) if !t.is_empty() => t,
         _ => {
-            let _ = socket.send(Message::Text(
+            let _ = resp_tx.send(Message::Text(
                 serde_json::json!({"type": "status", "request_id": rid, "message": "没听清，请再说一遍"}).to_string().into()
-            )).await;
+            ));
             return;
         }
     };
 
     info!(request_id = rid, text = %text, "STT result");
-    let _ = socket.send(Message::Text(
+    let _ = resp_tx.send(Message::Text(
         serde_json::json!({"type": "transcription", "request_id": rid, "text": text}).to_string().into()
-    )).await;
+    ));
 
-    // 2. LLM (reqwest to llama-server)
-    let _ = socket.send(Message::Text(
+    // 2. LLM (reqwest to llama-server / cloud)
+    let _ = resp_tx.send(Message::Text(
         serde_json::json!({"type": "thinking", "request_id": rid}).to_string().into()
-    )).await;
+    ));
 
     let reply = voice_llm_chat(state, &text).await;
     if reply.is_empty() {
-        let _ = socket.send(Message::Text(
+        let _ = resp_tx.send(Message::Text(
             serde_json::json!({"type": "error", "request_id": rid, "message": "思考失败了"}).to_string().into()
-        )).await;
+        ));
         return;
     }
 
     info!(request_id = rid, stt = %text, llm_reply = %reply, "voice utterance: STT→LLM");
 
     // 3. TTS (edge-tts subprocess)
-    let _ = socket.send(Message::Text(
+    let _ = resp_tx.send(Message::Text(
         serde_json::json!({"type": "status", "request_id": rid, "message": "回复中…"}).to_string().into()
-    )).await;
+    ));
 
     match voice_tts(&reply).await {
         Ok(mp3_data) => {
             let chunk_size = 8192;
             let mut chunk_count = 0u32;
             for chunk in mp3_data.chunks(chunk_size) {
-                let _ = socket.send(Message::Binary(chunk.to_vec().into())).await;
+                let _ = resp_tx.send(Message::Binary(chunk.to_vec().into()));
                 chunk_count += 1;
             }
-            let _ = socket.send(Message::Text(
+            let _ = resp_tx.send(Message::Text(
                 serde_json::json!({
                     "type": "done",
                     "request_id": rid,
                     "text": reply,
                     "chunks": chunk_count,
                 }).to_string().into()
-            )).await;
+            ));
         }
         Err(e) => {
             error!(request_id = rid, error = %e, "TTS failed");
-            let _ = socket.send(Message::Text(
+            let _ = resp_tx.send(Message::Text(
                 serde_json::json!({"type": "error", "request_id": rid, "message": format!("TTS failed: {}", e)}).to_string().into()
-            )).await;
+            ));
         }
     }
 
@@ -1566,6 +1668,7 @@ fn save_last_voice_model(model: &str) {
 }
 
 /// Query free VRAM in MB via nvidia-smi
+#[allow(dead_code)]
 fn query_vram_free_mb() -> Option<u64> {
     let output = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
@@ -1596,6 +1699,7 @@ fn estimate_model_vram_mb(model_name: &str) -> u64 {
 /// Pick the best voice model by VRAM budget.
 /// Strategy: sort candidates by size (smallest first for low latency),
 /// pick the largest that fits in available VRAM.
+#[allow(dead_code)]
 fn pick_voice_model_by_vram(candidates: &[&String]) -> Option<String> {
     let vram_free = query_vram_free_mb().unwrap_or(4096); // fallback 4GB
     info!("voice model: VRAM free = {} MB, candidates = {}", vram_free, candidates.len());
@@ -1625,24 +1729,35 @@ fn pick_voice_model_by_vram(candidates: &[&String]) -> Option<String> {
     chosen
 }
 
-/// Call llama-server directly for voice chat.
-/// Model selection: prefer last-used model, fallback to VRAM-based selection.
+/// Maximum voice conversation history turns (each turn = user + assistant pair).
+const VOICE_MAX_HISTORY_TURNS: usize = 10;
+
+/// Call llama-server or cloud via correct URL/auth, with conversation history.
+///
+/// Fixes vs original:
+///   - Cloud worker URL: uses `{base_url}/chat/completions` (not double /v1)
+///   - Cloud worker auth: adds Bearer/x-api-key header
+///   - Conversation history: maintains last 10 turns for contextual replies
+///   - Model preference: skips cloud models, prefers small local models (<4B)
 async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
-    // --- Model selection ---
-    // 1. Try last-used model (fast path: already loaded, no VRAM check needed)
-    // 2. If unavailable or VRAM insufficient, re-select by VRAM budget
+    // --- Model selection: prefer last-used, then smallest local, skip cloud ---
     let model = {
         let workers = state.worker_pool.workers.read().await;
-        let candidates: Vec<&String> = workers.iter()
-            .filter(|w| w.alive)
-            .flat_map(|w| w.models.iter())
-            .filter(|m| !m.to_lowercase().contains("mmproj"))
+        let candidates: Vec<(usize, &String, bool)> = workers.iter().enumerate()
+            .filter(|(_, w)| w.alive)
+            .flat_map(|(i, w)| w.models.iter().map(move |m| (i, m, w.is_cloud())))
+            .filter(|(_, m, _)| !m.to_lowercase().contains("mmproj"))
             .collect();
 
-        // Check last-used model
+        if candidates.is_empty() {
+            warn!("voice_llm: no alive worker with models");
+            return String::new();
+        }
+
+        // Check last-used model first
         let last_model = state.last_voice_model.read().await.clone();
-        let selected = if let Some(ref lm) = last_model {
-            if candidates.iter().any(|m| *m == lm) {
+        let selected: Option<String> = if let Some(ref lm) = last_model {
+            if candidates.iter().any(|(_, m, _)| *m == lm) {
                 info!("voice model: reusing last model '{}'", lm);
                 Some(lm.clone())
             } else {
@@ -1653,12 +1768,27 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
             None
         };
 
-        let selected = match selected {
+        match selected {
             Some(m) => m,
-            None => pick_voice_model_by_vram(&candidates).unwrap_or_else(|| "auto".to_string()),
-        };
+            None => {
+                // Prefer local models sorted by VRAM (smallest first for low latency)
+                let mut local: Vec<(&String, u64)> = candidates.iter()
+                    .filter(|(_, _, is_cloud)| !is_cloud)
+                    .map(|(_, m, _)| (*m, estimate_model_vram_mb(m)))
+                    .collect();
+                local.sort_by_key(|(_, v)| *v);
 
-        selected
+                if let Some((m, v)) = local.first() {
+                    info!("voice model: selected local '{}' (est. {} MB VRAM)", m, v);
+                    (*m).clone()
+                } else {
+                    // No local model — fall back to first alive cloud model
+                    let (_, m, _) = candidates.first().unwrap();
+                    info!("voice model: falling back to cloud '{}'", m);
+                    (*m).clone()
+                }
+            }
+        }
     };
 
     // Persist the selected model for next time
@@ -1670,30 +1800,40 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
         }
     }
 
-    // Prefer a worker that already has the model loaded (no autoload delay).
-    // Fallback to first alive worker.
-    let worker_url = {
+    // --- Build request URL and auth (match main chat flow logic) ---
+    let (worker_url, auth_header, anthropic) = {
         let pool = &state.worker_pool;
         let idx = pool.find_worker_for_model(&model).await;
-        match idx {
-            Some(i) => {
-                let workers = pool.workers.read().await;
-                workers.get(i).map(|w| w.url.clone())
+        let workers = pool.workers.read().await;
+        let worker = match idx.and_then(|i| workers.get(i)) {
+            Some(w) => w,
+            None => match workers.iter().find(|w| w.alive) {
+                Some(w) => w,
+                None => { warn!("voice_llm: no alive worker"); return String::new(); }
+            },
+        };
+
+        match &worker.upstream_type {
+            UpstreamType::Cloud { base_url, api_key, auth_format, protocol, .. } => {
+                let url = if matches!(protocol, ApiProtocol::Anthropic) {
+                    format!("{}/v1/messages", base_url.trim_end_matches('/'))
+                } else {
+                    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+                };
+                let header = match auth_format {
+                    AuthFormat::Bearer => ("authorization".to_string(), format!("Bearer {}", api_key)),
+                    AuthFormat::XApiKey => ("x-api-key".to_string(), api_key.clone()),
+                };
+                (url, Some(header), matches!(protocol, ApiProtocol::Anthropic))
             }
-            None => {
-                let workers = pool.workers.read().await;
-                workers.iter().find(|w| w.alive).map(|w| w.url.clone())
+            UpstreamType::Local => {
+                let url = format!("{}/v1/chat/completions", worker.url);
+                (url, None, false)
             }
         }
     };
-    let worker_url = match worker_url {
-        Some(u) => u,
-        None => { warn!("voice_llm: no alive worker"); return String::new(); }
-    };
 
-    let url = format!("{}/v1/chat/completions", worker_url);
-
-    // Build system prompt from axiom + cogno (unified with chat flow)
+    // --- Build system prompt from axiom + cogno ---
     let axiom = soul_loader::get_soul_injection();
     let cogno = cogno_layer::enrich(user_text);
     let system_prompt = format!(
@@ -1701,23 +1841,62 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
         axiom, cogno
     );
 
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-        "stream": false,
-        "max_tokens": 512,
-        "reasoning_format": "none",
-        "cache_prompt": true,
-    });
+    // --- Build messages with conversation history ---
+    let mut messages: Vec<serde_json::Value> = Vec::new();
+    messages.push(serde_json::json!({"role": "system", "content": system_prompt}));
 
-    match state.http_client.post(&url).json(&body).timeout(Duration::from_secs(120)).send().await {
+    // Load voice chat history (last N turns)
+    {
+        let history = state.voice_chat_history.read().await;
+        for msg in history.iter() {
+            messages.push(msg.clone());
+        }
+    }
+    // Add current user message
+    messages.push(serde_json::json!({"role": "user", "content": user_text}));
+
+    let body = if anthropic {
+        to_anthropic_body(&serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "max_tokens": 512,
+        }))
+    } else {
+        serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "max_tokens": 512,
+            "reasoning_format": "none",
+            "cache_prompt": true,
+        })
+    };
+
+    // --- Send request with auth ---
+    let mut req = state
+        .http_client
+        .post(&worker_url)
+        .header("content-type", "application/json")
+        .json(&body)
+        .timeout(Duration::from_secs(120));
+
+    if let Some((key, value)) = &auth_header {
+        req = req.header(key, value);
+    }
+
+    let reply = match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             match resp.json::<serde_json::Value>().await {
                 Ok(json) => {
-                    let raw = json.get("choices")
+                    // Anthropic responses use content[0].text format;
+                    // convert to OpenAI format for unified parsing
+                    let normalized = if anthropic {
+                        from_anthropic_response(&json)
+                    } else {
+                        json
+                    };
+                    let raw = normalized.get("choices")
                         .and_then(|c| c.as_array())
                         .and_then(|c| c.first())
                         .and_then(|c| c.get("message"))
@@ -1730,9 +1909,31 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
                 Err(e) => { warn!("voice_llm: parse error: {}", e); String::new() }
             }
         }
-        Ok(resp) => { warn!("voice_llm: status {}", resp.status()); String::new() }
-        Err(e) => { warn!("voice_llm: error: {}", e); String::new() }
+        Ok(resp) => {
+            warn!("voice_llm: status {} from {}", resp.status(), worker_url);
+            String::new()
+        }
+        Err(e) => {
+            warn!("voice_llm: error: {} to {}", e, worker_url);
+            String::new()
+        }
+    };
+
+    // Append to voice chat history on success
+    if !reply.is_empty() {
+        let mut history = state.voice_chat_history.write().await;
+        history.push(serde_json::json!({"role": "user", "content": user_text}));
+        history.push(serde_json::json!({"role": "assistant", "content": reply}));
+        // Keep last N turns (each turn = 2 messages: user + assistant)
+        let max_msgs = VOICE_MAX_HISTORY_TURNS * 2;
+        if history.len() > max_msgs {
+            let drain = history.len() - max_msgs;
+            history.drain(..drain);
+        }
+        info!("voice history: {} messages ({} turns)", history.len(), history.len() / 2);
     }
+
+    reply
 }
 
 /// Remove lone surrogates and other chars that break Python UTF-8 encoding.
@@ -2337,6 +2538,86 @@ async fn icarus_resume_context(
         }
         None => Json(serde_json::json!({"found": false, "reason": "webui db not accessible"})),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor endpoints (哥哥 6-29 axiom: suspend + crash_log)
+// ---------------------------------------------------------------------------
+
+/// GET /v1/ikaros/supervisor/list — 列出所有 worker 的监督状态.
+async fn supervisor_list(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let entries = state.supervisor_state.list();
+    Json(serde_json::json!({
+        "ts": chrono::Utc::now().timestamp(),
+        "supervisor": {
+            "poll_secs": 15,
+            "cooldown_secs": 60,
+            "max_restarts": 5,
+            "workers": entries,
+        }
+    }))
+}
+
+#[derive(Deserialize)]
+struct SupervisorSuspendReq {
+    name: String,
+    /// 可选: 秒数, 到期自动 resume. None = 永久 (直到显式 resume)
+    duration_secs: Option<u64>,
+}
+
+/// POST /v1/ikaros/supervisor/suspend — 暂时取消监管.
+async fn supervisor_suspend(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SupervisorSuspendReq>,
+) -> Json<serde_json::Value> {
+    let duration = req.duration_secs.map(std::time::Duration::from_secs);
+    state.supervisor_state.suspend(&req.name, duration);
+    Json(serde_json::json!({
+        "suspended": req.name,
+        "duration_secs": req.duration_secs,
+        "ts": chrono::Utc::now().timestamp(),
+    }))
+}
+
+/// POST /v1/ikaros/supervisor/resume — 立即恢复监管.
+async fn supervisor_resume(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SupervisorSuspendReq>,
+) -> Json<serde_json::Value> {
+    state.supervisor_state.resume(&req.name);
+    Json(serde_json::json!({
+        "resumed": req.name,
+        "ts": chrono::Utc::now().timestamp(),
+    }))
+}
+
+/// POST /v1/ikaros/supervisor/on-crash — 外部 trigger crash (for testing).
+async fn supervisor_on_crash(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SupervisorSuspendReq>,
+) -> Json<serde_json::Value> {
+    state.supervisor_state.mark_dead(&req.name, "external_trigger");
+    Json(serde_json::json!({
+        "marked_dead": req.name,
+        "ts": chrono::Utc::now().timestamp(),
+        "next_action": "next supervisor tick (<= 15s) will attempt restart after 60s cooldown"
+    }))
+}
+
+/// GET /v1/ikaros/supervisor/crash-log/{name} — 读崩溃 log.
+async fn supervisor_crash_log(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Json<serde_json::Value> {
+    let log = state.supervisor_state.crash_log(&name);
+    Json(serde_json::json!({
+        "name": name,
+        "ts": chrono::Utc::now().timestamp(),
+        "events": log,
+        "count": log.len(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2947,6 +3228,8 @@ async fn main() {
 
     // Start background health monitor
     state.start_health_monitor();
+    // Start per-worker supervisor (哥哥 6-29 axiom: suspend + crash_log)
+    state.start_supervisor();
 
     // Initial health check (wait a moment for first refresh)
     {
@@ -3008,6 +3291,12 @@ async fn main() {
         .route("/v1/ikaros/active-session", get(icarus_active_session))
         .route("/v1/ikaros/session/{id}/tail", get(icarus_session_tail))
         .route("/v1/ikaros/session/{id}/resume-context", post(icarus_resume_context))
+        // Supervisor (哥哥 6-29 axiom: suspend + crash_log)
+        .route("/v1/ikaros/supervisor/list", get(supervisor_list))
+        .route("/v1/ikaros/supervisor/suspend", post(supervisor_suspend))
+        .route("/v1/ikaros/supervisor/resume", post(supervisor_resume))
+        .route("/v1/ikaros/supervisor/on-crash", post(supervisor_on_crash))
+        .route("/v1/ikaros/supervisor/crash-log/{name}", get(supervisor_crash_log))
         // Session persistence (Part B — ikaros chat history)
         .route("/v1/sessions", post(create_session))
         .route("/v1/sessions", get(sessions_list))
