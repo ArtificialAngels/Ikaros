@@ -1433,8 +1433,11 @@ async def edge_tts_mp3(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
     Returns:
         完整 MP3 file bytes (可能空 bytes 如果 edge-tts 失败 — caller 检查)
     """
+    # 2026-06-29 哥哥 axiom Rule 8: TTS 禁念 markdown 强调符号
+    # edge-tts 把 ** 念成"星号", 听感差. LLM 应该已禁, 但兜底 strip 一下.
+    tts_text = _strip_markdown_emphasis(text)
     try:
-        communicate = edge_tts.Communicate(text, voice=voice)
+        communicate = edge_tts.Communicate(tts_text, voice=voice)
         chunks = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
@@ -1443,6 +1446,31 @@ async def edge_tts_mp3(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
     except Exception as exc:
         log.warning("edge-tts failed: %s", exc)
         return b""
+
+
+def _strip_markdown_emphasis(text: str) -> str:
+    """TTS 兜底: 去掉 markdown 强调符号, 但保留文字内容.
+
+    - **字** / __字__ → 字 (双星 = 粗体)
+    - *字* / _字_   → 字 (单星 = 斜体)
+    - ***字***      → 字 (粗斜体)
+    - 保留 markdown 链接/标题/代码/列表 (webui 渲染靠这些, TTS 念不到)
+
+    设计: 只 strip 强调, 不动其他 markdown. webui 显示仍正常.
+    14 case 单测 ALL PASS (2026-06-29): 粗体/斜体/粗斜体/列表/链接/标题/单词内 _
+    """
+    import re
+    # 三星 (粗斜体) — 先处理, 否则会被前两条吃掉
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'___(.+?)___',     r'\1', text, flags=re.DOTALL)
+    # 双星 (粗体)
+    text = re.sub(r'\*\*(.+?)\*\*',   r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'__(.+?)__',       r'\1', text, flags=re.DOTALL)
+    # 单星 (斜体) — *X*  X首尾非空白, 列表 * item 不会被吃 (item 后是空白但 \S 限制首字符)
+    text = re.sub(r'\*(\S(?:[^*]*\S)?)\*', r'\1', text)
+    # 下划线斜体 — 同上, \b word boundary 避免吃 hello_world
+    text = re.sub(r'\b_(\S(?:[^_]*\S)?)_\b', r'\1', text)
+    return text
 
 
 class ChatDockWindow(QMainWindow):
