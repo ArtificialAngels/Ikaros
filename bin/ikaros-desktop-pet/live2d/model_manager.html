@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>🪶 模型管理</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  width: 100vw; height: 100vh; overflow: auto;
+  padding: 16px;
+}
+h1 { font-size: 18px; margin-bottom: 12px; color: #8f8; }
+.section {
+  background: #16213e; border-radius: 8px; padding: 12px; margin-bottom: 12px;
+  border: 1px solid #0f3460;
+}
+.section h2 { font-size: 14px; margin-bottom: 8px; color: #e94560; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #0f3460; }
+th { color: #888; font-weight: normal; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot-ok { background: #4caf50; }
+.dot-warn { background: #ff9800; }
+.dot-err { background: #f44336; }
+.btn {
+  padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer;
+  font-size: 12px; color: #fff; transition: opacity 0.2s;
+}
+.btn:hover { opacity: 0.8; }
+.btn-load { background: #2196f3; }
+.btn-unload { background: #f44336; }
+.btn-refresh { background: #4caf50; }
+.btn-scan { background: #9c27b0; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+#status-bar {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: #0f3460; padding: 6px 16px; font-size: 12px; z-index: 999;
+  display: flex; justify-content: space-between; align-items: center;
+}
+#status-bar .ts { color: #888; }
+#vram-bar { height: 6px; background: #0f3460; border-radius: 3px; margin: 8px 0; overflow: hidden; }
+#vram-fill { height: 100%; background: linear-gradient(90deg, #4caf50, #ff9800, #f44336); transition: width 0.5s; }
+#error-box { display: none; background: #5c1a1a; color: #ff8a8a; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+.model-row:hover { background: #1a1a3e; }
+.loaded-badge { background: #4caf50; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+.cloud-badge { background: #ff9800; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+.model-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div id="status-bar">
+  <span>🪶 模型管理器</span>
+  <span class="ts" id="status-ts">—</span>
+</div>
+
+<div id="error-box"></div>
+
+<h1>🔍 当前模型状态</h1>
+
+<div class="section">
+  <h2>📊 系统状态</h2>
+  <table>
+    <tr><th>桥状态</th><td id="bridge-status"><span class="status-dot dot-warn"></span>检测中...</td></tr>
+    <tr><th>当前加载</th><td id="current-model">—</td></tr>
+    <tr><th>来源</th><td id="model-source">—</td></tr>
+    <tr><th>VRAM 使用</th><td id="vram-info">—</td></tr>
+  </table>
+  <div id="vram-bar"><div id="vram-fill" style="width:0%"></div></div>
+  <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+    <button class="btn btn-refresh" onclick="refreshStatus()">🔄 刷新状态</button>
+    <button class="btn btn-scan" onclick="scanDiskModels()">📂 扫描磁盘模型</button>
+  </div>
+</div>
+
+<h1>💻 本地模型</h1>
+<div class="section">
+  <table id="local-models-table">
+    <thead><tr><th>模型名称</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody id="local-models-body"><tr><td colspan="3" style="color:#888;text-align:center;">正在加载...</td></tr></tbody>
+  </table>
+</div>
+
+<h1>☁️ 云端模型</h1>
+<div class="section">
+  <table id="cloud-models-table">
+    <thead><tr><th>模型名称</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody id="cloud-models-body"><tr><td colspan="3" style="color:#888;text-align:center;">正在加载...</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+const BRIDGE = 'http://127.0.0.1:7860';
+const LLAMA = 'http://127.0.0.1:8080';
+let _currentState = { loaded: [], available: [], vram: null, source: 'unknown' };
+let _diskModels = [];
+
+function err(text) {
+  const box = document.getElementById('error-box');
+  box.textContent = text;
+  box.style.display = 'block';
+  setTimeout(() => { box.style.display = 'none'; }, 6000);
+}
+
+async function api(url, opts = {}) {
+  try {
+    const resp = await fetch(url, opts);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`HTTP ${resp.status}: ${text.slice(0, 120)}`);
+    }
+    return await resp.json();
+  } catch (e) {
+    throw new Error(`${url}: ${e.message}`);
+  }
+}
+
+/** 刷新模型状态 from bridge /v1/models/status */
+async function refreshStatus() {
+  document.getElementById('bridge-status').innerHTML = '<span class="status-dot dot-warn"></span>请求中...';
+  try {
+    const data = await api(`${BRIDGE}/v1/models/status`);
+    _currentState = data;
+    document.getElementById('status-ts').textContent = new Date().toLocaleTimeString();
+
+    document.getElementById('bridge-status').innerHTML = '<span class="status-dot dot-ok"></span>在线';
+    const loadedIds = data.loaded.map(l => l.id).join(', ') || '无';
+    document.getElementById('current-model').textContent = loadedIds;
+    document.getElementById('model-source').textContent = data.source || 'unknown';
+
+    // VRAM
+    const vram = data.vram;
+    if (vram) {
+      // Try to parse VRAM values
+      let used = 0, total = 0;
+      if (typeof vram === 'object') {
+        used = parseInt(vram.vram_used || vram.vram_used_size || 0);
+        total = parseInt(vram.vram_total || vram.vram_total_size || 1);
+      } else {
+        document.getElementById('vram-info').textContent = String(vram);
+      }
+      if (total > 0) {
+        const pct = Math.min(100, Math.round(used / total * 100));
+        document.getElementById('vram-info').textContent =
+          `${(used / 1024 / 1024).toFixed(1)}GB / ${(total / 1024 / 1024).toFixed(1)}GB (${pct}%)`;
+        document.getElementById('vram-fill').style.width = pct + '%';
+      }
+    } else {
+      document.getElementById('vram-info').textContent = '无法获取';
+    }
+
+    renderModels();
+  } catch (e) {
+    document.getElementById('bridge-status').innerHTML = '<span class="status-dot dot-err"></span>离线';
+    err('刷新状态失败: ' + e.message);
+  }
+}
+
+/** 加载模型 */
+async function loadModel(modelId) {
+  try {
+    await api(`${BRIDGE}/v1/models/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId }),
+    });
+    err('✅ 模型 ' + modelId + ' 加载请求已发送');
+    setTimeout(refreshStatus, 2000);
+  } catch (e) {
+    err('❌ 加载失败: ' + e.message);
+  }
+}
+
+/** 卸载模型 (evict) */
+async function unloadModel(modelId) {
+  try {
+    await api(`${BRIDGE}/v1/models/evict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId }),
+    });
+    err('✅ 模型 ' + modelId + ' 卸载请求已发送');
+    setTimeout(refreshStatus, 2000);
+  } catch (e) {
+    err('❌ 卸载失败: ' + e.message);
+  }
+}
+
+/** 从磁盘扫描本地 GGUF 模型 */
+async function scanDiskModels() {
+  try {
+    const data = await api(`http://127.0.0.1:8648/api/hermes/provider-models/cache/refresh`, {
+      method: 'POST',
+    });
+    err('📂 磁盘模型扫描请求已发送: ' + (data.message || JSON.stringify(data)));
+    setTimeout(refreshStatus, 3000);
+  } catch (e) {
+    // Fallback: try Python script via bridge
+    try {
+      const data = await api(`${BRIDGE}/v1/models/status`);
+      err('📂 桥状态已刷新, 可通过加载操作注册新模型');
+      refreshStatus();
+    } catch (e2) {
+      err('❌ 扫描失败: ' + e.message);
+    }
+  }
+}
+
+/** 渲染模型列表 */
+function renderModels() {
+  const loaded = _currentState.loaded || [];
+  const available = _currentState.available || [];
+  const loadedIds = new Set(loaded.map(l => l.id));
+
+  // Determine which models are local vs cloud based on owned_by
+  const localModels = available.filter(m => m.owned_by === 'llamacpp' || m.owned_by === 'llama-cpp' || m.owned_by === '');
+  const cloudModels = available.filter(m => m.owned_by !== 'llamacpp' && m.owned_by !== 'llama-cpp' && m.owned_by !== '');
+
+  // Render local models
+  const localBody = document.getElementById('local-models-body');
+  if (localModels.length === 0) {
+    localBody.innerHTML = '<tr><td colspan="3" style="color:#888;text-align:center;">暂无本地模型</td></tr>';
+  } else {
+    localBody.innerHTML = localModels.map(m => {
+      const id = m.id;
+      const isLoaded = loadedIds.has(id);
+      return `<tr class="model-row">
+        <td class="model-name" title="${id}">${id}${isLoaded ? ' <span class="loaded-badge">已加载</span>' : ''}</td>
+        <td>${isLoaded ? '<span style="color:#4caf50;">● 已加载</span>' : '<span style="color:#888;">○ 未加载</span>'}</td>
+        <td>
+          ${isLoaded
+            ? `<button class="btn btn-unload" onclick="unloadModel('${id}')">卸载</button>`
+            : `<button class="btn btn-load" onclick="loadModel('${id}')">加载</button>`
+          }
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Render cloud models - only show, no unload action needed
+  const cloudBody = document.getElementById('cloud-models-body');
+  if (cloudModels.length === 0) {
+    cloudBody.innerHTML = '<tr><td colspan="3" style="color:#888;text-align:center;">暂无云端模型</td></tr>';
+  } else {
+    cloudBody.innerHTML = cloudModels.map(m => {
+      const id = m.id;
+      const isLoaded = loadedIds.has(id);
+      return `<tr class="model-row">
+        <td class="model-name" title="${id}">${id} <span class="cloud-badge">☁️</span></td>
+        <td>${isLoaded ? '<span style="color:#4caf50;">● 已加载</span>' : '<span style="color:#888;">○ 可用</span>'}</td>
+        <td><span style="color:#666;font-size:11px;">云端自动路由</span></td>
+      </tr>`;
+    }).join('');
+  }
+}
+
+// Auto-refresh every 30s
+refreshStatus();
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>

@@ -1,23 +1,17 @@
 """
 Ikaros Audio Engine — persistent microphone capture + TTS playback.
 
-Architecture (inspired by DeskMate's ListenEvent.py):
-  sounddevice capture thread (16000Hz, 16-bit mono)         [4A.3: pyaudio → sounddevice]
+Architecture:
+  sounddevice capture thread (16000Hz, 16-bit mono)
   → energy-based VAD (RMS threshold)
-  → silence detection → flush to bridge WebSocket
-  → optional wake-word gating
-  → bridge WS pushes TTS MP3 chunks → pydub decode → sounddevice OutputStream  [4B]
+  → silence detection → flush raw PCM binary to bridge WebSocket
+  → bridge SenseVoice STT → text correction → LLM → TTS
+  → bridge WS pushes TTS MP3 chunks → pydub decode → sounddevice OutputStream
 
 Config options (set via system tray):
   - Continuous mode: always-on, auto detects speech
   - Wake-word mode: listen for "伊卡洛斯" before processing
   - Sensitivity: VAD threshold adjustment
-
-哥哥 2026-06-27 Phase 4B: 接 voice_server TTS MP3 流到扬声器
-  - bridge voice_server 用 edge-tts 输出 MP3 chunk via websocket.send_bytes()
-  - 多个 chunks 累加成完整 MP3 (用 MP3 frame header sync 0xFFE/0xFFF)
-  - pydub 解码 → numpy int16 array → sounddevice.OutputStream 播放
-  - 16kHz mono int16 跟录音同 (降采样如果原始是 24kHz/48kHz)
 """
 
 from __future__ import annotations
@@ -40,6 +34,10 @@ try:
 except ImportError:
     _tts_cache = None  # tts_cache.py 缺失时降级到原行为
 
+from _monitor_events import log_stt, log_llm_reply, log_state, log_status, log_error
+from _monitor_events import log_module_status, log_heartbeat, log_event
+from _monitor_events import HEARTBEAT_CAPTURE_INTERVAL, HEARTBEAT_TTS_INTERVAL
+
 log = logging.getLogger("ikaros.audio")
 
 # Audio config — 16kHz mono int16, 与 Whisper / edge-tts 默认一致
@@ -49,10 +47,21 @@ CHUNK = 1024
 DTYPE = "int16"  # sounddevice 用 numpy dtype, 替代 pyaudio.paInt16
 
 # VAD defaults
-DEFAULT_THRESHOLD = 400
+DEFAULT_THRESHOLD = 100
 SILENCE_TIMEOUT = 1.2        # seconds of silence = utterance end
 MIN_AUDIO_MS = 500            # minimum audio to send (ms)
 MAX_UTTERANCE_SEC = 30
+
+# AGC (Automatic Gain Control) — 环境噪音自适应增益
+AGC_TARGET_RMS = 800          # 目标 RMS (int16 范围 0~32768)
+AGC_MAX_GAIN = 8.0            # 最大增益倍数
+AGC_MIN_GAIN = 1.0            # 最小增益倍数 (安静环境不放大)
+AGC_NOISE_ATTACK = 0.05       # 噪音底上升速度 (快适应)
+AGC_NOISE_DECAY = 0.005       # 噪音底下降速度 (慢适应)
+AGC_GAIN_ATTACK = 0.1         # 增益上升速度
+AGC_GAIN_DECAY = 0.05         # 增益下降速度
+AGC_MIN_NOISE = 20            # 最低噪音底 (避免除零)
+AGC_MAX_NOISE = 2000          # 最高噪音底 (超过不再压制)
 
 # Websocket
 WS_URL = "ws://127.0.0.1:7860/v1/voice/ws"
@@ -68,6 +77,11 @@ class AudioEngine:
         self._speaking = False
         self._last_audio_ts = 0.0
         self._utterance_start = 0.0
+
+        # AGC state — 环境噪音自适应增益
+        self._agc_noise_floor = 100.0    # 当前噪音底估计 (RMS)
+        self._agc_gain = 1.0             # 当前增益倍数
+        self._agc_enabled = True         # AGC 开关 (可从 tray 控制)
 
         # 4B: TTS playback state — bridge pushes MP3 chunks via WS
         self._tts_chunks: list[bytes] = []   # accumulate MP3 chunks
@@ -133,6 +147,51 @@ class AudioEngine:
     def set_device(self, index: int):
         self.device_index = index
 
+    # ─── AGC (环境噪音自适应增益) ───
+
+    def _agc_update(self, rms: float, is_speaking: bool) -> float:
+        """根据环境噪音更新增益, 返回当前增益值.
+
+        静音期间: 追踪噪音底 RMS (指数移动平均)
+        说话期间: 噪音底冻结, 增益保持不变
+        """
+        if not self._agc_enabled:
+            return 1.0
+
+        if not is_speaking:
+            # 静音期: 更新噪音底估计
+            if rms < self._agc_noise_floor:
+                # 噪音下降 — 慢适应 (避免突然安静时增益飙升)
+                self._agc_noise_floor += AGC_NOISE_DECAY * (rms - self._agc_noise_floor)
+            else:
+                # 噪音上升 — 快适应 (快速跟踪环境变吵)
+                self._agc_noise_floor += AGC_NOISE_ATTACK * (rms - self._agc_noise_floor)
+
+            # 钳位噪音底
+            self._agc_noise_floor = max(AGC_MIN_NOISE, min(AGC_MAX_NOISE, self._agc_noise_floor))
+
+            # 计算目标增益
+            target_gain = AGC_TARGET_RMS / max(self._agc_noise_floor, AGC_MIN_NOISE)
+            target_gain = max(AGC_MIN_GAIN, min(AGC_MAX_GAIN, target_gain))
+
+            # 平滑增益变化
+            if target_gain < self._agc_gain:
+                self._agc_gain += AGC_GAIN_DECAY * (target_gain - self._agc_gain)
+            else:
+                self._agc_gain += AGC_GAIN_ATTACK * (target_gain - self._agc_gain)
+
+        return self._agc_gain
+
+    def _apply_gain(self, data: bytes, gain: float) -> bytes:
+        """对 int16 PCM 数据应用增益."""
+        if abs(gain - 1.0) < 0.01:
+            return data  # 增益接近 1, 跳过转换
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        samples *= gain
+        # 软限幅 (避免削波失真)
+        np.clip(samples, -32768, 32767, out=samples)
+        return samples.astype(np.int16).tobytes()
+
     # ─── VAD (能量阈值, RMS) ───
     # 与原 pyaudio 版本完全相同 — 输入是 bytes (int16 little-endian), 转 RMS
 
@@ -168,6 +227,8 @@ class AudioEngine:
             try:
                 async with websockets.connect(uri, proxy=None) as ws:
                     self._ws = ws
+                    self._ws_connected = True
+                    log_module_status("voice_ws", "connected")
                     # Send start with current LLM model
                     await ws.send(json.dumps({"type": "start", "model": self._llm_model}))
                     self._emit_state("LISTENING")
@@ -185,13 +246,24 @@ class AudioEngine:
                                 data = json.loads(msg)
                                 t = data.get("type", "")
                                 if t == "transcription":
-                                    self._emit_bubble(data.get("text", "?"), 3000)
+                                    text = data.get("text", "?")
+                                    log_stt(text)
+                                    self._emit_bubble(text, 3000)
                                 elif t == "thinking":
+                                    log_state("thinking")
                                     self._emit_state("THINKING")
                                 elif t == "status":
-                                    self._emit_bubble(data.get("message", ""), 2000)
+                                    msg = data.get("message", "")
+                                    if msg:
+                                        log_status(msg)
+                                    self._emit_bubble(msg, 2000)
                                 elif t == "done":
-                                    self._emit_bubble(data.get("text", "嗯~"), 5000)
+                                    reply_text = data.get("text", "嗯~")
+                                    model_name = data.get("model", "")
+                                    log_llm_reply(reply_text)
+                                    if model_name:
+                                        log_event("model_info", model_name)
+                                    self._emit_bubble(reply_text, 5000)
                                     self._emit_state("SPEAKING")
                                     # 4B: done = bridge TTS stream finished → play accumulated MP3
                                     chunks_count = 0
@@ -236,11 +308,21 @@ class AudioEngine:
                                             pass
                                     self._emit_state("LISTENING")
                                 elif t == "error":
-                                    self._emit_bubble(f"⚠️ {data.get('message', '?')}", 4000)
+                                    err_msg = data.get('message', '?')
+                                    log_error(err_msg)
+                                    self._emit_bubble(f"⚠️ {err_msg}", 4000)
                         except asyncio.TimeoutError:
                             continue
+                    # Inner loop exit (stop() or connection closed)
+                    if self._ws_connected:
+                        self._ws_connected = False
+                        log_module_status("voice_ws", "disconnected")
             except Exception as exc:
                 log.warning("WS: %s, retry 3s", exc)
+                if self._ws_connected:
+                    self._ws_connected = False
+                    log_module_status("voice_ws", "disconnected")
+                self._ws = None
                 await asyncio.sleep(3)
 
     def _emit_state(self, s: str):
@@ -251,7 +333,7 @@ class AudioEngine:
         if self.on_bubble:
             self.on_bubble(t, d)
 
-    # ─── TTS playback (4B) ───
+    # ─── TTS playback ───
 
     async def _play_tts_async(self):
         """Decode accumulated MP3 chunks → 16kHz mono int16 → sounddevice OutputStream.
@@ -370,13 +452,30 @@ class AudioEngine:
                 try:
                     # RawInputStream.read 返 (bytes, overflowed: bool)
                     data, overflowed = self._stream.read(CHUNK)
+
+                    # STT heartbeat (每 ~300次 ≈ 19s)
+                    self._capture_hb_count += 1
+                    if self._capture_hb_count >= HEARTBEAT_CAPTURE_INTERVAL:
+                        self._capture_hb_count = 0
+                        log_heartbeat("stt")
+                        if self._agc_enabled:
+                            log.debug("AGC: noise=%.0f gain=%.2f", self._agc_noise_floor, self._agc_gain)
                 except Exception as exc:
                     log.warning("audio: stream.read failed: %s", exc)
                     break
 
                 # data 已经是 bytes (raw int16), 直接喂 VAD
-                rms = self._rms(data)
+                raw_rms = self._rms(data)
                 now = time.time()
+
+                # AGC: 根据环境噪音更新增益
+                gain = self._agc_update(raw_rms, self._speaking)
+                # 应用增益后的数据用于 VAD 和缓冲
+                if abs(gain - 1.0) > 0.01:
+                    processed = self._apply_gain(data, gain)
+                else:
+                    processed = data
+                rms = self._rms(processed) if abs(gain - 1.0) > 0.01 else raw_rms
 
                 # C: TTS 串扰抑制 (哥哥 6-29 拍板)
                 # TTS 播放时 VAD 阈值 +50%, 扬声器出声不误触发 mic
@@ -386,7 +485,10 @@ class AudioEngine:
 
                 if rms > effective_threshold:
                     # Voice detected
-                    self._buffer.extend(data)
+                    if not self._speaking:
+                        # 语音活动开始 — 通知监控面板
+                        log_event("voice_activity", "detected")
+                    self._buffer.extend(processed)
                     self._last_audio_ts = now
                     # A: 标记用户最近说话, TTS worker 用来打断旧答
                     self._user_spoke_recently = now
@@ -400,7 +502,7 @@ class AudioEngine:
                     silence_chunks = 0
                 else:
                     if self._speaking:
-                        self._buffer.extend(data)  # keep trailing silence
+                        self._buffer.extend(processed)  # keep trailing silence
                         silence_chunks += 1
                         # Check silence timeout
                         dur = (now - self._last_audio_ts)
@@ -424,6 +526,7 @@ class AudioEngine:
                 self._stream = None
 
     def _flush(self):
+        """Send accumulated audio buffer as binary PCM to bridge (SenseVoice STT)."""
         if len(self._buffer) < int(RATE * MIN_AUDIO_MS / 1000 * 2):
             self._buffer.clear()
             self._speaking = False
@@ -432,38 +535,33 @@ class AudioEngine:
         self._buffer.clear()
         self._speaking = False
 
-        # Check wake word if enabled
-        # (In a real implementation, this would use a lightweight ASR)
-        # For now: send all speech through, wake word handled by LLM
-        # 静音5秒后—听歌/睡觉等不会被误触发
+        # 发送 PCM binary 到桥端 (bridge SenseVoice 做 STT + 纠错 + LLM)
         if self._ws:
             try:
-                # Rust bridge /v1/voice/ws protocol:
-                # 1. 累积 raw PCM BINARY chunks to server (audio_buffer on server side)
-                # 2. 发 {"type": "stop"} 触发 server flush audio_buffer → voice_worker.py (STT)
-                # server 自己也有 VAD (1.5s silence auto-flush) 作为 fallback
-                coro = self._ws.send(audio)
+                coro = self._ws.send(audio)  # bytes → binary WS frame
                 asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
-                # 然后发 stop 触发 server 立刻 flush (不等 1.5s 静默)
-                import time as _time
-                _time.sleep(0.01)  # ensure BINARY 先到
-                stop_coro = self._ws.send(json.dumps({"type": "stop"}))
-                asyncio.run_coroutine_threadsafe(stop_coro, self._aio_loop)
-            except Exception:
-                # 如果没有 aio_loop (还未启动 _run_ws), 简单忽略
-                pass
+                duration = len(audio) / (RATE * 2)
+                log.debug("audio sent: %d bytes (%.1fs)", len(audio), duration)
+            except Exception as exc:
+                log.warning("audio WS send failed: %s", exc)
+        else:
+            log.info("offline: %d bytes audio dropped", len(audio))
 
         self._emit_state("LISTENING")
     def start(self):
         if self._running:
             return
         self._running = True
+        self._capture_hb_count = 0  # STT heartbeat counter
+        self._ws_connected = False
+        log_module_status("stt", "running")
+        log_module_status("tts", "running")
         self._ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         self._ws_thread.start()
         time.sleep(0.5)  # Let WS connect first
         self._capture_thread = threading.Thread(target=self._capture, daemon=True)
         self._capture_thread.start()
-        log.info("audio: engine started")
+        log.info("audio: engine started (bridge-side SenseVoice STT)")
 
     def _run_ws(self):
         self._aio_loop = asyncio.new_event_loop()
@@ -487,12 +585,18 @@ class AudioEngine:
         - 任何一段失败 (pydub 解码 etc) 跳过不中断 worker
         """
         log.info("[TTS worker] started")
+        _tts_hb = 0
         while self._running:
             try:
                 mp3_bytes = await asyncio.wait_for(
                     self._tts_queue.get(), timeout=1.0
                 )
             except asyncio.TimeoutError:
+                # TTS heartbeat (每 ~15次超时 ≈ 15s idle)
+                _tts_hb += 1
+                if _tts_hb >= HEARTBEAT_TTS_INTERVAL:
+                    _tts_hb = 0
+                    log_heartbeat("tts")
                 continue
             except Exception as exc:
                 log.warning("[TTS worker] queue get failed: %s", exc)
@@ -521,6 +625,9 @@ class AudioEngine:
         log.info("[TTS worker] stopped")
 
     def stop(self):
+        if self._running:
+            log_module_status("stt", "stopped")
+            log_module_status("tts", "stopped")
         self._running = False
         if self._stream:
             try:

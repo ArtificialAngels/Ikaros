@@ -121,7 +121,9 @@ impl VoiceRecognizer {
         match stream.get_result() {
             Some(result) if !result.text.trim().is_empty() => {
                 let text = result.text.trim().to_string();
-                info!("STT result ({} chars): {}", text.len(), &text[..text.len().min(80)]);
+                // SAFETY: text[..n] may split a multi-byte char (Chinese), use chars().take()
+                let display_text: String = text.chars().take(80).collect();
+                info!("STT result ({} bytes, ~{} chars): {}", text.len(), display_text.chars().count(), display_text);
                 Some(text)
             }
             _ => None,

@@ -376,5 +376,32 @@ $launchInfo = @{
 } | ConvertTo-Json -Compress
 $launchInfo | Set-Content -Path (Join-Path $LogDir 'llm-engine-last-launch.json') -Encoding UTF8
 
+# ---- 启动模型扫描守护 (首次 + 每小时定时扫描) ----
+# llama-server --models-dir 只在启动时扫描一次.
+# 新放入 data/models/ 的 GGUF 文件需要主动注册到 router, 否则不会出现在 /v1/models 中.
+$ScanScript = Join-Path $HERMES_ROOT 'bin\scan-local-models.py'
+if (Test-Path $ScanScript) {
+    $ScanPython = $PYTHON
+    if (-not $ScanPython -or -not (Test-Path $ScanPython)) {
+        $ScanPython = Join-Path $HERMES_ROOT 'portable-python\python.exe'
+    }
+    if (Test-Path $ScanPython) {
+        $scanPsi = New-Object System.Diagnostics.ProcessStartInfo
+        $scanPsi.FileName = $ScanPython
+        $scanPsi.Arguments = "`"$ScanScript`" --watch"
+        $scanPsi.WorkingDirectory = $HERMES_ROOT
+        $scanPsi.UseShellExecute = $false
+        $scanPsi.CreateNoWindow = $true
+        $scanPsi.RedirectStandardOutput = $false
+        $scanPsi.RedirectStandardError = $false
+        try {
+            [System.Diagnostics.Process]::Start($scanPsi) | Out-Null
+            Write-Host "  [scan] 模型扫描守护已启动 (每 1 小时)"
+        } catch {
+            Write-Host "  [scan] 启动模型扫描守护失败: $_" -ForegroundColor DarkYellow
+        }
+    }
+}
+
 $proc.Dispose()
 exit 0

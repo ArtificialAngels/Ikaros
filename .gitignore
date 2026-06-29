@@ -71,7 +71,10 @@ data/knowledge/                      # knowledge base index
 data/skills/                         # user-installed skills
 data/kanban/                         # kanban boards/tasks/events
 data/crons/                          # cron jobs
-data/logs/                           # runtime logs
+# Runtime logs (2026-06-29: ikaros-pet.lock = singleton mutex file)
+data/logs/
+# NOTE: *.log files are also ignored by the wider rule above (#133)
+# ikaros-pet.lock is a zero-byte-or-PID Windows LockFileEx mutex; never commit it.
 
 # --- Configuration & secrets (never commit) ---
 .env

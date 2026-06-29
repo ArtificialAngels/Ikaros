@@ -21,7 +21,11 @@ import sys
 async def main():
     """Read one JSON line from stdin, stream TTS audio to stdout."""
     try:
-        line = sys.stdin.readline().strip()
+        # IMPORTANT: Read raw bytes from stdin.buffer and decode as UTF-8.
+        # On Chinese Windows, sys.stdin defaults to GBK (cp936), which
+        # corrupts UTF-8 JSON from the Rust bridge (causing "锟斤拷" garbled text).
+        raw_line = sys.stdin.buffer.readline()
+        line = raw_line.decode("utf-8").strip()
         if not line:
             print("no input", file=sys.stderr)
             sys.exit(1)
@@ -33,6 +37,10 @@ async def main():
         if not text:
             print("empty text", file=sys.stderr)
             sys.exit(1)
+
+        # Sanitize: remove lone surrogates that may appear from LLM tokenizer artifacts
+        text = text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+        print(f"TTS text: {text}", file=sys.stderr)
 
         import edge_tts
 

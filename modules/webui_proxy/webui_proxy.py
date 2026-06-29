@@ -525,6 +525,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     # ---------- Routing ----------
     def do_GET(self) -> None:
+        # C1 (哥哥 6-30): /v1/models 反代到桥 :7860, 自动带 X-Ikaros-Client: webui
+        # 这样 webui SPA 跟桌宠都从桥拿 model 清单, 桥是唯一真实来源
+        if self.path == "/v1/models" or self.path.startswith("/v1/models?"):
+            self._proxy_v1_models_to_bridge()
+            return
         if self.path.startswith(USAGE_STATS_PATH):
             self._handle_usage_stats()
         elif self.path.startswith(PLUGINS_PREFIX):
@@ -934,6 +939,42 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, f"{filename} not found")
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+    def _proxy_v1_models_to_bridge(self) -> None:
+        """C1 (哥哥 6-30): 反代 /v1/models 到桥 :7860, 自动注入 X-Ikaros-Client: webui
+
+        webui SPA 通过 :8648 拿模型清单, 实际是 proxy 反代到 :7860, 桥是唯一权威.
+        桥 access control 用 X-Ikaros-Client header 决定 webui slot.
+        """
+        url = self.bridge_url + self.path
+        fwd_headers = {
+            "X-Ikaros-Client": "webui",  # C1
+        }
+        # 保留原始 accept / accept-encoding
+        for h in ("accept", "accept-encoding", "user-agent"):
+            v = self.headers.get(h)
+            if v:
+                fwd_headers[h] = v
+        try:
+            req = urllib.request.Request(url, headers=fwd_headers, method="GET")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read()
+                self.send_response(resp.status)
+                # 透传 Content-Type
+                ct = resp.headers.get("Content-Type", "application/json")
+                self.send_header("Content-Type", ct)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+        except Exception as exc:
+            self.log_error("_proxy_v1_models: bridge unreachable: %s", exc)
+            self.send_response(HTTPStatus.BAD_GATEWAY)
+            self.send_header("Content-Type", "application/json")
+            body = b'{"error":"bridge unreachable for /v1/models"}'
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     def _proxy_to_bridge(self) -> None:
         """Forward the current request to the bridge (no shell, list args).

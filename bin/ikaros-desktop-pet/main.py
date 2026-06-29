@@ -134,6 +134,9 @@ log = logging.getLogger("ikaros")
 # Singleton lock (Windows LockFileEx) — 只允许一个桌宠进程
 from singleton import require_singleton_or_exit, IkarosPetLock
 
+# 结构化监控事件日志 (用于 monitor_agent.py)
+from _monitor_events import log_state, log_status
+
 # 4C: IntentRouter (Layer 1 规则 — task/chat/ambiguous)
 # 必须在 HERE + log 都定义之后, 否则 except 分支用 log 会 NameError
 try:
@@ -663,23 +666,19 @@ class PetWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # ── 📊 监控日志 (PowerShell tail) ──
+        # ── 📊 监控面板 (增强版: STT/回答/状态/自动重启) ──
         def _open_monitor():
             import subprocess
-            log_dir = HERMES_ROOT / "data" / "logs"
-            log_path = str(log_dir / "ikaros-pet.log")
-            # Use pwsh (PowerShell 7) if available, fall back to powershell (5.1)
-            shell = "pwsh"
-            try:
-                subprocess.run([shell, "-Command", "exit"], capture_output=True, timeout=3)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                shell = "powershell"
-            subprocess.Popen(
-                [shell, "-NoExit", "-Command",
-                 f"Get-Content -Wait -Tail 50 -Encoding utf8 '{log_path}'"],
-                creationflags=0x00000010,  # CREATE_NEW_CONSOLE — 打开新窗口
-            )
-        menu.addAction("📊 监控日志", _open_monitor)
+            monitor_py = HERE / "monitor_agent.py"
+            if monitor_py.exists():
+                # DETACHED_PROCESS: 不创建控制台窗口, 关掉 PowerShell 不影响监控
+                subprocess.Popen(
+                    [sys.executable, str(monitor_py)],
+                    cwd=str(HERE),
+                    creationflags=subprocess.DETACHED_PROCESS,
+                    close_fds=True,
+                )
+        menu.addAction("📊 监控面板", _open_monitor)
 
         # ── 🔄 重启 ──
         def _restart_pet():
@@ -706,7 +705,24 @@ class PetWindow(QMainWindow):
         menu.addAction("🔄 重启", _restart_pet)
 
         menu.addAction("💤 隐藏", lambda: self.hide())
-        menu.addAction("❌ 退出", lambda: QApplication.quit())
+        def _quit_with_flag():
+            """退出桌宠并标记主动退出 (监控代理据此不自动重启)."""
+            try:
+                from _monitor_events import log_status
+                log_status("👋 桌宠已主动退出")
+                # 写退出标记
+                import json as _json
+                exit_flag = HERMES_ROOT / "data" / "logs" / "ikaros-pet.exit"
+                exit_flag.parent.mkdir(parents=True, exist_ok=True)
+                exit_flag.write_text(
+                    _json.dumps({"ts": __import__("time").time(), "pid": __import__("os").getpid()},
+                                ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+            QApplication.quit()
+        menu.addAction("❌ 退出", _quit_with_flag)
 
         # Show menu at cursor position
         menu.popup(QCursor.pos())
@@ -1065,7 +1081,10 @@ class PetWindow(QMainWindow):
                         evict_body = json.dumps({"model": old_model}).encode("utf-8")
                         evict_req = urllib.request.Request(
                             evict_url, data=evict_body,
-                            headers={"Content-Type": "application/json"},
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-Ikaros-Client": "pet",  # C1
+                            },
                             method="POST",
                         )
                         with urllib.request.urlopen(evict_req, timeout=15.0) as evict_resp:
@@ -1087,7 +1106,10 @@ class PetWindow(QMainWindow):
                         body = json.dumps({"model": model_id}).encode("utf-8")
                         req = urllib.request.Request(
                             url, data=body,
-                            headers={"Content-Type": "application/json"},
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-Ikaros-Client": "pet",  # C1
+                            },
                             method="POST",
                         )
                         with urllib.request.urlopen(req, timeout=30.0) as resp:
@@ -1877,6 +1899,7 @@ class IkarosApp(QObject):
 
     def _on_state(self, state: str):
         log.info("state → %s", state)
+        log_state(state.lower())
         self.window.set_state(state)
         self.window.show_neuro_state(state.lower())
 
@@ -1899,6 +1922,7 @@ class IkarosApp(QObject):
         """Neuro AI 状态变化 → 桌宠表情 + 状态指示器."""
         log.debug("neuro state → %s (patience %.1fs, t=%.1f)",
                   state, self.neuro.patience, self.neuro.time_since_last)
+        log_state(state)
         # 映射到现有 character state
         # idle / listening / thinking / speaking / bored
         self.window.set_state(state)

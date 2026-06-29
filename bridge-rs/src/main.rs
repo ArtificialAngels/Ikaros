@@ -21,6 +21,7 @@ pub mod cogno_layer;
 pub mod sessions;
 pub mod soul_loader;
 pub mod supervisor;
+pub mod access;
 
 use telemetry::{SignalBus, RequestLog};
 
@@ -636,29 +637,28 @@ impl WorkerPool {
 
     /// Find which worker has a given model
     async fn find_worker_for_model(&self, model: &str) -> Option<usize> {
-        // Check model map first
-        {
-            let map = self.model_map.read().await;
-            if let Some(&idx) = map.get(model) {
+        // C1 (哥哥 6-30): removed fallback to first alive worker.
+        // 旧行为: 找不到 model 时 fallback 到任意 alive worker, 导致本地模型被
+        //         错误路由到云 (返回 400 unsupported model).
+        // 新行为: 没匹配返 None, 调用方决定怎么处理 (报 404 或 access control 拒绝).
+        let map = self.model_map.read().await;
+        if let Some(&idx) = map.get(model) {
+            let workers = self.workers.read().await;
+            if idx < workers.len() && workers[idx].alive {
+                return Some(idx);
+            }
+        }
+        // Try partial match (model name without .gguf suffix)
+        let model_base = model.trim_end_matches(".gguf");
+        for (name, &idx) in map.iter() {
+            if name.contains(model_base) || model_base.contains(name.as_str()) {
                 let workers = self.workers.read().await;
                 if idx < workers.len() && workers[idx].alive {
                     return Some(idx);
                 }
             }
-            // Try partial match (model name without .gguf suffix)
-            let model_base = model.trim_end_matches(".gguf");
-            for (name, &idx) in map.iter() {
-                if name.contains(model_base) || model_base.contains(name.as_str()) {
-                    let workers = self.workers.read().await;
-                    if idx < workers.len() && workers[idx].alive {
-                        return Some(idx);
-                    }
-                }
-            }
         }
-        // Fallback: first alive worker
-        let workers = self.workers.read().await;
-        workers.iter().position(|w| w.alive)
+        None
     }
 
     /// Get the first alive worker (for non-model-specific requests)
@@ -888,6 +888,8 @@ struct AppState {
     sessions: Arc<SessionStore>,
     /// Per-worker supervisor state (哥哥 6-29 axiom: suspend + crash_log)
     supervisor_state: Arc<supervisor::SupervisorState>,
+    /// Per-client model access control (哥哥 6-30 C1 拍板)
+    access_control: Arc<access::AccessControl>,
 }
 
 impl AppState {
@@ -938,6 +940,13 @@ impl AppState {
             voice_chat_history: RwLock::new(Vec::new()),
             sessions: Arc::new(SessionStore::new(&project_root())),
             supervisor_state,
+            // Per-client model access control (C1)
+            access_control: {
+                let persist = project_root()
+                    .join("data")
+                    .join("access-control.json");
+                Arc::new(access::AccessControl::new(persist))
+            },
         }
     }
 
@@ -1058,6 +1067,106 @@ async fn _chat_completions_impl(
                 }));
                 info!(req_id = req_id, "injected axiom + cogno system prompt ({} chars)", system_prompt.len());
             }
+        }
+    }
+
+    // C1: Per-client access control (哥哥 6-30 拍板)
+    // - X-Ikaros-Client header 决定 client (webui / pet / cron / mcp)
+    // - per-client slot lock, evict-then-load, 切云先 evict 本地
+    let client_id = access::ClientId::from_header(
+        headers.get("x-ikaros-client").and_then(|v| v.to_str().ok())
+    );
+    let worker_for_model = state.worker_pool.find_worker_for_model(&model).await;
+    let (worker_url_str, is_cloud) = match worker_for_model {
+        Some(idx) => {
+            let workers = state.worker_pool.workers.read().await;
+            let w = &workers[idx];
+            let cloud = matches!(w.upstream_type, UpstreamType::Cloud { .. });
+            (w.url.clone(), cloud)
+        }
+        None => {
+            // model 不在 worker_map 里 (典型: 本地模型还没 loaded 或 model 名错)
+            // fallback: 找任何 alive 的 local worker URL (用于 evict/load 操作)
+            let workers = state.worker_pool.workers.read().await;
+            let local_url = workers.iter()
+                .find(|w| matches!(w.upstream_type, UpstreamType::Local) && w.alive)
+                .map(|w| w.url.clone())
+                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
+            (local_url, false)
+        }
+    };
+    let access_decision = state.access_control.decide(
+        client_id.clone(), &model, &worker_url_str, is_cloud,
+    ).await;
+    info!(
+        req_id = req_id, client = %client_id.as_str(), model = %model,
+        is_cloud = is_cloud, decision = ?access_decision,
+        "access-control decision"
+    );
+    match access_decision {
+        access::AuthzDecision::Deny { reason } => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": reason,
+                    "client": client_id.as_str(),
+                    "model": model,
+                })),
+            ).into_response();
+        }
+        access::AuthzDecision::SwapLocal { client, old_model, new_model } => {
+            // 1. evict 旧模型 (如果非空)
+            if !old_model.is_empty() && old_model != new_model {
+                info!(client = %client.as_str(), old = %old_model, "access: evict old local");
+                let evict_url = format!("{}/v1/models/evict", worker_url_str);
+                let _ = state.http_client
+                    .post(&evict_url)
+                    .json(&serde_json::json!({"model": old_model}))
+                    .send()
+                    .await;
+            }
+            // 2. load 新模型 (调 llama-server router mode)
+            if old_model != new_model {
+                info!(client = %client.as_str(), new = %new_model, "access: load new local");
+                let load_url = format!("{}/v1/models/load", worker_url_str);
+                let _ = state.http_client
+                    .post(&load_url)
+                    .json(&serde_json::json!({"model": new_model}))
+                    .timeout(Duration::from_secs(60))
+                    .send()
+                    .await;
+            }
+            // 3. 更新 slot
+            state.access_control.set_slot(client, new_model.clone()).await;
+        }
+        access::AuthzDecision::EvictAndRouteCloud { client, .. } => {
+            // 先 evict 该 client 本地 slot (如果占着)
+            {
+                let slot = state.access_control.client_local_slot.read().await;
+                if let Some(old) = slot.get(&client).cloned() {
+                    drop(slot);
+                    info!(client = %client.as_str(), old = %old, "access: evict local before cloud");
+                    // find any local worker url
+                    let local_url = {
+                        let workers = state.worker_pool.workers.read().await;
+                        workers.iter()
+                            .find(|w| matches!(w.upstream_type, UpstreamType::Local) && w.alive)
+                            .map(|w| w.url.clone())
+                    };
+                    if let Some(url) = local_url {
+                        let evict_url = format!("{}/v1/models/evict", url);
+                        let _ = state.http_client
+                            .post(&evict_url)
+                            .json(&serde_json::json!({"model": old}))
+                            .send()
+                            .await;
+                    }
+                }
+            }
+            state.access_control.clear_slot(client).await;
+        }
+        access::AuthzDecision::Serve { .. } => {
+            // 直接 serve, 不需切换
         }
     }
 
@@ -1342,7 +1451,7 @@ async fn delete_session(
 // Models proxy (pass-through)
 // ---------------------------------------------------------------------------
 
-/// GET /v1/models — aggregate from all workers
+/// GET /v1/models — aggregate from all workers (with C1 access snapshot)
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
     let workers = state.worker_pool.workers.read().await;
     let mut all_models = Vec::new();
@@ -1364,9 +1473,13 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 
+    // C1: include access-control snapshot (哥哥 6-30)
+    let access_snapshot = state.access_control.snapshot().await;
+
     Json(serde_json::json!({
         "object": "list",
         "data": all_models,
+        "access": access_snapshot,
     })).into_response()
 }
 
@@ -1420,8 +1533,8 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
         }
     };
 
-    // Channel: main loop → spawned task (audio buffer to process)
-    let (job_tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<(Vec<i16>, u64)>();
+    // Channel: main loop → spawned task (audio buffer to process, with optional pre-transcribed text)
+    let (job_tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<(Vec<i16>, u64, Option<String>)>();
     // Channel: spawned task → main loop (WS messages to send back)
     let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
 
@@ -1429,8 +1542,8 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
     let proc_state = state.clone();
     let proc_rec = recognizer.clone();
     tokio::spawn(async move {
-        while let Some((audio, rid)) = job_rx.recv().await {
-            process_utterance_channel(resp_tx.clone(), proc_rec.clone(), &proc_state, audio, rid).await;
+        while let Some((audio, rid, pre_text)) = job_rx.recv().await {
+            process_utterance_channel(resp_tx.clone(), proc_rec.clone(), &proc_state, audio, rid, pre_text).await;
         }
     });
 
@@ -1471,7 +1584,7 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                         if !audio_buffer.is_empty() {
                                             let buf = std::mem::take(&mut audio_buffer);
                                             request_id += 1;
-                                            let _ = job_tx.send((buf, request_id));
+                                            let _ = job_tx.send((buf, request_id, None));
                                         }
                                     }
                                     "ping" => {
@@ -1486,6 +1599,18 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                             save_last_voice_model(m);
                                             let resp = serde_json::json!({"type": "status", "message": "model updated"});
                                             let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                        }
+                                    }
+                                    "transcript" => {
+                                        // Client-side STT done locally — skip bridge STT, go direct to LLM → TTS
+                                        if let Some(text) = parsed.get("text").and_then(|v| v.as_str()) {
+                                            let t = text.trim().to_string();
+                                            if !t.is_empty() {
+                                                request_id += 1;
+                                                let _ = job_tx.send((Vec::new(), request_id, Some(t)));
+                                                let resp = serde_json::json!({"type": "status", "message": "processing"});
+                                                let _ = socket.send(Message::Text(resp.to_string().into())).await;
+                                            }
                                         }
                                     }
                                     _ => {
@@ -1549,13 +1674,13 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                         let buf = std::mem::take(&mut audio_buffer);
                         is_audio_session = false;
                         request_id += 1;
-                        let _ = job_tx.send((buf, request_id));
+                        let _ = job_tx.send((buf, request_id, None));
                     } else if audio_buffer.len() > 480_000 {
                         info!("voice buffer: {} samples, emergency flush", audio_buffer.len());
                         let buf = std::mem::take(&mut audio_buffer);
                         is_audio_session = false;
                         request_id += 1;
-                        let _ = job_tx.send((buf, request_id));
+                        let _ = job_tx.send((buf, request_id, None));
                     }
                 }
             }
@@ -1565,36 +1690,108 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
     info!("voice WebSocket session ended");
 }
 
-/// Process utterance from mpsc channel: STT → LLM → TTS, send responses via channel
+/// Call correction LLM to fix STT text (homophones, punctuation, fragment merging).
+/// Uses existing llama-server upstream (port 8080) with a correction-focused prompt.
+/// Returns corrected text, or original text if correction service unavailable (graceful degradation).
+async fn voice_text_correct(state: &AppState, raw_text: &str) -> String {
+    // Find first alive worker for correction request
+    let workers = state.worker_pool.workers.read().await;
+    let Some(worker) = workers.iter().find(|w| w.alive && !w.is_cloud()) else {
+        // No local worker available — skip correction gracefully
+        return raw_text.to_string();
+    };
+    let url = format!("{}/v1/chat/completions", worker.url);
+    let model = worker.models.first().cloned().unwrap_or_default();
+    drop(workers);  // release lock before async HTTP call
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是语音转写纠错助手。修正同音字/近音字错误，添加合适的中文标点，将碎片短语合并为通顺句子。保持原意不变，只输出修正后的文本，不要解释。"
+            },
+            {"role": "user", "content": raw_text}
+        ],
+        "stream": false,
+        "max_tokens": 256,
+        "temperature": 0.1
+    });
+
+    match state.http_client.post(&url)
+        .json(&body)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(json) => {
+                    let corrected = json["choices"][0]["message"]["content"]
+                        .as_str()
+                        .unwrap_or(raw_text)
+                        .trim()
+                        .to_string();
+                    if corrected.is_empty() || corrected == raw_text {
+                        raw_text.to_string()
+                    } else {
+                        info!("text corrected: '{}' → '{}'", raw_text, corrected);
+                        corrected
+                    }
+                }
+                Err(_) => raw_text.to_string(),
+            }
+        }
+        Err(e) => {
+            warn!("correction LLM unavailable: {}, using raw STT text", e);
+            raw_text.to_string()
+        }
+        _ => raw_text.to_string(),
+    }
+}
+
+/// Process utterance from mpsc channel: (optional STT) → text correction → LLM → TTS
+/// If `pre_text` is Some, skip the bridge's own STT and use the provided transcription directly.
 async fn process_utterance_channel(
     resp_tx: tokio::sync::mpsc::UnboundedSender<Message>,
     recognizer: Arc<VoiceRecognizer>,
     state: &AppState,
     audio: Vec<i16>,
     rid: u64,
+    pre_text: Option<String>,
 ) {
-    // 1. STT (in-process, blocking — run on threadpool)
-    let _ = resp_tx.send(Message::Text(
-        serde_json::json!({"type": "status", "request_id": rid, "message": "识别中…"}).to_string().into()
-    ));
+    // 1. Transcribe: use pre_text if provided, otherwise run local STT
+    let text = if let Some(t) = pre_text {
+        // Client-side STT — skip bridge's sherpa-onnx entirely
+        t
+    } else {
+        // Bridge-side STT (sherpa-onnx SenseVoice, for non-transcript clients)
+        let _ = resp_tx.send(Message::Text(
+            serde_json::json!({"type": "status", "request_id": rid, "message": "识别中…"}).to_string().into()
+        ));
 
-    let text = tokio::task::spawn_blocking(move || recognizer.transcribe(&audio))
-        .await
-        .unwrap_or(None);
+        let text = tokio::task::spawn_blocking(move || recognizer.transcribe(&audio))
+            .await
+            .unwrap_or(None);
 
-    let text = match text {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            let _ = resp_tx.send(Message::Text(
-                serde_json::json!({"type": "status", "request_id": rid, "message": "没听清，请再说一遍"}).to_string().into()
-            ));
-            return;
+        match text {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                let _ = resp_tx.send(Message::Text(
+                    serde_json::json!({"type": "status", "request_id": rid, "message": "没听清，请再说一遍"}).to_string().into()
+                ));
+                return;
+            }
         }
     };
 
     info!(request_id = rid, text = %text, "STT result");
+
+    // 1.5 Text correction (homophones, punctuation, fragment merging)
+    let corrected = voice_text_correct(state, &text).await;
+
     let _ = resp_tx.send(Message::Text(
-        serde_json::json!({"type": "transcription", "request_id": rid, "text": text}).to_string().into()
+        serde_json::json!({"type": "transcription", "request_id": rid, "text": &corrected}).to_string().into()
     ));
 
     // 2. LLM (reqwest to llama-server / cloud)
@@ -1602,7 +1799,7 @@ async fn process_utterance_channel(
         serde_json::json!({"type": "thinking", "request_id": rid}).to_string().into()
     ));
 
-    let reply = voice_llm_chat(state, &text).await;
+    let (reply, model_used) = voice_llm_chat(state, &corrected).await;
     if reply.is_empty() {
         let _ = resp_tx.send(Message::Text(
             serde_json::json!({"type": "error", "request_id": rid, "message": "思考失败了"}).to_string().into()
@@ -1610,7 +1807,7 @@ async fn process_utterance_channel(
         return;
     }
 
-    info!(request_id = rid, stt = %text, llm_reply = %reply, "voice utterance: STT→LLM");
+    info!(request_id = rid, stt_raw = %text, stt_corrected = %corrected, model = %model_used, llm_reply = %reply, "voice utterance: STT→correct→LLM");
 
     // 3. TTS (edge-tts subprocess)
     let _ = resp_tx.send(Message::Text(
@@ -1631,6 +1828,7 @@ async fn process_utterance_channel(
                     "request_id": rid,
                     "text": reply,
                     "chunks": chunk_count,
+                    "model": model_used,
                 }).to_string().into()
             ));
         }
@@ -1739,7 +1937,7 @@ const VOICE_MAX_HISTORY_TURNS: usize = 10;
 ///   - Cloud worker auth: adds Bearer/x-api-key header
 ///   - Conversation history: maintains last 10 turns for contextual replies
 ///   - Model preference: skips cloud models, prefers small local models (<4B)
-async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
+async fn voice_llm_chat(state: &AppState, user_text: &str) -> (String, String) {
     // --- Model selection: prefer last-used, then smallest local, skip cloud ---
     let model = {
         let workers = state.worker_pool.workers.read().await;
@@ -1751,7 +1949,7 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
 
         if candidates.is_empty() {
             warn!("voice_llm: no alive worker with models");
-            return String::new();
+            return (String::new(), String::new());
         }
 
         // Check last-used model first
@@ -1809,7 +2007,7 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
             Some(w) => w,
             None => match workers.iter().find(|w| w.alive) {
                 Some(w) => w,
-                None => { warn!("voice_llm: no alive worker"); return String::new(); }
+                None => { warn!("voice_llm: no alive worker"); return (String::new(), String::new()); }
             },
         };
 
@@ -1946,7 +2144,7 @@ async fn voice_llm_chat(state: &AppState, user_text: &str) -> String {
         info!("voice history: {} messages ({} turns)", history.len(), history.len() / 2);
     }
 
-    reply
+    (reply, model)
 }
 
 /// Remove lone surrogates and other chars that break Python UTF-8 encoding.
@@ -3310,9 +3508,12 @@ async fn main() {
 
     let state = Arc::new(AppState::new());
 
+    // Load per-client access control state from disk (C1)
+    state.access_control.load().await;
+    info!("access-control loaded");
+
     // Start background health monitor
     state.start_health_monitor();
-    // Start per-worker supervisor (哥哥 6-29 axiom: suspend + crash_log)
     state.start_supervisor();
 
     // Initial health check (wait a moment for first refresh)
@@ -3320,6 +3521,21 @@ async fn main() {
         let pool = state.worker_pool.clone();
         let client = state.http_client.clone();
         pool.refresh(&client).await;
+        // Sync loaded locals to access_control (so list_models snapshot is accurate)
+        let mut loaded = Vec::new();
+        for w in pool.workers.read().await.iter() {
+            if matches!(w.upstream_type, UpstreamType::Local) && w.alive {
+                loaded.extend(w.models.iter().cloned());
+            }
+        }
+        state.access_control.sync_loaded_locals(loaded).await;
+    }
+
+    // C1: warmup — if last_successful_local set, trigger load (fire-and-forget)
+    if let Some(model) = state.access_control.startup_warmup_hint().await {
+        info!("access-control: warmup hint = {}", model);
+        // 实际的 model load 由 /v1/models/load 路由触发, 这里只 hint
+        // (避免在启动时阻塞, webui/pet 第一次请求时会自动 swap)
     }
 
     // Pre-warm cogno layer + soul loader (blocking Lazy init during startup,

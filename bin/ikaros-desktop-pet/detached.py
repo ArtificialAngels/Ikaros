@@ -22,6 +22,11 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 
+# Portable Python 不自动加 cwd 到 sys.path, 手动加
+sys.path.insert(0, str(Path(__file__).parent))
+
+from singleton import IkarosPetLock
+
 HERE = Path(__file__).parent
 HERMES_ROOT = HERE.parent.parent
 PY = HERMES_ROOT / "portable-python" / "python.exe"
@@ -39,6 +44,16 @@ def main():
     flog = open(LOG, "a", encoding="utf-8")
     flog.write(f"\n\n=== launch {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
     flog.flush()
+
+    # ── Singleton check: acquire lock before spawning ──
+    # This prevents detached.py from spawning another pet if one is already running.
+    # The child process (main.py) also acquires the same lock as a second barrier.
+    lock = IkarosPetLock()
+    if not lock.acquire():
+        flog.write("[FAIL] ANOTHER INSTANCE RUNNING — refusing to spawn\n")
+        flog.flush()
+        flog.close()
+        sys.exit(2)
 
     # PYTHONUNBUFFERED=1: stdout flushes immediately so the parent log
     # shows progress without waiting for buffer fill. Without this, any
@@ -72,6 +87,11 @@ def main():
 
     flog.write(f"spawned PID {proc.pid}\n")
     flog.flush()
+
+    # Release lock — child process will acquire its own when main.py starts.
+    # The lock is released here so that if detached.py exits, the lock file
+    # doesn't stay held (which would prevent later restarts).
+    lock.release()
 
     # Wait briefly to confirm startup
     time.sleep(2)

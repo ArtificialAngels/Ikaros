@@ -32,6 +32,15 @@ echo [ikaros] Usage: bin\hermes-pet.bat [start^|stop^|status^|--autostart]
 exit /b 1
 
 :start
+REM ── Singleton check: 拒绝重复启动 ──
+echo [ikaros] Checking for existing instance...
+wmic process where "name='python.exe' and commandline like '%%ikaros-desktop-pet%%'" get processid /format:value 2>nul | findstr "ProcessId" >nul
+if not errorlevel 1 (
+    echo [ikaros] ANOTHER PET RUNNING. Refusing to start duplicate.
+    echo   Please run bin\hermes-pet.bat stop first.
+    exit /b 2
+)
+echo [ikaros] No existing instance found — proceeding.
 echo.
 echo ============================================================
 echo   🪶 Ikaros Desktop Pet — Starting
