@@ -298,7 +298,7 @@
 - **13 个文件 + 5 个目录 mv** (路径改)
 - **8 阶段**: axiom → content → path mv → path refs → gitignore → gitnexus → commit/push → verify
 - **30 秒回滚**: git checkout HEAD -- . + git clean -fd
-- **中文名 '伊卡洛斯' + 代号 'ɑ' 不变**
+- **中文名 '伊卡洛斯' + 代号 'Alpha' 不变**
 - **3 open Q**: Rust route / schema filename / AGENTS.md + HANDOVER + .gitignore 顺手改
 - **等哥哥拍板执行** (snapshot / read-only / blast radius ✓ / 等授权 ⏸ / verify ⏸)
 
@@ -310,7 +310,7 @@
 - **270 处单词 icarus → ikaros** (docstring / log / path / Cargo)
 - **2 commits pushed**: 861c56f + d609a02
 - **GitNexus 重建**: 5074 nodes / 14071 edges (+2)
-- **保留**: 中文 '伊卡洛斯' + 代号 'ɑ' + hermes-agent 上游包名
+- **保留**: 中文 '伊卡洛斯' + 代号 'Alpha' + hermes-agent 上游包名
 - **远端同步**: origin/main = local HEAD ✅
 
 
@@ -358,3 +358,38 @@
 - **收益**: STT 延迟 1.5s → 200ms, 边说边转, 中文识别率 ↑, 内存 ↓
 - **5 个 phase**: 依赖下载 → cargo add → voice_recognizer.rs → handle_voice_socket 重构 → verify
 - **Quest 代执行**: Ikaros 按 STOP rule v2 不 restart 核心
+
+
+## 2026-06-29 — 🎤 Path A 执行 (哥哥拍板)
+
+- **decision**: Path A — bridge-rs 自动注入 axiom + cogno 5D
+- **handoff**: handshake.2026-06-29.pet-identity-fix-path-A-execute.json (10 步 plan)
+- **scope**: bridge-rs/src/main.rs + cogno_layer.rs (NEW) + soul_loader.rs (NEW)
+- **Quest 代执行**: Ikaros 不 restart 核心, 不改 main.rs
+- **预期**: 桌宠 chat reply 含 '伊卡洛斯' / '代号' / '哥哥' 关键词
+
+
+## 2026-06-29 — 🎤 Chat History C (哥哥拍板一口气)
+
+- **decision**: C — A (桌宠 in-memory deque) + B (bridge persistent sessions)
+- **handoff**: handshake.2026-06-29.chat-history-hybrid-execute.json
+- **part_A**: Ikaros 改 main.py:ChatDockWindow + bridge_chat signature
+- **part_B**: Quest 改 bridge-rs + sessions.rs (SQLite/JSON 持久化)
+- **预期**: 桌宠不傻不重复 + 跨重启保留 history + 跨设备同步 (future)
+
+
+## 2026-06-29 — 🎤 Chat History C Part B handoff
+
+- **part_A**: ✅ Done — Ikaros commit 1a5f9c7 (main.py +137/-24, 桌宠 in-memory deque)
+- **part_B**: ⏳ Quest 代执行 — bridge-rs/src/sessions.rs + 5 routes
+- **handoff**: handshake.2026-06-29.chat-history-B-bridge-sessions.json
+- **目标**: 跨桌宠重启保持 history, 跨设备同步 (future)
+
+
+## 2026-06-29 — 🔄 重启 hermes pet (哥哥指令)
+
+- **状态**: bridge :7860 alive, 桌宠 PID 33184 alive (主) + 27296 残留 (副)
+- **handoff**: handshake.2026-06-29.restart-hermes-pet.json
+- **方案**: A (soft restart) — bin/hermes-pet.bat stop + start
+- **Quest 代执行**: Ikaros 不 kill 进程
+- **预期**: 桌宠干净重启, history 保留 (in-memory deque), bridge 不受影响

@@ -131,6 +131,9 @@ sys.path.insert(0, str(HERE))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [ikaros] %(message)s")
 log = logging.getLogger("ikaros")
 
+# Singleton lock (Windows LockFileEx) — 只允许一个桌宠进程
+from singleton import require_singleton_or_exit, IkarosPetLock
+
 # 4C: IntentRouter (Layer 1 规则 — task/chat/ambiguous)
 # 必须在 HERE + log 都定义之后, 否则 except 分支用 log 会 NameError
 try:
@@ -336,6 +339,7 @@ class PetWindow(QMainWindow):
         self._cloud_model_set: set[str] = set()  # cloud model IDs for tag display
         self._models_fetching = False
         self._pending_llm_menu: QMenu | None = None  # context menu awaiting model list
+        self._live2d_model_names_cache: list[str] | None = None  # Live2D model name cache
 
         # Window setup
         self.setWindowTitle("🪶")
@@ -677,6 +681,22 @@ class PetWindow(QMainWindow):
             )
         menu.addAction("📊 监控日志", _open_monitor)
 
+        # ── 🔄 重启 ──
+        def _restart_pet():
+            """Restart the desktop pet (spawn new process, then quit)."""
+            import subprocess
+            # Launch new instance (detached)
+            subprocess.Popen(
+                [sys.executable, str(HERE / "main.py")],
+                cwd=str(HERE),
+                creationflags=0x00000008,  # DETACHED_PROCESS
+                close_fds=True,
+            )
+            # Quit current instance (releases singleton lock)
+            QApplication.quit()
+
+        menu.addAction("🔄 重启", _restart_pet)
+
         menu.addAction("💤 隐藏", lambda: self.hide())
         menu.addAction("❌ 退出", lambda: QApplication.quit())
 
@@ -692,6 +712,8 @@ class PetWindow(QMainWindow):
             names = []
         if not names:
             return
+        # Cache names for _get_model_name_by_index
+        self._live2d_model_names_cache = names
         switch_menu.addSeparator()
         for idx, name in enumerate(names):
             action = switch_menu.addAction(f"  {idx + 1}. {name}")
@@ -701,14 +723,18 @@ class PetWindow(QMainWindow):
 
     def _ctx_next_model(self):
         if hasattr(self, '_live2d_view') and self._live2d_view:
+            self.notify_live2d_tip("切换下一个形象...")
             self._live2d_view.page().runJavaScript("window.nextModel && window.nextModel()")
 
     def _ctx_prev_model(self):
         if hasattr(self, '_live2d_view') and self._live2d_view:
+            self.notify_live2d_tip("切换上一个形象...")
             self._live2d_view.page().runJavaScript("window.prevModel && window.prevModel()")
 
     def _ctx_switch_to(self, idx: int):
         if hasattr(self, '_live2d_view') and self._live2d_view:
+            model_name = self._get_model_name_by_index(idx)
+            self.notify_live2d_tip(f"切换到 {model_name}")
             self._live2d_view.page().runJavaScript(
                 f"window.switchToModel && window.switchToModel({idx})"
             )
@@ -720,7 +746,7 @@ class PetWindow(QMainWindow):
                 "window.getModelCount ? window.getModelCount() : 0",
                 lambda count: self._live2d_view.page().runJavaScript(
                     f"window.switchToModel && window.switchToModel({random.randint(0, max(0, int(count) - 1))})"
-                ) if count else None
+                ) if count and int(count) > 0 else None
             )
 
     def _ctx_set_scale(self, multiplier: float):
@@ -767,6 +793,13 @@ class PetWindow(QMainWindow):
                 log.info("capture saved: %s", path)
             except Exception as e:
                 log.warning("capture save failed: %s", e)
+
+    def _get_model_name_by_index(self, idx: int) -> str:
+        """Get Live2D model name by index (from cache)."""
+        names = getattr(self, '_live2d_model_names_cache', None)
+        if names and 0 <= idx < len(names):
+            return names[idx]
+        return f"#{idx}"
 
     def _ctx_toggle_hitframes(self):
         """Toggle hit area frame display (checkable menu item)."""
@@ -1088,7 +1121,7 @@ class PetTray:
         p.drawEllipse(8, 8, 48, 48)
         p.setPen(Qt.GlobalColor.white)
         p.setFont(self._font())
-        p.drawText(icon.rect(), Qt.AlignmentFlag.AlignCenter, "ɑ")
+        p.drawText(icon.rect(), Qt.AlignmentFlag.AlignCenter, "Alpha")
         p.end()
 
         self.tray = QSystemTrayIcon(QIcon(icon), parent=window)
@@ -1338,10 +1371,12 @@ def _quit(self):
 
 LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
 LLAMA_CHAT_TIMEOUT_S = 30.0
+SESSION_API_BASE = "http://127.0.0.1:7860/v1/sessions"
 
 
 async def bridge_chat(text: str, *, profile: str = "default",
-                   history: list = None, model: str = "Phi-4-Mini-3.8B-Q4_K_L") -> str:
+                   history: list = None, model: str = "Phi-4-Mini-3.8B-Q4_K_L",
+                   session_id: str = "") -> str:
     """4C: 调 Hermes bridge /v1/chat/completions — cloud auto-flip 已实现.
 
     Args:
@@ -1350,6 +1385,7 @@ async def bridge_chat(text: str, *, profile: str = "default",
         history: A — 之前对话列表 [{role:user|assistant, content:str}, ...]
                  (默认 None — 单条消息)
         model: 默认 Phi-4-Mini-3.8B-Q4_K_L (Quest Path A 改默认值)
+        session_id: Part B — bridge session ID (传 X-Session-Id header)
 
     Returns:
         assistant 回复文本 (string)
@@ -1366,21 +1402,27 @@ async def bridge_chat(text: str, *, profile: str = "default",
             "messages": msgs,
             "max_tokens": 200,
         }).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if session_id:
+            headers["X-Session-Id"] = session_id
         req = urllib.request.Request(
             LLAMA_CHAT_URL,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=LLAMA_CHAT_TIMEOUT_S) as r:
             data = json.loads(r.read())
     else:
+        extra_headers = {}
+        if session_id:
+            extra_headers["X-Session-Id"] = session_id
         async with httpx.AsyncClient(timeout=LLAMA_CHAT_TIMEOUT_S) as c:
             r = await c.post(LLAMA_CHAT_URL, json={
                 "model": model,
                 "messages": msgs,
                 "max_tokens": 200,
-            })
+            }, headers=extra_headers)
             data = r.json()
     return data["choices"][0]["message"]["content"]
 
@@ -1475,6 +1517,7 @@ class ChatDockWindow(QMainWindow):
         # In-memory chat history (A: in-memory persistence within pet lifetime)
         self._chat_history: deque = deque(maxlen=40)  # 最近 20 轮 (40 条)
         self._session_id: str = f"pet_{int(time.time())}_{id(self)}"
+        self._bridge_session_id: str = ""  # Part B: bridge session ID (created on first send)
 
         self._append_history("[伊卡洛斯] 哥哥好, 我在听~")
 
@@ -1525,6 +1568,7 @@ class ChatDockWindow(QMainWindow):
         但我们没显式主 loop — 改用 threading 直接 run.
 
         A: history 参数携带完整对话上下文, 让 LLM 看到之前的对话.
+        B: 同时持久化 user msg + assistant reply 到 bridge session.
         """
         # Get current model from PetWindow (shared state)
         model = self._get_current_model()
@@ -1535,11 +1579,21 @@ class ChatDockWindow(QMainWindow):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    # A: pass history (excluding the just-appended user msg, since
-                    # bridge_chat also appends it; or include it — either works)
+                    # Part B: ensure bridge session exists
+                    sid = self._bridge_session_id
+                    if not sid:
+                        sid = self._ensure_session()
+                    # Part B: persist user message to bridge session
+                    if sid:
+                        self._post_session_msg(sid, "user", text)
+
                     reply = loop.run_until_complete(
-                        bridge_chat(text, history=history, model=model)
+                        bridge_chat(text, history=history, model=model, session_id=sid)
                     )
+
+                    # Part B: persist assistant reply
+                    if sid and reply and not reply.startswith("⚠️"):
+                        self._post_session_msg(sid, "assistant", reply)
                 finally:
                     loop.close()
                 # 回到 Qt 主线程更新 UI
@@ -1549,6 +1603,50 @@ class ChatDockWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self._on_reply(f"⚠️ {exc}", intent))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ─── Session persistence helpers (Part B) ───
+
+    def _ensure_session(self) -> str:
+        """Create a session on the bridge if not already created.
+        Returns the session_id (empty string on failure)."""
+        if self._bridge_session_id:
+            return self._bridge_session_id
+        import urllib.request
+        body = json.dumps({"source": "pet", "model": self._get_current_model()}).encode("utf-8")
+        req = urllib.request.Request(
+            SESSION_API_BASE,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as r:
+                data = json.loads(r.read())
+                sid = data.get("session_id", "")
+                if sid:
+                    self._bridge_session_id = sid
+                    log.info("bridge session created: %s", sid)
+                return sid
+        except Exception as exc:
+            log.warning("session create failed: %s", exc)
+            return ""
+
+    def _post_session_msg(self, session_id: str, role: str, content: str):
+        """POST a message to the bridge session."""
+        import urllib.request
+        url = f"{SESSION_API_BASE}/{session_id}/messages"
+        body = json.dumps({"role": role, "content": content}).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as r:
+                resp = json.loads(r.read())
+                log.debug("session msg appended: %s/%s (#%d)", session_id, role, resp.get("total_messages", 0))
+        except Exception as exc:
+            log.warning("session msg append failed (%s/%s): %s", session_id, role, exc)
 
     def _get_current_model(self) -> str:
         """Get the currently selected LLM model from PetWindow."""
@@ -1845,6 +1943,9 @@ def main():
         if 'proxy' in k.lower():
             os.environ.pop(k, None)
 
+    # ── Singleton check: 只允许一个桌宠进程 ──
+    pet_lock = require_singleton_or_exit()
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
@@ -1855,6 +1956,7 @@ def main():
     app._icarus_pet = pet
     rc = pet.run()
     pet.cleanup()
+    pet_lock.release()
     sys.exit(rc)
 
 
