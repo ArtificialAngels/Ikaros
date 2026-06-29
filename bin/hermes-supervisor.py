@@ -745,13 +745,12 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     print(f"  {C.GRN}STARTED{C.RST}: {len(started)} module(s)")
     print(f"{C.BLD}============================================================{C.RST}")
 
-    # Detached-launch watchdog then return — supervisor no longer hangs
+    # 哥哥 2026-06-29 暂时禁用 watchdog — 影响开发
+    # 原因: 反复重启干扰调试, 服务死了需要手动 restart
+    # TODO: 重新启用时, 把这段换成 cmd_watchdog_start() 即可
     print()
-    print(f"  {C.CYN}>{C.RST} starting watchdog...")
-    rc = cmd_watchdog_start(modules)
-    if rc != 0:
-        print(f"  {C.YEL}[WARN]{C.RST} watchdog failed to start (services still up, "
-              f"will not auto-restart on crash)")
+    print(f"  {C.YEL}[SKIP]{C.RST} watchdog disabled by gēge (2026-06-29, dev mode)")
+    print(f"         to re-enable: uncomment cmd_watchdog_start() in cmd_start()")
     return 0
 
 
