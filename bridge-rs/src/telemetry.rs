@@ -4,7 +4,7 @@
 //! Mirrors the deleted bridge/telemetry.py (SignalBus + RequestLog + Topics).
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -22,7 +22,8 @@ pub struct SignalEnvelope {
 }
 
 pub struct SignalBus {
-    envelopes: RwLock<Vec<SignalEnvelope>>,
+    // W2 fix: use VecDeque for O(1) front eviction (was Vec with O(n) drain)
+    envelopes: RwLock<VecDeque<SignalEnvelope>>,
     next_id: AtomicU64,
     capacity: usize,
 }
@@ -30,7 +31,7 @@ pub struct SignalBus {
 impl SignalBus {
     pub fn new(capacity: usize) -> Self {
         Self {
-            envelopes: RwLock::new(Vec::with_capacity(capacity)),
+            envelopes: RwLock::new(VecDeque::with_capacity(capacity)),
             next_id: AtomicU64::new(1),
             capacity,
         }
@@ -45,10 +46,9 @@ impl SignalBus {
             ts: now_unix(),
         };
         let mut buf = self.envelopes.write().await;
-        buf.push(env.clone());
-        if buf.len() > self.capacity {
-            let excess = buf.len() - self.capacity;
-            buf.drain(0..excess);
+        buf.push_back(env.clone());
+        while buf.len() > self.capacity {
+            buf.pop_front();  // O(1) instead of O(n) drain
         }
         env
     }

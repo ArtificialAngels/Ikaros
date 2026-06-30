@@ -34,6 +34,8 @@ once_cell = "1.19"
 # Parking_lot (faster Mutex/RwLock)
 parking_lot = "0.12"
 sherpa-onnx = { version = "1.13.3", default-features = false, features = ["shared"] }
+# Edge TTS — native Rust client (replaces Python subprocess, W6 fix)
+edge-tts-rust = "0.1"
 
 [profile.release]
 opt-level = 3

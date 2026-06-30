@@ -22,6 +22,7 @@ pub mod sessions;
 pub mod soul_loader;
 pub mod supervisor;
 pub mod access;
+pub mod patience;  // PATIENCE heartbeat (ported from Neuro)
 
 use telemetry::{SignalBus, RequestLog};
 
@@ -36,7 +37,7 @@ use axum::{
     Json, Router,
 };
 use sessions::SessionStore;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -48,9 +49,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{watch, RwLock, Semaphore};
-use tokio::io::AsyncWriteExt;
+use tokio::sync::{broadcast, watch, RwLock, Semaphore};
 use voice_recognizer::VoiceRecognizer;
+use edge_tts_rust::{Boundary, EdgeTtsClient, SpeakOptions, SynthesisEvent};
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -669,64 +670,80 @@ impl WorkerPool {
 
     /// Refresh health and model list for all workers
     async fn refresh(&self, client: &reqwest::Client) {
-        let mut workers = self.workers.write().await;
-        let mut new_map = HashMap::new();
+        // W5 fix: snapshot worker URLs under brief read lock, then do HTTP
+        // checks without holding any lock — avoids blocking all chat requests
+        // when multiple workers are slow to respond (3s+5s per dead worker).
+        let worker_infos: Vec<(usize, String, bool)> = {
+            let workers = self.workers.read().await;
+            workers.iter().enumerate().map(|(i, w)| {
+                (i, w.url.clone(), w.is_cloud())
+            }).collect()
+        };
 
-        for (idx, worker) in workers.iter_mut().enumerate() {
-            // Cloud workers: always alive, models are static
-            if worker.is_cloud() {
-                for model in &worker.models {
-                    new_map.insert(model.clone(), idx);
-                }
+        // Health-check each local worker without holding any lock
+        let mut results: Vec<(usize, bool, Vec<String>)> = Vec::new();
+        for (idx, url, is_cloud) in &worker_infos {
+            if *is_cloud {
                 continue;
             }
-
-            // Local workers: health check
-            let health_url = format!("{}/props", worker.url);
-            match client
-                .get(&health_url)
+            let health_url = format!("{}/props", url);
+            let alive = match client.get(&health_url)
                 .timeout(Duration::from_secs(3))
-                .send()
-                .await
+                .send().await
             {
-                Ok(resp) if resp.status().is_success() => {
-                    worker.alive = true;
-                }
-                _ => {
-                    worker.alive = false;
-                    worker.models.clear();
-                    continue;
-                }
+                Ok(resp) if resp.status().is_success() => true,
+                _ => false,
+            };
+            if !alive {
+                results.push((*idx, false, Vec::new()));
+                continue;
             }
-
-            // Fetch models
-            let models_url = format!("{}/v1/models", worker.url);
-            match client
-                .get(&models_url)
+            let models_url = format!("{}/v1/models", url);
+            let models = match client.get(&models_url)
                 .timeout(Duration::from_secs(5))
-                .send()
-                .await
+                .send().await
             {
                 Ok(resp) if resp.status().is_success() => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
-                            worker.models = data
-                                .iter()
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(json) => json.get("data")
+                            .and_then(|d| d.as_array())
+                            .map(|data| data.iter()
                                 .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
-                                .collect();
-                            for model in &worker.models {
-                                new_map.insert(model.clone(), idx);
-                            }
-                        }
+                                .collect())
+                            .unwrap_or_default(),
+                        Err(_) => Vec::new(),
                     }
                 }
-                _ => {
-                    worker.models.clear();
-                }
-            }
-            worker.last_check = Instant::now();
+                _ => Vec::new(),
+            };
+            results.push((*idx, true, models));
         }
 
+        // Apply results under brief write lock (no HTTP during lock)
+        let mut new_map = HashMap::new();
+        {
+            let mut workers = self.workers.write().await;
+            for (idx, worker) in workers.iter_mut().enumerate() {
+                if worker.is_cloud() {
+                    for model in &worker.models {
+                        new_map.insert(model.clone(), idx);
+                    }
+                    continue;
+                }
+                if let Some((_, alive, models)) = results.iter().find(|(i, _, _)| *i == idx) {
+                    worker.alive = *alive;
+                    if *alive {
+                        worker.models = models.clone();
+                        for model in &worker.models {
+                            new_map.insert(model.clone(), idx);
+                        }
+                    } else {
+                        worker.models.clear();
+                    }
+                    worker.last_check = Instant::now();
+                }
+            }
+        }
         *self.model_map.write().await = new_map;
     }
 
@@ -890,6 +907,14 @@ struct AppState {
     supervisor_state: Arc<supervisor::SupervisorState>,
     /// Per-client model access control (哥哥 6-30 C1 拍板)
     access_control: Arc<access::AccessControl>,
+    /// Native Rust edge-tts client (replaces Python subprocess TTS, W6 fix)
+    tts_client: Option<EdgeTtsClient>,
+    /// PATIENCE heartbeat state (ported from Neuro)
+    patience_state: Arc<patience::PatienceState>,
+    /// External message queue (reserved for Twitch-like chat)
+    external_queue: Arc<patience::ExternalMessageQueue>,
+    /// WS broadcast handle (for proactive speech to all connected clients)
+    ws_broadcast: Arc<patience::WsBroadcastHandle>,
 }
 
 impl AppState {
@@ -947,6 +972,34 @@ impl AppState {
                     .join("access-control.json");
                 Arc::new(access::AccessControl::new(persist))
             },
+            // W6 fix: native Rust edge-tts client (replaces Python subprocess)
+            tts_client: {
+                match EdgeTtsClient::builder()
+                    .ws_pool_size(2)
+                    .ws_idle_ttl(Duration::from_secs(30))
+                    .ws_warmup(true)
+                    .request_chunk_reuse(true)
+                    .build()
+                {
+                    Ok(c) => {
+                        info!("edge-tts-rust client initialized (pool=2, idle=30s, warmup=true)");
+                        Some(c)
+                    }
+                    Err(e) => {
+                        warn!("edge-tts-rust init failed: {}, TTS unavailable", e);
+                        None
+                    }
+                }
+            },
+            // PATIENCE heartbeat state (ported from Neuro)
+            patience_state: Arc::new(patience::PatienceState::new(
+                false,  // stt_ready — updated when voice_recognizer loads
+                false,  // tts_ready — updated after tts_client init
+            )),
+            // External message queue (reserved for Twitch-like chat)
+            external_queue: Arc::new(patience::ExternalMessageQueue::new()),
+            // WS broadcast for proactive speech
+            ws_broadcast: Arc::new(patience::WsBroadcastHandle::new(256)),
         }
     }
 
@@ -984,6 +1037,43 @@ impl AppState {
             rx,
         );
         info!("supervisor: spawn task registered");
+    }
+
+    /// Update PATIENCE state readiness flags (called after initialization)
+    fn update_patience_readiness(&self) {
+        let stt_ready = self.voice_recognizer.is_some();
+        let tts_ready = self.tts_client.is_some();
+        self.patience_state.stt_ready.store(stt_ready, std::sync::atomic::Ordering::Relaxed);
+        self.patience_state.tts_ready.store(tts_ready, std::sync::atomic::Ordering::Relaxed);
+        info!("PATIENCE: stt_ready={}, tts_ready={}", stt_ready, tts_ready);
+    }
+
+    /// Start the PATIENCE heartbeat loop (ported from Neuro)
+    fn start_patience_loop(&self) {
+        let patience_state = self.patience_state.clone();
+        let external_queue = self.external_queue.clone();
+        let ws_broadcast = self.ws_broadcast.clone();
+        let http_client = self.http_client.clone();
+        let tts_client = self.tts_client.clone();
+        let worker_pool = self.worker_pool.clone();
+        let soul_text = soul_loader::get_soul_injection();
+
+        let context = Arc::new(patience::ProactiveSpeechContext {
+            http_client,
+            tts_client,
+            worker_pool,
+            soul_text,
+        });
+
+        tokio::spawn(async move {
+            patience::patience_loop(
+                patience_state,
+                external_queue,
+                ws_broadcast,
+                context,
+            ).await;
+        });
+        info!("PATIENCE heartbeat loop started");
     }
 }
 
@@ -1510,12 +1600,16 @@ async fn voice_ws(
 async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<AppState>) {
     info!(model = %model, "voice WebSocket established (sherpa-onnx in-process)");
 
+    // Subscribe to PATIENCE broadcast (for proactive speech)
+    let mut broadcast_rx = state.ws_broadcast.subscribe();
+
     // Send welcome message
     let welcome = serde_json::json!({
         "type": "connected",
         "model": model,
         "bridge": "hermes-bridge-rs",
         "stt": "sherpa-onnx-sense-voice",
+        "patience": state.patience_state.get_patience(),
         "version": env!("CARGO_PKG_VERSION"),
     });
     if socket.send(Message::Text(welcome.to_string().into())).await.is_err() {
@@ -1552,6 +1646,7 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
     let mut last_audio_time = tokio::time::Instant::now();
     let mut is_audio_session = false;
     let mut first_start = true;  // Clear voice history on first "start" after WS connect
+    let mut last_ping_time = tokio::time::Instant::now();  // W4 fix: server-side ping
 
     // Message loop
     loop {
@@ -1567,6 +1662,8 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                     .unwrap_or("unknown");
                                 match msg_type {
                                     "start" => {
+                                        // Mark human as speaking (for PATIENCE)
+                                        state.patience_state.human_speaking.store(true, std::sync::atomic::Ordering::Relaxed);
                                         is_audio_session = true;
                                         audio_buffer.clear();
                                         last_audio_time = tokio::time::Instant::now();
@@ -1580,6 +1677,8 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                         let _ = socket.send(Message::Text(resp.to_string().into())).await;
                                     }
                                     "stop" => {
+                                        // Mark human as done speaking
+                                        state.patience_state.human_speaking.store(false, std::sync::atomic::Ordering::Relaxed);
                                         is_audio_session = false;
                                         if !audio_buffer.is_empty() {
                                             let buf = std::mem::take(&mut audio_buffer);
@@ -1606,6 +1705,9 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                                         if let Some(text) = parsed.get("text").and_then(|v| v.as_str()) {
                                             let t = text.trim().to_string();
                                             if !t.is_empty() {
+                                                // Record message time (for PATIENCE)
+                                                state.patience_state.new_message.store(true, std::sync::atomic::Ordering::Relaxed);
+                                                state.patience_state.record_message().await;
                                                 request_id += 1;
                                                 let _ = job_tx.send((Vec::new(), request_id, Some(t)));
                                                 let resp = serde_json::json!({"type": "status", "message": "processing"});
@@ -1664,8 +1766,35 @@ async fn handle_voice_socket(mut socket: WebSocket, model: String, state: Arc<Ap
                 }
             }
 
-            // -- VAD silence timeout (every 500ms) --
+            // -- PATIENCE broadcast (proactive speech from heartbeat) --
+            broadcast_msg = broadcast_rx.recv() => {
+                match broadcast_msg {
+                    Ok(patience::BroadcastMessage::Text(text)) => {
+                        let _ = socket.send(Message::Text(text.into())).await;
+                    }
+                    Ok(patience::BroadcastMessage::Binary(data)) => {
+                        let _ = socket.send(Message::Binary(data.into())).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("PATIENCE broadcast lagged, missed {} messages", n);
+                    }
+                    Err(_) => {
+                        // Channel closed
+                    }
+                }
+            }
+
+            // -- VAD silence timeout + server-side ping (every 500ms) --
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                // W4 fix: send server-side ping every 30s to detect half-open connections
+                if last_ping_time.elapsed() > Duration::from_secs(30) {
+                    last_ping_time = tokio::time::Instant::now();
+                    if socket.send(Message::Ping(vec![1, 2, 3].into())).await.is_err() {
+                        info!("voice WS: ping failed, closing connection");
+                        break;
+                    }
+                }
+
                 if is_audio_session && !audio_buffer.is_empty() {
                     let elapsed = last_audio_time.elapsed();
                     if elapsed > Duration::from_secs_f64(1.5) {
@@ -1809,33 +1938,56 @@ async fn process_utterance_channel(
 
     info!(request_id = rid, stt_raw = %text, stt_corrected = %corrected, model = %model_used, llm_reply = %reply, "voice utterance: STT→correct→LLM");
 
-    // 3. TTS (edge-tts subprocess)
+    // 3. TTS (edge-tts-rust native, streaming — W6 fix: no Python subprocess)
     let _ = resp_tx.send(Message::Text(
         serde_json::json!({"type": "status", "request_id": rid, "message": "回复中…"}).to_string().into()
     ));
 
-    match voice_tts(&reply).await {
-        Ok(mp3_data) => {
-            let chunk_size = 8192;
-            let mut chunk_count = 0u32;
-            for chunk in mp3_data.chunks(chunk_size) {
-                let _ = resp_tx.send(Message::Binary(chunk.to_vec().into()));
-                chunk_count += 1;
+    match &state.tts_client {
+        Some(tts_client) => {
+            let tts_opts = SpeakOptions {
+                voice: "zh-CN-XiaoxiaoNeural".into(),
+                boundary: Boundary::Sentence,
+                ..SpeakOptions::default()
+            };
+            match tts_client.stream(&reply, tts_opts).await {
+                Ok(mut stream) => {
+                    let mut chunk_count = 0u32;
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            Ok(SynthesisEvent::Audio(chunk)) => {
+                                let _ = resp_tx.send(Message::Binary(chunk.into()));
+                                chunk_count += 1;
+                            }
+                            Ok(_) => {} // Boundary events, ignore
+                            Err(e) => {
+                                error!(request_id = rid, error = %e, "TTS stream error mid-stream");
+                                break;
+                            }
+                        }
+                    }
+                    let _ = resp_tx.send(Message::Text(
+                        serde_json::json!({
+                            "type": "done",
+                            "request_id": rid,
+                            "text": reply,
+                            "chunks": chunk_count,
+                            "model": model_used,
+                        }).to_string().into()
+                    ));
+                }
+                Err(e) => {
+                    error!(request_id = rid, error = %e, "TTS stream init failed");
+                    let _ = resp_tx.send(Message::Text(
+                        serde_json::json!({"type": "error", "request_id": rid, "message": format!("TTS failed: {}", e)}).to_string().into()
+                    ));
+                }
             }
-            let _ = resp_tx.send(Message::Text(
-                serde_json::json!({
-                    "type": "done",
-                    "request_id": rid,
-                    "text": reply,
-                    "chunks": chunk_count,
-                    "model": model_used,
-                }).to_string().into()
-            ));
         }
-        Err(e) => {
-            error!(request_id = rid, error = %e, "TTS failed");
+        None => {
+            error!(request_id = rid, "TTS client not available (edge-tts-rust init failed)");
             let _ = resp_tx.send(Message::Text(
-                serde_json::json!({"type": "error", "request_id": rid, "message": format!("TTS failed: {}", e)}).to_string().into()
+                serde_json::json!({"type": "error", "request_id": rid, "message": "TTS unavailable"}).to_string().into()
             ));
         }
     }
@@ -2155,43 +2307,8 @@ fn sanitize_llm_text(s: &str) -> String {
 }
 
 /// Run edge-tts via a small Python subprocess, return MP3 bytes
-async fn voice_tts(text: &str) -> Result<Vec<u8>, String> {
-    let python = find_portable_python();
-    let worker_script = project_root().join("bridge-rs").join("workers").join("tts_worker.py");
-    if !worker_script.is_file() {
-        return Err(format!("tts_worker.py not found at {}", worker_script.display()));
-    }
-
-    let tts_input = serde_json::json!({
-        "text": text,
-        "voice": "zh-CN-XiaoxiaoNeural",
-    });
-
-    let mut child = tokio::process::Command::new(&python)
-        .arg(worker_script.to_string_lossy().as_ref())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("TTS spawn failed: {}", e))?;
-
-    // Write input JSON to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let input = format!("{}\n", tts_input);
-        stdin.write_all(input.as_bytes()).await.map_err(|e| format!("TTS stdin: {}", e))?;
-        stdin.shutdown().await.map_err(|e| format!("TTS stdin close: {}", e))?;
-    }
-
-    // Wait and read stdout
-    let output = child.wait_with_output().await.map_err(|e| format!("TTS wait: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("TTS exit {}: {}", output.status.code().unwrap_or(-1), stderr));
-    }
-
-    Ok(output.stdout)
-}
+// voice_tts removed — replaced by edge-tts-rust native client (W6 fix)
+// TTS is now handled inline in process_utterance_channel via state.tts_client
 
 // ---------------------------------------------------------------------------
 // Ikaros endpoints — Phase 2 (real file I/O)
@@ -2258,26 +2375,6 @@ async fn neuro_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
         "pet_visible": true,
         "pet_mode": "continuous",
     }))
-}
-
-/// POST /v1/neuro/patience — set patience threshold
-async fn neuro_set_patience(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let seconds = body.get("seconds")
-        .and_then(|v| v.as_f64())
-        .map(|s| s.max(5.0).min(600.0))
-        .unwrap_or(30.0);
-    {
-        let mut ns = state.neuro_state.write().await;
-        ns.patience = seconds;
-    }
-    state.signal_bus.emit(
-        "neuro.patience_changed",
-        serde_json::json!({"patience": seconds}),
-    ).await;
-    Json(serde_json::json!({"patience": seconds}))
 }
 
 /// POST /v1/neuro/patience/trigger — manually trigger PATIENCE (simulate timeout)
@@ -2389,6 +2486,99 @@ async fn neuro_proactive(State(state): State<Arc<AppState>>) -> Json<serde_json:
     Json(serde_json::json!({
         "proactive_messages": ns.proactive_messages,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// External message injection (Twitch-like chat, reserved interface)
+// ---------------------------------------------------------------------------
+
+/// POST /v1/external/message — inject an external chat message (Twitch/Discord/etc.)
+///
+/// Request body:
+/// ```json
+/// {
+///     "source": "twitch",      // required: source identifier
+///     "username": "viewer123", // required: sender username
+///     "content": "Hello!"      // required: message content
+/// }
+/// ```
+///
+/// The message will be queued and processed by the PATIENCE loop on the next tick.
+/// This endpoint is reserved for future Twitch/Discord integration — currently
+/// no chat source is connected, but the interface is ready.
+async fn external_message_inject(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let username = body.get("username").and_then(|v| v.as_str()).unwrap_or("anonymous");
+    let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+    if content.is_empty() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "content is required",
+        }));
+    }
+
+    let msg = patience::ExternalMessage {
+        source: source.to_string(),
+        username: username.to_string(),
+        content: content.to_string(),
+        received_at: std::time::Instant::now(),
+    };
+
+    match state.external_queue.sender().try_send(msg) {
+        Ok(()) => {
+            info!(source = %source, user = %username, "external message queued");
+            Json(serde_json::json!({
+                "status": "ok",
+                "queued": true,
+                "pending": state.external_queue.pending_count().await,
+            }))
+        }
+        Err(e) => {
+            warn!("external message queue full: {}", e);
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "queue full",
+            }))
+        }
+    }
+}
+
+/// GET /v1/external/status — get external message queue status
+async fn external_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "pending_count": state.external_queue.pending_count().await,
+        "patience_enabled": state.patience_state.enabled.load(std::sync::atomic::Ordering::Relaxed),
+        "patience_secs": state.patience_state.get_patience(),
+        "ws_clients": state.ws_broadcast.receiver_count(),
+    }))
+}
+
+/// POST /v1/neuro/patience — set PATIENCE timeout (updated to also control patience_state)
+async fn neuro_set_patience_v2(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let seconds = body.get("seconds")
+        .and_then(|v| v.as_f64())
+        .map(|s| s.max(5.0).min(600.0))
+        .unwrap_or(30.0) as u64;
+
+    // Update both NeuroState (legacy) and PatienceState (new)
+    {
+        let mut ns = state.neuro_state.write().await;
+        ns.patience = seconds as f64;
+    }
+    state.patience_state.set_patience(seconds);
+
+    state.signal_bus.emit(
+        "neuro.patience_changed",
+        serde_json::json!({"patience": seconds}),
+    ).await;
+    Json(serde_json::json!({"patience": seconds}))
 }
 
 /// POST /v1/llama/restart — trigger llama-server restart via supervisor
@@ -3466,22 +3656,21 @@ async fn proxy_v1(
         Ok(resp) => {
             let status = resp.status();
             let headers = resp.headers().clone();
-            match resp.bytes().await {
-                Ok(resp_body) => {
-                    let mut response = Response::new(axum::body::Body::from(resp_body.to_vec()));
-                    *response.status_mut() = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK);
-                    for (name, value) in headers.iter() {
-                        if let (Ok(n), Ok(v)) = (
-                            axum::http::HeaderName::from_bytes(name.as_str().as_bytes()),
-                            axum::http::HeaderValue::from_bytes(value.as_bytes()),
-                        ) {
-                            response.headers_mut().insert(n, v);
-                        }
-                    }
-                    response
+            // W3 fix: stream response body instead of buffering entire body to memory
+            // (was resp.bytes().await — caused high memory for /v1/embeddings etc.)
+            let stream = TryStreamExt::map_err(resp.bytes_stream(), io::Error::other);
+            let body = axum::body::Body::from_stream(stream);
+            let mut response = Response::new(body);
+            *response.status_mut() = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK);
+            for (name, value) in headers.iter() {
+                if let (Ok(n), Ok(v)) = (
+                    axum::http::HeaderName::from_bytes(name.as_str().as_bytes()),
+                    axum::http::HeaderValue::from_bytes(value.as_bytes()),
+                ) {
+                    response.headers_mut().insert(n, v);
                 }
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             }
+            response
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -3515,6 +3704,10 @@ async fn main() {
     // Start background health monitor
     state.start_health_monitor();
     state.start_supervisor();
+
+    // Update PATIENCE readiness flags and start heartbeat loop
+    state.update_patience_readiness();
+    state.start_patience_loop();
 
     // Initial health check (wait a moment for first refresh)
     {
@@ -3576,12 +3769,15 @@ async fn main() {
         .route("/v1/voice/ws", get(voice_ws))
         // Neuro endpoints
         .route("/v1/neuro/status", get(neuro_status))
-        .route("/v1/neuro/patience", post(neuro_set_patience))
+        .route("/v1/neuro/patience", post(neuro_set_patience_v2))  // Updated to sync with patience_state
         .route("/v1/neuro/patience/trigger", post(neuro_trigger_patience))
         .route("/v1/neuro/reset", post(neuro_reset))
         .route("/v1/neuro/memories", get(neuro_list_memories))
         .route("/v1/neuro/memory/add", post(neuro_add_memory))
         .route("/v1/neuro/proactive", get(neuro_proactive))
+        // External message injection (Twitch/Discord reserved)
+        .route("/v1/external/message", post(external_message_inject))
+        .route("/v1/external/status", get(external_status))
         // Ikaros endpoints
         .route("/v1/liveness", get(liveness))
         .route("/v1/llama/restart", post(llama_restart))

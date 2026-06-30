@@ -1,12 +1,15 @@
 """
 Ikaros Audio Engine — persistent microphone capture + TTS playback.
 
-Architecture:
+Architecture (STT bypass — Quest 6-30):
   sounddevice capture thread (16000Hz, 16-bit mono)
-  → energy-based VAD (RMS threshold)
-  → silence detection → flush raw PCM binary to bridge WebSocket
-  → bridge SenseVoice STT → text correction → LLM → TTS
+  → energy-based VAD (RMS threshold + AGC)
+  → silence detection → flush PCM
+  → LOCAL faster-whisper tiny-int8 STT (in pet process)
+  → send {"type":"transcript","text":...} to bridge WS
+  → bridge skips own STT → LLM → TTS
   → bridge WS pushes TTS MP3 chunks → pydub decode → sounddevice OutputStream
+  Fallback: if local STT fails, raw PCM sent to bridge (SenseVoice STT)
 
 Config options (set via system tray):
   - Continuous mode: always-on, auto detects speech
@@ -52,6 +55,13 @@ SILENCE_TIMEOUT = 1.2        # seconds of silence = utterance end
 MIN_AUDIO_MS = 500            # minimum audio to send (ms)
 MAX_UTTERANCE_SEC = 30
 
+# Local STT (faster-whisper tiny int8 — runs in pet process, bypasses bridge STT)
+LOCAL_STT_MODEL = "tiny"  # ~75MB, fast CPU inference
+LOCAL_STT_DEVICE = "cpu"
+LOCAL_STT_COMPUTE = "int8"  # int8 quantization for speed
+LOCAL_STT_LANG = "zh"          # Chinese primary, auto-detect fallback
+LOCAL_STT_BEAM_SIZE = 3
+
 # AGC (Automatic Gain Control) — 环境噪音自适应增益
 AGC_TARGET_RMS = 800          # 目标 RMS (int16 范围 0~32768)
 AGC_MAX_GAIN = 8.0            # 最大增益倍数
@@ -82,6 +92,11 @@ class AudioEngine:
         self._agc_noise_floor = 100.0    # 当前噪音底估计 (RMS)
         self._agc_gain = 1.0             # 当前增益倍数
         self._agc_enabled = True         # AGC 开关 (可从 tray 控制)
+
+        # Local STT (faster-whisper lazy init)
+        self._stt_model = None           # faster_whisper.WhisperModel instance
+        self._stt_model_lock = threading.Lock()
+        self._stt_available: Optional[bool] = None  # None=untested, True/False
 
         # 4B: TTS playback state — bridge pushes MP3 chunks via WS
         self._tts_chunks: list[bytes] = []   # accumulate MP3 chunks
@@ -525,8 +540,90 @@ class AudioEngine:
                     pass
                 self._stream = None
 
+    def _ensure_stt_model(self):
+        """Lazily load faster-whisper tiny-int8 model. Returns model or None."""
+        if self._stt_available is True:
+            return self._stt_model
+        if self._stt_available is False:
+            return None
+        # First call — try to load
+        with self._stt_model_lock:
+            if self._stt_available is not None:
+                return self._stt_model if self._stt_available else None
+            try:
+                from faster_whisper import WhisperModel
+                log.info("Loading local STT: faster-whisper %s on %s", LOCAL_STT_MODEL, LOCAL_STT_DEVICE)
+                self._stt_model = WhisperModel(
+                    LOCAL_STT_MODEL,
+                    device=LOCAL_STT_DEVICE,
+                    compute_type=LOCAL_STT_COMPUTE,
+                )
+                self._stt_available = True
+                log.info("Local STT loaded OK")
+                return self._stt_model
+            except Exception as exc:
+                self._stt_available = False
+                log.warning("Local STT unavailable (will fallback to bridge STT): %s", exc)
+                return None
+
+    def _do_local_stt_and_send(self, pcm_bytes: bytes):
+        """Run faster-whisper on PCM bytes, send transcript to bridge.
+
+        Flow: PCM → faster-whisper → text → WS {"type":"transcript","text":...}
+        Bridge skips its own sherpa-onnx STT and goes straight to LLM → TTS.
+        Falls back to raw PCM send if local STT fails.
+        """
+        model = self._ensure_stt_model()
+        if model is None:
+            # Fallback: send raw PCM to bridge (bridge runs its own STT)
+            self._send_raw_pcm(pcm_bytes)
+            return
+
+        try:
+            # faster-whisper expects numpy float32 array in [-1, 1]
+            samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            segments, info = model.transcribe(
+                samples,
+                language=LOCAL_STT_LANG,
+                beam_size=LOCAL_STT_BEAM_SIZE,
+                vad_filter=True,
+            )
+            text = "".join(seg.text for seg in segments).strip()
+            if not text:
+                log.info("Local STT: empty result, skipping")
+                return
+
+            log.info("Local STT: %s (lang=%s, prob=%.2f)", text[:80], info.language, info.language_probability)
+            log_stt(text)
+
+            # Send transcript to bridge (bypasses bridge-side STT)
+            if self._ws:
+                msg = json.dumps({"type": "transcript", "text": text})
+                coro = self._ws.send(msg)
+                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
+                log.debug("transcript sent: %d chars", len(text))
+            else:
+                log.warning("No WS connection, transcript dropped: %s", text[:40])
+
+        except Exception as exc:
+            log.warning("Local STT failed, fallback to raw PCM: %s", exc)
+            self._send_raw_pcm(pcm_bytes)
+
+    def _send_raw_pcm(self, pcm_bytes: bytes):
+        """Send raw PCM binary to bridge (bridge runs its own SenseVoice STT)."""
+        if self._ws:
+            try:
+                coro = self._ws.send(pcm_bytes)
+                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
+                duration = len(pcm_bytes) / (RATE * 2)
+                log.debug("raw PCM sent: %d bytes (%.1fs)", len(pcm_bytes), duration)
+            except Exception as exc:
+                log.warning("raw PCM WS send failed: %s", exc)
+        else:
+            log.info("offline: %d bytes audio dropped", len(pcm_bytes))
+
     def _flush(self):
-        """Send accumulated audio buffer as binary PCM to bridge (SenseVoice STT)."""
+        """Send captured audio to bridge — local STT (transcript) or raw PCM fallback."""
         if len(self._buffer) < int(RATE * MIN_AUDIO_MS / 1000 * 2):
             self._buffer.clear()
             self._speaking = False
@@ -535,17 +632,9 @@ class AudioEngine:
         self._buffer.clear()
         self._speaking = False
 
-        # 发送 PCM binary 到桥端 (bridge SenseVoice 做 STT + 纠错 + LLM)
-        if self._ws:
-            try:
-                coro = self._ws.send(audio)  # bytes → binary WS frame
-                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
-                duration = len(audio) / (RATE * 2)
-                log.debug("audio sent: %d bytes (%.1fs)", len(audio), duration)
-            except Exception as exc:
-                log.warning("audio WS send failed: %s", exc)
-        else:
-            log.info("offline: %d bytes audio dropped", len(audio))
+        # STT bypass: run local faster-whisper → send transcript text
+        # Falls back to raw PCM if local STT unavailable
+        self._do_local_stt_and_send(audio)
 
         self._emit_state("LISTENING")
     def start(self):
@@ -561,7 +650,7 @@ class AudioEngine:
         time.sleep(0.5)  # Let WS connect first
         self._capture_thread = threading.Thread(target=self._capture, daemon=True)
         self._capture_thread.start()
-        log.info("audio: engine started (bridge-side SenseVoice STT)")
+        log.info("audio: engine started (local faster-whisper STT + bridge fallback)")
 
     def _run_ws(self):
         self._aio_loop = asyncio.new_event_loop()
