@@ -120,13 +120,16 @@ L2D_EXPR_BY_STATE = {
     "thinking": "serious", "speaking": "happy", "bored": "sleep",
 }
 HERMES_ROOT = HERE.parent.parent
-_MODEL_CACHE_PATH = HERE / "llm_model_cache.json"
-_LLM_MODEL_PERSIST_PATH = HERE / "last_llm_model.json"  # persists across restarts
-
 
 # 便携 Python 不自动加 cwd 到 sys.path (python312._pth 机制)
 # 手动加, 让 from audio_engine import AudioEngine 等本地 import 能工作
 sys.path.insert(0, str(HERE))
+# Allow importing modules.* from project root
+if str(HERMES_ROOT) not in sys.path:
+    sys.path.insert(0, str(HERMES_ROOT))
+
+# LLM Manager — shared model management (discovery, selection, persistence)
+from modules.model_manager.llm_manager import LLMManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [ikaros] %(message)s")
 log = logging.getLogger("ikaros")
@@ -154,101 +157,6 @@ try:
 except ImportError:
     log.warning("edge-tts not installed — 4C chat 会用 fallback TTS (no playback)")
     edge_tts = None
-
-
-# ─── LLM model cache helpers ───
-
-
-def _scan_local_gguf_files() -> list[str]:
-    """Scan data/models/*.gguf and return list of model names (no .gguf suffix)."""
-    models_dir = HERMES_ROOT / "data" / "models"
-    if not models_dir.exists():
-        return []
-    seen: set[str] = set()
-    result: list[str] = []
-    try:
-        for f in sorted(models_dir.glob("*.gguf")):
-            name = f.stem  # removes .gguf
-            # Exclude: mmproj, split parts (xxxx-of-xxxx)
-            if "mmproj" in name.lower():
-                continue
-            if "-of-" in name and re.search(r'\d{5}-of-\d{5}', name):
-                continue
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-    except Exception as exc:
-        log.warning("GGUF scan failed: %s", exc)
-    return result
-
-
-def _save_model_cache(models: list[str], cloud_models: list[str]):
-    """Save model list to disk for fast startup."""
-    try:
-        _MODEL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _MODEL_CACHE_PATH.write_text(
-            json.dumps({"models": models, "cloud": cloud_models, "ts": time.time()}),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        log.warning("model cache save FAILED: %s", exc)
-
-
-def _save_last_llm_model(model_id: str):
-    """Persist the last-selected LLM model ID across restarts."""
-    try:
-        _LLM_MODEL_PERSIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _LLM_MODEL_PERSIST_PATH.write_text(
-            json.dumps({"model": model_id, "ts": time.time()}),
-            encoding="utf-8",
-        )
-        log.info("persisted last LLM model: %s", model_id)
-    except Exception as exc:
-        log.warning("save last LLM model FAILED: %s", exc)
-
-    # Also sync to llm-engine-last-launch.json so llama-server router knows preferred model
-    try:
-        llm_launch_path = HERMES_ROOT / "data" / "logs" / "llm-engine-last-launch.json"
-        if llm_launch_path.exists():
-            info = json.loads(llm_launch_path.read_text(encoding="utf-8"))
-        else:
-            info = {}
-        info["preferred_model"] = model_id
-        llm_launch_path.parent.mkdir(parents=True, exist_ok=True)
-        llm_launch_path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
-    except Exception as exc:
-        log.debug("sync preferred_model to llm-engine-last-launch.json FAILED: %s", exc)
-
-
-def _load_last_llm_model() -> str | None:
-    """Load the persisted last LLM model ID. Returns None if missing or stale."""
-    try:
-        if not _LLM_MODEL_PERSIST_PATH.exists():
-            return None
-        data = json.loads(_LLM_MODEL_PERSIST_PATH.read_text(encoding="utf-8"))
-        model = data.get("model")
-        if model:
-            return model
-    except Exception:
-        pass
-    return None
-
-
-def _load_model_cache() -> dict | None:
-    """Load cached model list from disk. Returns None if missing or stale (>12h)."""
-    try:
-        if not _MODEL_CACHE_PATH.exists():
-            return None
-        data = json.loads(_MODEL_CACHE_PATH.read_text(encoding="utf-8"))
-        # Stale if older than 12 hours (模型文件不经常变)
-        ts = data.get("ts", 0)
-        if time.time() - ts > 43200:
-            return None
-        if not data.get("models"):
-            return None
-        return data
-    except Exception:
-        return None
 
 
 # ─── Communication bridge (thread-safe) ───
@@ -333,14 +241,14 @@ class PetWindow(QMainWindow):
         self._current_state = "idle"
         self._hit_frames_on = False  # track hit frame toggle state
 
+        # LLM Manager — shared model management
+        self._llm_mgr = LLMManager.instance(HERMES_ROOT)
+
         # LLM model selection (shared across chat dock + voice)
-        persisted = _load_last_llm_model()
+        persisted = self._llm_mgr.get_current_model()
         self._current_llm_model: str = persisted or "Phi-4-Mini-3.8B-Q4_K_L"  # default
         if persisted:
             log.info("restored last LLM model: %s", persisted)
-        self._available_models: list[str] = []  # model IDs from bridge
-        self._cloud_model_set: set[str] = set()  # cloud model IDs for tag display
-        self._models_fetching = False
         self._pending_llm_menu: QMenu | None = None  # context menu awaiting model list
         self._live2d_model_names_cache: list[str] | None = None  # Live2D model name cache
 
@@ -449,10 +357,10 @@ class PetWindow(QMainWindow):
             self._drag_handle.installEventFilter(self)
 
         # Load cached model list for instant right-click menu availability
-        cached = _load_model_cache()
+        cached = self._llm_mgr.load_cache()
         if cached:
-            self._available_models = cached["models"]
-            self._cloud_model_set = set(cached["cloud"])
+            self._llm_mgr._available_models = cached["models"]
+            self._llm_mgr._cloud_model_set = set(cached["cloud"])
             log.info("loaded %d models from disk cache", len(cached["models"]))
 
         # Pre-fetch fresh LLM model list in background
@@ -652,14 +560,14 @@ class PetWindow(QMainWindow):
         llm_menu = _DelayedMenu(f"🤖 LLM 模型: {self._current_llm_model}", menu)
         menu.addMenu(llm_menu)
 
-        if self._available_models:
+        if self._llm_mgr.available_models:
             # Models already fetched — populate directly
             self._populate_llm_menu(llm_menu)
         else:
             # Fetch models async, show loading placeholder
             loading_action = llm_menu.addAction("⏳ 加载模型列表...")
             loading_action.setEnabled(False)
-            if not self._models_fetching:
+            if not self._llm_mgr.is_fetching:
                 self._fetch_models_async()
         # Track current LLM submenu so "🔄 刷新列表" can auto-update it
         self._pending_llm_menu = llm_menu
@@ -839,120 +747,25 @@ class PetWindow(QMainWindow):
                 )
         log.info("hit frames: %s", "ON" if self._hit_frames_on else "OFF")
 
-    # ─── LLM Model switching ───
-
-    # Cloud models by provider (shown when API key is configured)
-    _CLOUD_MODELS = {
-        "minimax-cn": ["MiniMax-M3", "MiniMax-M1", "abab6.5s-chat"],
-        "deepseek": ["deepseek-chat", "deepseek-reasoner"],
-        "openai": ["gpt-4o", "gpt-4o-mini"],
-        "openrouter": ["openrouter/auto"],
-    }
-    # env var → provider name
-    _CLOUD_KEY_MAP = {
-        "MINIMAX_CN_API_KEY": "minimax-cn",
-        "MINIMAX_API_KEY": "minimax-cn",
-        "DEEPSEEK_API_KEY": "deepseek",
-        "OPENAI_API_KEY": "openai",
-        "OPENROUTER_API_KEY": "openrouter",
-    }
+    # ─── LLM Model switching (delegated to LLMManager) ───
 
     def _fetch_models_async(self):
-        """Fetch available models: llama-server (local) + cloud (by API key).
+        """Fetch available models via LLMManager (async, non-blocking).
         Falls back to scanning local GGUF files if server unreachable.
         """
-        self._models_fetching = True
+        self._llm_mgr.fetch_models(blocking=False)
 
-        def worker():
-            import urllib.request
+        def poll():
+            if self._llm_mgr.is_fetching:
+                QTimer.singleShot(300, poll)
+            else:
+                self._on_models_fetched()
+        QTimer.singleShot(300, poll)
 
-            local_models: list[str] = []
-            cloud_models: list[str] = []
-
-            # 1. Local models — try llama-server :8080 first (router mode),
-            #    fall back to bridge :7860, then local GGUF scan
-            api_success = False
-            for port in (8080, 7860):
-                try:
-                    url = f"http://127.0.0.1:{port}/v1/models"
-                    req = urllib.request.Request(url, method="GET")
-                    with urllib.request.urlopen(req, timeout=3.0) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                    raw_ids = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
-                    # Deduplicate: strip .gguf suffix, remove mmproj and split parts
-                    seen: set[str] = set()
-                    for mid in raw_ids:
-                        if "mmproj" in mid.lower():
-                            continue
-                        # Exclude split parts: xxx-00001-of-00002
-                        if re.search(r'-\d{5}-of-\d{5}', mid):
-                            continue
-                        base = mid.removesuffix(".gguf").removesuffix(".GGUF")
-                        if base not in seen:
-                            seen.add(base)
-                            local_models.append(base)
-                    api_success = True
-                    break  # got response, no need to try next port
-                except Exception as exc:
-                    log.debug("port %d models failed: %s", port, exc)
-                    continue
-
-            # 1b. Fallback: scan local GGUF files if API failed
-            if not api_success:
-                gguf_models = _scan_local_gguf_files()
-                if gguf_models:
-                    local_models = gguf_models
-                    log.info("fallback: scanned %d local GGUF files", len(gguf_models))
-
-            # 2. Cloud models — detect API keys from env + HERMES_HOME/.env
-            configured_providers = self._detect_cloud_providers()
-            for provider in configured_providers:
-                cloud_models.extend(self._CLOUD_MODELS.get(provider, []))
-
-            all_models = local_models + cloud_models
-            log.info("models fetched: %d local + %d cloud", len(local_models), len(cloud_models))
-            # Save cache in worker thread (thread-safe: file I/O only, no GUI)
-            _save_model_cache(all_models, cloud_models)
-            QTimer.singleShot(0, lambda: self._on_models_fetched(all_models, cloud_models))
-            self._models_fetching = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _detect_cloud_providers(self) -> list[str]:
-        """Detect which cloud providers have API keys configured."""
-        import os
-        configured: set[str] = set()
-
-        # Check os.environ (loaded from .env at startup)
-        for env_var, provider in self._CLOUD_KEY_MAP.items():
-            key = os.environ.get(env_var, "").strip()
-            if key and not key.startswith("$"):
-                configured.add(provider)
-
-        # Also check HERMES_HOME/.env directly (in case not loaded)
-        try:
-            hermes_env = HERMES_ROOT / "data" / "hermes-agent" / ".env"
-            if hermes_env.exists():
-                for line in hermes_env.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip().strip("'\"").strip()
-                    if v and not v.startswith("$"):
-                        for env_var, provider in self._CLOUD_KEY_MAP.items():
-                            if k == env_var:
-                                configured.add(provider)
-        except Exception:
-            pass
-
-        return list(configured)
-
-    def _on_models_fetched(self, models: list[str], cloud_models: list[str] | None = None):
-        """Called on main thread after models are fetched."""
-        self._available_models = models
-        cloud_list = cloud_models or []
-        self._cloud_model_set = set(cloud_list)
+    def _on_models_fetched(self):
+        """Called on main thread after LLMManager finishes fetching."""
+        models = self._llm_mgr.available_models
+        cloud_list = list(self._llm_mgr.cloud_model_set)
         log.info("available LLM models: %d total (%d cloud)", len(models), len(cloud_list))
         # If current model not in list, auto-select first local model
         if self._current_llm_model and self._current_llm_model not in models:
@@ -962,12 +775,11 @@ class PetWindow(QMainWindow):
                 log.warning("current model '%s' not in available list — falling back to '%s'",
                             self._current_llm_model, fallback)
                 self._current_llm_model = fallback
-                _save_last_llm_model(fallback)
+                self._llm_mgr.save_last_model(fallback)
                 self.notify_live2d_tip(f"模型切换: {fallback}")
             else:
-                self._available_models.insert(0, self._current_llm_model)
+                self._llm_mgr._available_models.insert(0, self._current_llm_model)
                 log.warning("current model '%s' not in available list — added anyway", self._current_llm_model)
-        # NOTE: disk cache already saved in worker thread (_fetch_models_async)
         # Auto-update context menu if it's still visible
         if self._pending_llm_menu is not None:
             try:
@@ -980,14 +792,15 @@ class PetWindow(QMainWindow):
 
     def _populate_llm_menu(self, llm_menu: QMenu):
         """Fill LLM model submenu with fetched model list."""
-        if not self._available_models:
+        models = self._llm_mgr.available_models
+        if not models:
             no_action = llm_menu.addAction("(无可用模型)")
             no_action.setEnabled(False)
             retry_action = llm_menu.addAction("🔄 重试")
             retry_action.triggered.connect(self._fetch_models_async)
             return
 
-        cloud_set = getattr(self, '_cloud_model_set', set())
+        cloud_set = self._llm_mgr.cloud_model_set
 
         # Current model indicator
         is_cloud = self._current_llm_model in cloud_set
@@ -999,7 +812,7 @@ class PetWindow(QMainWindow):
         # Show cloud models first (if any)
         cloud_shown = False
         local_shown = False
-        for model_id in self._available_models:
+        for model_id in models:
             if model_id == self._current_llm_model:
                 continue
             is_cloud = model_id in cloud_set
@@ -1029,19 +842,17 @@ class PetWindow(QMainWindow):
         try:
             old = self._current_llm_model
             self._current_llm_model = model_id
-            log.info("LLM model: %s → %s", old, model_id)
 
-            # Persist the selection immediately
-            _save_last_llm_model(model_id)
+            # Persist via LLMManager (syncs to router config too)
+            self._llm_mgr.select_model(model_id)
 
             # Notify user via Live2D tip
-            is_cloud = model_id in getattr(self, '_cloud_model_set', set())
+            is_cloud = model_id in self._llm_mgr.cloud_model_set
             if is_cloud:
                 self.notify_live2d_tip(f"切换到 ☁️ {model_id}")
             else:
                 self.notify_live2d_tip(f"正在加载 💻 {model_id}...")
-                # Pre-load local model via bridge API (async, don't block UI)
-                # 先卸载旧模型(old)再加载新模型
+                # Pre-load local model via LLMManager (async)
                 self._preload_model_async(model_id, old_model=old)
 
             # Update chat dock status if it exists
@@ -1063,94 +874,22 @@ class PetWindow(QMainWindow):
             log.error("_ctx_select_model CRASHED: %s", exc, exc_info=True)
 
     def _preload_model_async(self, model_id: str, old_model: str | None = None):
-        """Pre-load model on llama-server via bridge API (async, non-blocking).
-
-        修复: 先通过 /v1/models/evict 卸载旧模型, 再加载新模型.
-        After completion (success or failure), shows a Live2D tip to confirm.
-        """
-        def worker():
-            import urllib.request
-            import urllib.error
-            success = False
-            detail = ""
-            try:
-                # Step 1: 如果指定了旧模型, 先卸载
-                if old_model:
-                    try:
-                        evict_url = f"http://127.0.0.1:7860/v1/models/evict"
-                        evict_body = json.dumps({"model": old_model}).encode("utf-8")
-                        evict_req = urllib.request.Request(
-                            evict_url, data=evict_body,
-                            headers={
-                                "Content-Type": "application/json",
-                                "X-Ikaros-Client": "pet",  # C1
-                            },
-                            method="POST",
-                        )
-                        with urllib.request.urlopen(evict_req, timeout=15.0) as evict_resp:
-                            evict_result = evict_resp.read().decode("utf-8")
-                            log.info("model evict %s: %s", old_model, evict_result[:200])
-                    except Exception as exc:
-                        log.debug("model evict %s skipped (non-fatal): %s", old_model, exc)
-
-                # Step 2: 加载新模型
-                # Try bridge first (:7860 with /v1/models/load), then llama-server
-                # directly (:8080 with /models/load — no v1 prefix for direct access).
-                attempts = [
-                    (7860, "/v1/models/load"),
-                    (8080, "/models/load"),
-                ]
-                for port, path in attempts:
-                    try:
-                        url = f"http://127.0.0.1:{port}{path}"
-                        body = json.dumps({"model": model_id}).encode("utf-8")
-                        req = urllib.request.Request(
-                            url, data=body,
-                            headers={
-                                "Content-Type": "application/json",
-                                "X-Ikaros-Client": "pet",  # C1
-                            },
-                            method="POST",
-                        )
-                        with urllib.request.urlopen(req, timeout=30.0) as resp:
-                            result = resp.read().decode("utf-8")
-                            log.info("model pre-load %s on :%d%s: %s", model_id, port, path, result[:200])
-                        success = True
-                        detail = f":{port}{path}"
-                        break  # success
-                    except urllib.error.HTTPError as exc:
-                        body_text = exc.read().decode("utf-8", errors="replace")
-                        # 400 = already running (not an error)
-                        if exc.code == 400:
-                            log.info("model %s already loaded (bridge says running): %s", model_id, body_text[:100])
-                            success = True
-                            detail = "(already loaded)"
-                            break
-                        log.debug("pre-load :%d%s failed HTTP %d: %s", port, path, exc.code, body_text[:100])
-                        detail = f"HTTP {exc.code}: {body_text[:80]}"
-                        continue
-                    except Exception as exc:
-                        log.debug("pre-load :%d%s failed: %s", port, path, exc)
-                        detail = str(exc)[:80]
-                        continue
-            except Exception as exc:
-                log.debug("model pre-load failed: %s", exc)
-                detail = str(exc)[:80]
-
-            # Show Live2D tip on main thread
-
+        """Pre-load model via LLMManager (async). Shows Live2D tip on completion."""
+        def on_complete(result):
             def tip():
-                if success:
-                    is_cloud = model_id in getattr(self, '_cloud_model_set', set())
+                if result.success:
+                    is_cloud = model_id in self._llm_mgr.cloud_model_set
                     tag = "☁️" if is_cloud else "💻"
                     self.notify_live2d_tip(f"{tag} {model_id} ✓")
-                    log.info("model pre-load SUCCESS: %s (%s)", model_id, detail)
+                    log.info("model pre-load SUCCESS: %s (%s)", model_id, result.detail)
                 else:
-                    self.notify_live2d_tip(f"⚠️ 模型加载失败: {detail}")
-                    log.warning("model pre-load FAILED for %s: %s", model_id, detail)
+                    self.notify_live2d_tip(f"⚠️ 模型加载失败: {result.detail}")
+                    log.warning("model pre-load FAILED for %s: %s", model_id, result.detail)
             QTimer.singleShot(0, tip)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._llm_mgr.preload_model_async(
+            model_id, old_model=old_model, on_complete=on_complete
+        )
 
 
 # ─── System Tray ───
@@ -1345,26 +1084,19 @@ class PetTray:
     # ─── Tray LLM model submenu ───
 
     def _fetch_tray_models(self):
-        """Fetch models: reuse PetWindow's data if available, else fetch fresh."""
-        # If PetWindow already fetched models, reuse them
-        if hasattr(self.window, '_available_models') and self.window._available_models:
-            self._populate_tray_llm(
-                self.window._available_models,
-                getattr(self.window, '_cloud_model_set', set()),
-            )
+        """Fetch models: reuse LLMManager's data if available, else fetch fresh."""
+        mgr = self.window._llm_mgr
+        if mgr.available_models:
+            self._populate_tray_llm(mgr.available_models, mgr.cloud_model_set)
             return
-        # Otherwise trigger PetWindow's fetch and wait for it
-        if hasattr(self.window, '_fetch_models_async') and not getattr(self.window, '_models_fetching', False):
+        # Trigger fetch and poll for completion
+        if not mgr.is_fetching:
             self.window._fetch_models_async()
-        # Poll until PetWindow has data (max 5s)
         def poll():
-            if hasattr(self.window, '_available_models') and self.window._available_models:
-                self._populate_tray_llm(
-                    self.window._available_models,
-                    getattr(self.window, '_cloud_model_set', set()),
-                )
-            else:
+            if mgr.is_fetching:
                 QTimer.singleShot(500, poll)
+            else:
+                self._populate_tray_llm(mgr.available_models, mgr.cloud_model_set)
         QTimer.singleShot(500, poll)
 
     def _populate_tray_llm(self, models: list[str], cloud_set: set[str] | None = None):

@@ -1,0 +1,19 @@
+{
+  "name": "model_manager",
+  "version": "2.0.0",
+  "description": "LLM model discovery, selection, persistence & GGUF metadata. Shared library — imported by desktop-pet, WebUI, supervisor.",
+  "type": "library",
+  "runtime": {
+    "kind": "python",
+    "module": "modules.model_manager.llm_manager",
+    "class": "LLMManager"
+  },
+  "network": {},
+  "lifecycle": {
+    "start": null,
+    "stop": null,
+    "health": null
+  },
+  "depends_on": [],
+  "env": {}
+}
