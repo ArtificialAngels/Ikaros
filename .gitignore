@@ -263,3 +263,16 @@ bridge-rs/sherpa-onnx-prebuilt.tar.bz2
 bridge-rs/sherpa-onnx-shared-extracted/
 bridge-rs/sherpa-onnx-prebuilt.tar.bz2
 bridge-rs/sherpa-onnx-shared.tar.bz2
+
+nul                                        # Windows reserved name (can't unlink)
+.qdrant-initialized                        # Qdrant 1.14 sentinel (auto-generated)
+data/**/*.db                               # SQLite (state.db, kanban.db) — 已被 data/** ignore, 显式 list
+**/Cargo.lock                              # Rust: hermes-agent 跟 bridge-rs 自己的 lockfile 不在仓库
+
+packages                                    # webui sqlite db (隐私: users/devices/sessions, 任何深度)
+# nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在
+packages
+
+# 7-2 cleanup batch additions
+packages                                    # webui sqlite db (隐私: users/devices/sessions, any depth)
+# nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在 (verified via check-ignore)
