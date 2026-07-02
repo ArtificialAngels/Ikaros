@@ -1,21 +1,20 @@
 # Ikaros
 
-> **赛博游民数字管家** · 装在 U 盘里 · 插到任何 Windows 电脑就能跑 · **零系统依赖**(自带便携 Python + llama.cpp + Node.js 23)
+> **赛博游民数字管家** · 装在 U 盘里 · 插到任何 Windows 电脑就能跑 · **零系统依赖**(自带便携 Python + llama.cpp + Rust bridge)
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)](https://www.microsoft.com/windows)
 [![Python](https://img.shields.io/badge/python-3.12.10-3776ab)](https://www.python.org/)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-b9503%2B-blueviolet)](https://github.com/ggml-org/llama.cpp)
-[![Web UI](https://img.shields.io/badge/Web%20UI-Vue%203%20%2B%20Koa%2042b883)](https://github.com/EKKOLearnAI/hermes-web-ui)
-[![License](https://img.shields.io/badge/license-MIT%20%2B%20BSL--1.1-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-📖 **完整文档**:`docs/README-总览.md`(中文) — 速览 / 启动 / 目录 / 维护 / 故障排查
 🧠 **项目记忆库**:`AGENTS.md` — 架构 / 决策 / gotcha / 历史
+📖 **身体文档**:`data/hermes-agent/ikaros-identity/Ikaros-body.md` — 进程 / 端口 / 数据 / 模块
 
 ---
 
 ## 🎯 一句话
 
-Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\hermes-all.bat`,**5 秒后浏览器自动打开**,即可开始对话。云端 LLM(OpenAI / Anthropic / OpenRouter / MiniMax)和本地 GGUF 模型(Qwen / Llama / DeepSeek)走 fallback 链自动切换,断网也能用本地模型继续工作。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-start.bat`,**Hermes Desktop 自动启动**,即可开始对话。云端 LLM(DeepSeek / MiniMax)为主,本地 GGUF 模型备用,记忆系统(Qdrant + embedding + 归约)全链路本地运行。
 
 ---
 
@@ -23,61 +22,57 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                       用户浏览器                                  │
-│              http://localhost:8648/    ← 自动打开                │
+│              Hermes Desktop (Electron 主前端)                      │
+│              + Ikaros Desktop Pet (系统托盘, cloud chat)           │
 └──────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  webui_proxy  (:8648, Python 薄反代, 拦截 /api/hermes/usage/stats)│
-│       ← 修正 npm 包 SQL bug, 其他路径透传到 :8649                │
+│               bridge-rs  (:7860, Rust 主中枢)                     │
+│    52 endpoints: chat / voice / neuro / memory / signals / ikaros │
+│         axum + tokio, OpenAI-compat /v1/chat/completions          │
 └──────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│       Hermes Web UI  (:8649, 内部) ← 不直接对浏览器              │
-│       (EKKOLearnAI/hermes-web-ui 上游干净副本)                    │
-│            Vue 3 SPA + Koa BFF + Socket.IO                       │
-│   聊天 / 会话 / 看板 / 定时任务 / 模型管理 / 文件浏览器 / 终端   │
-└──────────────────────────────────────────────────────────────────┘
-                                │
               ┌─────────────────┼────────────────────┐
               ▼                 ▼                    ▼
    ┌──────────────────┐ ┌──────────────┐ ┌───────────────────────┐
-   │  llama-server    │ │ Hermes API   │ │ Hermes Agent Bridge   │
-   │     (:8080)      │ │   (:7860)    │ │ (Python shim)         │
-   │  OpenAI-兼容 API │ │  FastAPI     │ │ 调上游 hermes-agent   │
-   │  router 模式     │ │  embedding / │ │  CLI / memory / KB    │
-   │  扫 data\models  │ │  RAG / 会话  │ │                       │
+   │  Qdrant          │ │ nomic-embed  │ │ DeepSeek-R1 (1.5B)    │
+   │  (:6333/:6334)   │ │   (:8587)    │ │     (:8589)           │
+   │  向量存储 768dim │ │ embedding    │ │ 记忆归约 reduce_to_fact│
    └──────────────────┘ └──────────────┘ └───────────────────────┘
+              │                               │
+              ▼                               ▼
+   ┌──────────────────┐            ┌───────────────────────┐
+   │  Cloud LLM       │            │  llama-server (:8080) │
+   │  DeepSeek/MiniMax│            │  Phi-4 (disabled)     │
+   │  Pet chat 主通道  │            │  本地推理 (备用)       │
+   └──────────────────┘            └───────────────────────┘
 ```
 
-### 四个端口(很重要)
+### 核心端口
 
-| Port | 进程 | 用途 | 是否暴露浏览器 |
-|------|------|------|--------------|
-| **8080** | llama-server | LLM 推理(OpenAI 兼容,router 模式) | ❌ 内部 |
-| **7860** | Hermes FastAPI (bridge) | embeddings / RAG / sessions / kanban / crons | ❌ 内部 |
-| **8649** | Hermes Web UI | Vue 3 SPA + Koa BFF | ❌ 内部(被反代) |
-| **8648** | **webui_proxy**(主入口) | 薄反代,拦截 `/api/hermes/usage/stats` 用修正后 SQL | ✅ **浏览器打开这个** |
+| Port | 进程 | 用途 | 状态 |
+|------|------|------|------|
+| **7860** | bridge-rs (Rust) | 主中枢: chat / memory / voice / neuro / 52 endpoints | ✅ 常驻 |
+| **6333/6334** | Qdrant 1.14 | 向量存储 (mem0 collection, 768 dim Cosine) | ✅ 常驻 |
+| **8587** | llama-server (nomic-embed) | embedding 专用 (768 dim) | ✅ 常驻 |
+| **8589** | llama-server (DeepSeek-R1 1.5B) | 记忆归约 (reduce_to_fact) | ✅ 常驻 |
+| **8080** | llama-server (Phi-4) | 本地 LLM 推理 | ⚠️ 默认禁用 |
 
 ---
 
 ## ✨ 特性
 
-- **零系统依赖** — 自带便携 Python 3.12.10(`portable-python/`)、llama.cpp Windows 二进制 + DLL(`runtime/`)、Node.js 23.11.1(`runtime/node23/`)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
+- **零系统依赖** — 自带便携 Python 3.12.10(`portable-python/`)、llama.cpp Windows 二进制 + DLL(`runtime/`)、Rust bridge-rs。**不需要系统装 Python / Node / VS / CUDA toolkit**。
 - **U 盘即插即用** — 项目根路径由 `bin\hermes-root.py` 自动解析(`E:\` / `F:\` / `G:\` 自适应),写盘符硬编码立刻挂掉。
-- **llama-server router 模式** — 一个 llama-server 进程扫 `data\models\*.gguf` 注册所有模型,API 请求按 `model` 字段路由、按需加载、LRU 淘汰。WebUI 下拉菜单选模型,**不需要重启任何进程**。
+- **Rust 主中枢 (bridge-rs)** — axum + tokio, 52 endpoints, chat / voice / neuro / memory / signals 全栈。OpenAI-compat `/v1/chat/completions` + SSE。
+- **本地记忆系统** — Qdrant 1.14 向量存储 + nomic-embed embedding (768 dim) + DeepSeek-R1 1.5B 记忆归约,全链路本地运行。memory_writer 自动将对话归约为事实存入 Qdrant。
+- **云端 LLM 优先** — Pet chat 走 DeepSeek / MiniMax cloud,本地模型备用。fallback 链自动切换。
 - **多版本 CUDA 自适应** — `runtime/cuda/{11.8, 12.4, 13.0}/` 按 NVIDIA 驱动版本自动选,525-554 默认 12.4,老卡回退 11.8。
 - **模块化服务** — 每个服务是 `modules/<name>/` 自描述包(`module.json` + `start.ps1` + `health.ps1`),`bin\hermes-supervisor.py` 按 `depends_on` 拓扑排序。新增服务 = 新建目录 + 写 `module.json`。
-- **Web UI 全功能** — AI 聊天、多会话管理、用量分析、定时任务、模型管理、多 Profile、文件浏览器、群聊、技能管理、日志查看、Web 终端、8 平台渠道配置(Telegram / Discord / Slack / WhatsApp / Matrix / 飞书 / 微信 / 企业微信)。
-- **云端 fallback** — `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 写到 `.env` 即可,故障自动切本地或下一家。
+- **Hermes Desktop** — Electron 主前端,完整聊天 / 会话 / 模型管理。便携 userData,不污染宿主系统。
+- **Desktop Pet** — Live2D 桌宠,系统托盘驻留,cloud chat,语音气泡联动,右键菜单全功能。
 - **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
-- **隐私优先** — `data/`、`hermes/data/`、`.env`、IDE 状态、运行时缓存全在 `.gitignore`,**`git status` 干净**。
-- 🆕 **webui_proxy 反代拦截** — npm 包 `usage/stats` 端点 SQL bug 已修:正确按 `(model, provider, base_url)` 分桶,排除 `source='tool'` / `id LIKE 'compress_%'` / `parent_session_id IS NOT NULL` / `archived=1` 等内部 session;端口拓扑改为 `:8648 → :8649` 双层。
-- 🐛 **PowerShell Runspace 修复** — 4 个 start.ps1 (webui/bridge/llm_engine/webui_proxy) 不再因 `add_OutputDataReceived` callback 在 Runspace 销毁后崩溃而静默带走子进程。
-- 📐 **启动 fail-fast** — `bin/hermes-supervisor.bat` + `bin/hermes-all.bat` 在启动前调 `hermes-root verify`,USB 盘符换 (E:→F:) 早爆,不再等所有模块都 fail 了才发现。
-- 🧹 **DWG 工具集收敛** — 根目录 49 个 DWG/DXF 脚本 `git mv` 到 `tools/dwg/`,LLM system prompt 加 `PROJECT_CONVENTIONS` 硬规则,以后再写就强制落到 `tools/dwg/`。
+- **隐私优先** — `data/`、`hermes/data/`、`.env`、IDE 状态、运行时缓存全在 `.gitignore`。
 
 ---
 
@@ -86,20 +81,18 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 ### 在你现在的电脑上(已经解压过)
 
 ```
-1. 把 GGUF 模型放到 data\models\   (没有就下载 — 见下方"模型下载")
-2. 双击 bin\hermes-all.bat
-3. 等 5 秒,浏览器自动打开 http://localhost:8648/
-4. 开始对话
+1. 双击 bin\ikaros-start.bat
+2. Hermes Desktop 自动启动
+3. 开始对话
 ```
 
 ### 在一台全新 Windows 电脑上(刚 git clone)
 
 ```
 1. git clone https://github.com/ArtificialAngels/hermes-agent-portable.git
-2. cd "hermes-agent"
-3. bin\setup-portable.bat          ← 下载 portable-python + runtime(~1 GB)
-4. 把 GGUF 放到 data\models\
-5. bin\hermes-all.bat              ← 浏览器自动打开
+2. cd "hermes-agent-portable"
+3. bin\setup-portable.bat          ← 下载 portable-python + runtime
+4. bin\ikaros-start.bat            ← Desktop 自动启动
 ```
 
 ---
@@ -109,28 +102,24 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 | 目录 | 大小 | 来源 | 用途 |
 |------|------|------|------|
 | `portable-python/` | ~230 MB | `setup-portable.bat` 下载 | 嵌入式 Python 3.12.10 + pip 包 |
-| `runtime/` | ~700 MB | `setup-portable.bat` 下载 | llama.cpp Windows 二进制 + DLL + Node 23 |
+| `runtime/` | ~700 MB | `setup-portable.bat` 下载 | llama.cpp Windows 二进制 + DLL |
 | `runtime/cuda/12.4/` | ~700 MB | `setup-portable.bat` 下载 | CUDA 12.4 运行时(默认) |
 | `runtime/cuda/11.8/` | ~400 MB | 按需 | 老 NVIDIA 驱动回退 |
-| `data/models/*.gguf` | 自选 | 用户自己下 | 模型权重(可放多个,router 自动管理) |
 
 **为什么不直接 git track?** 因为加起来几个 G,git 仓库会爆。`setup-portable.bat` 用 `aria2c` 多线程下载。
 
 ---
 
-## 🤖 模型下载
+## 🤖 本地模型
 
-支持 **任何 GGUF 格式** 模型。常用推荐:
+本地模型用于**记忆系统**(embedding + 归约),chat 默认走云端 (DeepSeek / MiniMax)。
 
-| 模型 | HuggingFace | 大小 | 显存 |
-|------|------------|------|------|
-| Qwen2.5-3B-Instruct Q4_K_M | `Qwen/Qwen2.5-3B-Instruct-GGUF` | ~2 GB | 4 GB |
-| Qwen2.5-7B-Instruct Q4_K_M | `Qwen/Qwen2.5-7B-Instruct-GGUF` | ~4.4 GB | 6 GB |
-| Llama-3.1-8B-Instruct Q4_K_M | `lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF` | ~4.7 GB | 6 GB |
-| DeepSeek-R1-Distill-Qwen-7B | `unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF` | ~4.4 GB | 6 GB |
-| Qwen3-30B-A3B (MoE) | `Qwen/Qwen3-30B-A3B-GGUF` | ~18 GB | 8 GB(部分 offload) |
+| 模型 | 用途 | 端口 | 大小 |
+|------|------|------|------|
+| nomic-embed-text-v1.5-q4 | embedding (768 dim) | :8587 | 84 MB |
+| DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M | 记忆归约 (reduce_to_fact) | :8589 | 1.04 GB |
 
-下载后放到 `data\models\`,llama-server router 模式会自动发现。
+可选: Phi-4-Mini 3.8B (本地 chat 推理, :8080, 默认禁用)。
 
 ---
 
@@ -141,23 +130,8 @@ Hermes Agent 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷�
 编辑 `.env`(从 `.env.example` 复制):
 
 ```bash
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### Per-model NGL / ctx-size
-
-`data\models\router-preset.ini`(从 `router-preset.example.ini` 复制):
-
-```ini
-[Qwen2.5-7B-Instruct-Q4_K_M.gguf]
-n_gpu_layers = 35
-ctx_size = 8192
-temperature = 0.7
-
-[Qwen3-30B-A3B-Q4_K_M.gguf]
-n_gpu_layers = 16          # 8 GB VRAM 放不下全 offload
-ctx_size = 4096
+DEEPSEEK_API_KEY=sk-...
+MINIMAX_API_KEY=...
 ```
 
 ### 国内网络慢 / 需要代理
@@ -170,41 +144,38 @@ ctx_size = 4096
 
 | 用途 | 命令 |
 |------|------|
-| 一键启动全部 | `bin\hermes-all.bat` |
-| 停止全部 | `bin\hermes-stop.bat` |
-| 首次运行 GPU 检测 | `bin\hermes-firstrun.bat` |
-| 健康检查(三层探测) | `bin\hermes-health.ps1` |
+| 一键启动 | `bin\ikaros-start.bat` |
+| 停止全部 | `bin\hermes-stop.bat` 或 `bin\ikaros-sleep.bat` |
+| 服务状态 | `bin\hermes-supervisor.bat --status` |
+| 启动顺序预览 | `bin\hermes-supervisor.bat --dry-run` |
+| 端口契约表 | `bin\hermes-supervisor.bat --ports` |
+| 查看模块详情 | `bin\hermes-supervisor.bat --inspect bridge` |
+| 重启单个服务 | `bin\hermes-supervisor.bat --restart bridge` |
 | 下载便携运行时 | `bin\setup-portable.bat` |
-| 模型管理(list/info/download) | `bin\hermes-models.py list` |
-| 实时 LLM 日志 | `bin\hermes-model-run.bat` |
-| 控制台(切换模型 / 启停服务) | `bin\hermes-console.bat` |
 | CRLF 归一化 | `portable-python\python.exe bin\fix-eol.py --all` |
 | HERMES_ROOT 路径解析 | `bin\hermes-root.bat resolve` |
-| 注册 git hooks(阻止 LF-only .bat 提交) | `bin\install-git-hooks.bat` |
 
 ---
 
 ## 📁 目录速览
 
 ```
-hermes-agent\
-├── bin\                  ← 启动器集合(CRLF 行尾!)
-├── modules\              ← 自描述服务(llm_engine / bridge / webui / webui_proxy / env_bootstrap / model_manager / supervisor)
-├── deps\                 ← 统一依赖区(junction 桥接 runtime 和 node)
-├── bridge\               ← FastAPI 后端(:7860)
-├── hermes\               ← Python 桥接层
-├── hermes-agent\         ← 上游 NousResearch/hermes-agent(只读)
-├── docs\                 ← 用户文档(中文)
+Ikaros\
+├── bin\                  ← 启动器 + 工具脚本
+├── bridge-rs\            ← ★ Rust 主中枢 (bridge) 源码
+├── modules\              ← 自描述服务 (bridge / env_bootstrap / llm_engine / model_manager)
+├── deps\                 ← 环境解析 (hermes-env.bat/ps1)
+├── hermes\               ← Python 薄桥接层 (deprecated, Rust 化中)
+├── hermes-agent\         ← 上游 NousResearch/hermes-agent (只读)
+├── docs\                 ← 用户文档
 ├── config\               ← hermes.yaml / models.yaml
-├── data\                 ← ★ 运行时数据(全部 git ignored)
-├── portable-python\      ← Python 3.12.10(git ignored)
-├── runtime\              ← llama.cpp + DLL + Node 23(git ignored)
-├── tests\                ← 集成测试(smoke_webui_proxy / smoke_hermes_env / test_hermes)
-├── AGENTS.md             ← 项目记忆库(架构/决策/gotcha/历史)
+├── data\                 ← ★ 运行时数据 (全部 git ignored)
+├── portable-python\      ← Python 3.12.10 (git ignored)
+├── runtime\              ← llama.cpp + DLL + CUDA (git ignored)
+├── tests\                ← 集成测试
+├── AGENTS.md             ← 项目记忆库 (架构/决策/gotcha/历史)
 └── README.md             ← 你在这里
 ```
-
-完整目录见 [docs/03-目录结构.md](docs/03-目录结构.md)。
 
 ---
 
@@ -212,14 +183,12 @@ hermes-agent\
 
 | 现象 | 第一看 |
 |------|--------|
-| 浏览器打不开 | `bin\hermes-health.ps1` 三层探测 |
-| LLM 不响应 | `bin\hermes-model-run.bat` 看实时日志 |
-| 端口被占 | `netstat -ano \| findstr :8648` |
-| OOM / VRAM 不够 | `data\models\router-preset.ini` 调小 `n_gpu_layers` |
+| Desktop 无响应 | `bin\hermes-supervisor.bat --status` 查端口 |
+| Bridge 不启动 | `data\logs\bridge.err` 查错误日志 |
+| 记忆系统异常 | `curl http://localhost:7860/api/memory/stats` |
+| 端口被占 | `netstat -ano \| findstr :7860` |
 | 云端 API 失败 | 检查 `.env` 的 API Key |
-| git commit 被 pre-commit 阻止 | `portable-python\python.exe bin\fix-eol.py --all` |
-
-完整故障排查:[docs/15-故障排查.md](docs/15-故障排查.md)。
+| USB 盘符变了 | `bin\hermes-root.bat resolve` 重新解析 |
 
 ---
 
@@ -229,14 +198,12 @@ hermes-agent\
 
 | 上游项目 | 链接 | 用途 | 协议 |
 |----------|------|------|------|
-| **Hermes Web UI** | [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) | 主 Web 界面(Vue 3 + Koa + Socket.IO) | BSL-1.1 |
 | **Hermes Agent** | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | Agent 核心 / CLI | MIT |
 | **llama.cpp** | [ggerganov/llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 LLM 推理 | MIT |
-| **Qwen** | [QwenLM/Qwen](https://github.com/QwenLM/Qwen) | 默认本地模型 | Apache 2.0 |
+| **Qdrant** | [qdrant/qdrant](https://github.com/qdrant/qdrant) | 向量数据库 | Apache 2.0 |
+| **Qwen** | [QwenLM/Qwen](https://github.com/QwenLM/Qwen) | 本地模型 | Apache 2.0 |
 
-`hermes-agent\` 是上游的干净副本(Phase 11 锁定版本),本项目所有二次开发放在 `modules\` 下。WebUI 不再是 sibling clone —— 它通过 `cd runtime\node23 && npm install -g hermes-web-ui` 装到 `runtime/node23/node_modules/hermes-web-ui/`(见 [docs/14-维护与升级.md](docs/14-维护与升级.md))。
-
-**升级上游**(2026-06-17 改为 selective sync):用 `bin\hermes-upstream-sync.py pull → diff → pick → report` 的流程,**不**直接 `git clone` 覆盖 `hermes-agent/`。详见 [docs/14-维护与升级.md](docs/14-维护与升级.md)。
+`hermes-agent\` 是上游的干净副本,本项目所有二次开发放在 `bridge-rs\` 和 `modules\` 下。
 
 ---
 
@@ -255,10 +222,10 @@ hermes-agent\
 
 ## 📜 协议
 
-- 本整合包:MIT
-- Hermes Web UI:BSL-1.1
-- llama.cpp:MIT
-- Hermes Agent:MIT
+- 本整合包: MIT
+- llama.cpp: MIT
+- Hermes Agent: MIT
+- Qdrant: Apache 2.0
 - 模型权重遵循各自许可证(用户自备)
 
 模型权重**不包含在本仓库**。请从 HuggingFace / ModelScope 等渠道下载。
@@ -267,52 +234,24 @@ hermes-agent\
 
 ## 📈 更新日志
 
-### 2026-06-16c — webui_proxy + Runspace 修复 + 大清理(本次)
-**完整功能** — 修复 npm 包 SQL bug + 修 PowerShell 崩溃 + 启动 fail-fast + 根目录 DWG 脚本收敛:
+### 2026-07-02 — 架构刷新 (WebUI 移除 + 记忆系统上线)
+- 🗑️ **WebUI 完全移除** — hermes_cli gateway (ephemeral port) 取代 webui 套娃。Hermes Desktop (Electron) 成为主前端。
+- 🧠 **本地记忆系统** — Qdrant 1.14 + nomic-embed (:8587) + DeepSeek-R1 (:8589) 全链路。memory_writer.rs 自动将对话归约为事实。
+- 🔧 **模块清理** — webui / webui_proxy 模块禁用, llm_engine :8080 默认禁用。活跃模块: bridge / env_bootstrap / model_manager。
+- 📝 **启动脚本重构** — `ikaros-start.bat` / `hermes-stop.bat` 对齐模块化架构, 云优先。
 
-- 🆕 **新增 `modules/webui_proxy/` 薄反代** — 拦截 `/api/hermes/usage/stats` 端点 SQL bug(按 `(model, provider, base_url)` 分桶,排除 `source='tool'` / `id LIKE 'compress_%'` / `parent_session_id IS NOT NULL` / `archived=1` 内部 session,日期轴 dense 0 填充)。端口拓扑改为 `:8648 webui_proxy(公开) → :8649 webui(内部)` 双层。
-- 🐛 **PowerShell Runspace 修复** — 4 个 start.ps1 (webui/bridge/llm_engine/webui_proxy) 改用 `RedirectStandardOutput=$false` 让子进程继承 PowerShell 父进程 stdio,不再因 `add_OutputDataReceived` callback 在 Runspace 销毁后崩溃而静默带走子进程。
-- 📐 **启动 fail-fast** — `bin/hermes-supervisor.bat` + `bin/hermes-all.bat` 在启动前调 `hermes-root verify`,USB 盘符换 (E:→F:) 早爆,不再等所有模块都 fail 了才发现。
-- 🧹 **根目录 49 个 DWG/DXF 脚本** `git mv` 到 `tools/dwg/`,LLM system prompt 加 `PROJECT_CONVENTIONS` 硬规则,以后再写就强制落到 `tools/dwg/`。
-- 📝 **`docs/PROJECT_OVERVIEW.md` 新建** (142 行开发者视角精简地图:架构 / 端口 / 不变式 / 文件索引 / 修订时间线)。
-- 🗑️ **22 个 `bin/_*.ps1/_*.py` 诊断 + 4 个根目录冗余 + 13 个 `_backup` + 11 个 `__pycache__`** 全部清除。
+### 2026-06-16c — Supervisor + Runspace 修复
+- 🐛 **PowerShell Runspace 修复** — start.ps1 改用 inherit-stdio, 不再因 Runspace 销毁后崩溃而静默带走子进程。
+- 📐 **启动 fail-fast** — supervisor 在启动前调 `hermes-root verify`, USB 盘符换 (E:→F:) 早爆。
 
 ### 2026-06-13 — v3 Phase Close-Out
-**Soft release** — 无新功能、无破坏性重构。从"作者 U 盘"变成"公开仓库就绪":
-
-- 🔒 **Logs page ENOENT 修复** — 三个地方显式 pin `HERMES_AGENT_CLI_PYTHON`,webui 不再被旧 `HERMES_BIN` 环境变量污染。
-- 🔒 **Repo 隐私清理** — 4 个被早期 commit 误跟踪的文件 `git rm --cached`(`data/hermes-agent/config.yaml`、`data/models/router-preset.ini`、`hermes/data/skills/{note,weather}.py`)。两个 skill 文件移到 `docs/examples/skills/`。
-- 📝 **`.gitignore` 全面重写** — 新增 `data/{hermes-agent,webui,memory,knowledge,skills,kanban,crons,logs}` 段、IDE 状态、runtime 缓存、备份变体。
-- 📝 **文档修订** — `AGENTS.md` 加 §0 phase close-out 章节,`docs/03-目录结构.md` 完全重写(80→175 行),`docs/00-速览.md` 端口修正。
-- 📝 **`README.md` 重写** — 从"v1 启动器手册"变成"v3 GitHub 介绍"。
+- 🔒 `.gitignore` 全面重写, 隐私清理。
+- 📝 `README.md` 重写, `AGENTS.md` 加 §0 phase close-out 章节。
 
 ### 2026-06-10 — v2 Phase 11 重构
-- 模块化服务架构完成(`modules/{env_bootstrap, llm_engine, bridge, webui, model_manager, supervisor}`)。
+- 模块化服务架构完成 (`modules/<name>/` 自描述包)。
+- `bin\hermes-supervisor.py` 用 Python 替代老的 PowerShell orchestrator。
 - `bin\hermes-root.py` 成为路径解析的单一源真理。
-- `bin\hermes-supervisor.py` 用 Python 替代老的 PowerShell orchestrator(规避 cmd /c + 空格路径 bug)。
-- `.githooks/pre-commit` 阻止 LF-only `.bat` 提交。
-- `deps/` 统一依赖区(junction 桥接 `runtime/node23`、`runtime/cuda/`)。
-
-### 2026-06-09 — llama-server Router 模式
-- 单进程扫 `data\models\` 注册所有 GGUF,按 `model` 字段路由、按需加载、LRU 淘汰。
-- WebUI 下拉菜单切模型 = 下一条 chat 请求自动走该模型,首次加载几秒,后续走 LRU 缓存。
-- Per-model NGL / ctx 配置:`data\models\router-preset.ini`。
-- 显式预热:`POST /v1/models/load {model: ...}`,显式驱逐:`POST /v1/models/unload`。
-
-### 2026-06-08 — 集成 Hermes Web UI
-- 集成 [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) 作为主 Web 界面。
-- 解决便携环境兼容性问题(`HERMES_AGENT_BRIDGE_PYTHON` / `HERMES_WEB_UI_HOME` / 禁用 gateway 自启)。
-- 新增 6 个内部模块:sessions / workspace / webui_settings / kanban / cron / llm streaming。
-
-### 2026-06-07 — 内部模块扩充
-- 6 个新模块:sessions / workspace / webui_settings / kanban / cron / llm streaming。
-- 真实 SSE 流式聊天。
-- 持久化会话、看板、定时任务。
-
-### 2026-06-06 — llama.cpp b9538 升级
-- Qwen3 MoE 支持。
-- 多模型切换 CLI。
-- GPU 自动检测。
 
 ---
 
@@ -321,16 +260,13 @@ hermes-agent\
 | 项目 | 链接 |
 |------|------|
 | **本仓库** | https://github.com/ArtificialAngels/hermes-agent-portable |
-| Hermes Web UI(上游) | https://github.com/EKKOLearnAI/hermes-web-ui |
 | Hermes Agent(上游) | https://github.com/NousResearch/hermes-agent |
 | llama.cpp | https://github.com/ggml-org/llama.cpp |
+| Qdrant | https://github.com/qdrant/qdrant |
 | Qwen 模型 | https://huggingface.co/Qwen |
 | GGUF 模型索引 | https://huggingface.co/models?library=gguf |
 
 ---
 
-*最后完整测试:Qwen2.5-7B 真实响应通过 ✓*
-*启动时间(冷启动含模型加载):~15 秒*
-*内存基线(idle):~400 MB + 模型 VRAM*
-
-[⬆ 回到顶部](#hermes-agent)
+*当前架构: bridge-rs (Rust) + Qdrant + nomic-embed + DeepSeek-R1 记忆归约 + Hermes Desktop (Electron)*
+*启动: `bin\ikaros-start.bat` · 停止: `bin\hermes-stop.bat`*

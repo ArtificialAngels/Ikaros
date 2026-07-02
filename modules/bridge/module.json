@@ -23,7 +23,7 @@
     "shutdown_timeout_s": 10
   },
   "depends_on": [
-    { "module": "llm_engine", "required": false, "reason": "proxies /v1/chat/completions to llama-server" }
+    { "module": "llm_engine", "required": false, "reason": "proxies /v1/chat/completions to llama-server (soft — cloud fallback when down)" }
   ],
   "env": {
     "HERMES_LLAMA_URL": "http://127.0.0.1:8080",

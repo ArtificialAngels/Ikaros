@@ -8,13 +8,7 @@ REM   2. runtime/llama-server-*.exe  (llama.cpp b9503 with CUDA 12.4,
 REM                                   cudart/cublas bundled, ~250 MB)
 REM   2b. runtime/cuda/<v>/  (extra CUDA 11.8 / 13.0, on-demand)
 REM   3. runtime/node23/    (Node.js 23.11.1 win-x64, ~30 MB)
-REM                                   Required by the webui module (modules/webui/).
-REM                                   The npm global install (hermes-web-ui) is NOT
-REM                                   auto-downloaded -- it lives in a sibling
-REM                                   private repo. If runtime/node23/node_modules/
-REM                                   hermes-web-ui is absent, webui will fall back
-REM                                   to the dev source under .\hermes-web-ui\
-REM                                   (which the user must clone separately).
+REM                                   Used by hermes-agent tooling and gateway.
 REM   3b. runtime/git/      (PortableGit 2.54.0 win-x64, ~56 MB)
 REM                                   Required by hermes-agent's terminal backend
 REM                                   (tools/environments/local.py). Provides
@@ -60,7 +54,7 @@ set "USE_ARIA=0"
 if exist "%ARIA%" set "USE_ARIA=1"
 
 REM No default model download — users place their own .gguf files in data/models/.
-REM The hermes-models.py CLI or the WebUI model manager can download models.
+REM The hermes-models.py CLI can download models.
 set "HAS_MODEL=0"
 if exist "%HERMES_ROOT%\data\models\*.gguf" set "HAS_MODEL=1"
 
@@ -248,7 +242,7 @@ echo   OK: CUDA %CUDA_REC% runtime in %EXTRA_DIR%
 echo.
 
 REM ============================================================
-REM 3. runtime/node23/  (Node.js 23.11.1 -- webui runtime)
+REM 3. runtime/node23/  (Node.js 23.11.1 -- hermes-agent tooling)
 REM ============================================================
 :check_node
 set "NODE_DIR=%HERMES_ROOT%\runtime\node23"
@@ -270,7 +264,7 @@ if exist "%NODE_EXE%" goto :check_git
 echo.
 echo ============================================================
 echo   [3/4] runtime/node23/  ^(?^)
-echo   Node.js 23.11.1 is missing (required for the webui module).
+echo   Node.js 23.11.1 is missing (required for hermes-agent tooling).
 echo   Downloading from nodejs.org (~30 MB)...
 echo ============================================================
 echo.
@@ -286,7 +280,7 @@ if not exist "%NODE_DIR%" mkdir "%NODE_DIR%" 2>nul
 call :download "%NODE_URL%" "%NODE_ZIP%"
 if errorlevel 1 (
     echo [setup-portable] FAIL: Node.js download failed.
-    echo [setup-portable]   webui will be unable to start; other modules OK.
+    echo [setup-portable]   hermes-agent tooling may be affected; other modules OK.
     set "MISSING=1"
     goto :check_git
 )
@@ -314,16 +308,8 @@ if not exist "%NODE_EXE%" (
 echo   OK: %NODE_EXE%
 echo.
 
-REM Warn if the hermes-web-ui npm global install is missing.
-REM We retired the .\hermes-web-ui\ dev-source fallback in 2026-06-15
-REM (see AGENTS.md §0.7a); the npm global install is the only supported path.
-if not exist "%NODE_DIR%\node_modules\hermes-web-ui\bin\hermes-web-ui.mjs" (
-    echo   [WARN] hermes-web-ui npm global install NOT detected at
-    echo          %NODE_DIR%\node_modules\hermes-web-ui\
-    echo          The webui module will fail unless you install it:
-    echo            cd runtime\node23 ^&^& npm install -g hermes-web-ui
-    echo.
-)
+REM Node.js is present (checked above).
+REM hermes-agent tooling uses Node for gateway and CLI tools.
 
 REM ============================================================
 REM 3b. runtime/git/  (PortableGit 2.54.0 -- POSIX shell for hermes-agent)
@@ -407,7 +393,7 @@ echo.
 echo ============================================================
 echo   [4/4] data/models/  ^(?^)
 echo   No .gguf files found in data\models^. Use hermes-models.py
-echo   or the WebUI model manager to download a model.
+echo   or the model manager to download a model.
 echo ============================================================
 echo.
 set "MISSING=1"

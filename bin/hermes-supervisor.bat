@@ -12,7 +12,7 @@ REM   bin\hermes-supervisor.bat           # start all services
 REM   bin\hermes-supervisor.bat --status  # port health check
 REM   bin\hermes-supervisor.bat --stop    # stop all services
 REM   bin\hermes-supervisor.bat --dry-run # show start order
-REM   bin\hermes-supervisor.bat --only webui bridge
+REM   bin\hermes-supervisor.bat --only bridge llm_engine
 REM ============================================================
 setlocal
 chcp 65001 >nul
@@ -42,10 +42,10 @@ if not "%VERIFY_RC%"=="0" (
     echo         the old location.
     echo.
     echo         Fix ^(pick one^):
-    echo           1. Re-insert the USB stick and re-run hermes-all.bat.
+    echo           1. Re-insert the USB stick and re-run ikaros-start.bat.
     echo           2. Force re-resolve by deleting .hermes-root at the
-    echo              project's root, then re-run hermes-all.bat.
-    echo           3. Manually: bin\hermes-root.bat init ^&^& bin\hermes-all.bat
+    echo              project's root, then re-run ikaros-start.bat.
+    echo           3. Manually: bin\hermes-root.bat init ^&^& bin\ikaros-start.bat
     echo.
     exit /b 3
 )
