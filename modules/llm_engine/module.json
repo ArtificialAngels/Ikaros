@@ -17,7 +17,7 @@
     "health_timeout_ms": 5000
   },
   "lifecycle": {
-    "start": "start.ps1",
+      "start": null,
     "stop": "stop.ps1",
     "health": "health.ps1",
     "startup_timeout_s": 90,
