@@ -23,7 +23,7 @@ use std::time::Duration;
 const QDRANT_COLLECTION: &str = "mem0";
 const DEFAULT_QDRANT_URL: &str = "http://127.0.0.1:6333";
 const DEFAULT_EMBED_DIMS: usize = 0;  // 0 = 启动时自动检测
-const DEFAULT_EMBED_URL: &str = "http://127.0.0.1:8080/embeddings";
+const DEFAULT_EMBED_URL: &str = "http://127.0.0.1:8587/embeddings";
 const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text-v1.5";
 const HTTP_TIMEOUT_SECS: u64 = 30;
 
@@ -384,7 +384,7 @@ pub struct AddRequest {
     #[serde(default = "default_true")]
     pub direct: bool,
     // ↓ Phase 2 P0 (2026-07-02): DNA Memory 借鉴字段, 全 Optional 保持向后兼容
-    /// 重要性 (0.0-1.0), 衰减时作底线
+    /// 重要性 (0.0-1.0), 衰减时作底线 (DNA Memory 公式)
     #[serde(default)]
     pub importance: Option<f64>,
     /// 半衰期天数, 0 = 永久记忆不衰减
@@ -399,6 +399,46 @@ pub struct AddRequest {
     /// 来源: auto_collector / memory_writer / manual
     #[serde(default)]
     pub source: Option<String>,
+
+    // ↓ Phase 2 P2 (2026-07-02): mem0 兼容元数据, 全部 Optional + 缺省兜底
+    /// 来源渠道: chat | voice | kanban | webui | cli | unknown
+    /// (跟 source 不同: source 是写入者, source_kind 是用户接触面)
+    #[serde(default)]
+    pub source_kind: Option<String>,
+    /// session_id, 跨渠道复用同一个 chat session 时填 (例如 voice+webui 同 session)
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// 重要性 1-5 scale (UI 用), 跟 0-1 importance 共存 (DNA Memory 仍用 0-1 算衰减)
+    /// 1 = trivially important; 5 = 永久必记
+    #[serde(default)]
+    pub importance_5: Option<u8>,
+    /// 过期时间 (秒), None = 永不过期
+    /// 跟 halflife_days 不同: halflife_days 是软衰减, ttl_seconds 是硬过期
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+    /// 标签 (JSON array 形式), 跟 string tags 共存 — P2 期间 tags 仍写为 comma-string
+    /// (Qdrant 1.14 不支持 native list indexing, 留在 payload 做应用层 filter)
+    #[serde(default)]
+    pub tags_vec: Option<Vec<String>>,
+    /// ISO 8601 创建时间 (alias of created_at, 前端统一字段名)
+    #[serde(default)]
+    pub created_at_iso: Option<String>,
+    /// ISO 8601 最后访问时间 (alias of last_accessed)
+    #[serde(default)]
+    pub last_accessed_at_iso: Option<String>,
+    /// 关联记忆的 point id 列表, 跨链接用 (GraphRAG 雏形)
+    #[serde(default)]
+    pub related_memories: Option<Vec<String>>,
+}
+
+/// Source kind 白名单 (跟主入口对齐)
+const VALID_SOURCE_KINDS: &[&str] = &["chat", "voice", "kanban", "webui", "cli", "unknown"];
+
+fn default_source_kind(s: Option<String>) -> String {
+    match s {
+        Some(t) if VALID_SOURCE_KINDS.contains(&t.as_str()) => t,
+        _ => "unknown".to_string(),
+    }
 }
 
 fn default_user() -> String { "hermes-user".to_string() }
@@ -439,6 +479,25 @@ pub struct SearchResult {
     pub last_accessed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decayed_weight: Option<f64>,
+    // ↓ Phase 2 P2: mem0 兼容字段 (P0 字段之上再增, 全部 Optional 输出)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub importance_5: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_expires_at_iso: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags_vec: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at_iso: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at_iso: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_memories: Option<Vec<String>>,
 }
 
 /// 添加记忆 (直接存储, 不做 LLM 提取)
@@ -457,12 +516,38 @@ pub async fn add_memory(req: &AddRequest) -> Result<String, String> {
     let tags = req.tags.clone().unwrap_or_default();
     let source = req.source.clone().unwrap_or_else(|| "manual".to_string());
 
+    // ↓ Phase 2 P2: mem0 兼容字段默认值
+    let source_kind = default_source_kind(req.source_kind.clone());
+    let session_id = req.session_id.clone().unwrap_or_default();
+    let importance_5 = req.importance_5.unwrap_or(3).clamp(1, 5);  // 默认 ★★★
+    let ttl_seconds = req.ttl_seconds;  // None = forever
+    let tags_vec = req.tags_vec.clone().unwrap_or_default();
+    // ISO 8601 aliases — 优先用调用方传的, 否则用 now (跟 created_at 同源)
+    let created_at_iso = req.created_at_iso.clone()
+        .unwrap_or_else(|| now.to_rfc3339());
+    let last_accessed_at_iso = req.last_accessed_at_iso.clone()
+        .unwrap_or_else(|| now.to_rfc3339());
+    let related_memories = req.related_memories.clone().unwrap_or_default();
+    // 衍生: ttl_expires_at_iso = created_at + ttl_seconds (硬过期时间, 给 UI 显示)
+    let ttl_expires_at_iso: Option<String> = ttl_seconds.map(|s| {
+        let exp = now + chrono::Duration::seconds(s as i64);
+        exp.to_rfc3339()
+    });
+
     let url = format!("{}/collections/{}/points?wait=true", cfg.qdrant_url, QDRANT_COLLECTION);
     // Phase 2 P1 (2026-07-02): Qdrant 1.14 兼容性修复 (更正)
     //   - PUT (不是 POST) — POST /points 在 1.14 返 200 但实际不写 (verified via GET by id)
     //   - body 加 "ids" 顶层字段 (1.14 强制要求, 之前 PUT 也会 400 错 "missing field ids")
     //   - ?wait=true 同步等结果 (确保写完再返回)
     //   - ad-hoc verify 见 hermes-verify-phase2p1-wireup-20260702.py
+    //
+    // Phase 2 P2 (2026-07-02): mem0 兼容 payload schema migration
+    //   - 新字段全部 Optional, 旧 point 不受影响 (回读时缺字段用 None 兜底)
+    //   - created_at_iso / last_accessed_at_iso 是 created_at / last_accessed 的 alias
+    //     (Phase 2 P2 同步写两份, 后续 P3 把老字段 alias 删掉)
+    //   - tags_vec 写为 list (Qdrant 1.14 不支持 indexed list, 只支持应用层 filter)
+    //   - ttl_seconds 写底层数字, ttl_expires_at_iso 写预计算的 ISO 字符串 (UI 直接用)
+    //   - related_memories 写 list, 跟 Mem0 graph link 同语义 (Phase 3 GraphRAG 雏形)
     let body = serde_json::json!({
         "ids": [point_id],
         "points": [{
@@ -472,14 +557,25 @@ pub async fn add_memory(req: &AddRequest) -> Result<String, String> {
                 "text": &req.text,
                 "user_id": &req.user_id,
                 "agent_id": &req.agent_id,
-                "created_at": now.to_rfc3339(),
+                "created_at": created_at_iso,
                 // ↓ Phase 2 P0: DNA Memory 借鉴字段
-                "last_accessed": now.to_rfc3339(),
+                "last_accessed": last_accessed_at_iso,
                 "importance": importance,
                 "halflife_days": halflife_days,
                 "mem_type": mem_type,
                 "tags": tags,
                 "source": source,
+                // ↓ Phase 2 P2: mem0 兼容 schema (additive, 老数据完全不受影响)
+                "source_kind": source_kind,
+                "session_id": session_id,
+                "importance_5": importance_5,
+                "ttl_seconds": ttl_seconds,
+                "ttl_expires_at_iso": ttl_expires_at_iso,
+                "tags_vec": tags_vec,
+                "created_at_iso": created_at_iso,
+                "last_accessed_at_iso": last_accessed_at_iso,
+                "related_memories": related_memories,
+                "schema_version": 2,  // P2 标记, P3 migration 工具识别用
             }
         }]
     });
@@ -546,7 +642,7 @@ pub async fn search_memories(req: &SearchRequest) -> Result<Vec<SearchResult>, S
         .await
         .map_err(|e| format!("search parse failed: {e}"))?;
 
-    let results = json["result"]
+let results = json["result"]
         .as_array()
         .unwrap_or(&vec![])
         .iter()
@@ -560,6 +656,20 @@ pub async fn search_memories(req: &SearchRequest) -> Result<Vec<SearchResult>, S
             let decayed = compute_decayed_weight(importance, &last_accessed_str, halflife);
             // 综合分: cosine * 0.7 + decayed * 0.3 (DNA Memory 思想: 旧记忆自然掉分)
             let combined = cosine * 0.7 + decayed * 0.3;
+            // ↓ Phase 2 P2: 读 mem0 兼容字段 (全部 Optional, 缺省 None — 旧数据安全)
+            let source_kind = payload["source_kind"].as_str().map(|s| s.to_string());
+            let session_id = payload["session_id"].as_str().map(|s| s.to_string());
+            let importance_5 = payload["importance_5"].as_u64().map(|v| v.min(5) as u8);
+            let ttl_seconds = payload["ttl_seconds"].as_u64();
+            let ttl_expires_at_iso = payload["ttl_expires_at_iso"].as_str().map(|s| s.to_string());
+            let tags_vec = payload["tags_vec"].as_array().map(|arr|
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+            );
+            let created_at_iso = payload["created_at_iso"].as_str().map(|s| s.to_string());
+            let last_accessed_at_iso = payload["last_accessed_at_iso"].as_str().map(|s| s.to_string());
+            let related_memories = payload["related_memories"].as_array().map(|arr|
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+            );
             Some(SearchResult {
                 id: point["id"].as_str()?.to_string(),
                 text: payload["text"].as_str()?.to_string(),
@@ -573,6 +683,16 @@ pub async fn search_memories(req: &SearchRequest) -> Result<Vec<SearchResult>, S
                 source: payload["source"].as_str().map(|s| s.to_string()),
                 last_accessed: last_accessed_str,
                 decayed_weight: Some(decayed),
+                // ↓ Phase 2 P2
+                source_kind,
+                session_id,
+                importance_5,
+                ttl_seconds,
+                ttl_expires_at_iso,
+                tags_vec,
+                created_at_iso,
+                last_accessed_at_iso,
+                related_memories,
             })
         })
         .collect();
@@ -627,6 +747,20 @@ pub async fn get_all_memories(user_id: &str) -> Result<Vec<SearchResult>, String
             let halflife = payload["halflife_days"].as_u64().unwrap_or(30) as u32;
             let last_accessed_str = payload["last_accessed"].as_str().map(|s| s.to_string());
             let decayed = compute_decayed_weight(importance, &last_accessed_str, halflife);
+            // ↓ Phase 2 P2: 读 mem0 兼容字段
+            let source_kind = payload["source_kind"].as_str().map(|s| s.to_string());
+            let session_id = payload["session_id"].as_str().map(|s| s.to_string());
+            let importance_5 = payload["importance_5"].as_u64().map(|v| v.min(5) as u8);
+            let ttl_seconds = payload["ttl_seconds"].as_u64();
+            let ttl_expires_at_iso = payload["ttl_expires_at_iso"].as_str().map(|s| s.to_string());
+            let tags_vec = payload["tags_vec"].as_array().map(|arr|
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+            );
+            let created_at_iso = payload["created_at_iso"].as_str().map(|s| s.to_string());
+            let last_accessed_at_iso = payload["last_accessed_at_iso"].as_str().map(|s| s.to_string());
+            let related_memories = payload["related_memories"].as_array().map(|arr|
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+            );
             Some(SearchResult {
                 id: point["id"].as_str()?.to_string(),
                 text: payload["text"].as_str().unwrap_or("").to_string(),
@@ -640,6 +774,16 @@ pub async fn get_all_memories(user_id: &str) -> Result<Vec<SearchResult>, String
                 source: payload["source"].as_str().map(|s| s.to_string()),
                 last_accessed: last_accessed_str,
                 decayed_weight: Some(decayed),
+                // ↓ Phase 2 P2
+                source_kind,
+                session_id,
+                importance_5,
+                ttl_seconds,
+                ttl_expires_at_iso,
+                tags_vec,
+                created_at_iso,
+                last_accessed_at_iso,
+                related_memories,
             })
         })
         .collect();
