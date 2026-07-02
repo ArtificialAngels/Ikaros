@@ -243,15 +243,17 @@ class TestBridgeRsProbe:
         assert "DeepSeek-R1-Distill-Qwen-1.5B-GGUF" in main_rs, "R1 HF download URL in probe"
 
     def test_probe_ikaros_patch_comment(self):
-        """Ikarus 7-2 patch: -ngl removed, default auto."""
+        """Ikarus 7-2 patch: -ngl removed, default auto. DEFAULT_EMBED_URL → :8587."""
         main_rs = (ROOT / "bridge-rs" / "src" / "main.rs").read_text(encoding="utf-8")
-        # 7-2 22:30: 哥哥 asked can llama-server self-manage CPU/GPU.
-        # Answer: yes, default auto. Ikarus removed -ngl 0 patch,
-        # now modules use llama-server's default auto. Real measured: R1 0.20s (4x CPU).
         assert "Ikarus" in main_rs, "Ikarus 7-2 patch comment must be in source"
-        # Either the original -ngl 0 comment OR the new auto comment is fine
         assert "auto" in main_rs.lower() or "-ngl 0" in main_rs, \
             "patch comment must reference either auto (default) or -ngl 0"
+
+    def test_default_embed_url_8587(self):
+        """DEFAULT_EMBED_URL must point to :8587 (not dead :8080)."""
+        mem_rs = (ROOT / "bridge-rs" / "src" / "memory.rs").read_text(encoding="utf-8")
+        assert "http://127.0.0.1:8587/embeddings" in mem_rs, \
+            "DEFAULT_EMBED_URL should be :8587, not :8080"
 
     def test_probe_block_syntactically_intact(self):
         """Quest 写的 probe block 必须完整, 不被 partial patch 截断."""
