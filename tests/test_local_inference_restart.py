@@ -64,13 +64,21 @@ class TestMemoryEmbeddingModule:
         mj = json.loads((ROOT / "modules" / "memory_embedding" / "module.json").read_text(encoding="utf-8"))
         assert mj["required"] is True, "required=true per 哥哥 axiom"
 
-    def test_module_json_ngl_zero(self):
-        """RTX 3070 -ngl 99 lazy-load 卡死 → -ngl 0 CPU (Ikarus 7-2 patch)."""
+    def test_module_json_ngl_optional(self):
+        """-ngl is OPTIONAL — default is auto, llama-server self-schedules.
+
+        7-2 history: Ikarus tried -ngl 99 (GPU) first, hit RTX 3070 lazy-load deadlock,
+        then -ngl 0 (CPU) which works. Brother test accepted only -ngl 0.
+        7-2 22:30: 哥哥 asked "can llama-server self-manage CPU/GPU?". Default IS auto.
+        This test now accepts BOTH "no -ngl (auto)" and "-ngl 0 (CPU explicit)".
+        """
         mj = json.loads((ROOT / "modules" / "memory_embedding" / "module.json").read_text(encoding="utf-8"))
         args = mj["runtime"]["args"]
-        assert "-ngl" in args, "missing -ngl arg"
-        idx = args.index("-ngl")
-        assert args[idx + 1] == "0", f"expected -ngl 0 (CPU), got -ngl {args[idx + 1]}"
+        if "-ngl" in args:
+            idx = args.index("-ngl")
+            assert args[idx + 1] in ("0", "auto"), \
+                f"only -ngl 0 (CPU) or auto (default) accepted, got -ngl {args[idx + 1]}"
+        # else: no -ngl specified, llama-server uses default = auto (OK)
 
     def test_module_json_no_model_dimensions(self):
         """b9826 llama-server 不支持 --model-dimensions (Ikarus 7-2 patch)."""
@@ -98,9 +106,12 @@ class TestMemoryEmbeddingModule:
         mj = json.loads((ROOT / "modules" / "memory_embedding" / "module.json").read_text(encoding="utf-8"))
         assert "huggingface.co" in mj.get("model_download_url", ""), "download URL on HF required for missing-model prompt"
 
-    def test_start_ps1_ngl_zero(self):
+    def test_start_ps1_ngl_optional(self):
+        """Same as module.json: -ngl optional, default auto."""
         ps1 = (ROOT / "modules" / "memory_embedding" / "start.ps1").read_text(encoding="utf-8")
-        assert "'-ngl', '0'" in ps1, "start.ps1 must launch with -ngl 0 (CPU)"
+        if "'-ngl'" in ps1:
+            assert "'-ngl', '0'" in ps1 or "'-ngl', 'auto'" in ps1, \
+                "if -ngl specified in start.ps1, must be 0 (CPU) or auto"
 
     def test_start_ps1_no_model_dimensions(self):
         ps1 = (ROOT / "modules" / "memory_embedding" / "start.ps1").read_text(encoding="utf-8")
@@ -138,11 +149,14 @@ class TestMemoryWriterLLMModule:
         mj = json.loads((ROOT / "modules" / "memory_writer_llm" / "module.json").read_text(encoding="utf-8"))
         assert mj["required"] is True, "R1 is required backend (memory reduce)"
 
-    def test_module_json_ngl_zero(self):
+    def test_r1_module_json_ngl_optional(self):
+        """Same as embed: -ngl is optional, default auto."""
         mj = json.loads((ROOT / "modules" / "memory_writer_llm" / "module.json").read_text(encoding="utf-8"))
         args = mj["runtime"]["args"]
-        idx = args.index("-ngl")
-        assert args[idx + 1] == "0", f"expected -ngl 0 (CPU), got -ngl {args[idx + 1]}"
+        if "-ngl" in args:
+            idx = args.index("-ngl")
+            assert args[idx + 1] in ("0", "auto"), \
+                f"only -ngl 0 (CPU) or auto (default) accepted, got -ngl {args[idx + 1]}"
 
     def test_module_json_jinja_flag(self):
         mj = json.loads((ROOT / "modules" / "memory_writer_llm" / "module.json").read_text(encoding="utf-8"))
@@ -160,9 +174,11 @@ class TestMemoryWriterLLMModule:
         idx = args.index("-c")
         assert int(args[idx + 1]) >= 4096, f"ctx must be >= 4096 for reduce, got {args[idx + 1]}"
 
-    def test_start_ps1_ngl_zero(self):
+    def test_r1_start_ps1_ngl_optional(self):
         ps1 = (ROOT / "modules" / "memory_writer_llm" / "start.ps1").read_text(encoding="utf-8")
-        assert "'-ngl', '0'" in ps1, "R1 start.ps1 must launch with -ngl 0 (CPU)"
+        if "'-ngl'" in ps1:
+            assert "'-ngl', '0'" in ps1 or "'-ngl', 'auto'" in ps1, \
+                "if -ngl specified in R1 start.ps1, must be 0 (CPU) or auto"
 
     def test_start_ps1_port_8589(self):
         ps1 = (ROOT / "modules" / "memory_writer_llm" / "start.ps1").read_text(encoding="utf-8")
@@ -227,9 +243,15 @@ class TestBridgeRsProbe:
         assert "DeepSeek-R1-Distill-Qwen-1.5B-GGUF" in main_rs, "R1 HF download URL in probe"
 
     def test_probe_ikaros_patch_comment(self):
-        """Ikarus 7-2 patch: -ngl 0 CPU mode justification."""
+        """Ikarus 7-2 patch: -ngl removed, default auto."""
         main_rs = (ROOT / "bridge-rs" / "src" / "main.rs").read_text(encoding="utf-8")
-        assert "Ikaros" in main_rs and "-ngl 0" in main_rs, "Ikarus 7-2 patch comment must be in source"
+        # 7-2 22:30: 哥哥 asked can llama-server self-manage CPU/GPU.
+        # Answer: yes, default auto. Ikarus removed -ngl 0 patch,
+        # now modules use llama-server's default auto. Real measured: R1 0.20s (4x CPU).
+        assert "Ikarus" in main_rs, "Ikarus 7-2 patch comment must be in source"
+        # Either the original -ngl 0 comment OR the new auto comment is fine
+        assert "auto" in main_rs.lower() or "-ngl 0" in main_rs, \
+            "patch comment must reference either auto (default) or -ngl 0"
 
     def test_probe_block_syntactically_intact(self):
         """Quest 写的 probe block 必须完整, 不被 partial patch 截断."""

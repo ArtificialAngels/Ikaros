@@ -65,7 +65,6 @@ $psi.Arguments = @(
     '--host', '127.0.0.1',
     '--port', "$Port",
     '-c', '2048',
-    '-ngl', '0',  # CPU only — GPU offload (-ngl 99) lazy-load 卡死, 2026-07-02 Ikaros 验证
     '--embeddings',
     '--pooling', 'mean',
     '--alias', 'nomic-embed-text-v1.5-q4',

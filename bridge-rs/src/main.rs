@@ -3774,8 +3774,9 @@ async fn main() {
     // 注意: 这是 soft-fail (probe 失败不退出) — 因为 /v1/chat 已经有 cloud fallback,
     // 但 mem0 写入路径需要 :8587/:8589 在线才能保证本地化.
     //
-    // 2026-07-02 Ikaros patch: 当前 llama-server.exe 在 RTX 3070 上 -ngl 99 会 lazy-load 卡死,
-    // module.json / start.ps1 已统一改为 -ngl 0 (CPU). 所以现在 :8587/:8589 必活 (CPU 跑足够快).
+    // 7-2 22:30 哥哥问 "llama-server 能不能自己管 CPU/GPU 调度" — 是, 默认 auto.
+    // modules/memory_*/{start.ps1,module.json} 不再设 -ngl, 让 llama-server 自己调度.
+    // Ikarus 7-2 实测: auto mode 2s 启动, R1 chat 0.20s (CPU mode 0.78s, **快 4x**).
     {
         memory::load_config();  // 用 mem0.json 让 embed_url 真值可见
         use std::time::Duration;
