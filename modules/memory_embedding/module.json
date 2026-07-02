@@ -1,0 +1,44 @@
+{
+  "name": "memory_embedding",
+  "version": "1.0.0",
+  "description": "nomic-embed-text-v1.5 嵌入推理服务 — 必须运行 (:8587)。bridge-rs memory pipeline 的核心依赖。",
+  "type": "service",
+  "runtime": {
+    "kind": "native",
+    "binary": "runtime/llama-server.exe",
+    "args": [
+      "-m", "data/models/nomic-embed-text-v1.5-q4/nomic-embed-text-v1.5.Q4_K_M.gguf",
+      "--host", "127.0.0.1",
+      "--port", "8587",
+      "-c", "2048",
+      "-ngl", "0",
+      "--embeddings",
+      "--pooling", "mean",
+      "--alias", "nomic-embed-text-v1.5-q4",
+      "--cont-batching",
+      "--flash-attn"
+    ],
+    "working_directory": "."
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 8587,
+    "protocol": "http",
+    "health_endpoint": "/health",
+    "health_timeout_ms": 30000
+  },
+  "lifecycle": {
+    "start": "start.ps1",
+    "stop": "stop.ps1",
+    "health": "health.ps1",
+    "startup_timeout_s": 60,
+    "shutdown_timeout_s": 10
+  },
+  "depends_on": [],
+  "env": {},
+  "required": true,
+  "_required_reason": "记忆高级管理核心依赖, 不允许降级到 cloud (cloud embed 延迟高且数据不出本机). 哥哥 2026-07-02 拍板.",
+  "model_file": "data/models/nomic-embed-text-v1.5-q4/nomic-embed-text-v1.5.Q4_K_M.gguf",
+  "model_size_mb": 84,
+  "model_download_url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf"
+}

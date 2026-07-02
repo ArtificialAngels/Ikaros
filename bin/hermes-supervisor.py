@@ -170,6 +170,8 @@ class Module:
     runtime_kind: str = ""         # 'native' | 'python' | 'node' | ''
     runtime_args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
+    required: bool = False         # 哥哥 2026-07-02: required=true → startup fails → supervisor 报错退出 (no silent skip)
+    required_reason: str = ""
 
 
 # ============================================================
@@ -225,6 +227,8 @@ def discover_modules() -> Dict[str, Module]:
             runtime_kind=runtime.get("kind", ""),
             runtime_args=list(runtime.get("args", []) or []),
             env=dict(data.get("env", {}) or {}),
+            required=bool(data.get("required", False)),
+            required_reason=str(data.get("_required_reason", "")),
         )
     return modules
 
@@ -330,6 +334,10 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
     Returns the Popen handle; returns None if start.ps1 exits immediately
     (HasExited=True).
     """
+    if not m.start_script:
+        print(f"  {C.YEL}[SKIP]{C.RST} {m.name} — start disabled (start: null)")
+        return None
+
     script = m.path / m.start_script
     if not script.is_file():
         print(f"  {C.YEL}[SKIP]{C.RST} {m.name} — no {m.start_script}")
@@ -423,6 +431,8 @@ def start_module(m: Module) -> Optional[subprocess.Popen]:
 
 def stop_module(m: Module) -> None:
     """Invoke stop.ps1 to gracefully shut down a module."""
+    if not m.stop_script:
+        return
     script = m.path / m.stop_script
     if not script.is_file():
         return
@@ -719,10 +729,33 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
 
     for n in order:
         m = modules[n]
-        print(f"  {C.CYN}>{C.RST} {n} ({m.type})")
+        print(f"  {C.CYN}>{C.RST} {n} ({m.type}){C.YEL}{' [REQUIRED]' if m.required else ''}{C.RST}")
         proc = start_module(m)
-        if proc is None and m.type == "service":
+        if proc is None and m.type == "service" and m.start_script:
             failed.append(n)
+            # 哥哥 2026-07-02 axiom: required 模块失败 → supervisor 立即报错退出.
+            # 不要 silent skip — 这是 supervisor 编排的"安全网", 让哥哥一眼看到缺少什么.
+            if m.required:
+                print(f"{C.RED}============================================================{C.RST}")
+                print(f"  {C.RED}[FATAL]{C.RST} required module failed: {C.BLD}{n}{C.RST} (:{m.port})")
+                if m.required_reason:
+                    print(f"          reason: {m.required_reason}")
+                # 缺模型下载提示 (从 module.json 读 model_download_url)
+                raw = json.loads((m.path / "module.json").read_text(encoding="utf-8"))
+                if raw.get("model_file") and raw.get("model_download_url"):
+                    mf = m.path.parent.parent / raw["model_file"]
+                    print(f"  {C.RED}[model]{C.RST} {raw['model_file']}")
+                    if mf.is_file():
+                        print(f"          exists at: {mf}")
+                    else:
+                        print(f"          {C.YEL}MISSING{C.RST} — download to: {mf}")
+                        print(f"          URL: {raw['model_download_url']}")
+                print(f"{C.RED}============================================================{C.RST}")
+                print()
+                # 失败后停止已经启动的 (reverse order) 干净退出
+                for started_name in started:
+                    stop_module(modules[started_name])
+                return 2
         else:
             started.append(n)
 
@@ -748,9 +781,9 @@ def cmd_start(modules: Dict[str, Module], only: List[str]) -> int:
     # 哥哥 2026-06-29 暂时禁用 watchdog — 影响开发
     # 原因: 反复重启干扰调试, 服务死了需要手动 restart
     # TODO: 重新启用时, 把这段换成 cmd_watchdog_start() 即可
-    print()
-    print(f"  {C.YEL}[SKIP]{C.RST} watchdog disabled by gēge (2026-06-29, dev mode)")
-    print(f"         to re-enable: uncomment cmd_watchdog_start() in cmd_start()")
+    # 2026-07-02 重新启用 (哥哥 out-of-band: nomic-embed :8587 + R1 :8589 是 required,
+    # 必须有 watchdog 死掉自动拉起). 见 handshake.2026-07-02.local-inference-required-restart.json
+    cmd_watchdog_start(modules)
     return 0
 
 

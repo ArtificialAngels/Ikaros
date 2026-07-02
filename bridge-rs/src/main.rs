@@ -3769,6 +3769,70 @@ async fn main() {
         state.access_control.sync_loaded_locals(loaded).await;
     }
 
+    // 哥哥 2026-07-02 拍板: nomic-embed :8587 + R1 :8589 是 REQUIRED memory backend.
+    // 启动期做 1 次 health probe, 缺失就 emit FATAL 提示哥哥下载模型 + 给 cloud fallback path.
+    // 注意: 这是 soft-fail (probe 失败不退出) — 因为 /v1/chat 已经有 cloud fallback,
+    // 但 mem0 写入路径需要 :8587/:8589 在线才能保证本地化.
+    //
+    // 2026-07-02 Ikaros patch: 当前 llama-server.exe 在 RTX 3070 上 -ngl 99 会 lazy-load 卡死,
+    // module.json / start.ps1 已统一改为 -ngl 0 (CPU). 所以现在 :8587/:8589 必活 (CPU 跑足够快).
+    {
+        memory::load_config();  // 用 mem0.json 让 embed_url 真值可见
+        use std::time::Duration;
+        let probes = [
+            ("memory_embedding:nomic-embed :8587",
+             "http://127.0.0.1:8587/health",
+             "data/models/nomic-embed-text-v1.5-q4/nomic-embed-text-v1.5.Q4_K_M.gguf",
+             "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf"),
+            ("memory_writer_llm:DeepSeek-R1 :8589",
+             "http://127.0.0.1:8589/health",
+             "data/models/deepseek-r1-distill-qwen-1.5b-q4/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+             "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/deepseek-r1-distill-qwen-1.5b.q4_k_m.gguf"),
+        ];
+        for (label, url, model_rel, download_url) in probes {
+            let root = project_root();
+            let model_abs = root.join(model_rel);
+            let req = state.http_client
+                .get(url)
+                .timeout(Duration::from_secs(3));
+            match req.send().await {
+                Ok(r) if r.status().is_success() => {
+                    info!("required backend OK: {} ({})", label, url);
+                }
+                Ok(r) => {
+                    tracing::error!(target: "bridge_startup",
+                        "[FATAL] required memory backend NOT HEALTHY: {} ({} → status {})",
+                        label, url, r.status());
+                    tracing::error!(target: "bridge_startup",
+                        "        model: {}", model_rel);
+                    tracing::error!(target: "bridge_startup",
+                        "        exists: {}", model_abs.display());
+                    tracing::error!(target: "bridge_startup",
+                        "        cloud fallback ACTIVE — memory writes will use cloud embed/reduce.");
+                    tracing::error!(target: "bridge_startup",
+                        "        download: {}", download_url);
+                    tracing::error!(target: "bridge_startup",
+                        "        place at: {}", model_abs.display());
+                }
+                Err(e) => {
+                    tracing::error!(target: "bridge_startup",
+                        "[FATAL] required memory backend UNREACHABLE: {} ({} → {})",
+                        label, url, e);
+                    tracing::error!(target: "bridge_startup",
+                        "        model: {}", model_rel);
+                    tracing::error!(target: "bridge_startup",
+                        "        exists: {}", model_abs.display());
+                    tracing::error!(target: "bridge_startup",
+                        "        cloud fallback ACTIVE — memory writes will use cloud embed/reduce.");
+                    tracing::error!(target: "bridge_startup",
+                        "        download: {}", download_url);
+                    tracing::error!(target: "bridge_startup",
+                        "        place at: {}", model_abs.display());
+                }
+            }
+        }
+    }
+
     // C1: warmup — if last_successful_local set, trigger load (fire-and-forget)
     if let Some(model) = state.access_control.startup_warmup_hint().await {
         info!("access-control: warmup hint = {}", model);
