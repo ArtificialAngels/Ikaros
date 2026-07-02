@@ -3861,6 +3861,56 @@ async fn main() {
         );
     }
 
+    // ========================================================================
+    // Memory endpoint handlers (Phase 2 P1, 2026-07-02) — wire-up routes
+    // 修 D 决策 ship-but-not-wired: P1.1 + P2 代码 ship 但 routes 从未注册
+    // ========================================================================
+
+    /// GET /v1/memory/writer/status — writer 配置 + 队列状态
+    async fn writer_status_handler() -> Json<serde_json::Value> {
+        let stats = memory_writer::STATE.lock().stats();
+        let cfg = memory_writer::config();
+        Json(serde_json::json!({
+            "enabled": stats.enabled,
+            "users_with_queue": stats.users_with_queue,
+            "total_queued": stats.total_queued,
+            "config": {
+                "base_url": cfg.base_url,
+                "model": cfg.model,
+                "implicit_window_sec": cfg.implicit_window_sec,
+                "merge_similarity_threshold": cfg.merge_similarity_threshold,
+                "fallback_to_cloud": cfg.fallback_to_cloud,
+                "max_input_chars": cfg.max_input_chars,
+                "explicit_keywords": cfg.explicit_keywords,
+            }
+        }))
+    }
+
+    /// POST /v1/memory/writer/toggle — 启用/禁用, 返回 prev + 当前状态
+    async fn writer_toggle_handler(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        let prev = memory_writer::is_enabled();
+        let new_enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(!prev);
+        memory_writer::set_enabled(new_enabled);
+        let current = memory_writer::is_enabled();
+        info!("memory_writer: toggle {} -> {}", prev, current);
+        Json(serde_json::json!({
+            "prev": prev,
+            "enabled": current,
+        }))
+    }
+
+    /// GET /api/memory/stats — Qdrant mem0 collection 统计
+    async fn memory_stats_handler() -> Json<serde_json::Value> {
+        match crate::memory::memory_stats().await {
+            Ok(stats) => Json(serde_json::json!(stats)),
+            Err(e) => Json(serde_json::json!({
+                "collection": "mem0",
+                "points_count": 0,
+                "status": format!("error: {}", e),
+            })),
+        }
+    }
+
     // Build router
     let app = Router::new()
         // Health checks
@@ -3920,6 +3970,9 @@ async fn main() {
         .route("/api/chat/sessions", get(list_sessions))
         .route("/api/agent/run", post(agent_run))
         // Catch-all for other /v1/* paths
+        .route("/v1/memory/writer/status", get(writer_status_handler))
+        .route("/v1/memory/writer/toggle", post(writer_toggle_handler))
+        .route("/api/memory/stats", get(memory_stats_handler))
         .fallback(proxy_v1)
         .with_state(state);
 

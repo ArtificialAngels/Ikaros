@@ -279,7 +279,25 @@ impl AutoCollector {
         let mut detected = detect_error(text)
             .or_else(|| detect_preference(text))
             .or_else(|| detect_decision(text))
-            .or_else(|| detect_knowledge(text))?;
+            .or_else(|| detect_knowledge(text));
+
+        // Phase 2 P1 (2026-07-02) 修: 显式触发含"记住"但无 Detector 匹配时,
+        //  兜底写入 fact 类型。否则 "记住: X" 但 X 不匹配任何 pattern 会被静默丢弃。
+        if detected.is_none() && is_explicit {
+            detected = Some(CollectedMemory {
+                mem_type: "fact".to_string(),
+                content: text.trim().to_string(),
+                importance: 0.7,
+                tags: vec!["explicit".to_string()],
+                is_explicit: true,
+                halflife_days: 0,
+            });
+        }
+
+        let mut detected = match detected {
+            Some(m) => m,
+            None => return None,  // 无 Detector 匹配 + 非显式触发 → skip
+        };
 
         // 4. 显式触发 → 永久 + 加分
         if is_explicit {
