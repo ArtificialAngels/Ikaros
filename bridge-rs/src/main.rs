@@ -1396,6 +1396,22 @@ async fn _chat_completions_impl(
                     }
                 }
 
+                // Phase 2 P1 (2026-07-02): wire-up — 末尾入队 memory_writer
+                // 0 副作用当 disabled; enabled 时只调 enqueue, 显式才 spawn flush
+                if let Some(user_msg_text) = body.get("messages")
+                    .and_then(|m| m.as_array())
+                    .and_then(|msgs| msgs.iter().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user")))
+                    .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+                {
+                    let user_id: String = headers.get("x-user-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .or_else(|| body.get("user").and_then(|u| u.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_else(|| "hermes-user".to_string());
+                    maybe_enqueue_memory(user_msg_text, &user_id);
+                }
+
                 (StatusCode::OK, [("content-type", "application/json")], body_text).into_response()
             }
             Err(e) => {
@@ -1404,6 +1420,26 @@ async fn _chat_completions_impl(
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         }
+    }
+}
+
+// Phase 2 P1 (2026-07-02) wire-up: chat_completions 末尾入队 memory_writer
+//   - 默认 disabled (memory_writer::is_enabled() false 时直接 skip, 0 副作用)
+//   - 显式触发 (含"记住"等) → spawn flush_user
+//   - 隐式 → 5min 窗口 + spawn_flush_loop 5s tick 兜底
+//   - P1.1 ship-but-not-wired 反模式修复 (7-1 26/26 verify 跑过 endpoint 但未接)
+fn maybe_enqueue_memory(user_text: &str, user_id: &str) {
+    if !memory_writer::is_enabled() {
+        return;  // 默认 disabled, 0 副作用
+    }
+    let decision = memory_writer::on_user_message(user_id, user_text);
+    if decision.should_flush_now {
+        let uid = user_id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = memory_writer::flush_user(&uid).await {
+                warn!(user_id = %uid, error = %e, "memory_writer: explicit flush failed");
+            }
+        });
     }
 }
 
@@ -3711,6 +3747,12 @@ async fn main() {
     // Update PATIENCE readiness flags and start heartbeat loop
     state.update_patience_readiness();
     state.start_patience_loop();
+
+    // Phase 2 P1 (2026-07-02) wire-up: memory_writer 隐式 flush 后台循环
+    //   - 5s tick, 默认 disabled 时 noop
+    //   - 修了 P1.1 ship-but-not-wired 反模式 (7-1 endpoint ship 但未接后台 loop)
+    memory_writer::spawn_flush_loop();
+    info!("memory_writer: flush loop spawned (default disabled, 5s tick)");
 
     // Initial health check (wait a moment for first refresh)
     {

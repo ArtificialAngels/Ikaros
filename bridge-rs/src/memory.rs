@@ -457,8 +457,13 @@ pub async fn add_memory(req: &AddRequest) -> Result<String, String> {
     let tags = req.tags.clone().unwrap_or_default();
     let source = req.source.clone().unwrap_or_else(|| "manual".to_string());
 
-    let url = format!("{}/collections/{}/points", cfg.qdrant_url, QDRANT_COLLECTION);
+    let url = format!("{}/collections/{}/points?wait=true", cfg.qdrant_url, QDRANT_COLLECTION);
+    // Phase 2 P1 (2026-07-02): Qdrant 1.14 兼容性修复
+    //   - 改 PUT → POST (1.14 deprecated 老 PUT /points 端点)
+    //   - body 加 "ids" 顶层字段 (1.14 强制要求, 之前 400 错误: missing field `ids`)
+    //   - ?wait=true 同步等结果, 避免 fire-and-forget 掩盖写失败
     let body = serde_json::json!({
+        "ids": [point_id],
         "points": [{
             "id": point_id,
             "vector": vector,
@@ -479,7 +484,7 @@ pub async fn add_memory(req: &AddRequest) -> Result<String, String> {
     });
 
     let resp = HTTP
-        .put(&url)
+        .post(&url)
         .json(&body)
         .send()
         .await
