@@ -140,22 +140,44 @@ class TestWebuiSecretKeyRemoved:
 
 # === [D P1-1] handshake title field ====================================
 class TestHandshakeTitles:
-    """D: 45 handshakes补 title, 现在 81/81 = 100%."""
+    """D: 45 handshakes补 title, 现在 81/81 = 100%.
+
+    Updated 7-2: 哥哥 out-of-band handoffs use 'topic' + 'NEW_TASK.title'
+    schema (not strict 'title' field). Accept any of:
+    - 'title' (canonical, Ikaros 风格)
+    - 'topic' (哥哥 out-of-band 风格)
+    - 'NEW_TASK.title' (Quest 嵌套 title)
+    """
+
+    def _has_title(self, d: dict) -> bool:
+        """A handoff is 'titled' if it has any of these fields."""
+        if 'title' in d and d['title']:
+            return True
+        if 'topic' in d and d['topic']:
+            return True
+        if 'NEW_TASK' in d and isinstance(d['NEW_TASK'], dict):
+            if 'title' in d['NEW_TASK'] and d['NEW_TASK']['title']:
+                return True
+        return False
 
     def test_all_handshakes_have_title(self):
         coord = ROOT / "data" / "ikaros-coordination"
         jsons = list(coord.glob("handshake.*.json"))
         assert len(jsons) > 0, "should have handshake JSON files"
         n_with_title = 0
+        no_title_list = []
         for p in jsons:
             try:
                 d = json.loads(p.read_text(encoding='utf-8', errors='replace'))
-                if 'title' in d:
+                if self._has_title(d):
                     n_with_title += 1
-            except Exception:
-                pass
+                else:
+                    no_title_list.append(p.name)
+            except Exception as e:
+                no_title_list.append(f"{p.name} (parse error: {e})")
         assert n_with_title == len(jsons), (
-            f"all handshakes should have title; got {n_with_title}/{len(jsons)}"
+            f"all handshakes should have title; got {n_with_title}/{len(jsons)}\n"
+            f"missing: {no_title_list}"
         )
 
 
