@@ -23,6 +23,9 @@ pub mod soul_loader;
 pub mod supervisor;
 pub mod access;
 pub mod patience;  // PATIENCE heartbeat (ported from Neuro)
+pub mod memory;    // Phase 1 ship, 2026-07-01 (Qdrant + llama-server embeddings)
+pub mod memory_writer;  // Phase 1.1, 2026-07-01 (auto chat enqueue + LLM reduce)
+pub mod auto_collector;  // Phase 2 P0, 2026-07-02 (DNA Memory 借鉴: 4 类 Detector)
 
 use telemetry::{SignalBus, RequestLog};
 
