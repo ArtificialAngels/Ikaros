@@ -4,11 +4,30 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-06-27 (ikaros-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
-> Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定义语言气泡
-> `#neuro-bubble` 和状态指示器 `#neuro-state`，处理 transcription/thinking/status/done/state
-> 消息类型，自动重连。右键菜单集成全部 wl-live2d 功能（切换模型/服装/截图/帧检测/比例调节），
-> 移除原生菜单按钮，CDN 扩展至 18 个模型。)
+**Last revised:** 2026-07-04 (push-to-github cleanup + Ikaros v4 ship).
+删去 265 个旧文件 (`bin/*.bat` / `bin/*.ps1` / `modules/*` / `bridge-rs/` / `bin/ikaros-desktop-pet-tauri/`)，
+一次性 push 到 `ArtificialAngels/Ikaros` origin/main as commit **11d682f**。
+新增 Ikaros v4 项目: `Ikaros-Live2D/` / `Ikaros-environment/` / `Ikaros-memory/`
+(不含 data/) / `tools/ikaros-memory-v3/` (Rust)。
+`.gitignore` 末尾新增 30+ 行 lockdown 块 (lines 280-314)，永久守护：
+- `oldcode/` 递归整树（旧架构数据）
+- `Ikaros-memory/data/v3.db` + `Ikaros-memory/data/space/`（DNA 记忆）
+- `Ikaros-memory/models/*.gguf`（5GB 模型）
+- `Ikaros-Live2D/src-tauri/target/` + `Cargo.lock`（Rust 编译产物）
+- 凭据: `.env` / `.vault` / `auth.json` / `config.yaml` 已早被守住
+- 测试诊断脚本: `tests/_debug_*` / `_*test*` / `_diagnose_*` / `benchmark_*` /
+  `check_model_*` / `clean_v3_*` / `smoke_*` / `test_ikaros_dojo_daily` /
+  `test_sem_*` 不推送
+- `bin/oldcode/`（root oldcode 的镜像）
+
+bridge-rw/webui_proxy/Rust bridge — 旧架构，全部扫清于本次提交。
+推完即刻：**origin/main HEAD = `11d682f`**，本地比 remote 36 commits 全部追上。
+
+Previous: 2026-06-27 (ikaros-desktop-pet: Neuro 语音气泡联动 + 右键菜单全功能集成。
+Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定义语言气泡
+`#neuro-bubble` 和状态指示器 `#neuro-state`，处理 transcription/thinking/status/done/state
+消息类型，自动重连。右键菜单集成全部 wl-live2d 功能（切换模型/服装/截图/帧检测/比例调节），
+移除原生菜单按钮，CDN 扩展至 18 个模型。)
 >
 > Previous: 2026-06-16c (added `modules/webui_proxy` as a thin Python
 > reverse-proxy in front of `hermes-web-ui` on :8648. The npm package's
