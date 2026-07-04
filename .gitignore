@@ -285,10 +285,11 @@ Ikaros-Live2D/src-tauri/target/
 Ikaros-Live2D/src-tauri/Cargo.lock
 # 临时诊断/调试脚本 (哥哥 7-4 裁定:不推送)
 tests/_debug_*.py
+tests/debug_*.py
 tests/_test_*.py
 tests/_diagnose_*.py
+tests/diagnose_*.py
 tests/benchmark_*.py
-tests/check_model_*.py
 tests/check_model_*.py
 tests/clean_v3_*.py
 tests/smoke_*.py
