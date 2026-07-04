@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""🪶 ikaros-memory-watchdog.py — 记忆服务看门狗 (2026-07-04)
+
+管理记忆服务 (统一架构):
+  1. Embedding (:8587) — nomic-embed-text, 供 v3 记忆库语义搜索
+  2. LLM (:8080) — 复用 Hermes Agent llama-server (不管理, 仅检测)
+
+启动后:
+  - 启动 embedding 服务
+  - 每 10 秒巡检 embedding 端口, 死则重启
+  - 检测 :8080 健康状态 (不重启, 由 Hermes Agent 管理)
+  - 写 PID 文件, 支持 --stop 安全停止
+
+用法:
+  python bin/ikaros-memory-watchdog.py          # 启动 (后台: start /B)
+  python bin/ikaros-memory-watchdog.py --stop   # 停止
+  python bin/ikaros-memory-watchdog.py --status # 状态查询
+
+端点播报 (写入 JSON, 供其他组件读取):
+  data/icarus-memory/endpoints.json
+"""
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
+PID_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.pid"
+LOG_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.log"
+ENDPOINTS_FILE = ROOT / "Ikaros-memory" / "data" / "endpoints.json"
+HEARTBEAT_FILE = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
+
+# llama-server binary (from env var or default)
+LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
+    str(ROOT / "runtime" / "llama" / "b9867" / "llama-server.exe")))
+
+# Model paths (from env vars or defaults)
+EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
+    str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text.gguf")))
+
+# Ports
+EMBED_PORT = 8587
+LLM_PORT = 8080  # Hermes Agent llama-server (detect only, don't manage)
+
+CHECK_INTERVAL = 10  # patrol interval (seconds)
+PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
+
+log = print  # 启动阶段用 print; watchdog 循环用 _log
+
+
+class MemoryWatchdog:
+    """记忆服务看门狗 — 启动 + 巡检 embedding, 检测 LLM 健康."""
+
+    def __init__(self):
+        self._procs: dict[str, subprocess.Popen | None] = {
+            "embed": None,
+        }
+        self._running = False
+
+    # ─── 端口工具 ────────────────────────────────────
+
+    @staticmethod
+    def _port_alive(port: int) -> bool:
+        """TCP 端口是否在监听."""
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2):
+                return True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
+
+    @staticmethod
+    def _wait_port(port: int, timeout: int = PORT_TIMEOUT) -> bool:
+        """等待端口就绪, 超时返回 False."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if MemoryWatchdog._port_alive(port):
+                return True
+            time.sleep(1)
+        return False
+
+    # ─── 启动 ────────────────────────────────────────
+
+    def _start_embed(self) -> bool:
+        """启动 embedding llama-server (:8587)."""
+        if self._port_alive(EMBED_PORT):
+            _log("[embed] :8587 already listening, skip")
+            return True
+        if not LLAMA_BIN.exists():
+            _log("[embed] FATAL: llama-server not found: %s", LLAMA_BIN)
+            return False
+        if not EMBED_MODEL.exists():
+            _log("[embed] FATAL: model not found: %s", EMBED_MODEL)
+            return False
+
+        _log("[embed] starting: %s ...", EMBED_MODEL.name)
+        self._procs["embed"] = subprocess.Popen(
+            [
+                str(LLAMA_BIN),
+                "-m", str(EMBED_MODEL),
+                "--host", "127.0.0.1",
+                "--port", str(EMBED_PORT),
+                "-c", "2048",
+                "-ngl", "99",
+                "--embeddings",
+                "--pooling", "mean",
+                "--alias", "nomic-embed-text-v1.5-q4",
+                "--cont-batching",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.DETACHED_PROCESS,
+        )
+        ok = self._wait_port(EMBED_PORT)
+        _log("[embed] %s (%s)", "OK" if ok else "FAIL", EMBED_PORT)
+        return ok
+
+    def _start_llm(self) -> bool:
+        """检测 Hermes Agent llama-server (:8080) 是否运行中.
+
+        不启动/不重启 — 由 Hermes Agent 自行管理.
+        """
+        if self._port_alive(LLM_PORT):
+            _log("[llm] :8080 Hermes Agent llama-server OK")
+            return True
+        _log("[llm] :8080 not running (Hermes Agent manages its own llama-server)")
+        return False
+
+    def start_all(self) -> bool:
+        """启动记忆服务 (embedding + 检测 LLM)."""
+        # ── 动作日志: watchdog 启动/重启都是关键 action ──
+        import importlib.util as _ilu, sys as _sys
+        if "_action_log" not in _sys.modules:
+            _spec = _ilu.spec_from_file_location(
+                "_action_log",
+                str(ROOT / "bin" / "ikaros-action-log.py"))
+            _al = _ilu.module_from_spec(_spec)
+            _sys.modules["_action_log"] = _al
+            _spec.loader.exec_module(_al)
+        else:
+            _al = _sys.modules["_action_log"]
+
+        with _al.action("start_all memory services",
+                        action="watchdog.start_all",
+                        target="embedding+llm_detect",
+                        who="Ikaros (watchdog)",
+                        why="memory watchdog init/restart") as _a:
+            _log("=== Starting memory services (unified architecture) ===")
+            ok_embed = self._start_embed()
+            ok_llm = self._start_llm()  # 只检测, 不启动
+            self._write_endpoints(ok_embed, ok_llm)
+            all_ok = ok_embed  # LLM 不强制要求
+            if all_ok:
+                _log("=== Embedding started, LLM detected ===")
+            else:
+                _log("=== Embedding failed ===")
+            _a.done(result="ok" if all_ok else "fail",
+                    completion_pct=100 if all_ok else 50,
+                    notes=f"embed={'ok' if ok_embed else 'fail'} llm_8080={'ok' if ok_llm else 'not_running'}")
+            return all_ok
+
+    # ─── 巡检 ────────────────────────────────────────
+
+    def _check_and_restart(self) -> None:
+        """巡检 embedding 端口 + 检测 LLM 健康."""
+        embed_alive = self._port_alive(EMBED_PORT)
+        llm_alive = self._port_alive(LLM_PORT)
+
+        if not embed_alive:
+            _log("[heartbeat] embed :8587 DEAD, restarting...")
+            self._start_embed()
+            embed_alive = self._port_alive(EMBED_PORT)
+        else:
+            _log("[heartbeat] embed :8587 OK")
+
+        # LLM :8080 只检测, 不重启 (Hermes Agent 管理)
+        if llm_alive:
+            _log("[heartbeat] llm :8080 OK")
+        else:
+            _log("[heartbeat] llm :8080 not running (Hermes Agent manages it)")
+
+        self._write_endpoints(embed_alive, llm_alive)
+        self._emit_heartbeat(embed_alive, llm_alive)
+
+    def _emit_heartbeat(self, embed_alive: bool, llm_alive: bool) -> None:
+        """写入心跳 JSONL, 加入 ikaros 统一心跳体系."""
+        try:
+            import json
+            HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ev = {
+                "event": "memory_watchdog",
+                "ts": time.time(),
+                "embed_port": EMBED_PORT,
+                "llm_port": LLM_PORT,
+                "embed_alive": embed_alive,
+                "llm_alive": llm_alive,
+                "all_ok": embed_alive and llm_alive,
+            }
+            with open(str(HEARTBEAT_FILE), "a", encoding="utf-8") as f:
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        except Exception as e:
+            _log("[heartbeat] JSONL write failed: %s", e)
+
+    def run_loop(self) -> None:
+        """巡检主循环."""
+        self._running = True
+        _log("=== Watchdog loop started (interval=%ds) ===", CHECK_INTERVAL)
+        while self._running:
+            time.sleep(CHECK_INTERVAL)
+            try:
+                self._check_and_restart()
+            except Exception as e:
+                _log("[heartbeat] ERROR: %s", e)
+
+    def stop(self) -> None:
+        """停止巡检循环."""
+        self._running = False
+
+    # ─── 端点播报 ────────────────────────────────────
+
+    def _write_endpoints(self, embed_ok: bool, llm_ok: bool) -> None:
+        """写入 endpoints.json, 供其他组件读取记忆服务状态."""
+        try:
+            ENDPOINTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "embedding": {
+                    "url": f"http://127.0.0.1:{EMBED_PORT}/v1",
+                    "port": EMBED_PORT,
+                    "alive": embed_ok,
+                    "model": "nomic-embed-text",
+                },
+                "llm": {
+                    "url": f"http://127.0.0.1:{LLM_PORT}/v1",
+                    "port": LLM_PORT,
+                    "alive": llm_ok,
+                    "model": "hermes-agent-unified",
+                    "note": "Managed by Hermes Agent, not watchdog",
+                },
+                "updated_at": time.time(),
+            }
+            ENDPOINTS_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            _log("[endpoints] write failed: %s", e)
+
+
+# ─── 独立工具函数 ───────────────────────────────────
+
+
+def _setup_log():
+    """配置日志: 写文件 + 终端.
+
+    Returns: callable _log(fmt, *args, level=INFO) — 兼容 _log("msg") 和 _log.info("msg").
+    """
+    import logging
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("memory-watchdog")
+    logger.setLevel(logging.INFO)
+
+    # 防止重复 handler (--detach + detach 内再 fork 时 logger 全局, 否则重复)
+    if logger.handlers:
+        for h in list(logger.handlers):
+            logger.removeHandler(h)
+
+    # 文件 handler
+    fh = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(fh)
+
+    # 终端 handler (启动阶段可见)
+    ch = logging.StreamHandler()
+    ch.setFormatter(logging.Formatter("[watchdog] %(message)s"))
+    logger.addHandler(ch)
+
+    # wrapper: _log("msg") or _log("fmt %s", arg1) → logger.info(formatted)
+    #          也暴露 .info / .warning / .error 等 logger 方法
+    class _LogWrapper:
+        def __init__(self, lg): self._lg = lg
+        def __call__(self, fmt, *args, level=None):
+            msg = fmt % args if args else fmt
+            (level or self._lg.info)(msg)
+        def __getattr__(self, name):
+            return getattr(self._lg, name)
+
+    return _LogWrapper(logger)
+
+
+_log = lambda *a, **kw: None  # noqa: E731  # 启动前占位
+
+
+def cmd_start():
+    """启动记忆看门狗 (前台, 持续巡检)."""
+    global _log
+    _log = _setup_log()
+
+    wd = MemoryWatchdog()
+    ok = wd.start_all()
+    if not ok:
+        _log("Some services failed to start, continuing watchdog anyway...")
+
+    # 写 PID
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+
+    # 注册 SIGTERM/SIGINT 优雅退出
+    def _on_signal(signum, _frame):
+        _log("Received signal %d, shutting down watchdog...", signum)
+        wd.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    try:
+        wd.run_loop()
+    except KeyboardInterrupt:
+        _log("Watchdog stopped by user.")
+        wd.stop()
+
+
+def cmd_stop():
+    """停止记忆看门狗 (发 SIGTERM + 清扫 llama-server)."""
+    print("[watchdog] Stopping memory services...")
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+            print(f"  watchdog PID {pid} terminated")
+        except Exception:
+            pass
+        PID_FILE.unlink(missing_ok=True)
+    else:
+        print("  watchdog PID file not found (may already be stopped)")
+
+    # 清扫残留的 llama-server (ikaros-sleep 也会做, 但这里确保)
+    for name in ("llama-server.exe", "llama-server-cuda-12.4.exe"):
+        subprocess.run(
+            ["taskkill", "/F", "/IM", name, "/T"],
+            capture_output=True,
+        )
+    print("  llama-server instances cleaned up")
+
+    # 清除端点文件
+    if ENDPOINTS_FILE.exists():
+        ENDPOINTS_FILE.unlink()
+    print(f"  {ENDPOINTS_FILE.name} removed")
+
+    print("[watchdog] Done.")
+
+
+def cmd_status():
+    """查询记忆服务状态."""
+    import socket
+
+    def _check(port: int) -> str:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2):
+                return "✓ ALIVE"
+        except Exception:
+            return "✗ DEAD"
+
+    print("=== Memory Services Status (Unified Architecture) ===")
+    print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (Hermes Agent)")
+
+    if PID_FILE.exists():
+        pid_str = PID_FILE.read_text(encoding="utf-8").strip()
+        alive = False
+        try:
+            # Windows: os.kill(pid, 0) 不可靠 (WinError 87), 用 ctypes OpenProcess
+            import ctypes
+            from ctypes import wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid_str))
+            if h:
+                ec = wintypes.DWORD()
+                if kernel32.GetExitCodeProcess(h, ctypes.byref(ec)):
+                    alive = (ec.value == STILL_ACTIVE)
+                kernel32.CloseHandle(h)
+        except Exception:
+            pass
+        print(f"  Watchdog PID {pid_str}: {'✓ running' if alive else '✗ dead (stale PID file)'}")
+    else:
+        print("  Watchdog: not running")
+
+    if ENDPOINTS_FILE.exists():
+        ep = json.loads(ENDPOINTS_FILE.read_text(encoding="utf-8"))
+        embed_alive = ep.get("embedding", {}).get("alive", "?")
+        llm_alive = ep.get("llm", {}).get("alive", "?")
+        print(f"  Endpoints file: embedding={embed_alive}/llm={llm_alive}")
+    else:
+        print("  Endpoints file: not found")
+
+    print()
+
+
+def main():
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == "--stop":
+            cmd_stop()
+            return
+        elif cmd == "--status":
+            cmd_status()
+            return
+        elif cmd == "--detach":
+            # 后台启动 (Windows 用 subprocess.CREATE_NEW_PROCESS_GROUP, 自己 detach)
+            import subprocess
+            here = Path(__file__).resolve().parent
+            print(f"[watchdog] Detaching... log: {LOG_FILE}")
+            log_f = open(LOG_FILE, "ab", buffering=0)
+            proc = subprocess.Popen(
+                [sys.executable, str(here / "ikaros-memory-watchdog.py")],
+                stdin=subprocess.DEVNULL,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                close_fds=True,
+            )
+            print(f"[watchdog] Detached PID: {proc.pid}")
+            print(f"[watchdog] Tail: {sys.executable} -m tail -f '{LOG_FILE}'")
+            return
+        else:
+            print(f"Unknown command: {cmd}")
+            print("Usage: python bin/ikaros-memory-watchdog.py [--stop|--status|--detach]")
+            sys.exit(1)
+
+    cmd_start()
+
+
+if __name__ == "__main__":
+    main()

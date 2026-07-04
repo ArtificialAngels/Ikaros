@@ -1,0 +1,66 @@
+{
+  "_comment": "Ikaros 路径配置 - 供 Python 脚本读取。由 ikaros-env.bat/ps1 同步生成。",
+  "_version": "1.0",
+
+  "ikaros_root": "E:\\Ikaros",
+
+  "core": {
+    "python": "E:\\Ikaros\\portable-python\\python.exe",
+    "runtime": "E:\\Ikaros\\runtime",
+    "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+    "npm": "E:\\Ikaros\\runtime\\node23\\npm.cmd",
+    "node_modules": "E:\\Ikaros\\runtime\\node23\\node_modules",
+    "aria2": "E:\\Ikaros\\runtime\\aria2",
+    "gopeed": "E:\\Ikaros\\runtime\\gopeed",
+    "rpc_server": "E:\\Ikaros\\runtime\\rpc-server",
+    "data": "E:\\Ikaros\\data",
+    "bin": "E:\\Ikaros\\bin",
+    "config": "E:\\Ikaros\\config",
+    "modules": "E:\\Ikaros\\modules",
+    "deps": "E:\\Ikaros\\deps",
+    "logs": "E:\\Ikaros\\data\\logs"
+  },
+
+  "hermes": {
+    "agent": "E:\\Ikaros\\hermes-agent",
+    "home": "E:\\Ikaros\\data\\hermes-agent",
+    "bridge": "E:\\Ikaros\\bridge",
+    "core": "E:\\Ikaros\\hermes"
+  },
+
+  "memory": {
+    "root": "E:\\Ikaros\\Ikaros-memory",
+    "data": "E:\\Ikaros\\Ikaros-memory\\data",
+    "models": "E:\\Ikaros\\Ikaros-memory\\models",
+    "services": "E:\\Ikaros\\Ikaros-memory\\services",
+    "script": "E:\\Ikaros\\Ikaros-memory\\ikaros-memory-v3.py",
+    "db": "E:\\Ikaros\\Ikaros-memory\\data\\v3.db",
+    "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\chromadb"
+  },
+
+  "llama": {
+    "version": "b9867",
+    "dir": "E:\\Ikaros\\runtime\\llama\\b9867",
+    "server": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-server.exe",
+    "cli": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-cli.exe"
+  },
+
+  "models": {
+    "embedding": "E:\\Ikaros\\Ikaros-memory\\models\\nomic-embed-text.gguf",
+    "llm": "E:\\Ikaros\\Ikaros-memory\\models\\qwen3-8b.gguf"
+  },
+
+  "live2d": {
+    "root": "E:\\Ikaros\\Ikaros-Live2D",
+    "src": "E:\\Ikaros\\Ikaros-Live2D\\src",
+    "src_tauri": "E:\\Ikaros\\Ikaros-Live2D\\src-tauri"
+  },
+
+  "ports": {
+    "embedding": 8587,
+    "llama": 8080,
+    "bridge": 7860,
+    "webui": 8648,
+    "webui_internal": 8649
+  }
+}

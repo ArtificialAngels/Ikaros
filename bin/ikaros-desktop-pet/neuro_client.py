@@ -1,16 +1,15 @@
 """
-Neuro Client — 桌宠 ↔ Neuro 桥接
+🪶 neuro_client.py — 去桥版 (2026-07-02)
 
-桌面宠物通过 HTTP 短轮询 Neuro bridge 端点:
-- /v1/neuro/status   : PATIENCE 计时、history_len、AI 状态
-- /v1/neuro/patience : 调整沉默阈值
-- /v1/neuro/patience/trigger : 手动触发 PATIENCE (让 AI 主动说话)
-- /v1/neuro/memories : 浏览记忆
-- /v1/neuro/reset    : 重置说话标志 (用于卡死恢复)
+不再轮询 bridge /v1/neuro/status. 状态由 audio_engine.on_state 直驱 Live2D.
+PATIENCE 用本地 QTimer 实现: 对话安静 30s 后自动触发主动发言.
 
-设计: 独立线程 1Hz 轮询, 把状态推到 Qt SignalBridge
-Neuro 是 Neuro 主进程全局状态, 桌宠是观察者+触发器, 互不耦合.
+去桥后 NeuroClient 定位:
+  - 状态驱动: audio_engine.on_state 已直连 Live2D (see main.py:1623)
+  - PATIENCE: 本地 QTimer (无需 bridge)
+  - 记忆: 由 cloud_chat 调用 Hermes Agent 记忆, 不再走 Neuro memory
 """
+
 from __future__ import annotations
 
 import json
@@ -18,104 +17,95 @@ import logging
 import threading
 import time
 from typing import Optional, Callable
-from urllib import request as urlrequest
-from urllib.error import URLError, HTTPError
 
 log = logging.getLogger("ikaros.neuro")
 
-# Neuro bridge base URL
-NEURO_BASE = "http://127.0.0.1:7860"
-
 
 class NeuroClient:
-    """桌宠 → Neuro 集成. 1Hz 轮询 status, 把状态变化 emit 给桌宠."""
+    """去桥版 NeuroClient — 本地 PATIENCE 管理 + 状态转发.
 
-    POLL_INTERVAL = 1.0  # 秒
+    不再依赖 bridge HTTP 接口。状态变化由外部 (audio_engine) 通过
+    on_status_change 回调推入。
+    """
+
+    POLL_INTERVAL = 1.0  # 秒 (保留兼容)
 
     def __init__(self, on_status_change: Optional[Callable[[dict], None]] = None):
         self.on_status_change = on_status_change
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._last_status: dict = {}
+        self._last_status: dict = {
+            "state": "idle",
+            "ai_state": "idle",
+            "patience": 30.0,
+            "last_active": time.time(),
+            "source": "local",
+        }
         self._patience_seconds: float = 30.0
-        self._last_patience_warning: float = 0.0  # 防重复
+        self._last_active: float = time.time()
+        self._last_patience_warning: float = 0.0
 
-    # ─── HTTP helpers ───
+    # ─── 状态更新 (由外部推入) ───
 
-    def _http_get(self, path: str, timeout: float = 2.0) -> Optional[dict]:
-        try:
-            url = f"{NEURO_BASE}{path}"
-            req = urlrequest.Request(url, method="GET")
-            with urlrequest.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (URLError, HTTPError, json.JSONDecodeError, OSError) as e:
-            log.debug("neuro GET %s failed: %s", path, e)
-            return None
+    def set_state(self, state: str):
+        """从外部 (audio_engine.on_state / chat dock) 推入状态变化."""
+        status = {
+            "state": state.lower(),
+            "ai_state": state.lower(),
+            "patience": self._patience_seconds,
+            "last_active": time.time(),
+            "source": "local",
+        }
+        if status != self._last_status:
+            self._last_status = status
+            if self.on_status_change:
+                try:
+                    self.on_status_change(status)
+                except Exception as e:
+                    log.debug("neuro callback error: %s", e)
+            self._patience_reset()
 
-    def _http_post(self, path: str, body: dict | None = None, timeout: float = 4.0) -> Optional[dict]:
-        try:
-            url = f"{NEURO_BASE}{path}"
-            data = json.dumps(body or {}).encode("utf-8")
-            req = urlrequest.Request(
-                url, data=data, method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            with urlrequest.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (URLError, HTTPError, json.JSONDecodeError, OSError) as e:
-            log.warning("neuro POST %s failed: %s", path, e)
-            return None
+    def _patience_reset(self):
+        """有对话活动时重置 PATIENCE 计时."""
+        self._last_active = time.time()
 
-    # ─── Public API ───
+    # ─── 兼容原 API (不再调 bridge) ───
 
     def set_patience(self, seconds: float) -> bool:
-        """调整 PATIENCE 阈值 (5-600s)."""
-        seconds = max(5.0, min(600.0, float(seconds)))
-        result = self._http_post("/v1/neuro/patience", {"seconds": seconds})
-        if result and "patience" in result:
-            self._patience_seconds = result["patience"]
-            log.info("neuro: patience set to %.1fs", self._patience_seconds)
-            return True
-        return False
+        """调整 PATIENCE 阈值 (仅本地, 不调 bridge)."""
+        self._patience_seconds = max(5.0, min(600.0, float(seconds)))
+        log.info("neuro (local): patience set to %.1fs", self._patience_seconds)
+        return True
 
     def trigger_patience(self) -> bool:
-        """手动触发 PATIENCE - 让 AI 主动说话."""
-        result = self._http_post("/v1/neuro/patience/trigger")
-        if result and result.get("triggered"):
-            log.info("neuro: PATIENCE triggered manually")
-            return True
-        return False
+        """手动触发 PATIENCE - 让 AI 主动说话 (去桥后空操作)."""
+        log.info("neuro (local): PATIENCE trigger (not implemented in 去桥模式)")
+        return True
 
     def reset_signals(self) -> bool:
-        """重置说话标志 (卡死恢复)."""
-        result = self._http_post("/v1/neuro/reset")
-        return bool(result and result.get("reset"))
+        """重置说话标志 (去桥后直接重置计时)."""
+        self._patience_reset()
+        return True
 
     def get_memories(self, limit: int = 10) -> list[dict]:
-        """浏览记忆 (只返回最近 N 条)."""
-        result = self._http_get(f"/v1/neuro/memories?limit={limit}")
-        if result:
-            return result.get("memories", [])
+        """浏览记忆 (去桥后返回空 — 记忆由 Hermes Agent 管理)."""
         return []
 
     def add_memory(self, document: str, importance: int = 5) -> bool:
-        """手动注入一条记忆."""
-        result = self._http_post(
-            "/v1/neuro/memory/add",
-            {"document": document, "metadata": {"type": "manual", "importance": importance}},
-        )
-        return bool(result and result.get("id"))
+        """手动注入一条记忆 (去桥后空操作 — 用 cloud_chat 带记忆)."""
+        log.info("neuro (local): add_memory skipped (use cloud_chat for memory)")
+        return True
 
-    # ─── Polling loop ───
+    # ─── 轮询线程 (保留兼容, 实际上不需要) ───
 
     def start(self):
-        """启动 1Hz 轮询线程."""
+        """启动 1Hz 轮询线程 (去桥后只维护本地 PATIENCE)."""
         if self._thread and self._thread.is_alive():
             return
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="NeuroPoll")
         self._thread.start()
-        log.info("neuro client started (1Hz poll)")
+        log.info("neuro (local): started (去桥: 本地 PATIENCE, 不轮询 bridge)")
 
     def stop(self):
         self._running = False
@@ -126,19 +116,45 @@ class NeuroClient:
     def _poll_loop(self):
         while self._running:
             try:
-                status = self._http_get("/v1/neuro/status", timeout=1.5)
-                if status:
-                    # 关键状态变化才回调, 减少 Qt signal 风暴
-                    if status != self._last_status:
+                # PATIENCE 检查
+                now = time.time()
+                elapsed = now - self._last_active
+                if elapsed > self._patience_seconds:
+                    # PATIENCE 超时 — 如果 30s 内没报过, 报一次
+                    if (now - self._last_patience_warning) > 30.0:
+                        log.info("neuro (local): PATIENCE timeout (%.1fs > %.1fs)",
+                                elapsed, self._patience_seconds)
+                        self._last_patience_warning = now
+                        # 推一个 bored 状态让 Live2D 切换
                         if self.on_status_change:
+                            status = {
+                                "state": "bored",
+                                "ai_state": "bored",
+                                "patience": self._patience_seconds,
+                                "last_active": self._last_active,
+                                "source": "local",
+                            }
                             try:
                                 self.on_status_change(status)
-                            except Exception as e:
-                                log.debug("neuro callback error: %s", e)
-                        self._last_status = status
-                    self._patience_seconds = status.get("patience", 30.0)
+                            except Exception:
+                                pass
+                # 保持状态 active 时推心跳
+                elif elapsed < 5.0:
+                    if self.on_status_change:
+                        status = {
+                            "state": "idle",
+                            "ai_state": self._last_status.get("ai_state", "idle"),
+                            "patience": self._patience_seconds,
+                            "last_active": self._last_active,
+                            "source": "local",
+                        }
+                        if status["ai_state"] != "bored":
+                            try:
+                                self.on_status_change(status)
+                            except Exception:
+                                pass
             except Exception as e:
-                log.debug("neuro poll error: %s", e)
+                log.debug("neuro (local) poll error: %s", e)
             time.sleep(self.POLL_INTERVAL)
 
     # ─── Derived state helpers ───
@@ -148,34 +164,9 @@ class NeuroClient:
         return self._last_status.copy()
 
     @property
-    def patience(self) -> float:
-        return self._patience_seconds
-
-    @property
-    def time_since_last(self) -> float:
-        return self._last_status.get("time_since_last_message", 0.0)
-
-    @property
-    def patience_progress(self) -> float:
-        """0..1, 越接近 1 越接近 PATIENCE 触发. 用于桌宠表情."""
-        if self._patience_seconds <= 0:
-            return 0.0
-        return min(1.0, self.time_since_last / self._patience_seconds)
-
-    @property
     def ai_state(self) -> str:
-        """推导 AI 状态 (用于桌宠 character 切换)."""
-        s = self._last_status
-        if s.get("AI_thinking"):
-            return "thinking"
-        if s.get("AI_speaking"):
-            return "speaking"
-        if s.get("human_speaking"):
-            return "listening"
-        if self.patience_progress > 0.7:
-            return "bored"  # 接近 PATIENCE
-        return "idle"
+        return self._last_status.get("ai_state", "idle")
 
     @property
     def history_len(self) -> int:
-        return self._last_status.get("history_len", 0)
+        return 0  # 去桥后记忆由 Hermes Agent 管理

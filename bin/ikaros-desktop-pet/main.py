@@ -1151,62 +1151,30 @@ def _quit(self):
 
 # ─── Chat Dock (4C: 文本聊天入口) ───
 
-LLAMA_CHAT_URL = "http://127.0.0.1:7860/v1/chat/completions"
-LLAMA_CHAT_TIMEOUT_S = 30.0
-SESSION_API_BASE = "http://127.0.0.1:7860/v1/sessions"
+# ─── 去桥架构: 直调 cloud LLM (cloud_chat.py, 带 soul + cogno 5D) ───
+# bridge 退役后不再需要 LLAMA_CHAT_URL / SESSION_API_BASE
 
 
 async def bridge_chat(text: str, *, profile: str = "default",
                    history: list = None, model: str = "Phi-4-Mini-3.8B-Q4_K_L",
                    session_id: str = "") -> str:
-    """4C: 调 Hermes bridge /v1/chat/completions — cloud auto-flip 已实现.
+    """4C: 去桥后直调 cloud LLM (cloud_chat), 带 soul + cogno 5D 注入.
+
+    完整的伊卡洛斯灵魂 (axiom.md) + 五维认知元数据（时间/设备/地理/情绪/上下文）
+    在 cloud_chat.py 的 build_system_prompt() 中自动注入。
 
     Args:
         text: 用户输入
-        profile: Hermes profile (default)
-        history: A — 之前对话列表 [{role:user|assistant, content:str}, ...]
-                 (默认 None — 单条消息)
-        model: 默认 Phi-4-Mini-3.8B-Q4_K_L (Quest Path A 改默认值)
-        session_id: Part B — bridge session ID (传 X-Session-Id header)
+        profile: 保留兼容 (不再使用)
+        history: 之前对话列表 [{role:user|assistant, content:str}, ...]
+        model: 保留兼容 (不再使用)
+        session_id: 保留兼容 (不再使用)
 
     Returns:
         assistant 回复文本 (string)
     """
-    # A: 拼 messages = [*history, {user msg}]
-    msgs = list(history) if history else []
-    msgs.append({"role": "user", "content": text})
-
-    if httpx is None:
-        # Fallback: urllib (同步, 不优雅但能用)
-        import json, urllib.request
-        body = json.dumps({
-            "model": model,
-            "messages": msgs,
-            "max_tokens": 200,
-        }).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        if session_id:
-            headers["X-Session-Id"] = session_id
-        req = urllib.request.Request(
-            LLAMA_CHAT_URL,
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=LLAMA_CHAT_TIMEOUT_S) as r:
-            data = json.loads(r.read())
-    else:
-        extra_headers = {}
-        if session_id:
-            extra_headers["X-Session-Id"] = session_id
-        async with httpx.AsyncClient(timeout=LLAMA_CHAT_TIMEOUT_S) as c:
-            r = await c.post(LLAMA_CHAT_URL, json={
-                "model": model,
-                "messages": msgs,
-                "max_tokens": 200,
-            }, headers=extra_headers)
-            data = r.json()
-    return data["choices"][0]["message"]["content"]
+    from cloud_chat import cloud_chat
+    return await cloud_chat(text, history=history, max_tokens=400)
 
 
 async def edge_tts_mp3(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bytes:
@@ -1415,21 +1383,11 @@ class ChatDockWindow(QMainWindow):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    # Part B: ensure bridge session exists
-                    sid = self._bridge_session_id
-                    if not sid:
-                        sid = self._ensure_session()
-                    # Part B: persist user message to bridge session
-                    if sid:
-                        self._post_session_msg(sid, "user", text)
-
+                    # 去桥架构: 对话历史由 in-memory _chat_history 管理
+                    # bridge session 已退役, 不再需要 API 调用
                     reply = loop.run_until_complete(
-                        bridge_chat(text, history=history, model=model, session_id=sid)
+                        bridge_chat(text, history=history, model=model)
                     )
-
-                    # Part B: persist assistant reply
-                    if sid and reply and not reply.startswith("⚠️"):
-                        self._post_session_msg(sid, "assistant", reply)
                 finally:
                     loop.close()
                 # 回到 Qt 主线程更新 UI
@@ -1440,49 +1398,15 @@ class ChatDockWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ─── Session persistence helpers (Part B) ───
+    # ─── Session persistence helpers (Part B — 去桥后空实现) ───
 
     def _ensure_session(self) -> str:
-        """Create a session on the bridge if not already created.
-        Returns the session_id (empty string on failure)."""
-        if self._bridge_session_id:
-            return self._bridge_session_id
-        import urllib.request
-        body = json.dumps({"source": "pet", "model": self._get_current_model()}).encode("utf-8")
-        req = urllib.request.Request(
-            SESSION_API_BASE,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5.0) as r:
-                data = json.loads(r.read())
-                sid = data.get("session_id", "")
-                if sid:
-                    self._bridge_session_id = sid
-                    log.info("bridge session created: %s", sid)
-                return sid
-        except Exception as exc:
-            log.warning("session create failed: %s", exc)
-            return ""
+        """去桥: 不再需要 bridge session. 返回空字符串."""
+        return ""
 
     def _post_session_msg(self, session_id: str, role: str, content: str):
-        """POST a message to the bridge session."""
-        import urllib.request
-        url = f"{SESSION_API_BASE}/{session_id}/messages"
-        body = json.dumps({"role": role, "content": content}).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5.0) as r:
-                resp = json.loads(r.read())
-                log.debug("session msg appended: %s/%s (#%d)", session_id, role, resp.get("total_messages", 0))
-        except Exception as exc:
-            log.warning("session msg append failed (%s/%s): %s", session_id, role, exc)
+        """去桥: 不再需要 bridge session 持久化. 对话历史由 _chat_history 管理."""
+        pass
 
     def _get_current_model(self) -> str:
         """Get the currently selected LLM model from PetWindow."""

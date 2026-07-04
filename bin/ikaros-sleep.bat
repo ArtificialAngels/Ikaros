@@ -1,37 +1,44 @@
 @echo off
 REM ============================================================
-REM  Ikaros — Graceful Shutdown (alias for hermes-stop.bat)
+REM  Ikaros - Graceful Shutdown (no-bridge 2026-07-03)
 REM ============================================================
-REM  Called by ikaros-start.bat to stop old instances before
-REM  starting fresh. Also usable standalone.
-REM  For the full shutdown sequence, see hermes-stop.bat.
+REM  Stops: Memory Watchdog + Desktop Pet + Hermes Desktop + safety sweep.
+REM  No supervisor needed (retired).
 REM ============================================================
 setlocal
-chcp 65001 >nul
 
-REM ---- [env] Resolve HERMES_ROOT ----
-call "%~dp0..\deps\hermes-env.bat"
+REM ---- Load Ikaros environment (unified path config) ----
+call "%~dp0..\Ikaros-environment\ikaros-env.bat"
 if errorlevel 1 (
-    echo [FATAL] could not resolve HERMES_ROOT.
+    echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
     exit /b 1
 )
 
 echo [sleep] Stopping all Ikaros processes...
+echo.
 
-REM ---- Step 1: Stop supervisor-managed services (reverse topo order) ----
-call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --stop
+REM ---- Step 0: Stop Memory Watchdog (stop memory first, then pet) ----
+echo [0] Stopping Memory Watchdog...
+"%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --stop >nul 2>&1
+echo       done
+
+REM ---- Step 1: Stop Desktop Pet ----
+echo [1] Stopping Desktop Pet...
+call "%IKAROS_BIN%\hermes-pet.bat" stop >nul 2>&1
+echo       done
 
 REM ---- Step 2: Stop Hermes Desktop (Electron) ----
+echo [2] Stopping Hermes Desktop...
 taskkill /F /IM "Hermes.exe" /T >nul 2>&1
+echo       done
 
-REM ---- Step 3: Stop Desktop Pet ----
-call "%HERMES_ROOT%\bin\hermes-pet.bat" stop >nul 2>&1
-
-REM ---- Step 4: Safety sweep — orphaned llama-server ----
+REM ---- Step 3: Safety sweep ----
+echo [3] Safety sweep...
 taskkill /F /IM "llama-server.exe" /T >nul 2>&1
 taskkill /F /IM "llama-server-cuda-12.4.exe" /T >nul 2>&1
-taskkill /F /IM "llama-server-vulkan.exe" /T >nul 2>&1
+echo       done
 
+echo.
 echo [sleep] Done.
 endlocal
 exit /b 0

@@ -274,5 +274,42 @@ packages                                    # webui sqlite db (隐私: users/dev
 packages
 
 # 7-2 cleanup batch additions
-packages                                    # webui sqlite db (隐私: users/devices/sessions, any depth)
+packages                                    # webui sqlite db (隐私: users/devices/sessions, 任何深度)
 # nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在 (verified via check-ignore)
+
+# 7-4 push-to-github cleanup
+# Ikaros-memory models: 5GB+ gguf files. Pull, not push.
+Ikaros-memory/models/*.gguf
+# Live2D Rust build artifacts: cargo target
+Ikaros-Live2D/src-tauri/target/
+Ikaros-Live2D/src-tauri/Cargo.lock
+# 临时诊断/调试脚本 (哥哥 7-4 裁定:不推送)
+tests/_debug_*.py
+tests/_test_*.py
+tests/_diagnose_*.py
+tests/benchmark_*.py
+tests/check_model_*.py
+tests/check_model_*.py
+tests/clean_v3_*.py
+tests/smoke_*.py
+tests/test_ikaros_dojo_daily.py
+tests/test_sem_*.py
+# bin/oldcode/ 与 root oldcode/ 同源(都是历史旧数据,本地保留,不推)
+bin/oldcode/
+
+# === UNCONDITIONAL 7-4 lockout (AGENTSMD wants NO oldcode sync) ===
+oldcode/
+oldcode/**
+/oldcode/
+**/oldcode/
+
+# === Ikaros v3 记忆数据库 — NEVER push (哥哥 7-4 明令) ===
+Ikaros-memory/data/v3.db
+Ikaros-memory/data/v3.db-*
+Ikaros-memory/data/*.db
+Ikaros-memory/data/space/
+Ikaros-memory/data/_workspace/
+
+# === Ikaros-memory 运行时配置 — 本地保留,不推送 ===
+Ikaros-memory/data/
+Ikaros-memory/services/launchd/

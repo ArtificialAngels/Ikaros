@@ -1,18 +1,18 @@
 @echo off
 REM ============================================================
-REM Hermes Desktop — Portable Launcher
+REM Hermes Desktop - Portable Launcher
 REM ============================================================
 REM Launches the official Hermes Desktop (Electron app) built from
 REM hermes-agent/apps/desktop. All paths derived from HERMES_ROOT
 REM so the launcher works on any drive letter (USB portable).
 REM
 REM Env vars set for the Desktop process:
-REM   HERMES_HOME              — data directory (config.yaml, .env, sessions)
-REM   HERMES_DESKTOP_HERMES_ROOT — hermes-agent source root
-REM   HERMES_DESKTOP_PYTHON    — venv Python with all deps installed
-REM   PATH                     — node + portable-python + venv Scripts
+REM   HERMES_HOME              - data directory (config.yaml, .env, sessions)
+REM   HERMES_DESKTOP_HERMES_ROOT - hermes-agent source root
+REM   HERMES_DESKTOP_PYTHON    - venv Python with all deps installed
+REM   PATH                     - node + portable-python + venv Scripts
 REM ============================================================
-REM ── Why NO setlocal ──────────────────────────────────────────────
+REM -- Why NO setlocal ------------------------------------------------
 REM  The Electron Desktop must see HERMES_HOME / HERMES_DESKTOP_HERMES_ROOT
 REM  / HERMES_DESKTOP_PYTHON in its *own* process.env.  `setlocal` keeps
 REM  variables local to cmd.exe and the `start`-spawned grandchild has
@@ -20,13 +20,12 @@ REM  been observed to inherit the *user-level persistent* env block
 REM  instead of the setlocal-modified one on Windows 25H2.
 REM  Dropping setlocal lets `set` write the current process env, which
 REM  `start` reliably inherits.
-REM ─────────────────────────────────────────────────────────────────
-chcp 65001 >nul
+REM -------------------------------------------------------------------
 
 REM ---- Resolve HERMES_ROOT (same source of truth as all other scripts) ----
-call "%~dp0..\deps\hermes-env.bat"
+call "%~dp0..\Ikaros-environment\ikaros-env.bat"
 if errorlevel 1 (
-    echo [FATAL] deps\hermes-env.bat failed to resolve HERMES_ROOT.
+    echo [FATAL] Ikaros-environment\ikaros-env.bat failed to resolve HERMES_ROOT.
     pause
     exit /b 1
 )
@@ -35,6 +34,11 @@ REM ---- Derive paths from HERMES_ROOT ----
 set "HERMES_HOME=%HERMES_ROOT%\data\hermes-agent"
 set "HERMES_DESKTOP_HERMES_ROOT=%HERMES_ROOT%\hermes-agent"
 set "HERMES_DESKTOP_PYTHON=%HERMES_ROOT%\hermes-agent\venv\Scripts\python.exe"
+REM Pin the Electron resolveHermesCwd() fallback to HERMES_ROOT so that
+REM relative terminal.cwd values like '.\' in config.yaml resolve against
+REM the project root, not the Electron process cwd (which may be on C:\).
+REM This env var is read by main.cjs resolveHermesCwd() as 2nd candidate.
+set "HERMES_DESKTOP_CWD=%HERMES_ROOT%"
 set "DESKTOP_EXE=%HERMES_ROOT%\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
 REM 2026-07-02: pin Electron userData to HERMES_ROOT so the portable launcher
 REM never bleeds state into %APPDATA%\Roaming\Hermes on the host user account.
@@ -73,9 +77,9 @@ if errorlevel 1 (
 REM ---- Launch (redirect stdio to prevent EPIPE when cmd window closes) ----
 REM 2026-07-01: wrap in cmd /c so Electron's child-process stderr (Node deprecation
 REM warnings with backticks, Chromium GPU cache errors) is captured by the intermediate
-REM cmd.exe's console — not the parent cmd.exe that's running this .bat.  Without this,
+REM cmd.exe's console - not the parent cmd.exe that's running this .bat.  Without this,
 REM the parent cmd sees raw Electron stderr and can render ". was unexpected at this time."
 REM when backtick-containing lines hit the console buffer.
 if not exist "%HERMES_HOME%\logs" mkdir "%HERMES_HOME%\logs"
-start "Hermes Desktop" cmd /c ""%DESKTOP_EXE%" > "%HERMES_HOME%\logs\desktop-stdout.log" 2>&1"
+start "Hermes Desktop" /MIN cmd /c ""%DESKTOP_EXE%" > "%HERMES_HOME%\logs\desktop-stdout.log" 2>&1"
 exit /b 0

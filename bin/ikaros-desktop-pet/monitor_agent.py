@@ -40,7 +40,7 @@ _MAIN_PY = _HERE / "main.py"
 _LOCK_PATH = _ROOT / "data" / "logs" / "ikaros-pet.lock"
 _JSONL_PATH = _ROOT / "data" / "logs" / "ikaros-monitor.jsonl"
 _EXIT_FLAG = _ROOT / "data" / "logs" / "ikaros-pet.exit"
-_BRIDGE_BASE = "http://127.0.0.1:7860"
+# 去桥: 不再需要 _BRIDGE_BASE (桌宠独立运行)
 
 # ── Timing ──
 EVENT_POLL_MS = 500          # JSONL 文件轮询间隔
@@ -306,28 +306,9 @@ class MonitorEngine(QObject):
     # ── Neuro status poll (后台线程，不阻塞 UI) ──
 
     def _start_neuro_poll(self):
-        """在后台线程启动 Neuro 状态轮询."""
-
-        def _poll():
-            while self._running:
-                try:
-                    req = urllib.request.Request(
-                        f"{_BRIDGE_BASE}/v1/neuro/status", method="GET"
-                    )
-                    with urllib.request.urlopen(req, timeout=2.0) as r:
-                        data = json.loads(r.read().decode("utf-8"))
-                        # 回主线程 emit
-                        QTimer.singleShot(0, lambda d=data: self.neuro_status_changed.emit(d))
-                except Exception:
-                    pass
-                # 等 NEURO_POLL_MS 再轮
-                for _ in range(NEURO_POLL_MS // 100):
-                    if not self._running:
-                        return
-                    time.sleep(0.1)
-
-        t = threading.Thread(target=_poll, daemon=True, name="NeuroPoll")
-        t.start()
+        """去桥: 不再轮询 bridge neuro status. 状态由音频引擎直驱 Live2D."""
+        # 静默跳过 — audio_engine.on_state 已直连 Live2D (main.py:1623)
+        pass
 
 
 # ══════════════════════════════════════════
@@ -440,7 +421,7 @@ class MonitorWindow(QMainWindow):
 
         # ── TTS indicator ──
         self._tts_lbl = QLabel("🔊 TTS ⚪")
-        self._tts_lbl.setToolTip("语音合成模块 (接收WS TTS块→播放扬声器)")
+        self._tts_lbl.setToolTip("语音合成模块 (edge-tts 本地 TTS → 扬声器)")
         self._tts_lbl.setStyleSheet("font-size: 11px; color: #666; background: transparent;")
         sl.addWidget(self._tts_lbl)
 
@@ -448,9 +429,9 @@ class MonitorWindow(QMainWindow):
         sep_tts.setStyleSheet("color: #444; background: transparent;")
         sl.addWidget(sep_tts)
 
-        # ── WS indicator ──
-        self._ws_lbl = QLabel("🌐 WS ⚪")
-        self._ws_lbl.setToolTip("WebSocket 连接 (ws://127.0.0.1:7860/v1/voice/ws)")
+        # ── 去桥: WS indicator 改为语音管线状态 ──
+        self._ws_lbl = QLabel("🎤 语音 ⚪")
+        self._ws_lbl.setToolTip("语音管线 (本地 STT → cloud_chat → 本地 TTS)")
         self._ws_lbl.setStyleSheet("font-size: 11px; color: #666; background: transparent;")
         sl.addWidget(self._ws_lbl)
 

@@ -1,15 +1,15 @@
 """
 Ikaros Audio Engine — persistent microphone capture + TTS playback.
 
-Architecture (STT bypass — Quest 6-30):
+Architecture (去桥 v2, 2026-07-02):
   sounddevice capture thread (16000Hz, 16-bit mono)
   → energy-based VAD (RMS threshold + AGC)
   → silence detection → flush PCM
   → LOCAL faster-whisper tiny-int8 STT (in pet process)
-  → send {"type":"transcript","text":...} to bridge WS
-  → bridge skips own STT → LLM → TTS
-  → bridge WS pushes TTS MP3 chunks → pydub decode → sounddevice OutputStream
-  Fallback: if local STT fails, raw PCM sent to bridge (SenseVoice STT)
+  → cloud_chat() 直调 cloud LLM (带 soul + cogno 5D 注入)
+  → edge-tts 本地 TTS → pydub decode → sounddevice OutputStream
+
+不再依赖 bridge WS 连接。STT / LLM / TTS 全在本地进程完成。
 
 Config options (set via system tray):
   - Continuous mode: always-on, auto detects speech
@@ -73,8 +73,8 @@ AGC_GAIN_DECAY = 0.05         # 增益下降速度
 AGC_MIN_NOISE = 20            # 最低噪音底 (避免除零)
 AGC_MAX_NOISE = 2000          # 最高噪音底 (超过不再压制)
 
-# Websocket
-WS_URL = "ws://127.0.0.1:7860/v1/voice/ws"
+# ─── 去桥后不再需要 WebSocket 连接 ───
+# WS_URL 已移除，语音管线全部本地完成
 
 class AudioEngine:
     """Persistent microphone capture with VAD and wake-word."""
@@ -82,7 +82,6 @@ class AudioEngine:
     def __init__(self):
         self._running = False
         self._stream: Optional[sd.RawInputStream] = None
-        self._ws = None
         self._buffer = bytearray()
         self._speaking = False
         self._last_audio_ts = 0.0
@@ -98,7 +97,7 @@ class AudioEngine:
         self._stt_model_lock = threading.Lock()
         self._stt_available: Optional[bool] = None  # None=untested, True/False
 
-        # 4B: TTS playback state — bridge pushes MP3 chunks via WS
+        # 4B: TTS playback state — edge-tts 本地生成 MP3, 排队播放
         self._tts_chunks: list[bytes] = []   # accumulate MP3 chunks
         self._tts_lock = threading.Lock()
         self._out_stream: Optional[sd.OutputStream] = None
@@ -127,18 +126,11 @@ class AudioEngine:
 
         # Threads
         self._capture_thread: Optional[threading.Thread] = None
-        self._ws_thread: Optional[threading.Thread] = None
+        self._async_thread: Optional[threading.Thread] = None
 
     def set_model(self, model: str):
-        """Set LLM model for voice. Sends update to voice_server if connected."""
+        """Set LLM model for voice. 去桥后只更新本地模型配置."""
         self._llm_model = model
-        # If WS is connected, send set_model action to update server-side
-        if self._ws:
-            try:
-                coro = self._ws.send(json.dumps({"type": "set_model", "model": model}))
-                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
-            except Exception:
-                pass
         log.info("voice model → %s", model)
 
     # ─── Device management ───
@@ -229,116 +221,85 @@ class AudioEngine:
             except Exception:
                 return 0.0
 
-    # ─── WebSocket client ───
+    # ─── 语音管线: STT → cloud_chat → TTS (去桥后, 全本地) ───
 
-    async def _ws_loop(self):
-        import websockets
-        # 清掉代理 env var, 避免 httpx/websockets 走系统代理失败
-        for k in list(os.environ.keys()):
-            if 'proxy' in k.lower():
-                os.environ.pop(k, None)
-        uri = WS_URL
-        while self._running:
+    async def _process_and_reply(self, text: str):
+        """在 async loop 中: cloud_chat → edge-tts → TTS 队列.
+
+        此方法从 _flush() 通过 asyncio.run_coroutine_threadsafe 调用,
+        运行在 _async_loop 线程中, 不阻塞 capture 线程.
+        """
+        if not text or not text.strip():
+            return
+
+        log.info("Voice STT: %s", text[:80])
+        log_stt(text)
+        self._emit_bubble(text, 3000)
+        self._emit_state("THINKING")
+
+        try:
+            # 调 cloud LLM (带 soul + cogno 5D)
+            from cloud_chat import cloud_chat
+            reply = await cloud_chat(text, max_tokens=400)
+
+            if not reply or not reply.strip():
+                log.warning("cloud_chat returned empty reply")
+                self._emit_state("LISTENING")
+                return
+
+            log_llm_reply(reply)
+            self._emit_bubble(reply, 5000)
+            self._emit_state("SPEAKING")
+
+            # 本地 edge-tts TTS (用 main.py 的同款)
+            from cloud_chat import _get_api_key, _load_env
+            tts_text = reply
+            # strip markdown emphasis (同 main.py _strip_markdown_emphasis)
+            import re as _re
+            tts_text = _re.sub(r'\*\*([^*]+)\*\*', r'\1', tts_text)
+            tts_text = _re.sub(r'\*([^*]+)\*', r'\1', tts_text)
+            tts_text = _re.sub(r'__([^_]+)__', r'\1', tts_text)
+
             try:
-                async with websockets.connect(uri, proxy=None) as ws:
-                    self._ws = ws
-                    self._ws_connected = True
-                    log_module_status("voice_ws", "connected")
-                    # Send start with current LLM model
-                    await ws.send(json.dumps({"type": "start", "model": self._llm_model}))
-                    self._emit_state("LISTENING")
-                    self._emit_bubble("🎤 我在听~", 2000)
-
-                    while self._running:
-                        try:
-                            msg = await asyncio.wait_for(ws.recv(), timeout=0.3)
-                            if isinstance(msg, bytes):
-                                # 4B: TTS MP3 chunk from edge-tts → accumulate
-                                with self._tts_lock:
-                                    self._tts_chunks.append(msg)
-                                log.debug("TTS chunk: %dB (total %d chunks)", len(msg), len(self._tts_chunks))
-                            else:
-                                data = json.loads(msg)
-                                t = data.get("type", "")
-                                if t == "transcription":
-                                    text = data.get("text", "?")
-                                    log_stt(text)
-                                    self._emit_bubble(text, 3000)
-                                elif t == "thinking":
-                                    log_state("thinking")
-                                    self._emit_state("THINKING")
-                                elif t == "status":
-                                    msg = data.get("message", "")
-                                    if msg:
-                                        log_status(msg)
-                                    self._emit_bubble(msg, 2000)
-                                elif t == "done":
-                                    reply_text = data.get("text", "嗯~")
-                                    model_name = data.get("model", "")
-                                    log_llm_reply(reply_text)
-                                    if model_name:
-                                        log_event("model_info", model_name)
-                                    self._emit_bubble(reply_text, 5000)
-                                    self._emit_state("SPEAKING")
-                                    # 4B: done = bridge TTS stream finished → play accumulated MP3
-                                    chunks_count = 0
-                                    with self._tts_lock:
-                                        chunks_count = len(self._tts_chunks)
-                                    if chunks_count > 0:
-                                        # A: 不再 create_task, 改入队列 + 单 worker 顺序播放
-                                        # 排队的 mp3 bytes 走 _tts_play_worker (单线程顺序)
-                                        with self._tts_lock:
-                                            mp3_bytes = b"".join(self._tts_chunks)
-                                            self._tts_chunks.clear()
-                                        # 排队 (maxsize=3 防内存爆, 满了丢最旧)
-                                        if self._tts_queue is not None:
-                                            try:
-                                                self._tts_queue.put_nowait(mp3_bytes)
-                                            except asyncio.QueueFull:
-                                                # 丢最旧, 入新
-                                                try:
-                                                    self._tts_queue.get_nowait()
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    self._tts_queue.put_nowait(mp3_bytes)
-                                                except Exception:
-                                                    pass
-                                                log.warning("TTS queue full, dropped oldest")
-                                        else:
-                                            # 兜底: aio_loop 还没启, 同步播
-                                            self._tts_playing = True
-                                            self.play_mp3_bytes(mp3_bytes)
-                                            self._tts_playing = False
-                                    else:
-                                        log.warning("done 但 _tts_chunks 为空, 没 TTS 音频可播")
-                                    await asyncio.sleep(0.5)
-                                    # Re-send "start" to re-enable audio session on Rust bridge.
-                                    # Without this, is_audio_session=false on server and new audio
-                                    # arriving before the next explicit "start" would be dropped.
-                                    if self._ws and self._running:
-                                        try:
-                                            await self._ws.send(json.dumps({"type": "start", "model": self._llm_model}))
-                                        except Exception:
-                                            pass
-                                    self._emit_state("LISTENING")
-                                elif t == "error":
-                                    err_msg = data.get('message', '?')
-                                    log_error(err_msg)
-                                    self._emit_bubble(f"⚠️ {err_msg}", 4000)
-                        except asyncio.TimeoutError:
-                            continue
-                    # Inner loop exit (stop() or connection closed)
-                    if self._ws_connected:
-                        self._ws_connected = False
-                        log_module_status("voice_ws", "disconnected")
+                import edge_tts
+                communicate = edge_tts.Communicate(tts_text, voice="zh-CN-XiaoxiaoNeural")
+                mp3_chunks = []
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        mp3_chunks.append(chunk["data"])
+                mp3_bytes = b"".join(mp3_chunks)
             except Exception as exc:
-                log.warning("WS: %s, retry 3s", exc)
-                if self._ws_connected:
-                    self._ws_connected = False
-                    log_module_status("voice_ws", "disconnected")
-                self._ws = None
-                await asyncio.sleep(3)
+                log.warning("TTS failed: %s — skipping audio", exc)
+                mp3_bytes = b""
+
+            if mp3_bytes and len(mp3_bytes) > 100:
+                # 排队播放 (同原 TTS worker)
+                if self._tts_queue is not None:
+                    try:
+                        self._tts_queue.put_nowait(mp3_bytes)
+                    except asyncio.QueueFull:
+                        try:
+                            self._tts_queue.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            self._tts_queue.put_nowait(mp3_bytes)
+                        except Exception:
+                            pass
+                        log.warning("TTS queue full, dropped oldest")
+                else:
+                    self._tts_playing = True
+                    self.play_mp3_bytes(mp3_bytes)
+                    self._tts_playing = False
+
+            # 回复后重新进入听状态
+            await asyncio.sleep(0.5)
+            self._emit_state("LISTENING")
+
+        except Exception as exc:
+            log.error("voice pipeline failed: %s", exc)
+            self._emit_bubble(f"⚠️ {exc}", 4000)
+            self._emit_state("LISTENING")
 
     def _emit_state(self, s: str):
         if self.on_state:
@@ -566,17 +527,15 @@ class AudioEngine:
                 log.warning("Local STT unavailable (will fallback to bridge STT): %s", exc)
                 return None
 
-    def _do_local_stt_and_send(self, pcm_bytes: bytes):
-        """Run faster-whisper on PCM bytes, send transcript to bridge.
+    def _do_local_stt_and_reply(self, pcm_bytes: bytes):
+        """Run faster-whisper on PCM bytes → 文本 → 送入 async 管线做 LLM+TTS.
 
-        Flow: PCM → faster-whisper → text → WS {"type":"transcript","text":...}
-        Bridge skips its own sherpa-onnx STT and goes straight to LLM → TTS.
-        Falls back to raw PCM send if local STT fails.
+        Flow: PCM → faster-whisper → text → asyncio.run_coroutine_threadsafe(
+            _process_and_reply(text), loop)
         """
         model = self._ensure_stt_model()
         if model is None:
-            # Fallback: send raw PCM to bridge (bridge runs its own STT)
-            self._send_raw_pcm(pcm_bytes)
+            log.warning("Local STT unavailable, voice input dropped")
             return
 
         try:
@@ -594,36 +553,24 @@ class AudioEngine:
                 return
 
             log.info("Local STT: %s (lang=%s, prob=%.2f)", text[:80], info.language, info.language_probability)
-            log_stt(text)
 
-            # Send transcript to bridge (bypasses bridge-side STT)
-            if self._ws:
-                msg = json.dumps({"type": "transcript", "text": text})
-                coro = self._ws.send(msg)
-                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
-                log.debug("transcript sent: %d chars", len(text))
+            # 送入 async loop 做 cloud_chat + TTS
+            if self._aio_loop and self._aio_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._process_and_reply(text), self._aio_loop
+                )
             else:
-                log.warning("No WS connection, transcript dropped: %s", text[:40])
+                log.warning("Async loop not running, voice reply dropped: %s", text[:40])
 
         except Exception as exc:
-            log.warning("Local STT failed, fallback to raw PCM: %s", exc)
-            self._send_raw_pcm(pcm_bytes)
+            log.warning("Local STT failed, voice input dropped: %s", exc)
 
-    def _send_raw_pcm(self, pcm_bytes: bytes):
-        """Send raw PCM binary to bridge (bridge runs its own SenseVoice STT)."""
-        if self._ws:
-            try:
-                coro = self._ws.send(pcm_bytes)
-                asyncio.run_coroutine_threadsafe(coro, self._aio_loop)
-                duration = len(pcm_bytes) / (RATE * 2)
-                log.debug("raw PCM sent: %d bytes (%.1fs)", len(pcm_bytes), duration)
-            except Exception as exc:
-                log.warning("raw PCM WS send failed: %s", exc)
-        else:
-            log.info("offline: %d bytes audio dropped", len(pcm_bytes))
 
     def _flush(self):
-        """Send captured audio to bridge — local STT (transcript) or raw PCM fallback."""
+        """将捕获的音频做本地 STT → cloud_chat → TTS (去桥后, 不再走 WS).
+
+        本地 faster-whisper STT → 文本 → async loop 中 cloud_chat + edge-tts.
+        """
         if len(self._buffer) < int(RATE * MIN_AUDIO_MS / 1000 * 2):
             self._buffer.clear()
             self._speaking = False
@@ -632,35 +579,35 @@ class AudioEngine:
         self._buffer.clear()
         self._speaking = False
 
-        # STT bypass: run local faster-whisper → send transcript text
-        # Falls back to raw PCM if local STT unavailable
-        self._do_local_stt_and_send(audio)
+        # 全本地: 本地 STT → cloud_chat → 本地 TTS
+        self._do_local_stt_and_reply(audio)
 
         self._emit_state("LISTENING")
+
     def start(self):
         if self._running:
             return
         self._running = True
         self._capture_hb_count = 0  # STT heartbeat counter
-        self._ws_connected = False
         log_module_status("stt", "running")
         log_module_status("tts", "running")
-        self._ws_thread = threading.Thread(target=self._run_ws, daemon=True)
-        self._ws_thread.start()
-        time.sleep(0.5)  # Let WS connect first
+        # 去桥: 不再启动 WS 线程, 改启动 async loop 线程做 LLM+TTS
+        self._async_thread = threading.Thread(target=self._run_async_loop, daemon=True)
+        self._async_thread.start()
+        time.sleep(0.5)  # 等 async loop 就绪
         self._capture_thread = threading.Thread(target=self._capture, daemon=True)
         self._capture_thread.start()
-        log.info("audio: engine started (local faster-whisper STT + bridge fallback)")
+        log.info("audio: engine started (去桥: 本地 STT → cloud_chat → 本地 TTS)")
 
-    def _run_ws(self):
+    def _run_async_loop(self):
         self._aio_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._aio_loop)
-        # A: 初始化 TTS 队列 + 启动单 worker (哥哥 6-29 拍板)
+        # 初始化 TTS 队列 + 启动单 worker (哥哥 6-29 拍板)
         self._tts_queue = asyncio.Queue(maxsize=3)
-        # 注意: create_task 必须 await, 这里用 ensure_future 同步提交
         asyncio.ensure_future(self._tts_play_worker(), loop=self._aio_loop)
         try:
-            self._aio_loop.run_until_complete(self._ws_loop())
+            # 去桥: 不再连 WS, loop 保持运行等待 _process_and_reply
+            self._aio_loop.run_forever()
         finally:
             self._aio_loop.close()
 

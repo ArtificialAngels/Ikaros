@@ -1,153 +1,117 @@
 @echo off
 REM ============================================================
-REM  Ikaros — One-click Launcher
+REM  Ikaros - Desktop Pet Launcher (no-bridge 2026-07-03)
 REM ============================================================
-REM  Starts all backend services via the Python supervisor
-REM  (orchestrator), then launches the frontends.
-REM
-REM  Architecture (cloud-first):
-REM    Supervisor reads modules/*/module.json, resolves the
-REM    dependency graph (Kahn topo-sort), and starts each
-REM    module in order with port health-checks.
-REM
-REM    :7860  bridge  (Rust — memory API, signals, module scan)
-REM    :8080  llm_engine (local GGUF — disabled by default,
-REM                       cloud models used unless local needed)
-REM    Desktop      Hermes Desktop (Electron, primary frontend)
-REM    Pet          Ikaros Desktop Pet (system tray, cloud chat)
-REM
-REM  All backend processes are fully detached; closing this
-REM  window does NOT affect them.
+REM  No-bridge: no bridge / supervisor / webui.
+REM  Hermes Desktop launches as standalone app.
+REM  Desktop Pet stays in system tray.
 REM ============================================================
-setlocal enabledelayedexpansion
-chcp 65001 >nul
+REM -- Why NO setlocal -----------------------------------------------
+REM  Windows 25H2: child processes created by start within setlocal
+REM  inherit the original unmodified env block, not the setlocal one.
+REM  hermes-desktop.bat relies on env vars PATH / HERMES_HOME /
+REM  HERMES_DESKTOP_HERMES_ROOT passed to Electron subprocess.
+REM  Without setlocal, all set writes to current process env,
+REM  and start reliably inherits them.
+REM  (wait loop uses goto to re-resolve %WAIT%, no delayedexpansion)
+REM -------------------------------------------------------------------
 
-REM ---- [env] Single source of truth: deps\hermes-env.bat ----
-REM      Resolves HERMES_ROOT + 13 derived paths (HERMES_PYTHON,
-REM      HERMES_BIN, HERMES_RUNTIME, etc.)
-call "%~dp0..\deps\hermes-env.bat"
+REM ---- Load Ikaros environment ----
+call "%~dp0..\Ikaros-environment\ikaros-env.bat"
 if errorlevel 1 (
-    echo [FATAL] deps\hermes-env.bat failed to resolve HERMES_ROOT.
-    echo         See stderr above for details.
+    echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
     pause
     exit /b 1
 )
 
 echo ============================================================
-echo   Ikaros — All-in-One Launcher
+echo   Ikaros - No-Bridge Launcher
 echo.
-echo   Bridge:    http://127.0.0.1:7860  (memory + signals)
-echo   LLM:       cloud-first  (local GGUF disabled by default)
-echo   Frontend:  Hermes Desktop  (Electron)
-echo   Pet:       Ikaros Desktop Pet  (cloud chat)
+echo   Pet:       Ikaros Desktop Pet  (system tray, cloud chat)
+echo   Frontend:  Hermes Desktop       (Electron)
 echo.
-echo   Logs:      %HERMES_ROOT%\data\logs\
+echo   Memory:    Embedding :8587 + LLM :8080 (Hermes Agent unified)
+echo   LLM:       cloud (DeepSeek V4 / minimax) + local :8080
+echo   Dashboard: http://127.0.0.1:9119  (hermes dashboard)
+echo   5D Cog:    cogno + soul injected by cloud_chat.py
+echo   Memory:    ikaros-memory-watchdog auto-check + restart
+echo   Logs:      %IKAROS_LOGS%\
 echo   Stop:      bin\ikaros-sleep.bat
 echo ============================================================
 echo.
 
-REM ---- Step 0a: CRLF sanity check (warn only) ----
-REM      cmd.exe mis-parses LF-only .bat files (paths with spaces
-REM      get truncated). Fix: portable-python\python.exe bin\fix-eol.py --all
-echo [0a] Checking bat / ps1 line endings...
-"%HERMES_PYTHON%" "%HERMES_BIN%\fix-eol.py" --check >nul 2>&1
-if errorlevel 1 (
-    echo [WARN] Some bat / ps1 files have wrong line endings.
-    echo [WARN] Run: portable-python\python.exe bin\fix-eol.py --all
-    echo [WARN] Continuing anyway — failures may surface later.
-)
-
-REM ---- Step 0b: Environment bootstrap (portable python / runtime) ----
-echo [0b] Checking portable environment...
-call "%HERMES_ROOT%\bin\setup-portable.bat" auto >nul
-if errorlevel 1 (
-    echo [WARN] setup-portable had warnings — continuing anyway.
-    echo [WARN] Re-run bin\setup-portable.bat later to retry.
-)
-
-REM ---- Step 1: Stop any stale instances ----
-echo [1]  Stopping old instances ^(if any^)...
-call "%HERMES_ROOT%\bin\ikaros-sleep.bat" >nul 2>&1
+REM ---- Step 1: Stop stale instances ----
+echo [1] Stopping old instances...
+call "%IKAROS_BIN%\ikaros-sleep.bat" >nul 2>&1
 timeout /t 2 /nobreak >nul
+echo       done
 
-REM ---- Step 2: Verify HERMES_ROOT integrity ----
-echo [2]  Verifying HERMES_ROOT...
-call "%HERMES_BIN%\hermes-root.bat" verify
-if errorlevel 1 (
-    echo.
-    echo [FATAL] HERMES_ROOT verify FAILED.
-    echo         The supervisor was NOT started.
-    echo         See the error from `hermes-root.bat verify` above.
-    pause
-    exit /b 3
-)
-
-REM ---- Step 3: Start all services via the supervisor (orchestrator) ----
-REM      hermes-supervisor.py scans modules/*/module.json, resolves
-echo [3]  Starting services via supervisor ^(orchestrator^)...
-REM      the dependency graph via Kahn topo-sort, and starts each
-REM      module in order with TCP port health-checks.
-call "%HERMES_ROOT%\bin\hermes-supervisor.bat" --start
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Supervisor failed to start one or more services.
-    echo [hint]  Check: data\logs\supervisor-state.json
-    echo [hint]  Check: data\logs\*.err  (per-module error logs)
-    echo [hint]  Run:   bin\hermes-supervisor.bat --status
-    pause
-    exit /b 1
-)
-
-REM ---- Step 4: Launch Hermes Desktop (primary frontend) ----
-REM      Wait for bridge HTTP health before launching Desktop,
-REM      otherwise Desktop's reconnection loop leaks memory → OOM.
+REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM detect) ----
 echo.
-echo [4]  Waiting for bridge HTTP health...
-set "_BRIDGE_OK=0"
-for /L %%i in (1,1,30) do (
-    if "!_BRIDGE_OK!"=="0" (
-        "%HERMES_PYTHON%" -c "import http.client;c=http.client.HTTPConnection('127.0.0.1',7860,timeout=3);c.request('GET','/health');exit(0 if c.getresponse().status==200 else 1)" >nul 2>&1
-        if not errorlevel 1 set "_BRIDGE_OK=1"
-        if "!_BRIDGE_OK!"=="0" timeout /t 1 /nobreak >nul
-    )
-)
-if "%_BRIDGE_OK%"=="0" (
-    echo [desktop] WARN: Bridge :7860 not responding to HTTP after 30s.
-    echo [desktop]       Desktop may show connection errors on first chat.
-    echo [desktop]       Continuing anyway...
-)
-echo [4]  Launching Hermes Desktop...
-call "%HERMES_BIN%\hermes-desktop.bat"
-if errorlevel 1 (
-    echo [desktop] WARN: Hermes Desktop failed to start.
-    echo [desktop] See:   data\logs\desktop.log
-) else (
-    echo [desktop] OK
-)
-
-REM ---- Step 5: Launch Desktop Pet (non-critical, cloud chat) ----
+echo [2] Starting Memory Services...
+echo       Embedding :8587 (nomic-embed-text)
+echo       LLM       :8080 (Hermes Agent unified, detect only)
 echo.
-echo [5]  Launching Desktop Pet...
-start "" /B cmd /c ""%HERMES_BIN%\hermes-pet.bat" start" >nul 2>&1
-echo [pet]    OK
+start "MemoryWatchdog" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --detach >nul 2>&1
+REM Wait for endpoints file (max 40s)
+set "WAIT=0"
+:wait_endpoints
+if exist "%IKAROS_MEMORY_DATA%\endpoints.json" goto :endpoints_ready
+timeout /t 2 /nobreak >nul
+set /a WAIT+=2
+if %WAIT% lss 40 goto :wait_endpoints
+echo       [WARN] Memory services may not be fully ready (timeout)
+goto :after_memory
+:endpoints_ready
+echo       Memory endpoints ready:
+type "%IKAROS_MEMORY_DATA%\endpoints.json" 2>nul
+echo.
+:after_memory
+
+REM ---- Step 3: Launch Desktop Pet ----
+echo.
+echo [3] Launching Desktop Pet...
+start "" /B cmd /c ""%IKAROS_BIN%\hermes-pet.bat" start" >nul 2>&1
+echo       Pet started (system tray)
+
+REM ---- Step 4: Launch Hermes Dashboard (web UI :9119) ----
+echo.
+echo [4] Starting Hermes Dashboard...
+start "HermesDashboard" /MIN cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe" dashboard --port 9119 --no-open --skip-build" >nul 2>&1
+REM Wait for Dashboard port (max 30s)
+set "WAIT=0"
+:wait_dashboard
+"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',9119));s.close();exit(0 if r==0 else 1)" >nul 2>&1
+if not errorlevel 1 goto :dashboard_ready
+timeout /t 2 /nobreak >nul
+set /a WAIT+=2
+if %WAIT% lss 30 goto :wait_dashboard
+echo       [WARN] Dashboard may not be fully ready (timeout)
+goto :after_dashboard
+:dashboard_ready
+echo       Dashboard: http://127.0.0.1:9119
+echo.
+:after_dashboard
+
+REM ---- Step 5: Launch Hermes Desktop ----
+echo.
+echo [5] Launching Hermes Desktop...
+call "%IKAROS_BIN%\hermes-desktop.bat"
+echo.
 
 REM ---- Done ----
-echo.
 echo ============================================================
 echo   Ikaros is ready!
 echo.
-echo   Bridge:    http://127.0.0.1:7860/health
-echo   Frontend:  Hermes Desktop  (Electron window)
 echo   Pet:       Ikaros Desktop Pet  (system tray)
-echo   LLM:       cloud  ^(MiniMax-M3 default, auto-flip if local needed^)
+echo   Frontend:  Hermes Desktop       (Electron)
+echo   Dashboard: http://127.0.0.1:9119
+echo   Memory:    Embedding :8587 + LLM :8080 (unified)
+echo   LLM:       cloud (DeepSeek V4) + local :8080
 echo.
-echo   Logs:      %HERMES_ROOT%\data\logs\
+echo   Endpoints: %IKAROS_MEMORY_DATA%\endpoints.json
 echo   Stop:      bin\ikaros-sleep.bat
-echo   Status:    bin\hermes-supervisor.bat --status
 echo ============================================================
 echo.
-echo   This window will close; services stay alive.
-echo   To stop: bin\ikaros-sleep.bat
 
-endlocal
 exit /b 0
