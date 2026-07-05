@@ -33,27 +33,85 @@ logger = logging.getLogger("ikaros.memory.vector")
 
 _HERE = Path(__file__).resolve().parent
 _CHROMA_DIR = _HERE / "data" / "chroma"
-_EMBED_URL = "http://127.0.0.1:8587/v1/embeddings"
+# 2026-07-05 fix: llama-server (nomic-embed-text) exposes /embedding
+# (singular, not the OpenAI /v1/embeddings path).  The original vector
+# search shipped with the OpenAI-style URL and silently failed every
+# embed call: _get_embedding caught the HTTPError, returned None,
+# sync_from_v3 inserted 0 vectors, and search() returned 0 rows
+# even though ChromaDB was already populated.  Curling /v1/embeddings
+# returns 404; curling /embedding returns 200 with the 768-dim
+# vector.  Use the singular path.
+_EMBED_URL = "http://127.0.0.1:8587/embedding"
 _EMBED_MODEL = "nomic-embed-text-v1.5-q4"
 _EMBED_TIMEOUT = 10
+# 2026-07-05 fix: llama-server rejects the default `Python-urllib/3.x`
+# User-Agent (returns 404 even when curl/raw-HTTP succeed).  Setting
+# an explicit non-default UA makes the server route the request
+# correctly.  Mirror curl's UA to avoid future regressions.
+_USER_AGENT = "ikaros-vector-search/1.0 (curl-compatible)"
 
 
 def _get_embedding(text: str) -> list[float] | None:
-    """调 :8587 embedding 服务获取向量."""
+    """调 :8587 embedding 服务获取向量.
+
+    llama-server nomic-embed-text 接受 JSON body: ``{"content": "..."}``
+    (不是 OpenAI 风格的 ``{"input": "..."}``).  响应是
+    ``{"embedding": [[...768 floats...]], "index": 0, "object": "embedding"}``.
+
+    Note: 2026-07-05 重大发现 -- llama-server 拒收 "absolute URI" 形式
+    (urllib 默认发 "POST http://...:port/embedding HTTP/1.1"),
+    即使 server 内部路由看起来相同。 它只接受 "POST /embedding HTTP/1.1"
+    (相对路径 + Host header)。 raw socket 走相对路径 OK, urllib 走
+    绝对路径 404。 改用 stdlib http.client 显式走相对路径, 既避开
+    urllib 的 UA 行为差, 也绕开 absolute-URI 404。
+    """
     body = json.dumps({
-        "model": _EMBED_MODEL,
-        "input": text[:500],  # 截断避免超长
+        "content": text[:500],  # 截断避免超长
     }).encode("utf-8")
     try:
-        req = urllib.request.Request(
-            _EMBED_URL, data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=_EMBED_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        embeddings = data.get("data", [])
-        if embeddings:
-            return embeddings[0]["embedding"]
+        import http.client
+        from urllib.parse import urlparse
+        u = urlparse(_EMBED_URL)
+        # 走相对路径 (urllib 默认走 absolute URI, 触发 404)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=_EMBED_TIMEOUT)
+        conn.request("POST", u.path or "/", body=body,
+                     headers={
+                         "Content-Type": "application/json",
+                         "Host": u.netloc,
+                         "User-Agent": _USER_AGENT,
+                     })
+        resp = conn.getresponse()
+        if resp.status != 200:
+            logger.debug("embedding failed: HTTP %d %s", resp.status, resp.reason)
+            return None
+        data = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+        # llama-server 返的是 list[dict] 而非 dict:
+        #   [{"index": 0, "embedding": [[...768 floats...]]}]
+        # 不是 OpenAI-style {"data": [{...}]} 也不是 Ollama-style
+        # {"embedding": [...]}。 兼容 3 种回包。
+        embeddings = None
+        if isinstance(data, list) and data:
+            item = data[0]
+            if isinstance(item, dict) and "embedding" in item:
+                emb = item["embedding"]
+                if isinstance(emb, list) and emb and isinstance(emb[0], list):
+                    embeddings = emb[0]
+                elif isinstance(emb, list):
+                    embeddings = emb
+        elif isinstance(data, dict):
+            if "embedding" in data:
+                emb = data["embedding"]
+                if isinstance(emb, list) and emb and isinstance(emb[0], list):
+                    embeddings = emb[0]
+                elif isinstance(emb, list):
+                    embeddings = emb
+            elif "data" in data and isinstance(data["data"], list) and data["data"]:
+                item0 = data["data"][0]
+                if isinstance(item0, dict) and "embedding" in item0:
+                    embeddings = item0["embedding"]
+        if embeddings and len(embeddings) > 0:
+            return embeddings
         return None
     except Exception as e:
         logger.debug("embedding failed: %s", e)
@@ -132,12 +190,21 @@ class VectorIndex:
                 weight = meta.get("weight", 0.6)
                 if weight < min_weight:
                     continue
+                # 2026-07-05: add score + source fields for callers
+                # that expected fused_search shape (id, content, type,
+                # weight, score, source).  score = (1 - distance) so
+                # closer matches score higher; 0 distance = 1.0, 1.0
+                # distance = 0.0.  distance is cosine (0 = identical,
+                # 2 = opposite), so clamp to [0, 1].
+                score = max(0.0, min(1.0, 1.0 - dist))
                 items.append({
                     "id": mid,
                     "content": results["documents"][0][i],
                     "type": meta.get("type", "fact"),
                     "weight": weight,
                     "distance": dist,
+                    "score": score,
+                    "source": "vector",
                 })
                 if len(items) >= top_k:
                     break
