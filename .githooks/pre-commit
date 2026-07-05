@@ -1,39 +1,76 @@
 #!/usr/bin/env sh
-# .githooks/pre-commit -- block commit if any Hermes-owned .bat/.ps1 has wrong
-# line endings. See AGENTS.md SS7: cmd.exe does NOT parse LF-only .bat files
-# correctly (paths with spaces get truncated, scripts fail silently).
+# .githooks/pre-commit -- block commit if any Hermes-owned .bat/.ps1
+# has wrong line endings.  See AGENTS.md SS7: cmd.exe does NOT parse
+# LF-only .bat files correctly (paths with spaces get truncated,
+# scripts fail silently).  Pure sh, no Python dependency.
 #
 # Install once with:  bin\install-git-hooks.bat
 # Uninstall with:     bin\install-git-hooks.bat uninstall
 #
+# 2026-07-05 rewrite:  bin/fix-eol.py was deleted by the 7-4b
+# architecture cleanup (commit 11d682f), so the previous hook that
+# called it as a subprocess has been SKIPping silently for weeks.
+# The new in-hook check is pure POSIX sh: for each tracked .bat /
+# .ps1 file, count carriage returns (`\r`) on the first 256 bytes
+# and require at least one.  This is enough to flag LF-only files
+# without depending on any external tool.
+#
 # On unix-like (WSL/macOS/Linux):  chmod +x .githooks/pre-commit
-# (Windows: git ignores executable bit, but set it anyway for cross-platform use.)
+# (Windows: git ignores executable bit, but set it anyway for
+# cross-platform use.)
 
 set -e
 
 HERMES_ROOT="$(git rev-parse --show-toplevel)"
-PY="$HERMES_ROOT/portable-python/python.exe"
-FIX_EOL="$HERMES_ROOT/bin/fix-eol.py"
 
-# Skip gracefully if portable-python is missing (fresh clone, CI, etc.).
-if [ ! -f "$PY" ]; then
-    echo "[pre-commit] SKIP: portable-python/python.exe not found, cannot verify CRLF."
-    exit 0
-fi
-if [ ! -f "$FIX_EOL" ]; then
-    echo "[pre-commit] SKIP: bin/fix-eol.py not found."
-    exit 0
+# Skip gracefully if we're committing a fix-eol.py itself -- the
+# tool does not exist on this branch any more, see AGENTS.md SS7.
+if [ ! -x "$HERMES_ROOT/portable-python/python.exe" ]; then
+    # Fresh clone / CI: no portable-python.  We can still validate
+    # the .bat / .ps1 files via POSIX sh, so do not skip entirely.
+    :
 fi
 
-echo "[pre-commit] Checking Hermes-owned .bat / .ps1 line endings..."
-if ! "$PY" "$FIX_EOL" --all --check; then
-    echo ""
-    echo "[pre-commit] ABORTED: some .bat / .ps1 files have wrong line endings."
-    echo "[pre-commit] Fix with:"
-    echo "    portable-python\python.exe bin\fix-eol.py --all"
-    echo "[pre-commit] Then re-stage and commit again."
+# Hermes-owned script files: bin/*.{bat,ps1} + Ikaros-environment/*.{bat,ps1}
+# (AGENTS.md L113 mandate: cmd.exe parses .bat files; PowerShell
+# parses .ps1 files; both fail on LF-only input.)
+SCRIPT_PATHS="$HERMES_ROOT/bin"
+SCRIPT_PATHS="$SCRIPT_PATHS $HERMES_ROOT/Ikaros-environment"
+
+# A file is "good" if it has at least one CR within the first 256
+# bytes (any reasonable .bat has dozens).  We use a single grep that
+# returns the file path on success, silence on failure, to keep the
+# loop fast even with hundreds of files.
+bad_count=0
+for dir in $SCRIPT_PATHS; do
+    [ -d "$dir" ] || continue
+    # Portable find across git-bash / POSIX: pick -maxdepth for speed
+    while IFS= read -r f; do
+        case "$f" in
+            *.bat|*.ps1)
+                # Count CR in the first 256 bytes via head + tr + grep.
+                # If the count is 0, the file is LF-only.
+                cr=$(head -c 256 "$f" 2>/dev/null | tr -cd '\r' | wc -c)
+                if [ "$cr" -eq 0 ]; then
+                    echo "  [pre-commit] LF-ONLY: $f" >&2
+                    bad_count=$((bad_count + 1))
+                fi
+                ;;
+        esac
+    done <<EOF
+$(find "$dir" -maxdepth 2 -type f \( -name '*.bat' -o -name '*.ps1' \) 2>/dev/null)
+EOF
+done
+
+if [ "$bad_count" -gt 0 ]; then
+    echo "" >&2
+    echo "[pre-commit] ABORTED: $bad_count .bat / .ps1 file(s) are LF-only." >&2
+    echo "[pre-commit] Fix with one of:" >&2
+    echo "    - re-save the file in your editor with CRLF line endings" >&2
+    echo "    - or, in PowerShell:  (Get-Content f) -join \`r\`n | Set-Content -NoNewline f" >&2
+    echo "    - or, in bash:  sed -i 's/$/\r/' f && rm f" >&2
     exit 1
 fi
 
-echo "[pre-commit] OK: all .bat / .ps1 files are CRLF."
+echo "[pre-commit] OK: all .bat / .ps1 files have CRLF line endings."
 exit 0
