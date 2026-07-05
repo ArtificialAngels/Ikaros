@@ -60,6 +60,10 @@ DB_PATH = DATA / "v3.db"
 SOUL_MD_PATH = Path(os.environ.get(
     "HERMES_HOME", r"E:\Ikaros\data\hermes-agent"
 )) / "SOUL.md"
+# axiom.md = SOUL.md 镜像 (cloud_chat.py 加载此路径作为 system prompt 灵魂段)
+AXIOM_MD_PATH = Path(os.environ.get(
+    "HERMES_ROOT", r"E:\Ikaros"
+)) / "ikaros-identity" / "axiom.md"
 
 # ---- write-back cache (在内存中读写, 每分钟覆写磁盘) ----
 
@@ -133,26 +137,28 @@ def _flush(*, force: bool = False) -> int:
 
 
 def _sync_soul_md() -> None:
-    """Sync identity/axiom/rule memories to SOUL.md.
+    """Sync identity/axiom/rule/fact/lesson/decision memories to SOUL.md.
 
     Called after each successful DB flush. Reads from memory DB
     (in-memory cache if enabled, otherwise disk DB), filters identity-
-    related entries, synthesizes structured markdown, and atomically
-    writes to {HERMES_HOME}/SOUL.md.
+    related entries + high-weight facts, synthesizes structured markdown,
+    and atomically writes to {HERMES_HOME}/SOUL.md.
 
     Failure is silently logged — never blocks the main flush flow.
     """
     try:
-        # Query identity-related entries from whichever DB source is active
+        # Query identity-related + high-weight knowledge entries
         with conn() as c:
             rows = c.execute(
                 "SELECT content, type, weight FROM memory "
-                "WHERE type IN ('identity', 'axiom', 'rule') "
+                "WHERE type IN ('identity', 'axiom', 'rule', "
+                "       'fact', 'lesson', 'decision') "
+                "  AND weight >= 0.5 "
                 "ORDER BY type, weight DESC"
             ).fetchall()
 
         if not rows:
-            logger.debug("soul sync: no identity/axiom/rule memories, skipping")
+            logger.debug("soul sync: no memories, skipping")
             return
 
         # Group by type
@@ -166,7 +172,7 @@ def _sync_soul_md() -> None:
         lines = [
             "<!-- AUTO-SYNCED by Ikaros v3 Memory Plugin -->",
             f"<!-- Last sync: {now_str} -->",
-            "<!-- Source: v3 memory DB (identity/axiom/rule entries) -->",
+            "<!-- Source: v3 memory DB (identity/axiom/rule/fact/lesson/decision) -->",
             "<!-- DO NOT manually edit — this file is regenerated every flush cycle -->",
             "",
         ]
@@ -175,6 +181,9 @@ def _sync_soul_md() -> None:
             ("identity", "## 核心身份"),
             ("axiom", "## 存在公理"),
             ("rule", "## 行为准则"),
+            ("fact", "## 关键事实"),
+            ("lesson", "## 经验教训"),
+            ("decision", "## 重要决策"),
         ]
         for type_key, section_title in section_map:
             entries = groups.get(type_key, [])
@@ -189,26 +198,55 @@ def _sync_soul_md() -> None:
         content_text = "\n".join(lines)
 
         # Atomic write: temp file -> os.replace
+        # 写 SOUL.md
         target = SOUL_MD_PATH
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = target.parent / ".SOUL.md.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(content_text)
         os.replace(str(tmp_path), str(target))
-        logger.info("SOUL.md synced (%d entries, %d bytes)",
+
+        # 镜像写 axiom.md (axiom.md = SOUL.md, cloud_chat.py 加载此路径)
+        try:
+            AXIOM_MD_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp_ax = AXIOM_MD_PATH.parent / ".axiom.md.tmp"
+            with open(tmp_ax, "w", encoding="utf-8") as f:
+                f.write(content_text)
+            os.replace(str(tmp_ax), str(AXIOM_MD_PATH))
+        except Exception as ax_e:
+            logger.debug("axiom.md mirror write failed (non-fatal): %s", ax_e)
+
+        logger.info("SOUL.md + axiom.md synced (%d entries, %d bytes)",
                     len(rows), len(content_text))
 
     except Exception as e:
         logger.warning("SOUL.md sync failed (non-fatal): %s", e)
 
 
+_last_decay_time = 0.0
+_DECAY_INTERVAL = 86400.0  # 24h between decay runs
+
+
 def _flush_loop() -> None:
-    """后台线程: 每 60 秒检查脏页并落盘."""
+    """后台线程: 每 60 秒检查脏页并落盘, 每 24h 跑一次衰减+清理."""
+    global _last_decay_time
+    _last_decay_time = time.time()
     while not _stop_event.is_set():
         _stop_event.wait(timeout=_flush_interval)
         if _stop_event.is_set():
             break
         _flush()
+        # 每 24h 跑一次半衰期衰减 + auto-clean
+        now = time.time()
+        if now - _last_decay_time >= _DECAY_INTERVAL:
+            try:
+                n = decay()
+                c = clean()
+                if n or c:
+                    logger.info("auto decay: %d weights decayed, %d cleaned", n, c)
+            except Exception as e:
+                logger.warning("auto decay failed: %s", e)
+            _last_decay_time = now
 
 
 def enable_cache() -> None:

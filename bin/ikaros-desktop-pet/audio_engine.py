@@ -5,7 +5,7 @@ Architecture (去桥 v2, 2026-07-02):
   sounddevice capture thread (16000Hz, 16-bit mono)
   → energy-based VAD (RMS threshold + AGC)
   → silence detection → flush PCM
-  → LOCAL faster-whisper tiny-int8 STT (in pet process)
+  → FunASR paraformer-zh STT (GPU, 含 VAD + 标点恢复)
   → cloud_chat() 直调 cloud LLM (带 soul + cogno 5D 注入)
   → edge-tts 本地 TTS → pydub decode → sounddevice OutputStream
 
@@ -55,12 +55,12 @@ SILENCE_TIMEOUT = 1.2        # seconds of silence = utterance end
 MIN_AUDIO_MS = 500            # minimum audio to send (ms)
 MAX_UTTERANCE_SEC = 30
 
-# Local STT (faster-whisper tiny int8 — runs in pet process, bypasses bridge STT)
-LOCAL_STT_MODEL = "tiny"  # ~75MB, fast CPU inference
-LOCAL_STT_DEVICE = "cpu"
-LOCAL_STT_COMPUTE = "int8"  # int8 quantization for speed
-LOCAL_STT_LANG = "zh"          # Chinese primary, auto-detect fallback
-LOCAL_STT_BEAM_SIZE = 3
+# Local STT — FunASR paraformer-zh (中文最强离线识别, 含 VAD + 标点恢复)
+FUNASR_MODEL = "paraformer-zh"       # 220M 参数, 中文精度碾压 whisper
+FUNASR_VAD_MODEL = "fsmn-vad"        # 内置 VAD (能量 + 语义双重检测)
+FUNASR_PUNC_MODEL = "ct-punc"        # 标点恢复 (自动加逗号句号)
+FUNASR_DEVICE = "cuda"               # GPU 推理 (RTX 3070)
+FUNASR_NGPU = 1                      # 使用 1 块 GPU
 
 # AGC (Automatic Gain Control) — 环境噪音自适应增益
 AGC_TARGET_RMS = 800          # 目标 RMS (int16 范围 0~32768)
@@ -92,8 +92,8 @@ class AudioEngine:
         self._agc_gain = 1.0             # 当前增益倍数
         self._agc_enabled = True         # AGC 开关 (可从 tray 控制)
 
-        # Local STT (faster-whisper lazy init)
-        self._stt_model = None           # faster_whisper.WhisperModel instance
+        # Local STT (FunASR lazy init)
+        self._stt_model = None           # funasr.AutoModel instance
         self._stt_model_lock = threading.Lock()
         self._stt_available: Optional[bool] = None  # None=untested, True/False
 
@@ -502,7 +502,7 @@ class AudioEngine:
                 self._stream = None
 
     def _ensure_stt_model(self):
-        """Lazily load faster-whisper tiny-int8 model. Returns model or None."""
+        """Lazily load FunASR paraformer-zh model. Returns model or None."""
         if self._stt_available is True:
             return self._stt_model
         if self._stt_available is False:
@@ -512,47 +512,69 @@ class AudioEngine:
             if self._stt_available is not None:
                 return self._stt_model if self._stt_available else None
             try:
-                from faster_whisper import WhisperModel
-                log.info("Loading local STT: faster-whisper %s on %s", LOCAL_STT_MODEL, LOCAL_STT_DEVICE)
-                self._stt_model = WhisperModel(
-                    LOCAL_STT_MODEL,
-                    device=LOCAL_STT_DEVICE,
-                    compute_type=LOCAL_STT_COMPUTE,
+                from funasr import AutoModel
+                log.info("Loading FunASR: %s + VAD=%s + PUNC=%s on %s",
+                         FUNASR_MODEL, FUNASR_VAD_MODEL, FUNASR_PUNC_MODEL, FUNASR_DEVICE)
+                self._stt_model = AutoModel(
+                    model=FUNASR_MODEL,
+                    vad_model=FUNASR_VAD_MODEL,
+                    punc_model=FUNASR_PUNC_MODEL,
+                    device=FUNASR_DEVICE,
+                    ngpu=FUNASR_NGPU,
                 )
                 self._stt_available = True
-                log.info("Local STT loaded OK")
+                log.info("FunASR loaded OK (GPU=%s)", FUNASR_DEVICE)
                 return self._stt_model
             except Exception as exc:
+                # GPU 失败时 fallback 到 CPU
+                if "cuda" in str(exc).lower() or "CUDA" in str(exc):
+                    log.warning("FunASR GPU failed (%s), retrying on CPU...", exc)
+                    try:
+                        from funasr import AutoModel
+                        self._stt_model = AutoModel(
+                            model=FUNASR_MODEL,
+                            vad_model=FUNASR_VAD_MODEL,
+                            punc_model=FUNASR_PUNC_MODEL,
+                            device="cpu",
+                        )
+                        self._stt_available = True
+                        log.info("FunASR loaded on CPU (fallback)")
+                        return self._stt_model
+                    except Exception as exc2:
+                        log.warning("FunASR CPU fallback also failed: %s", exc2)
+                else:
+                    log.warning("FunASR unavailable: %s", exc)
                 self._stt_available = False
-                log.warning("Local STT unavailable (will fallback to bridge STT): %s", exc)
                 return None
 
     def _do_local_stt_and_reply(self, pcm_bytes: bytes):
-        """Run faster-whisper on PCM bytes → 文本 → 送入 async 管线做 LLM+TTS.
+        """Run FunASR paraformer-zh on PCM bytes → 文本 → 送入 async 管线做 LLM+TTS.
 
-        Flow: PCM → faster-whisper → text → asyncio.run_coroutine_threadsafe(
+        Flow: PCM → FunASR → text → asyncio.run_coroutine_threadsafe(
             _process_and_reply(text), loop)
         """
         model = self._ensure_stt_model()
         if model is None:
-            log.warning("Local STT unavailable, voice input dropped")
+            log.warning("FunASR unavailable, voice input dropped")
             return
 
         try:
-            # faster-whisper expects numpy float32 array in [-1, 1]
-            samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            segments, info = model.transcribe(
-                samples,
-                language=LOCAL_STT_LANG,
-                beam_size=LOCAL_STT_BEAM_SIZE,
-                vad_filter=True,
+            # FunASR requires float32 input in [-1, 1] range
+            pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+            samples = pcm_int16.astype(np.float32) / 32768.0
+            result = model.generate(
+                input=samples,
+                batch_size_s=300,   # max audio length in seconds
             )
-            text = "".join(seg.text for seg in segments).strip()
+            # result: list of dicts, each has "text" key
+            text = ""
+            if result:
+                text = result[0].get("text", "").strip()
             if not text:
-                log.info("Local STT: empty result, skipping")
+                log.info("FunASR: empty result, skipping")
                 return
 
-            log.info("Local STT: %s (lang=%s, prob=%.2f)", text[:80], info.language, info.language_probability)
+            log.info("FunASR: %s", text[:120])
 
             # 送入 async loop 做 cloud_chat + TTS
             if self._aio_loop and self._aio_loop.is_running():
@@ -563,13 +585,16 @@ class AudioEngine:
                 log.warning("Async loop not running, voice reply dropped: %s", text[:40])
 
         except Exception as exc:
-            log.warning("Local STT failed, voice input dropped: %s", exc)
+            log.warning("FunASR STT failed, voice input dropped: %s", exc)
+            # Reset model so next call re-loads
+            self._stt_model = None
+            self._stt_available = None
 
 
     def _flush(self):
-        """将捕获的音频做本地 STT → cloud_chat → TTS (去桥后, 不再走 WS).
+        """将捕获的音频做 FunASR STT → cloud_chat → TTS (去桥后, 不再走 WS).
 
-        本地 faster-whisper STT → 文本 → async loop 中 cloud_chat + edge-tts.
+        FunASR paraformer-zh → 文本 → async loop 中 cloud_chat + edge-tts.
         """
         if len(self._buffer) < int(RATE * MIN_AUDIO_MS / 1000 * 2):
             self._buffer.clear()

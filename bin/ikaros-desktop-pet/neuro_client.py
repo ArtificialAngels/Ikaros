@@ -160,6 +160,16 @@ class NeuroClient:
     # ─── Derived state helpers ───
 
     @property
+    def patience(self) -> float:
+        """Current patience threshold in seconds."""
+        return self._patience_seconds
+
+    @property
+    def time_since_last(self) -> float:
+        """Seconds since last active interaction."""
+        return time.time() - self._last_active
+
+    @property
     def last_status(self) -> dict:
         return self._last_status.copy()
 

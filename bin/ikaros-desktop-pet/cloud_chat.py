@@ -33,113 +33,59 @@ log = logging.getLogger("ikaros.cloud_chat")
 
 _HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
 _ENV_PATH = _HERMES_ROOT / "data" / "hermes-agent" / ".env"
-_AXIOM_PATH = _HERMES_ROOT / "data" / "hermes-agent" / "ikaros-identity" / "axiom.md"
-_LOCAL_LLM_URL = os.environ.get("IKAROS_LLM_URL", "http://127.0.0.1:8589/v1")
+_AXIOM_PATH = _HERMES_ROOT / "ikaros-identity" / "axiom.md"
+_LOCAL_LLM_URL = os.environ.get(
+    "IKAROS_LLM_URL",
+    os.environ.get("HERMES_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1"),
+)
 
 # ─── 缓存 ───
 
 _axiom_cache: Optional[str] = None
 _env_cache: Optional[dict[str, str]] = None
-_turn_counter: int = 0
-_last_user_text: str = ""
 
-# ─── cogno 5D 组件 ───
+# ─── cogno 5D 组件 (委托给 Ikaros-memory/cogno_5d.py 共享模块) ───
 
-
-def _get_time_str() -> str:
-    """维度 1: 时间 — '2026/7/2 22:14' (Windows 兼容)"""
-    now = datetime.now()
-    return f"{now.year}/{now.month}/{now.day} {now.hour:02d}:{now.minute:02d}"
-
-
-def _get_machine_id() -> str:
-    """维度 2: 设备 — 'PZS0X@LEGION9'"""
-    hostname = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown-pc"
-    username = os.environ.get("USERNAME") or os.environ.get("USER") or "unknown-user"
-    return f"{username}@{hostname}"
-
-
-def _get_geo_location() -> str:
-    """维度 3: 地理 — 从 ip-api.com 获取 (缓存在进程生命周期内)"""
-    if not hasattr(_get_geo_location, "_cache"):
-        _get_geo_location._cache = _fetch_geo_sync() or "未知"
-    return _get_geo_location._cache
-
-
-def _fetch_geo_sync() -> Optional[str]:
-    """轻量同步 IP 地理位置查询 (ip-api.com, 免费, 无需 key)"""
-    import socket
+def _load_cogno():
+    """Lazy-import cogno_5d module (avoid circular import at module level)."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(("ip-api.com", 80))
-        sock.sendall(b"GET /json?fields=city,regionName,country HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n")
-        response = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-        sock.close()
-        body = response.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in response else b""
-        data = json.loads(body.decode("utf-8", errors="replace"))
-        parts = [data.get(k, "") or "" for k in ("city", "regionName", "country")]
-        parts = [p for p in parts if p]
-        return "/".join(parts) if parts else None
+        cogno_path = str(_HERMES_ROOT / "Ikaros-memory")
+        if cogno_path not in sys.path:
+            sys.path.insert(0, cogno_path)
+        import cogno_5d
+        return cogno_5d
     except Exception:
         return None
 
 
+def _get_time_str() -> str:
+    """维度 1: 时间 — 委托 cogno_5d.get_time_str()"""
+    c = _load_cogno()
+    return c.get_time_str() if c else datetime.now().strftime("%Y/%m/%d %H:%M")
+
+
+def _get_machine_id() -> str:
+    """维度 2: 设备 — 委托 cogno_5d.get_machine_id()"""
+    c = _load_cogno()
+    return c.get_machine_id() if c else "unknown"
+
+
+def _get_geo_location() -> str:
+    """维度 3: 地理 — 委托 cogno_5d.get_geo_location()"""
+    c = _load_cogno()
+    return c.get_geo_location() if c else "未知"
+
+
 def _infer_emotion(text: str) -> str:
-    """维度 4: 情绪推断 — 关键词匹配"""
-    t = text.lower()
-
-    # 开心 / 兴奋
-    happy = ["哈哈", "呵呵", "开心", "高兴", "太好了", "棒", "厉害", "赞", "牛",
-             "喜欢", "爱", "😊", "😄", "🎉", "好耶", "nice", "great", "awesome",
-             "wow", "wonderful", "优秀", "漂亮", "完美"]
-    for kw in happy:
-        if kw in t:
-            return "开心"
-
-    # 好奇
-    curious = ["为什么", "怎么", "如何", "什么", "能不能", "可以吗", "请问",
-               "想知道", "好奇", "怎么回事", "why", "how", "what"]
-    for kw in curious:
-        if kw in t:
-            return "好奇"
-
-    # 感谢
-    grateful = ["谢谢", "感谢", "多谢", "辛苦了", "麻烦了", "thank", "thanks", "thx", "appreciate"]
-    for kw in grateful:
-        if kw in t:
-            return "感谢"
-
-    # 烦躁
-    frustrated = ["烦", "讨厌", "垃圾", "bug", "错了", "不行", "失败", "崩溃",
-                  "搞什么", "为什么不能", "气死", "无语", "晕", "靠", "卧槽",
-                  "shit", "fuck", "damn", "crap"]
-    for kw in frustrated:
-        if kw in t:
-            return "烦躁"
-
-    return "平静"
+    """维度 4: 情绪推断 — 委托 cogno_5d.infer_emotion()"""
+    c = _load_cogno()
+    return c.infer_emotion(text) if c else "平静"
 
 
 def _compress_context(text: str) -> str:
-    """维度 5: 上下文压缩 — 轮次 + 上轮摘要 + 本轮开头"""
-    global _turn_counter, _last_user_text
-    _turn_counter += 1
-    last = _last_user_text
-    _last_user_text = text[:80]
-    excerpt = text[:40]
-
-    if _turn_counter <= 1:
-        return "新对话开始"
-    elif not last:
-        return f"第{_turn_counter}轮, 问: {excerpt}…"
-    else:
-        return f"第{_turn_counter}轮, 上轮: {last[:30]}…, 本轮: {excerpt}…"
+    """维度 5: 上下文压缩 — 委托 cogno_5d.compress_context()"""
+    c = _load_cogno()
+    return c.compress_context(text) if c else text[:40]
 
 
 # ─── v3.db 模块加载 (共享，与 Agent ikaros_v3 插件同一入口) ───
@@ -153,7 +99,7 @@ def _get_v3_module():
 
     Returns: v3 module object, 或 None (DB 不存在 / 加载失败).
     """
-    db_path = _HERMES_ROOT / "data" / "icarus-memory" / "v3.db"
+    db_path = _HERMES_ROOT / "Ikaros-memory" / "data" / "v3.db"
     if not db_path.exists():
         return None
     with _V3_MODULE_LOCK:
@@ -168,7 +114,7 @@ def _get_v3_module():
         if v3 is None:
             spec = importlib.util.spec_from_file_location(
                 _V3_ALIAS,
-                str(_HERMES_ROOT / "bin" / "ikaros-memory-v3.py"))
+                str(_HERMES_ROOT / "Ikaros-memory" / "ikaros-memory-v3.py"))
             v3 = importlib.util.module_from_spec(spec)
             sys.modules[_V3_ALIAS] = v3
             spec.loader.exec_module(v3)
@@ -187,12 +133,17 @@ def _search_v3_memories(query: str, top_k: int = 5) -> list[dict]:
     """从 v3.db (FTS5) 检索与 query 相关的记忆.
 
     实现: 用 _get_v3_module() 获取模块, 调 v3.search() (5 级 fallback).
+    搜索前截断到 30 字, 避免长句子稀释关键词匹配.
     """
     v3 = _get_v3_module()
     if v3 is None:
         return []
+    # 截断长查询: FTS5/LIKE 对长文本匹配效果差, 取前 30 字保留关键词
+    search_query = query.strip()[:30] if len(query) > 30 else query.strip()
+    if not search_query:
+        return []
     try:
-        rows = v3.search(query, top_k=top_k, min_weight=0.3)
+        rows = v3.search(search_query, top_k=top_k, min_weight=0.3)
         return [{"content": r["content"], "type": r.get("type"),
                  "weight": r["weight"], "tags": r.get("tags")}
                 for r in rows]
@@ -204,8 +155,8 @@ def _search_v3_memories(query: str, top_k: int = 5) -> list[dict]:
 def _record_conversation(user_msg: str, assistant_msg: str) -> bool:
     """把对话写入 v3.db (委托给 v3 模块的 store(), 而非 inline SQL).
 
-    type=conversation, weight=0.5, tags=cloud_chat.
-    存储 user_msg 前 200 字.
+    type=conversation, weight=0.5, tags=cloud_chat+cogno元数据.
+    存储 user_msg 前 200 字 + cogno 5D 标签 (供后续反思整合).
     """
     v3 = _get_v3_module()
     if v3 is None:
@@ -214,8 +165,17 @@ def _record_conversation(user_msg: str, assistant_msg: str) -> bool:
         content = user_msg.strip()[:200]
         if not content:
             return False
-        v3.store(content=content, type="conversation", weight=0.5, tags="cloud_chat")
-        log.info("recorded conversation to v3.db: %.60s", content)
+        # 附加 cogno 5D 元数据到 tags (供向量搜索按维度过滤)
+        cogno_tags = "cloud_chat"
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "Ikaros-memory"))
+            import cogno_5d
+            meta = cogno_5d.enrich_reply("", user_text=user_msg)
+            cogno_tags += f",emo:{meta.get('emotion_user', '?')},geo:{meta.get('geo', '?')},turn:{meta.get('context_turn', 0)}"
+        except Exception:
+            pass
+        v3.store(content=content, type="conversation", weight=0.5, tags=cogno_tags)
+        log.info("recorded conversation to v3.db: %.60s [tags=%s]", content, cogno_tags)
         return True
     except Exception as e:
         log.warning("record conversation to v3.db failed: %s", e)
@@ -509,35 +469,46 @@ async def _call_openai_compatible(
 async def _call_local_llm(
     messages: list[dict],
     *,
-    max_tokens: int = 300,
+    max_tokens: int = 512,
     temperature: float = 0.1,
 ) -> str | None:
-    """调本地 Qwen3-8B Q4_K_M (:8589/v1/chat/completions).
+    """调本地 Qwen3-8B (:8080/v1/chat/completions).
 
     用于 self-review / consolidate, 不阻塞主对话流程.
     连接失败 / 超时 / 模型未加载时返回 None, caller 自行 fallback.
 
-    2026-07-03 修: 之前写 Qwen3.5-9B 是名错, Qwen3 系列最大 8B (MoE 30B/32B/235B 另算),
-    watchdog + memory-writer-llm-serve-qwen.bat 已同步改为 Qwen3-8B.
+    2026-07-04 修:
+    - 端口从 :8589 改为 :8080 (watchdog 管理的 LLM)
+    - Qwen3 思考模式: content 可能为空 (token 全被 thinking 吃掉),
+      此时回退读 reasoning_content
+    - max_tokens 默认从 300 提升到 512, 给思考+回答留够空间
+    - timeout 从 15s 提升到 30s (思考模式更慢)
     """
     url = f"{_LOCAL_LLM_URL.rstrip('/')}/chat/completions"
     body = {
-        "model": "Qwen3-8B-q4",
+        "model": "qwen3-8b",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=body)
             if resp.status_code != 200:
                 log.warning("local LLM returned %d", resp.status_code)
                 return None
             data = resp.json()
-            reply = data["choices"][0]["message"]["content"]
+            msg = data["choices"][0]["message"]
+            reply = msg.get("content", "") or ""
+            # Qwen3 思考模式: content 可能为空, 回退读 reasoning_content
+            if not reply.strip():
+                reasoning = msg.get("reasoning_content", "") or ""
+                if reasoning.strip():
+                    log.info("local LLM: content empty, using reasoning_content (%d chars)", len(reasoning))
+                    reply = reasoning
             log.info("local LLM OK (%d chars)", len(reply))
-            return reply
+            return reply if reply.strip() else None
     except ImportError:
         # urllib fallback (同步, 包在 thread 里)
         import urllib.request
@@ -552,15 +523,19 @@ async def _call_local_llm(
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                    result[0] = data["choices"][0]["message"]["content"]
+                    msg = data["choices"][0]["message"]
+                    r = msg.get("content", "") or ""
+                    if not r.strip():
+                        r = msg.get("reasoning_content", "") or ""
+                    result[0] = r if r.strip() else None
             except Exception as e:
                 log.warning("local LLM sync fallback failed: %s", e)
 
         t = threading.Thread(target=_sync_call, daemon=True)
         t.start()
-        t.join(timeout=20)
+        t.join(timeout=35)
         return result[0]
     except Exception as e:
         log.warning("local LLM call failed: %s", e)
@@ -630,9 +605,9 @@ async def _self_review(
         except Exception:
             pass
 
-    # 2) 本地 Qwen3.5-9B (回退, 断网/无 key 时兜底)
+    # 2) 本地 Qwen3-8B (:8080 回退, 断网/无 key 时兜底)
     if not text:
-        text = await _call_local_llm(msgs, max_tokens=300, temperature=0.1)
+        text = await _call_local_llm(msgs, max_tokens=512, temperature=0.1)
 
     if not text:
         return {"score": 7, "verdict": "accept", "issues": [], "suggestion": ""}
@@ -713,11 +688,13 @@ async def _consolidate_to_memory(
         except Exception:
             pass
 
-    # 2) 本地 Qwen3.5-9B (回退, 断网/无 key 时兜底)
+    # 2) 本地 Qwen3-8B (:8080 回退, 断网/无 key 时兆底)
     if not fact:
-        fact = await _call_local_llm(msgs, max_tokens=200, temperature=0.0)
+        log.info("consolidate: cloud LLM unavailable, falling back to local :8080")
+        fact = await _call_local_llm(msgs, max_tokens=512, temperature=0.0)
 
     if not fact or len(fact.strip()) < 5:
+        log.warning("consolidate: LLM returned empty/too-short fact (cloud+local all failed)")
         return False
     fact = fact.strip().rstrip(".")
     # 写入 v3.db (委托给 v3 模块的 store(), 而非 inline SQL)

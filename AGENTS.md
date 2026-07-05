@@ -4,7 +4,17 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-**Last revised:** 2026-07-04 (push-to-github cleanup + Ikaros v4 ship).
+> **Last revised:** 2026-07-04b (ikaros-start.bat crash fix: LLMManager stub + init.bat encoding).
+> Two bugs killed the startup chain:
+> 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
+>    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.
+>    Fix: all comments converted to pure ASCII. **Rule: .bat files MUST be pure ASCII.**
+> 2. `ikaros-desktop-pet/main.py` imported `from modules.model_manager.llm_manager import LLMManager`
+>    but the module didn't exist → `ModuleNotFoundError`. Fix: created
+>    `modules/model_manager/llm_manager.py` stub (scans local GGUFs + queries :8080 + cloud models).
+> Also: memory watchdog now manages both :8587 (embedding) AND :8080 (qwen3-8b LLM for v3 extraction).
+
+Previous: 2026-07-04 (push-to-github cleanup + Ikaros v4 ship).
 删去 265 个旧文件 (`bin/*.bat` / `bin/*.ps1` / `modules/*` / `bridge-rs/` / `bin/ikaros-desktop-pet-tauri/`)，
 一次性 push 到 `ArtificialAngels/Ikaros` origin/main as commit **11d682f**。
 新增 Ikaros v4 项目: `Ikaros-Live2D/` / `Ikaros-environment/` / `Ikaros-memory/`
@@ -85,6 +95,15 @@ Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定�
 
 ## Revision Timeline (chronological; see git log for details)
 
+- **2026-07-04b** - ikaros-start.bat crash fix (2 bugs):
+  1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments → cmd.exe GBK parse fail → instant crash.
+     All .bat comments converted to pure ASCII. **GOTCHA: .bat = ASCII only, no exceptions.**
+  2. `modules/model_manager/llm_manager.py` was missing → pet `ModuleNotFoundError`.
+     Created `LLMManager` stub: scans `data/models/` + `Ikaros-memory/models/` for GGUFs,
+     queries `:8080/v1/models`, knows cloud model names, supports async fetch + cache + persist.
+  3. Memory watchdog (`bin/ikaros-memory-watchdog.py`) now **manages** :8080 LLM (was detect-only).
+     Embedding :8587 + LLM :8080 both auto-started and auto-restarted by watchdog.
+     qwen3-8b runs on :8080 for v3 memory extraction (saves cloud tokens).
 - **2026-06-27 (Quest handoff)** - 灵感挖掘 + 桥问题交接。Ikaros 不写代码改自己, 把 OpenDesktop-Pet 6 大特性写到
   `data/ikaros-coordination/handshake.2026-06-27.odp-inspiration.json` (7415B): P0 三层记忆 / P1 主动互动循环 / P1 截屏视觉 / P2 TTS 多引擎 / P3 身体分区点击。
   桥 uvicorn 应用层卡死问题写到 `handshake.2026-06-27.bridge-uvicorn-unresponsive.json` (7519B): 7 修复建议 + 测试命令。

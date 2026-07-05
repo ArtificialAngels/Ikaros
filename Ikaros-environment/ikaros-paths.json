@@ -1,9 +1,7 @@
 {
   "_comment": "Ikaros 路径配置 - 供 Python 脚本读取。由 ikaros-env.bat/ps1 同步生成。",
   "_version": "1.0",
-
   "ikaros_root": "E:\\Ikaros",
-
   "core": {
     "python": "E:\\Ikaros\\portable-python\\python.exe",
     "runtime": "E:\\Ikaros\\runtime",
@@ -20,14 +18,12 @@
     "deps": "E:\\Ikaros\\deps",
     "logs": "E:\\Ikaros\\data\\logs"
   },
-
   "hermes": {
     "agent": "E:\\Ikaros\\hermes-agent",
     "home": "E:\\Ikaros\\data\\hermes-agent",
     "bridge": "E:\\Ikaros\\bridge",
     "core": "E:\\Ikaros\\hermes"
   },
-
   "memory": {
     "root": "E:\\Ikaros\\Ikaros-memory",
     "data": "E:\\Ikaros\\Ikaros-memory\\data",
@@ -37,25 +33,66 @@
     "db": "E:\\Ikaros\\Ikaros-memory\\data\\v3.db",
     "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\chromadb"
   },
-
   "llama": {
     "version": "b9867",
     "dir": "E:\\Ikaros\\runtime\\llama\\b9867",
     "server": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-server.exe",
     "cli": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-cli.exe"
   },
-
   "models": {
     "embedding": "E:\\Ikaros\\Ikaros-memory\\models\\nomic-embed-text.gguf",
     "llm": "E:\\Ikaros\\Ikaros-memory\\models\\qwen3-8b.gguf"
   },
-
   "live2d": {
     "root": "E:\\Ikaros\\Ikaros-Live2D",
     "src": "E:\\Ikaros\\Ikaros-Live2D\\src",
     "src_tauri": "E:\\Ikaros\\Ikaros-Live2D\\src-tauri"
   },
-
+  "rust": {
+    "root": "E:\\Ikaros\\runtime\\rust",
+    "bin": "E:\\Ikaros\\runtime\\rust\\bin",
+    "rustc": "E:\\Ikaros\\runtime\\rust\\bin\\rustc.exe",
+    "cargo": "E:\\Ikaros\\runtime\\rust\\bin\\cargo.exe",
+    "version": "1.96.1",
+    "type": "standalone"
+  },
+  "mcp": {
+    "root": "E:\\Ikaros\\runtime\\MCPServe",
+    "gitnexus": {
+      "dist": "E:\\Ikaros\\runtime\\MCPServe\\gitnexus\\gitnexus\\dist\\cli\\index.js",
+      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "version": "1.7.0",
+      "command_arg": "mcp"
+    },
+    "context7": {
+      "pkg": "@upstash/context7-mcp",
+      "version": "3.2.2",
+      "dist": "E:\\Ikaros\\runtime\\MCPServe\\context7\\package\\dist\\index.js",
+      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "command_arg": "",
+      "requires_key": false
+    },
+    "playwright": {
+      "pkg": "@playwright/mcp",
+      "version": "0.0.77",
+      "dist": "E:\\Ikaros\\runtime\\MCPServe\\playwright\\package\\cli.js",
+      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "command_arg": "",
+      "requires_key": false
+    },
+    "codebase-memory": {
+      "pkg": "codebase-memory-mcp",
+      "version": "0.8.1",
+      "dist": "E:\\Ikaros\runtime\\MCPServe\\codebase-memory\\package\bin\\codebase-memory-mcp.exe",
+      "node": "E:\\Ikaros\runtime\node23\node.exe",
+      "shim": "E:\\Ikaros\runtime\\MCPServe\\codebase-memory\\package\bin.js",
+      "command_arg": "",
+      "requires_key": false,
+      "tools": 14,
+      "source_url": "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.8.1/codebase-memory-mcp-windows-amd64.zip",
+      "sha256": "a602ad090ed3f49d86c55472f73f27ad7055222806a82358f2e08513e027f00f"
+    }
+  },
   "ports": {
     "embedding": 8587,
     "llama": 8080,

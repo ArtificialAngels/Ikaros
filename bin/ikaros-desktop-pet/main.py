@@ -574,12 +574,22 @@ class PetWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # ── 📊 监控面板 (增强版: STT/回答/状态/自动重启) ──
+        # ── 📊 监控面板 (Rust 原生版优先, fallback Python) ──
         def _open_monitor():
             import subprocess
+            # 优先启动 Rust 原生版 (快、轻、无 Python 依赖)
+            monitor_exe = HERE / "ikaros-monitor.exe"
+            if monitor_exe.exists():
+                subprocess.Popen(
+                    [str(monitor_exe)],
+                    cwd=str(HERE),
+                    creationflags=subprocess.DETACHED_PROCESS,
+                    close_fds=True,
+                )
+                return
+            # Fallback: Python 版
             monitor_py = HERE / "monitor_agent.py"
             if monitor_py.exists():
-                # DETACHED_PROCESS: 不创建控制台窗口, 关掉 PowerShell 不影响监控
                 subprocess.Popen(
                     [sys.executable, str(monitor_py)],
                     cwd=str(HERE),

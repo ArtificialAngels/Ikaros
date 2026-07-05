@@ -57,6 +57,10 @@ REM ---- Step 4b: Ikaros-Live2D desktop pet paths ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"
 set "IKAROS_NODE_MODULES=%IKAROS_RUNTIME%\node23\node_modules"
 
+REM ---- Step 4c: Portable Rust toolchain (standalone rustc + cargo) ----
+REM No rustup needed - just bin/ on PATH. Truly portable, zero registry deps.
+set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
+
 REM ---- Step 5: llama-server paths ----
 REM b9867 is the llama.cpp build version, located under runtime\llama\
 if not defined IKAROS_LLAMA_VERSION set "IKAROS_LLAMA_VERSION=b9867"
@@ -83,7 +87,7 @@ set "PYTHONPATH=%IKAROS_ROOT%;%IKAROS_HERMES_AGENT%"
 
 REM ---- Step 9: PATH enhancement ----
 REM Project portable versions take priority over system versions
-set "PATH=%IKAROS_LLAMA_DIR%;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node23;%IKAROS_RUNTIME%\aria2;%IKAROS_RUNTIME%\gopeed;%IKAROS_RUNTIME%\rpc-server;%IKAROS_ROOT%\portable-python\Scripts;%IKAROS_ROOT%\portable-python;%PATH%"
+set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node23;%IKAROS_RUNTIME%\aria2;%IKAROS_RUNTIME%\gopeed;%IKAROS_RUNTIME%\rpc-server;%IKAROS_ROOT%\portable-python\Scripts;%IKAROS_ROOT%\portable-python;%PATH%"
 
 REM ---- Step 10: Interference prevention ----
 REM Clear system env vars that could interfere

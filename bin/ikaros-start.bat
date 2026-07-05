@@ -16,10 +16,10 @@ REM  and start reliably inherits them.
 REM  (wait loop uses goto to re-resolve %WAIT%, no delayedexpansion)
 REM -------------------------------------------------------------------
 
-REM ---- Load Ikaros environment ----
-call "%~dp0..\Ikaros-environment\ikaros-env.bat"
+REM ---- Load Ikaros environment (via init.bat single entry) ----
+call "%~dp0..\Ikaros-environment\init.bat"
 if errorlevel 1 (
-    echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
+    echo [FATAL] Ikaros-environment\init.bat failed.
     pause
     exit /b 1
 )
@@ -46,11 +46,11 @@ call "%IKAROS_BIN%\ikaros-sleep.bat" >nul 2>&1
 timeout /t 2 /nobreak >nul
 echo       done
 
-REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM detect) ----
+REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM) ----
 echo.
 echo [2] Starting Memory Services...
 echo       Embedding :8587 (nomic-embed-text)
-echo       LLM       :8080 (Hermes Agent unified, detect only)
+echo       LLM       :8080 (qwen3-8b, watchdog managed)
 echo.
 start "MemoryWatchdog" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --detach >nul 2>&1
 REM Wait for endpoints file (max 40s)
@@ -77,7 +77,8 @@ echo       Pet started (system tray)
 REM ---- Step 4: Launch Hermes Dashboard (web UI :9119) ----
 echo.
 echo [4] Starting Hermes Dashboard...
-start "HermesDashboard" /MIN cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe" dashboard --port 9119 --no-open --skip-build" >nul 2>&1
+REM Use launch-hidden.vbs to start completely windowless (no CMD flash)
+wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe"" dashboard --port 9119 --no-open --skip-build >nul 2>&1"
 REM Wait for Dashboard port (max 30s)
 set "WAIT=0"
 :wait_dashboard

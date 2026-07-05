@@ -3,12 +3,11 @@
 
 管理记忆服务 (统一架构):
   1. Embedding (:8587) — nomic-embed-text, 供 v3 记忆库语义搜索
-  2. LLM (:8080) — 复用 Hermes Agent llama-server (不管理, 仅检测)
+  2. LLM (:8080) — qwen3-8b, 供 v3 记忆提取 (extract)
 
 启动后:
-  - 启动 embedding 服务
-  - 每 10 秒巡检 embedding 端口, 死则重启
-  - 检测 :8080 健康状态 (不重启, 由 Hermes Agent 管理)
+  - 启动 embedding + LLM 服务
+  - 每 10 秒巡检端口, 死则重启
   - 写 PID 文件, 支持 --stop 安全停止
 
 用法:
@@ -42,13 +41,16 @@ LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
 # Model paths (from env vars or defaults)
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
     str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text.gguf")))
+LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
+    str(ROOT / "Ikaros-memory" / "models" / "qwen3-8b.gguf")))
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # Hermes Agent llama-server (detect only, don't manage)
+LLM_PORT = 8080  # qwen3-8b for v3 memory extraction
 
 CHECK_INTERVAL = 10  # patrol interval (seconds)
 PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
+REFLECT_INTERVAL = 3600  # 1h between memory reflection cycles
 
 log = print  # 启动阶段用 print; watchdog 循环用 _log
 
@@ -59,8 +61,10 @@ class MemoryWatchdog:
     def __init__(self):
         self._procs: dict[str, subprocess.Popen | None] = {
             "embed": None,
+            "llm": None,
         }
         self._running = False
+        self._last_reflect = 0.0  # last memory reflection timestamp
 
     # ─── 端口工具 ────────────────────────────────────
 
@@ -121,15 +125,36 @@ class MemoryWatchdog:
         return ok
 
     def _start_llm(self) -> bool:
-        """检测 Hermes Agent llama-server (:8080) 是否运行中.
-
-        不启动/不重启 — 由 Hermes Agent 自行管理.
-        """
+        """启动/检测 llama-server (:8080) — qwen3-8b for v3 memory extraction."""
         if self._port_alive(LLM_PORT):
-            _log("[llm] :8080 Hermes Agent llama-server OK")
+            _log("[llm] :8080 already listening, skip")
             return True
-        _log("[llm] :8080 not running (Hermes Agent manages its own llama-server)")
-        return False
+        if not LLAMA_BIN.exists():
+            _log("[llm] FATAL: llama-server not found: %s", LLAMA_BIN)
+            return False
+        if not LLM_MODEL.exists():
+            _log("[llm] FATAL: model not found: %s", LLM_MODEL)
+            return False
+
+        _log("[llm] starting: %s ...", LLM_MODEL.name)
+        self._procs["llm"] = subprocess.Popen(
+            [
+                str(LLAMA_BIN),
+                "-m", str(LLM_MODEL),
+                "--host", "127.0.0.1",
+                "--port", str(LLM_PORT),
+                "-c", "4096",
+                "-ngl", "99",
+                "--alias", "qwen3-8b",
+                "--cont-batching",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.DETACHED_PROCESS,
+        )
+        ok = self._wait_port(LLM_PORT, timeout=60)
+        _log("[llm] %s (%s)", "OK" if ok else "FAIL", LLM_PORT)
+        return ok
 
     def start_all(self) -> bool:
         """启动记忆服务 (embedding + 检测 LLM)."""
@@ -147,27 +172,49 @@ class MemoryWatchdog:
 
         with _al.action("start_all memory services",
                         action="watchdog.start_all",
-                        target="embedding+llm_detect",
+                        target="embedding+llm",
                         who="Ikaros (watchdog)",
                         why="memory watchdog init/restart") as _a:
             _log("=== Starting memory services (unified architecture) ===")
             ok_embed = self._start_embed()
-            ok_llm = self._start_llm()  # 只检测, 不启动
+            ok_llm = self._start_llm()
             self._write_endpoints(ok_embed, ok_llm)
-            all_ok = ok_embed  # LLM 不强制要求
-            if all_ok:
-                _log("=== Embedding started, LLM detected ===")
+            all_ok = ok_embed  # LLM 不强制要求 (embed 必须)
+            if ok_embed and ok_llm:
+                _log("=== Embedding + LLM both started ===")
+            elif ok_embed:
+                _log("=== Embedding started, LLM failed ===")
             else:
                 _log("=== Embedding failed ===")
             _a.done(result="ok" if all_ok else "fail",
                     completion_pct=100 if all_ok else 50,
-                    notes=f"embed={'ok' if ok_embed else 'fail'} llm_8080={'ok' if ok_llm else 'not_running'}")
+                    notes=f"embed={'ok' if ok_embed else 'fail'} llm_8080={'ok' if ok_llm else 'fail'}")
             return all_ok
 
     # ─── 巡检 ────────────────────────────────────────
 
+    def _maybe_reflect(self) -> None:
+        """Periodically trigger memory reflection cycle (self-evolution).
+
+        Runs every REFLECT_INTERVAL seconds. Imports memory_reflect module
+        and runs a consolidation + dedup + promote + distill cycle.
+        Uses local Qwen3-8B only (no cloud tokens).
+        """
+        now = time.time()
+        if (now - self._last_reflect) < REFLECT_INTERVAL:
+            return
+        self._last_reflect = now
+        try:
+            sys.path.insert(0, str(ROOT / "Ikaros-memory"))
+            import importlib
+            mr = importlib.import_module("memory_reflect")
+            results = mr.reflect_cycle()
+            _log("[reflect] cycle complete: %s", results)
+        except Exception as e:
+            _log("[reflect] cycle failed (non-fatal): %s", e)
+
     def _check_and_restart(self) -> None:
-        """巡检 embedding 端口 + 检测 LLM 健康."""
+        """巡检 embedding 端口 + 检测 LLM 健康 + 定期记忆反思."""
         embed_alive = self._port_alive(EMBED_PORT)
         llm_alive = self._port_alive(LLM_PORT)
 
@@ -178,14 +225,19 @@ class MemoryWatchdog:
         else:
             _log("[heartbeat] embed :8587 OK")
 
-        # LLM :8080 只检测, 不重启 (Hermes Agent 管理)
-        if llm_alive:
-            _log("[heartbeat] llm :8080 OK")
+        if not llm_alive:
+            _log("[heartbeat] llm :8080 DEAD, restarting...")
+            self._start_llm()
+            llm_alive = self._port_alive(LLM_PORT)
         else:
-            _log("[heartbeat] llm :8080 not running (Hermes Agent manages it)")
+            _log("[heartbeat] llm :8080 OK")
 
         self._write_endpoints(embed_alive, llm_alive)
         self._emit_heartbeat(embed_alive, llm_alive)
+
+        # 定期跑记忆反思周期 (只在 LLM 可用时)
+        if llm_alive:
+            self._maybe_reflect()
 
     def _emit_heartbeat(self, embed_alive: bool, llm_alive: bool) -> None:
         """写入心跳 JSONL, 加入 ikaros 统一心跳体系."""
@@ -238,8 +290,8 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",
                     "port": LLM_PORT,
                     "alive": llm_ok,
-                    "model": "hermes-agent-unified",
-                    "note": "Managed by Hermes Agent, not watchdog",
+                    "model": "qwen3-8b",
+                    "note": "Managed by memory watchdog for v3 extraction",
                 },
                 "updated_at": time.time(),
             }
@@ -370,7 +422,7 @@ def cmd_status():
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
-    print(f"  LLM       (:8080): {_check(LLM_PORT)} (Hermes Agent)")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-8b)")
 
     if PID_FILE.exists():
         pid_str = PID_FILE.read_text(encoding="utf-8").strip()

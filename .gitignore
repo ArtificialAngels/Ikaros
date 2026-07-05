@@ -314,3 +314,28 @@ Ikaros-memory/data/_workspace/
 # === Ikaros-memory 运行时配置 — 本地保留,不推送 ===
 Ikaros-memory/data/
 Ikaros-memory/services/launchd/
+
+# === 2026-07-05: ephemeral / generated artifacts (binaries + clones) ===
+
+# Quest 7-4 Rust build artifacts (cargo target/).  Source lives in
+# Ikaros-environment/scripts/detect-root/ (committed) and rebuilds
+# via `cargo build --release`.  The .exe is regenerated each time
+# and must NOT enter the repo (~110MB).
+Ikaros-environment/detect-root/target/
+Ikaros-environment/detect-root/Cargo.lock
+Ikaros-environment/scripts/detect-root.exe
+
+# bin/ikaros-monitor.exe is the Rust monitor binary rebuilt from
+# bin/ikaros-desktop-pet/agent/.  Skip the binary; commit the source
+# .py / .ps1 / .vbs files in the same dir.
+bin/ikaros-monitor.exe
+
+# exProject/ holds sibling open-source clones (Live2DPet, MewCo-AI,
+# etc.) that Ikaros reads for inspiration but does not re-distribute.
+# 1.2 GB+ of source — never push.
+exProject/
+
+# launch-hidden.vbs is a per-host Windows startup shim that points at
+# the user's logged-in shell.  Path is hard-coded to the host's
+# username (PZS0X) and is not portable; do not push.
+bin/launch-hidden.vbs

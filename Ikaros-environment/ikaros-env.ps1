@@ -49,6 +49,10 @@ $env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\ikaros-memory-v3.py"
 $env:IKAROS_LIVE2D       = "$env:IKAROS_ROOT\Ikaros-Live2D"
 $env:IKAROS_NODE_MODULES = "$env:IKAROS_RUNTIME\node23\node_modules"
 
+# ---- Step 4c: Portable Rust toolchain (standalone rustc + cargo) ----
+# No rustup needed - just bin/ on PATH. Truly portable, zero registry deps.
+$env:IKAROS_RUST         = "$env:IKAROS_RUNTIME\rust"
+
 # ---- Step 5: llama-server 路径 ----
 # b9867 是 llama.cpp 构建版本号，位于 runtime\llama\ 下
 if (-not $env:IKAROS_LLAMA_VERSION) { $env:IKAROS_LLAMA_VERSION = "b9867" }
@@ -76,6 +80,7 @@ $env:PYTHONPATH       = "$env:IKAROS_ROOT;$env:IKAROS_HERMES_AGENT"
 # ---- Step 9: PATH 增强 ----
 # 项目内 portable 版本优先于系统版本
 $pathParts = @(
+    "$env:IKAROS_RUST\bin",
     $env:IKAROS_LLAMA_DIR,
     $env:IKAROS_RUNTIME,
     "$env:IKAROS_RUNTIME\node23",

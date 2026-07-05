@@ -1,19 +1,14 @@
 # ============================================================
-# detect-root.ps1 - 自动检测 IKAROS_ROOT
+# detect-root.ps1 - Auto-detect IKAROS_ROOT
 # ============================================================
-#  从多个来源尝试解析 Ikaros 项目根目录。
-#  输出: 解析到的根目录路径，或抛出错误。
-#
-#  用法:
-#    $root = . "$PSScriptRoot\detect-root.ps1"
-#    或
-#    $root = & "E:\Ikaros\Ikaros-environment\scripts\detect-root.ps1"
+#  Try multiple sources to resolve Ikaros project root.
+#  Output: resolved root path, or throw error.
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 
 function Find-IkarosRoot {
-    # 优先级 1: 环境变量
+    # Priority 1: IKAROS_ROOT env var
     if ($env:IKAROS_ROOT -and (Test-Path $env:IKAROS_ROOT)) {
         $root = (Resolve-Path $env:IKAROS_ROOT).Path
         if (Test-Path "$root\portable-python\python.exe") {
@@ -21,7 +16,7 @@ function Find-IkarosRoot {
         }
     }
 
-    # 优先级 2: HERMES_ROOT 环境变量 (兼容旧脚本)
+    # Priority 2: HERMES_ROOT env var (legacy compat)
     if ($env:HERMES_ROOT -and (Test-Path $env:HERMES_ROOT)) {
         $root = (Resolve-Path $env:HERMES_ROOT).Path
         if (Test-Path "$root\portable-python\python.exe") {
@@ -29,27 +24,28 @@ function Find-IkarosRoot {
         }
     }
 
-    # 优先级 3: 从脚本位置推导
-    # 脚本在 E:\Ikaros\Ikaros-environment\scripts\
+    # Priority 3: Derive from script location
+    # Script is at Ikaros-environment\scripts\, root is parent of parent
     $scriptDir = $PSScriptRoot
-    $envDir = Split-Path $scriptDir -Parent  # Ikaros-environment
-    $candidate = Split-Path $envDir -Parent   # Ikaros
+    $envDir = Split-Path $scriptDir -Parent
+    $candidate = Split-Path $envDir -Parent
     if (Test-Path "$candidate\portable-python\python.exe") {
         return (Resolve-Path $candidate).Path
     }
 
-    # 优先级 4: 从当前工作目录向上查找
+    # Priority 4: Walk up from current working directory
     $dir = Get-Location
     while ($dir -ne $null) {
-        if (Test-Path "$dir\portable-python\python.exe" -and
-            Test-Path "$dir\hermes-agent" -and
-            Test-Path "$dir\Ikaros-environment") {
+        $hasPython = Test-Path "$dir\portable-python\python.exe"
+        $hasHermes = Test-Path "$dir\hermes-agent"
+        $hasEnv = Test-Path "$dir\Ikaros-environment"
+        if ($hasPython -and $hasHermes -and $hasEnv) {
             return (Resolve-Path $dir).Path
         }
         $dir = Split-Path $dir -Parent
     }
 
-    # 优先级 5: 扫描盘符
+    # Priority 5: Scan drive letters
     $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null }
     foreach ($drive in $drives) {
         $candidate = Join-Path $drive.Root "Ikaros"
@@ -58,9 +54,9 @@ function Find-IkarosRoot {
         }
     }
 
-    throw "无法找到 Ikaros 根目录。请设置 IKAROS_ROOT 环境变量。"
+    throw "IKAROS_ROOT not found. Set IKAROS_ROOT env var."
 }
 
-# 执行并输出结果
+# Execute and output result
 $root = Find-IkarosRoot
 Write-Output $root

@@ -15,9 +15,9 @@ REM  start-spawned child must inherit env vars set by ikaros-env.bat.
 REM  setlocal blocks env inheritance on Windows 25H2.
 REM -------------------------------------------------------------------
 
-call "%~dp0..\Ikaros-environment\ikaros-env.bat"
+call "%~dp0..\Ikaros-environment\init.bat"
 if errorlevel 1 (
-    echo [ikaros] FATAL: could not load Ikaros-environment.
+    echo [ikaros] FATAL: could not load Ikaros-environment - init.bat failed.
     exit /b 1
 )
 

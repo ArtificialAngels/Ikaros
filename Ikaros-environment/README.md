@@ -2,6 +2,9 @@
 
 集中管理 Ikaros 项目的所有路径配置，确保完全隔离部署。
 
+> **接手智能体**: 这是 Ikaros 项目的 **PATH / sys.path 等效层** —— 不读 README 也能懂?
+> 看 [PATH-LAYER.md](PATH-LAYER.md) (Windows 概念与 Ikaros 实现 1:1 映射, 11 节)。
+
 ## 目录结构
 
 ```

@@ -22,11 +22,10 @@ REM  Dropping setlocal lets `set` write the current process env, which
 REM  `start` reliably inherits.
 REM -------------------------------------------------------------------
 
-REM ---- Resolve HERMES_ROOT (same source of truth as all other scripts) ----
-call "%~dp0..\Ikaros-environment\ikaros-env.bat"
+REM ---- Resolve Ikaros paths (via init.bat single entry) ----
+call "%~dp0..\Ikaros-environment\init.bat"
 if errorlevel 1 (
-    echo [FATAL] Ikaros-environment\ikaros-env.bat failed to resolve HERMES_ROOT.
-    pause
+    echo [FATAL] Ikaros-environment\init.bat failed to resolve IKAROS_ROOT.
     exit /b 1
 )
 
@@ -81,5 +80,7 @@ REM cmd.exe's console - not the parent cmd.exe that's running this .bat.  Withou
 REM the parent cmd sees raw Electron stderr and can render ". was unexpected at this time."
 REM when backtick-containing lines hit the console buffer.
 if not exist "%HERMES_HOME%\logs" mkdir "%HERMES_HOME%\logs"
-start "Hermes Desktop" /MIN cmd /c ""%DESKTOP_EXE%" > "%HERMES_HOME%\logs\desktop-stdout.log" 2>&1"
+REM Launch Electron completely hidden (no CMD window flash)
+REM WScript.Shell.Run with windowStyle=0 = hidden, detached
+start "" /B wscript.exe "%~dp0launch-hidden.vbs" "cmd /c ""%DESKTOP_EXE%"" > ""%HERMES_HOME%\logs\desktop-stdout.log"" 2>&1"
 exit /b 0

@@ -7,10 +7,10 @@ REM  No supervisor needed (retired).
 REM ============================================================
 setlocal
 
-REM ---- Load Ikaros environment (unified path config) ----
-call "%~dp0..\Ikaros-environment\ikaros-env.bat"
+REM ---- Load Ikaros environment (via init.bat single entry) ----
+call "%~dp0..\Ikaros-environment\init.bat"
 if errorlevel 1 (
-    echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
+    echo [FATAL] Ikaros-environment\init.bat failed.
     exit /b 1
 )
 
