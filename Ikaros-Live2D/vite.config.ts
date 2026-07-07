@@ -14,6 +14,9 @@ export default defineConfig({
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
+    // Keep dist/live2d (Live2D model assets) across rebuilds instead of
+    // wiping the whole outDir. Safe for incremental frontend-only builds.
+    emptyOutDir: false,
     target: 'esnext',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
