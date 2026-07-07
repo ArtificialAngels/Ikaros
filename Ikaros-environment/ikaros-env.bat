@@ -51,7 +51,7 @@ set "IKAROS_MEMORY=%IKAROS_ROOT%\Ikaros-memory"
 set "IKAROS_MEMORY_DATA=%IKAROS_MEMORY%\data"
 set "IKAROS_MEMORY_MODELS=%IKAROS_MEMORY%\models"
 set "IKAROS_MEMORY_SERVICES=%IKAROS_MEMORY%\services"
-set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\ikaros-memory-v3.py"
+set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\v4\store.py"
 
 REM ---- Step 4b: Ikaros-Live2D desktop pet paths ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"
@@ -77,8 +77,9 @@ set "IKAROS_PORT_EMBEDDING=8587"
 set "IKAROS_PORT_LLAMA=8080"
 REM NOTE: LLM unified on :8080 (Hermes Agent llama-server), no separate :8589
 set "IKAROS_PORT_BRIDGE=7860"
-set "IKAROS_PORT_WEBUI=8648"
-set "IKAROS_PORT_WEBUI_INTERNAL=8649"
+REM 2026-07-05: hermes-web-ui 卸了 (哥哥).  :8648 让给 Ikaros-Live2D Tauri webview.
+set "IKAROS_PORT_LIVE2D_WEBVIEW=8648"
+set "IKAROS_PORT_LIVE2D_WEBVIEW_INTERNAL=8649"
 
 REM ---- Step 8: Python env vars ----
 set "PYTHONIOENCODING=utf-8"

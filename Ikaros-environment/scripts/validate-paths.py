@@ -170,7 +170,7 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     ))
     checks.append(PathCheck(
         "记忆数据库",
-        str(root / "Ikaros-memory" / "data" / "v3.db"),
+        str(root / "Ikaros-memory" / "data" / "v4" / "v4.db"),
         critical=False, must_be_file=True
     ))
     checks.append(PathCheck(

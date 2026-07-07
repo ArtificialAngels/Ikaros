@@ -246,9 +246,20 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let state = TrayMenuState::default();
     let menu = build_menu(app, &state)?;
 
+    // Safe icon resolution: a missing icon must NOT panic the whole tray
+    // creation (the old `.unwrap()` would abort setup and leave no tray at all).
+    let tray_icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("no default window icon available for tray")?;
+
     let _tray = TrayIconBuilder::with_id("ikaros-tray")
         .tooltip("🪶 伊卡洛斯")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tray_icon)
+        // Right-click opens the context menu; left-click toggles the pet window
+        // (handled in `on_tray_icon_event`). Tauri v2 defaults to showing the
+        // menu on BOTH clicks, which conflicted with the toggle — disable it.
+        .show_menu_on_left_click(false)
         .menu(&menu)
         .on_menu_event(move |app, event| {
             let id = event.id.as_ref();

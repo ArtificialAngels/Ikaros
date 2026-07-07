@@ -29,8 +29,8 @@
     "data": "E:\\Ikaros\\Ikaros-memory\\data",
     "models": "E:\\Ikaros\\Ikaros-memory\\models",
     "services": "E:\\Ikaros\\Ikaros-memory\\services",
-    "script": "E:\\Ikaros\\Ikaros-memory\\ikaros-memory-v3.py",
-    "db": "E:\\Ikaros\\Ikaros-memory\\data\\v3.db",
+    "script": "E:\\Ikaros\\Ikaros-memory\\v4\\store.py",
+    "db": "E:\\Ikaros\\Ikaros-memory\\data\\v4\\v4.db",
     "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\chromadb"
   },
   "llama": {
@@ -97,7 +97,7 @@
     "embedding": 8587,
     "llama": 8080,
     "bridge": 7860,
-    "webui": 8648,
-    "webui_internal": 8649
+    "live2d_webview": 8648,
+    "live2d_webview_internal": 8649
   }
 }

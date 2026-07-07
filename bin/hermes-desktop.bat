@@ -61,17 +61,10 @@ if not exist "%HERMES_DESKTOP_PYTHON%" (
     exit /b 1
 )
 
-REM ---- Pre-flight: warn if bridge is down (prevents backend boot-loop) ----
-REM 2026-07-01: if bridge :7860 isn't running, the desktop backend crashes on
-REM first API call and enters a crash+restart loop.  Warn early so the user can
-REM start the supervisor first, but still launch (cloud-only mode still works).
-"%HERMES_ROOT%\portable-python\python.exe" -c "import socket;s=socket.socket();s.settimeout(2);r=s.connect_ex(('127.0.0.1',7860));s.close();exit(0 if r==0 else 1)" >nul 2>&1
-if errorlevel 1 (
-    echo [WARN] Bridge :7860 not responding. Desktop may show errors on first chat.
-    echo        Fix: run bin\hermes-supervisor.bat start first, then retry.
-    echo        (Cloud-only models still work without the bridge.)
-    echo.
-)
+REM ---- Pre-flight: no-bridge mode (since 2026-07-03) ----
+REM Bridge :7860 removed (de-bridge architecture, commit b16c8f8). Hermes
+REM Desktop runs standalone; cloud-only models work with no local bridge.
+REM Old :7860 down-check removed on purpose so it can't emit a false [WARN].
 
 REM ---- Launch (redirect stdio to prevent EPIPE when cmd window closes) ----
 REM 2026-07-01: wrap in cmd /c so Electron's child-process stderr (Node deprecation

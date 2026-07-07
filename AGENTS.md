@@ -4,7 +4,7 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 >
-> **Last revised:** 2026-07-04b (ikaros-start.bat crash fix: LLMManager stub + init.bat encoding).
+> **Last revised:** 2026-07-07b (V3 memory fully removed; PyQt6 pet removed; oldcode deleted; cloud_chat.py relocated). Prev: 2026-07-04b (ikaros-start.bat crash fix).
 > Two bugs killed the startup chain:
 > 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
 >    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.
@@ -94,6 +94,15 @@ Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定�
 
 
 ## Revision Timeline (chronological; see git log for details)
+
+- **2026-07-07b** - Ikaros v3 memory fully removed (after V4 cutover). `git rm` (recoverable from history): `Ikaros-memory/ikaros-memory-v3.py`, `vector_search.py`, `memory_reflect.py`, `tools/ikaros-memory-v3/` (Rust). Sent to Recycle Bin (recoverable): `Ikaros-memory/data/v3.db` (256K), `Ikaros-memory/.tmp_test_migrate/`, 3 V3 test files (`tests/test_sem_extract.py`/`benchmark_ikaros_memory.py`/`clean_v3_test.py`), Hermes `plugins/ikaros_v3/` (orphaned dynamic-loader), `chroma_fix_verify.py` (verified deleted V3 `vector_search`). Config follow-up: `ikaros-env.bat/.ps1` `IKAROS_MEMORY_SCRIPT`→`v4/store.py`; `ikaros-paths.json` script/db→v4; `validate-paths.py` checks `v4/v4.db`; `bin/ikaros-mem.bat` dropped v3 route; `gitignore_guard.py` v3.db→v4/v4.db. `migrate_from_v3.py` retained (V4 asset, gracefully handles missing v3.db). All live paths run on V4 only; re-verified compile + v4 wiring.
+
+- **2026-07-07** - PyQt6 desktop pet removed; architecture is now Tauri v2 + Live2D pet (`Ikaros-Live2D`) + Hermes Desktop (Electron) + Hermes Dashboard (:9119) + memory watchdog (:8587/:8080). Actions:
+  1. Deleted `bin/oldcode/` (756 files, 73MB, gitignored legacy) and empty root `oldcode/` — sent to Recycle Bin (recoverable).
+  2. Deleted entire `bin/ikaros-desktop-pet/` (PyQt6 GUI: `main.py`, `detached.py`, `audio_engine.py`, tests, launchers, character assets, `live2d/`, monitor). The live voice backend was NOT in this dir.
+  3. Relocated shared backend `cloud_chat.py` `bin/ikaros-desktop-pet/cloud_chat.py` -> `bin/cloud_chat.py` (imported by `bin/ikaros-voice-ws.py` [:7870], `bin/ikaros-repl.py`, `tests/smoke_ikaros_v3.py`). Fixed `sys.path` in `ikaros-repl.py` + `smoke_ikaros_v3.py`.
+  4. Live voice chain preserved: Tauri `App.vue` -> `ws://127.0.0.1:7870/v1/voice/ws` -> `bin/ikaros-voice-ws.py` -> `cloud_chat.py` -> `Ikaros-memory/cogno_5d.py`.
+  5. Verified: `py_compile` + `from cloud_chat import cloud_chat` OK.
 
 - **2026-07-04b** - ikaros-start.bat crash fix (2 bugs):
   1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments → cmd.exe GBK parse fail → instant crash.
@@ -389,203 +398,106 @@ $ python tests/smoke_webui_proxy.py
 
 ## 1. What This Is
 
-A **portable, USB-drive-deployable Hermes Agent** — a hybrid LLM (cloud + local)
-with a modern full-featured Web UI, designed to run on any Windows PC with zero install.
+**Ikaros** -- a Windows desktop AI companion (桌宠) with a Live2D pet, local+cloud
+memory, and voice. **No-bridge architecture** since 2026-07-07: there is no
+`:7860` bridge and no PyQt6 pet. The pet is a **Tauri v2 + Vue 3 + Live2D**
+app; memory is a local **V4** SQLite+FTS5+Chroma system; the LLM path is cloud
+(DeepSeek V4 / MiniMax) with a local `:8080` qwen3-8b fallback.
 
-**One-click UX:** `bin\hermes-all.bat` → browser opens to `http://localhost:8648/` → chat ready.
-
-**Web UI Source:** [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui) — Vue 3 + Koa + Socket.IO
-
----
-
-## 2. Architecture
-
-Three processes, each with a single responsibility:
-
-| Port  | Process                | Role                                                           |
-|-------|------------------------|----------------------------------------------------------------|
-| :8080 | **llama-server**       | LLM engine. OpenAI-compatible HTTP API. Internal — not exposed. |
-| :7860 | **Hermes FastAPI**     | Memory + knowledge base + RAG embeddings shim + legacy static UI. |
-| :8648 | **Hermes Web UI**      | **Main Web Interface** (EKKOLearnAI/hermes-web-ui). Vue 3 + Koa + Socket.IO. Browser opens here. |
-
-**Data flow:**
-```
-Browser → :8648 Hermes Web UI (Koa BFF + Vue 3 SPA)
-                │
-                ├── Socket.IO /chat-run → Hermes Agent Bridge → hermes-agent-source
-                │
-                └── REST API → :7860 Hermes FastAPI (embeddings/RAG /api/*)
-                             → :8080 llama-server (chat /v1/*)
-```
-
-**Hermes Web UI** (from [EKKOLearnAI/hermes-web-ui](https://github.com/EKKOLearnAI/hermes-web-ui)):
-- Full-featured Vue 3 + TypeScript frontend with Koa BFF backend
-- Features: AI chat, platform channels, usage analytics, cron jobs, model management,
-  multi-profile, file browser, group chat, skills, logs, web terminal
-- Communicates with local llama-server via OpenAI-compatible API
-- Uses Hermes Agent Bridge for chat execution
-
-llama-server only loads **one model at a time**; the WebUI shows whichever
-model llama-server exposes via `--alias`). When llama-server is down, `/v1/models`
-falls back to scanning `data/models/*.gguf` via `modules/model_manager/gguf.py`.
-See §6 for multi-model options.
-
-**Module architecture** (Phase 1-13, completed 2026-06-10): each service is a
-self-describing `modules/<name>/` package with its own `module.json` (declares
-port, dependencies, env), `start.ps1` / `stop.ps1` / `health.ps1`. The Python
-`bin/hermes-supervisor.py` does a topological sort by `depends_on` and starts
-them in the right order; `bin/hermes-all.bat` just calls it. New service? Add
-a directory, drop in a `module.json`, and the supervisor picks it up. See
-§5 (Components -> Hermes Supervisor) and §4 (HERMES_ROOT resolution).
+**One-click UX:** `bin\ikaros-start.bat` -> Tauri pet in system tray + Hermes
+Dashboard at `http://localhost:9119/`. Stop with `bin\ikaros-sleep.bat`.
 
 ---
 
-## 3. Project Layout
+## 2. Architecture (no-bridge)
+
+| Port  | Process                                | Role                                                       |
+|-------|----------------------------------------|------------------------------------------------------------|
+| :7870 | **voice-ws** (`bin/ikaros-voice-ws.py`)| Tauri pet speech link (ws -> cloud_chat + cogno_5d + edge_tts) |
+| :8587 | **nomic-embed-text** (llama-server)    | V4 embeddings / semantic search                            |
+| :8080 | **qwen3-8b** (llama-server)            | V4 memory extraction + reflection; cloud LLM fallback      |
+| :9119 | **Hermes Dashboard** (`hermes.exe dashboard`) | Web UI                                              |
+| --    | `:7860` bridge / `:8648` hermes-web-ui | **REMOVED 2026-07-07** (no-bridge refactor)               |
+
+**Voice / LLM data flow:**
+```
+Tauri Pet (Ikaros-Live2D) --ws :7870--> ikaros-voice-ws.py
+        |  (tray menu . bubbles . Live2D)            |
+        |                                            v
+        |                                      cloud_chat.py
+        |                                        |- cloud: DeepSeek V4 / MiniMax
+        |                                        |- local :8080 qwen3-8b (fallback)
+        |                                                 |
+        |                                          cogno_5d.py (5D anchor)
+        v                                                 |
+   edge_tts (TTS back to pet bubble) <--------------------+
+
+Memory (Ikaros-memory V4): SQLite+FTS5 + Chroma  ->  data/v4/v4.db
+   ikaros-memory-watchdog.py manages :8587 + :8080, runs V4 reflection
+   (consolidate / dedup / promote / distill / reflect / cleanup).
+```
+
+**Components:**
+- **Pet** -- `Ikaros-Live2D` (Tauri v2 + Vue 3 + Live2D). Click-through,
+  system-tray context menu (`src-tauri/src/tray.rs`). Launched by
+  `bin/ikaros-live2d.bat` (release exe). 2 windows: `main` (transparent,
+  decorations off) + `monitor` (hidden, toggled from tray).
+- **Frontend** -- Hermes Desktop (Electron, standalone) + Hermes Dashboard
+  (`:9119`, `hermes.exe dashboard --port 9119`).
+- **Memory** -- `Ikaros-memory` V4, watchdog-managed (see above).
+- **Environment** -- `Ikaros-environment/init.bat` sets `IKAROS_ROOT`,
+  `IKAROS_BIN`, `IKAROS_PYTHON`, `IKAROS_MEMORY_DATA`, `IKAROS_LOGS`.
+
+> WARNING: Historical note -- the original design doc below (the `E:\Hermes Agent\`
+> `modules/bridge`, `:7860` FastAPI, `:8648` Web UI, `hermes-all.bat`, PyQt6 pet)
+> was REMOVED in the 2026-07-07 no-bridge refactor. Sections 1-3 above describe
+> the current architecture; the changelog further down remains as project history.
+
+---
+
+## 3. Project Layout (current -- `E:\Ikaros`)
 
 ```
-E:\Hermes Agent\
-├── .env                          # runtime env vars (API keys, paths)
-├── AGENTS.md                     # THIS FILE
-├── README.md                     # user-facing docs
-├── deps\                         # ★ 2026-06-13 — FIRST commit to git (was local-only)
-│   ├── hermes-env.bat            # ★ Every .bat in the project calls this first
-│   ├── hermes-env.ps1            #   PowerShell equivalent (every .ps1 dot-sources this)
-│   ├── manifest.json             #   Version tracking for runtime assets (downloaded by bin/setup-portable.bat)
-│   ├── README.md                 #   deps/ documentation
-│   # (No junctions here, by design. Earlier Hermes versions used
-│   #  `mklink /J` to expose runtime/ and node23/ under deps\ as
-│   #  deps\node / tools / llamacpp\bin / python-test, but junctions
-│   #  store absolute reparse-point targets and break when the
-│   #  project is moved to a new drive letter. hermes-env.{bat,ps1}
-│   #  now resolves %HERMES_RUNTIME% directly and auto-rmdir's any
-│   #  leftover junction an old copy might still be carrying — see
-│   #  §0.5 for the full story.)
-├── modules\                      # ★ NEW 2026-06-10 — Independent modules with module.json
-│   ├── __init__.py               # Marks modules/ as a Python package
-│   ├── llm_engine\               # llama-server router mode (:8080)
-│   │   ├── module.json           # name="llm_engine"
-│   │   ├── start.ps1             # Multi-version CUDA selection (Phase 8) + launcher
-│   │   ├── stop.ps1
-│   │   └── health.ps1
-│   ├── bridge\                   # FastAPI bridge (:7860)
-│   │   ├── module.json
-│   │   ├── start.ps1
-│   │   ├── stop.ps1
-│   │   └── health.ps1
-│   ├── webui\                    # hermes-web-ui (:8648)
-│   │   ├── module.json
-│   │   ├── start.ps1
-│   │   ├── stop.ps1
-│   │   └── health.ps1
-│   ├── env_bootstrap\            # GPU detection + multi-version CUDA runtime
-│   │   ├── __init__.py           # Marks env_bootstrap/ as a Python package
-│   │   ├── __main__.py           # `python -m modules.env_bootstrap` entrypoint
-│   │   ├── module.json           # name="env_bootstrap"
-│   │   ├── start.ps1             # Verifies Python/Node/llama-server, runs GPU status
-│   │   ├── stop.ps1              # No-op (one-shot tool)
-│   │   └── gpu_detect.py         # Merged from hermes/gpu.py + hermes/firstrun.py
-│   ├── model_manager\            # Model management (GGUF + download + mirror)
-│   │   ├── __init__.py           # Marks model_manager/ as a Python package
-│   │   ├── module.json           # name="model_manager"
-│   │   ├── start.ps1             # Discovers models + runs manager.py list
-│   │   ├── stop.ps1              # No-op (one-shot tool)
-│   │   ├── downloader.py         # Merged from hermes/download.py + hermes/gopeed_client.py
-│   │   ├── gguf.py               # Migrated from hermes/gguf.py (Phase 11)
-│   │   ├── mirror.py             # Migrated from hermes/mirror.py (Phase 11)
-│   │   └── manager.py            # Unified CLI: list/info/download/import-ollama
-│   └── supervisor\               # Process orchestrator (replaces hermes-all.bat core)
-│       ├── module.json
-│       ├── start.ps1
-│       ├── stop.ps1
-│       └── orchestrator.ps1      # Topological sort + health-check lifecycle
-├── hermes\                       # Python package (BRIDGE LAYER — thin glue for bridge/ and bin/)
-│   ├── __init__.py               # Docstring-only: lists what's in the package and what moved to modules/
-│   ├── __main__.py               # `python -m hermes` delegates to upstream hermes_cli.main
-│   ├── config.py                 # config loader (env-aware, bash ${VAR:-default} expansion)
-│   ├── knowledge.py              # markdown KB with chunking
-│   ├── memos_client.py           # memory plugin
-│   ├── watchdog.py               # process supervisor (kills orphans on parent exit)
-│   └── workspace.py              # whitelisted file browser (HERMES_ROOT trust boundary)
-│   # (download.py, firstrun.py, gguf.py, mirror.py, gpu.py, gopeed_client.py,
-│   #  skills.py, prompts.py were removed in Phases 5/10/11 — replaced by modules/*)
-├── hermes-agent\                 # ★ upstream v0.16.0 (CLEAN — DO NOT MODIFY)
-├── bridge\                       # FastAPI app + monkey-patch sitecustomize
-│   ├── server.py                 # FastAPI: /v1/embeddings, /v1/models, /api/*, /static/
-│   └── sitecustomize.py          # Windows-only monkey-patches for upstream
-├── portable-python\              # embedded Python 3.12.10 + pip deps
-│   └── python.exe
-├── runtime\                      # llama.cpp binaries + per-version CUDA runtimes (Phase 8)
-│   ├── llama-server.exe          # CPU build
-│   ├── llama-server-vulkan.exe   # AMD / Intel / NVIDIA fallback
-│   ├── llama-server-impl.dll     # shared by all CPU/Vulkan/CUDA builds
-│   ├── aria2c.exe                # multi-thread downloader
-│   ├── cuda\                     # ★ NEW 2026-06-10 — per-version CUDA runtime (Phase 8)
-│   │   ├── 11.8\                 # NVIDIA driver 470–524; on-demand install (pypi nvidia-cu11)
-│   │   │   ├── llama-server-cuda-11.8.exe
-│   │   │   ├── cudart64_110.dll
-│   │   │   ├── cublas64_11.dll
-│   │   │   ├── cublasLt64_11.dll
-│   │   │   └── manifest.json     # download_on_demand / compatible_driver_min=470.0
-│   │   ├── 12.4\                 # NVIDIA driver 525–554; bundled by default
-│   │   │   ├── llama-server-cuda-12.4.exe
-│   │   │   ├── cudart64_12.dll
-│   │   │   ├── cublas64_12.dll
-│   │   │   ├── cublasLt64_12.dll
-│   │   │   ├── ggml-cuda.dll
-│   │   │   └── manifest.json     # status=bundled
-│   │   └── 13.0\                 # NVIDIA driver 555+; on-demand install
-│   │       └── manifest.json     # uses _12 DLL naming for back-compat
-│   └── *.dll                     # common runtime DLLs (ggml-*, mtmd, llama, etc.)
-├── data\
-│   ├── models\                   # GGUF files
-│   │   └── *.gguf
-│   ├── webui\                    # Web UI state (SQLite, auth, sessions)
-│   ├── hermes-agent\             # Agent state (config.yaml, sessions, skills)
-│   ├── memory\                   # JSONL memory store
-│   ├── knowledge\                # markdown KB source + index.jsonl
-│   ├── skills\                   # Hermes FastAPI skill registry (built-in: time/calc/echo/...)
-│   ├── hermes-agent\skills\      # ★ NEW 2026-06-08 — installed skills for Web UI (see §15)
-│   │   ├── finance\              # excel-author, pptx-author, comps-analysis, dcf-model
-│   │   ├── creative\             # avoid-ai-writing, claude-design, drawio-skill
-│   │   ├── productivity\         # google-workspace, nano-pdf, ocr-and-documents,
-│   │   │                         #   plur-memory, plur-session-end, powerpoint
-│   │   └── autonomous-ai-agents\ # hermes-dojo
-│   │   (others: apikey-image-gen, grok-image-to-video, hyperframes,
-│   │    markdown-viewer, remotion — empty legacy stubs)
-│   ├── logs\                     # hermes.log + bootstrap.log
-│   ├── sessions\                 # ★ NEW 2026-06-07 — one JSON file per chat session
-│   ├── kanban\                   # ★ NEW 2026-06-07 — boards.json + tasks.json + events.json
-│   ├── crons\                    # ★ NEW 2026-06-07 — jobs.json (croniter-scheduled)
-│   └── webui_settings.json       # ★ NEW 2026-06-07 — single-file atomic webui prefs
-├── bin\                          # user-facing launchers (CRLF line endings!)
-│   ├── hermes-all.bat            # ★ MAIN: one-click everything (now opens :8648)
-│   │                                [Phase 3] delegates to modules/supervisor/orchestrator.ps1
-│   ├── hermes-stop.bat           # kill all Hermes processes (delegates to orchestrator -Stop)
-│   ├── hermes-firstrun.bat       # first-run GPU detection → modules/env_bootstrap/
-│   ├── hermes-models.py          # CLI model manager (list/info/download) → modules/model_manager/manager
-│   ├── hermes-console.bat        # wrapper for console.ps1
-│   ├── hermes-console.ps1        # model management shell (router mode: Switch-Model)
-│   ├── hermes-model-run.bat      # wrapper for live LLM log viewer
-│   ├── hermes-model-run.ps1      # tail llm-server.log/err with smart colors
-│   ├── hermes-health.ps1         # 3-layer liveness probe (TCP / /v1/models / /v1/completions)
-│   ├── setup-portable.bat        # one-shot bootstrap: portable-python + runtime + default model
-│   └── gpu-detect.bat            # one-shot GPU probe → modules/env_bootstrap/gpu_detect
-│   # (start-llm-router.ps1, start-bridge-server.ps1, start-webui.ps1 removed in Phase 10;
-│   #  their work is now done by modules/{llm_engine,bridge,webui}/start.ps1 via the supervisor)
-├── data\models\
-│   └── router-preset.ini         # ★ NEW 2026-06-09 — per-model NGL/ctx/temp for router mode
-├── tests\                        # functional test scripts (kept clean)
-│   └── test_hermes.py            # 17-test E2E suite (mock LLM, no GPU needed)
-│   # (verify_smart_ngl.py was removed in router-mode refactor — NGL now lives in router-preset.ini)
-├── .hermes-root                   # ★ NEW 2026-06-10 — Persisted HERMES_ROOT cache (atomic write)
-├── .githooks/                     # ★ NEW 2026-06-10 — Versioned git hooks (tracked in repo)
-│   └── pre-commit                 # bash: blocks commit if .bat/.ps1 are not CRLF
-├── bin/hermes-root.py             # ★ NEW 2026-06-10 — The single source of truth for path resolution
-├── bin/hermes-root.bat            # ★ NEW 2026-06-10 — Thin bat launcher (ASCII-only, CRLF)
-├── bin/fix-eol.py                 # ★ NEW 2026-06-10 — One-shot CRLF normalizer for bat/ps1
-├── bin/install-git-hooks.bat      # ★ NEW 2026-06-10 — One-time: sets core.hooksPath=.githooks
-└── requirements.txt
+E:\Ikaros\
+├── AGENTS.md                       # THIS FILE (current architecture in S1-3)
+├── README.md                       # user-facing docs (current architecture)
+├── bin\
+│   ├── ikaros-start.bat            # * MAIN no-bridge launcher (5-step)
+│   ├── ikaros-sleep.bat            # stop all Ikaros processes
+│   ├── ikaros-live2d.bat           # launch Tauri pet (release exe)
+│   ├── ikaros-voice-ws.py          # :7870 voice WS (pet speech link)
+│   ├── cloud_chat.py               # LLM router (cloud + :8080 fallback) + cogno_5d
+│   ├── ikaros-memory-watchdog.py   # manages :8587 + :8080 + V4 reflection
+│   ├── ikaros-mem.bat / ikaros-repl.py
+│   └── Hermes-dashboard.bat        # launch :9119 dashboard
+├── Ikaros-Live2D\                  # * Pet: Tauri v2 + Vue 3 + Live2D
+│   ├── src\App.vue                 # pet UI, tray-event handler, voice ws client
+│   ├── src-tauri\src\tray.rs       # system tray menu (Rust)
+│   ├── src-tauri\tauri.conf.json   # windows: main (transparent) + monitor
+│   ├── public\live2d\              # Live2D model assets
+│   └── dist\                       # built frontend (frontendDist)
+├── Ikaros-memory\                  # * V4 memory system
+│   ├── v4\                         # store.py / search.py / reflect/ (V4)
+│   ├── cogno_5d.py                 # 5D cognition anchoring
+│   └── data\v4\v4.db               # SQLite+FTS5 + Chroma vector store
+├── Ikaros-environment\             # env bootstrap (init.bat -> IKAROS_* vars)
+├── data\hermes-agent\              # Hermes Desktop (Electron) + skills + sessions
+├── exProject\                      # sibling OSS clones (Live2DPet, MewCo-AI) - ref only
+└── tools\ikaros-monitor\           # standalone monitor tool
 ```
+
+> **Removed 2026-07-07:** PyQt6 pet (`bin/ikaros-desktop-pet/`) and the
+> `:7860` Rust/PyQt6 bridge. The pet is now `Ikaros-Live2D` (Tauri). V3 memory
+> (`Ikaros-memory/ikaros-memory-v3.py` etc.) was also removed; memory is 100% V4.
+
+
+
+> ⚠️ **HISTORICAL BELOW** — the remainder of this file (Path Resolution, component
+> deep-dives, and the dated changelog) describes the **pre-2026-07-07** Hermes
+> Agent design (`E:\Hermes Agent`, `:7860` bridge, `:8648` Web UI, `hermes-all.bat`,
+> PyQt6 pet). All of that was **removed** in the no-bridge refactor; the current
+> architecture is documented in §1–3 above. Path resolution is now handled by
+> `Ikaros-environment/init.bat` (not `hermes-root.py`).
 
 ### Path Resolution — Single Source of Truth (NEW 2026-06-10)
 

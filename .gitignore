@@ -278,8 +278,9 @@ packages                                    # webui sqlite db (隐私: users/dev
 # nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在 (verified via check-ignore)
 
 # 7-4 push-to-github cleanup
-# Ikaros-memory models: 5GB+ gguf files. Pull, not push.
-Ikaros-memory/models/*.gguf
+# Ikaros-memory models: 5GB+ gguf weights + junk (.bak/.q4/.placed/.corrupt).
+# Pull, not push — never commit model binaries.
+Ikaros-memory/models/
 # Live2D Rust build artifacts: cargo target
 Ikaros-Live2D/src-tauri/target/
 Ikaros-Live2D/src-tauri/Cargo.lock
@@ -339,3 +340,17 @@ exProject/
 # the user's logged-in shell.  Path is hard-coded to the host's
 # username (PZS0X) and is not portable; do not push.
 bin/launch-hidden.vbs
+
+# 2026-07-05 (哥哥 instruction): hermes agent verify scripts and
+# ad-hoc verification artifacts must live under the project root
+# (e.g. Ikaros/tmp/hermes-verify/), not under the OS-default
+# C:/Users/<user>/AppData/Local/Temp/ which yields stray roots
+# like E:/Users/.  The tmp/ tree is per-host and never pushes.
+tmp/
+tmp/**
+
+# --- Agent workspace data (WorkBuddy / CodeBuddy local state) ---
+# These hold agent memory, session logs, and task state. They are
+# host-specific and must NEVER enter the repo.
+.workbuddy/
+.codebuddy/

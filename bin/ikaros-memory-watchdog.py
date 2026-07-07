@@ -2,8 +2,8 @@
 """🪶 ikaros-memory-watchdog.py — 记忆服务看门狗 (2026-07-04)
 
 管理记忆服务 (统一架构):
-  1. Embedding (:8587) — nomic-embed-text, 供 v3 记忆库语义搜索
-  2. LLM (:8080) — qwen3-8b, 供 v3 记忆提取 (extract)
+  1. Embedding (:8587) — nomic-embed-text, 供 v4 记忆库语义搜索
+  2. LLM (:8080) — qwen3-8b, 供 v4 记忆提取 (extract / 反思)
 
 启动后:
   - 启动 embedding + LLM 服务
@@ -46,7 +46,7 @@ LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # qwen3-8b for v3 memory extraction
+LLM_PORT = 8080  # qwen3-8b for v4 memory extraction
 
 CHECK_INTERVAL = 10  # patrol interval (seconds)
 PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
@@ -88,6 +88,45 @@ class MemoryWatchdog:
             time.sleep(1)
         return False
 
+    @staticmethod
+    def _health_ok(port: int, timeout: int = 3) -> bool:
+        """llama-server /health 返回 200 才代表模型已加载、可服务.
+
+        仅查端口会漏掉'端口绑了但服务崩了'的僵尸监听器
+        (gpu-reset 那次就是端口在、/embedding 返 404, 被误报 OK).
+        404 = 该 build 无 /health 端点 → 退化为仅查端口, 不误杀.
+        503/500/连接错 = 未就绪或已坏 → 返 False (触发重启/等待).
+        """
+        import urllib.error
+        import urllib.request
+        url = f"http://127.0.0.1:{port}/health"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status == 200
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return True  # 无 /health 端点, 退化为仅查端口
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def _wait_health(port: int, timeout: int = 120) -> bool:
+        """等待 /health 200 (模型真正就绪), 超时返回 False.
+        加载中 /health 返 503 → 持续等待, 不会误判死亡."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if MemoryWatchdog._health_ok(port):
+                return True
+            time.sleep(1)
+        return False
+
+    @staticmethod
+    def _service_ok(port: int) -> bool:
+        """端口在 + /health 200 才算真活."""
+        return MemoryWatchdog._port_alive(port) and MemoryWatchdog._health_ok(port)
+
     # ─── 启动 ────────────────────────────────────────
 
     def _start_embed(self) -> bool:
@@ -120,12 +159,12 @@ class MemoryWatchdog:
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.DETACHED_PROCESS,
         )
-        ok = self._wait_port(EMBED_PORT)
+        ok = self._wait_health(EMBED_PORT)
         _log("[embed] %s (%s)", "OK" if ok else "FAIL", EMBED_PORT)
         return ok
 
     def _start_llm(self) -> bool:
-        """启动/检测 llama-server (:8080) — qwen3-8b for v3 memory extraction."""
+        """启动/检测 llama-server (:8080) — qwen3-8b for v4 memory extraction (extract / 反思)."""
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
@@ -152,7 +191,7 @@ class MemoryWatchdog:
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.DETACHED_PROCESS,
         )
-        ok = self._wait_port(LLM_PORT, timeout=60)
+        ok = self._wait_health(LLM_PORT, timeout=120)
         _log("[llm] %s (%s)", "OK" if ok else "FAIL", LLM_PORT)
         return ok
 
@@ -196,9 +235,10 @@ class MemoryWatchdog:
     def _maybe_reflect(self) -> None:
         """Periodically trigger memory reflection cycle (self-evolution).
 
-        Runs every REFLECT_INTERVAL seconds. Imports memory_reflect module
-        and runs a consolidation + dedup + promote + distill cycle.
-        Uses local Qwen3-8B only (no cloud tokens).
+        Runs every REFLECT_INTERVAL seconds. Imports v4.reflect.registry and
+        runs the V4 reflection scheduler (consolidate/dedup/promote/distill/
+        reflect/cleanup). continue_on_error=True: one failing op (e.g. missing
+        DeepSeek key for the 7d reflect) does not block the rest.
         """
         now = time.time()
         if (now - self._last_reflect) < REFLECT_INTERVAL:
@@ -207,30 +247,35 @@ class MemoryWatchdog:
         try:
             sys.path.insert(0, str(ROOT / "Ikaros-memory"))
             import importlib
-            mr = importlib.import_module("memory_reflect")
-            results = mr.reflect_cycle()
-            _log("[reflect] cycle complete: %s", results)
+            vr = importlib.import_module("v4.reflect.registry")
+            sched = vr.make_default_scheduler()
+            results = sched.run_all(continue_on_error=True)
+            _log("[reflect] v4 cycle complete: %s", results)
         except Exception as e:
-            _log("[reflect] cycle failed (non-fatal): %s", e)
+            _log("[reflect] v4 cycle failed (non-fatal): %s", e)
 
     def _check_and_restart(self) -> None:
-        """巡检 embedding 端口 + 检测 LLM 健康 + 定期记忆反思."""
-        embed_alive = self._port_alive(EMBED_PORT)
-        llm_alive = self._port_alive(LLM_PORT)
+        """巡检 embedding + LLM (端口+/health) + 定期记忆反思.
+
+        用 _service_ok (端口在 + /health 200) 替代裸 _port_alive,
+        避免僵尸监听器 (端口绑了但服务崩) 被误报 OK.
+        """
+        embed_alive = self._service_ok(EMBED_PORT)
+        llm_alive = self._service_ok(LLM_PORT)
 
         if not embed_alive:
-            _log("[heartbeat] embed :8587 DEAD, restarting...")
+            _log("[heartbeat] embed :8587 DEAD (port/health), restarting...")
             self._start_embed()
-            embed_alive = self._port_alive(EMBED_PORT)
+            embed_alive = self._service_ok(EMBED_PORT)
         else:
-            _log("[heartbeat] embed :8587 OK")
+            _log("[heartbeat] embed :8587 OK (port+health)")
 
         if not llm_alive:
-            _log("[heartbeat] llm :8080 DEAD, restarting...")
+            _log("[heartbeat] llm :8080 DEAD (port/health), restarting...")
             self._start_llm()
-            llm_alive = self._port_alive(LLM_PORT)
+            llm_alive = self._service_ok(LLM_PORT)
         else:
-            _log("[heartbeat] llm :8080 OK")
+            _log("[heartbeat] llm :8080 OK (port+health)")
 
         self._write_endpoints(embed_alive, llm_alive)
         self._emit_heartbeat(embed_alive, llm_alive)
@@ -291,7 +336,7 @@ class MemoryWatchdog:
                     "port": LLM_PORT,
                     "alive": llm_ok,
                     "model": "qwen3-8b",
-                    "note": "Managed by memory watchdog for v3 extraction",
+                    "note": "Managed by memory watchdog for v4 extraction",
                 },
                 "updated_at": time.time(),
             }
@@ -410,15 +455,15 @@ def cmd_stop():
 
 
 def cmd_status():
-    """查询记忆服务状态."""
+    """查询记忆服务状态 (端口 + /health)."""
     import socket
 
     def _check(port: int) -> str:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=2):
-                return "✓ ALIVE"
-        except Exception:
+        if not MemoryWatchdog._port_alive(port):
             return "✗ DEAD"
+        if MemoryWatchdog._health_ok(port):
+            return "✓ ALIVE (port+health)"
+        return "⚠ PORT-ONLY (health failed)"
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")

@@ -1,0 +1,434 @@
+// Ikaros Monitor Dashboard — Slint UI
+
+import { Button, CheckBox, LineEdit, ListView, ScrollView, StandardListView,
+         StandardTableView, SpinBox, TextEdit, ComboBox, GroupBox, TabWidget } from "std-widgets.slint";
+
+// ── Data structs ──
+export struct EventItem {
+    time: string,
+    icon: string,
+    etype: string,
+    text: string,
+    bg-color: color,
+    fg-color: color,
+}
+
+export struct StatusCard {
+    title: string,
+    value: string,
+    value-color: color,
+}
+
+// ── Color palette ──
+export global Palette {
+    in property <color> bg: #0d1117;
+    in property <color> card-bg: #161b22;
+    in property <color> card-border: #21262d;
+    in property <color> accent: #58a6ff;
+    in property <color> text: #c9d1d9;
+    in property <color> text-dim: #8b949e;
+    in property <color> green: #3fb950;
+    in property <color> red: #f85149;
+    in property <color> yellow: #d29922;
+    in property <color> purple: #bc8cff;
+}
+
+// ── Status Card Component ──
+component StatusCardView inherits Rectangle {
+    in property <string> card-title;
+    in property <string> card-value;
+    in property <color> value-color: Palette.text;
+
+    background: Palette.card-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.card-border;
+
+    VerticalLayout {
+        alignment: start;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+
+        Text {
+            text: card-title;
+            font-size: 11px;
+            color: Palette.text-dim;
+        }
+        Text {
+            text: card-value;
+            font-size: 16px;
+            font-weight: 700;
+            color: value-color;
+        }
+    }
+}
+
+// ── Module Card Component ──
+component ModuleCardView inherits Rectangle {
+    in property <string> module-icon;
+    in property <string> module-name;
+    in property <string> module-detail;
+    in property <string> dot-text: "⚪";
+    in property <color> dot-color: Palette.text-dim;
+
+    background: Palette.card-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.card-border;
+    min-height: 56px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 8px;
+
+        Text {
+            text: module-icon;
+            font-size: 20px;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: start;
+            Text {
+                text: module-name;
+                font-size: 12px;
+                font-weight: 700;
+                color: Palette.text;
+            }
+            Text {
+                text: module-detail;
+                font-size: 11px;
+                color: Palette.text-dim;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: dot-text;
+            font-size: 16px;
+            color: dot-color;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ── Event Bubble Component ──
+component EventBubbleView inherits Rectangle {
+    in property <string> ev-time;
+    in property <string> ev-icon;
+    in property <string> ev-type;
+    in property <string> ev-text;
+    in property <color> ev-bg: #1a1a2e;
+    in property <color> ev-fg: Palette.text;
+
+    background: transparent;
+    height: 60px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        // Time
+        Text {
+            text: ev-time;
+            font-size: 11px;
+            color: Palette.text-dim;
+            horizontal-alignment: right;
+            vertical-alignment: top;
+            preferred-width: 58px;
+        }
+
+        // Bubble
+        Rectangle {
+            background: ev-bg;
+            border-radius: 6px;
+            Rectangle {
+                width: 3px;
+                background: ev-fg;
+                border-radius: 2px;
+            }
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: 2px;
+
+                Text {
+                    text: ev-icon + " " + ev-type;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: ev-fg;
+                }
+                Text {
+                    text: ev-text;
+                    font-size: 12px;
+                    color: Palette.text;
+                    wrap: word-wrap;
+                    overflow: elide;
+                    max-height: 36px;
+                }
+            }
+        }
+    }
+}
+
+// ── Filter Chip Component ──
+component FilterChip inherits Rectangle {
+    in property <string> chip-label;
+    in property <bool> checked;
+    in property <bool> pressed;
+    callback clicked;
+
+    background: checked ? Palette.accent : Palette.card-bg;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: checked ? Palette.accent : Palette.card-border;
+    height: 28px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: chip-label;
+            font-size: 11px;
+            color: checked ? white : Palette.text-dim;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Main Window ──
+export component MainWindow inherits Window {
+    title: "🪶 Ikaros Monitor";
+    preferred-width: 720px;
+    preferred-height: 600px;
+    min-width: 480px;
+    min-height: 360px;
+    background: Palette.bg;
+
+    // ── Properties (set by Rust) ──
+    in property <string> alive-text: "检测中...";
+    in property <color> alive-color: Palette.yellow;
+    in property <string> state-text: "💤 待机";
+    in property <color> state-color: Palette.text-dim;
+    in property <string> resource-text: "--";
+    in property <string> model-text: "--";
+
+    in property <string> stt-detail: "FunASR paraformer-zh · 检测中";
+    in property <string> stt-dot: "⚪";
+    in property <color> stt-dot-color: Palette.text-dim;
+
+    in property <string> tts-detail: "edge-tts · 检测中";
+    in property <string> tts-dot: "⚪";
+    in property <color> tts-dot-color: Palette.text-dim;
+
+    in property <[EventItem]> events;
+    in property <string> restart-count: "重启: 0";
+    in property <bool> auto-restart: true;
+
+    // ── Callbacks (to Rust) ──
+    callback restart-pet();
+    callback toggle-auto-restart(bool);
+    callback set-filter(int);
+    callback search-changed(string);
+    callback clear-events();
+
+    // ── Layout ──
+    VerticalLayout {
+        padding-left: 1px;
+        padding-right: 1px;
+        padding-top: 1px;
+        padding-bottom: 1px;
+
+        // ══ Title Bar ══
+        Rectangle {
+            height: 36px;
+            background: Palette.card-bg;
+            border-radius: 11px;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 8px;
+
+                Text {
+                    text: "🪶 Ikaros Monitor";
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: Palette.accent;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                // Close button placeholder — actual close handled by window
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: close-touch.pressed ? #ff6b81 : transparent;
+                    Text {
+                        text: "✕";
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: close-touch.has-hover ? Palette.red : Palette.text-dim;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    close-touch := TouchArea {
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+        }
+
+        // ══ Content Area ══
+        ScrollView {
+            viewport-height: content-col.preferred-height;
+
+            content-col := VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+
+                // ── Status Cards Row ──
+                HorizontalLayout {
+                    spacing: 8px;
+                    StatusCardView { card-title: "📡 Live2D形象"; card-value: alive-text; value-color: alive-color; }
+                    StatusCardView { card-title: "🧠 AI 状态"; card-value: state-text; value-color: state-color; }
+                    StatusCardView { card-title: "📊 资源"; card-value: resource-text; value-color: Palette.text-dim; }
+                    StatusCardView { card-title: "🤖 模型"; card-value: model-text; value-color: #80cbc4; }
+                }
+
+                // ── Module Cards Row ──
+                HorizontalLayout {
+                    spacing: 8px;
+                    ModuleCardView {
+                        module-icon: "🎤";
+                        module-name: "STT 语音识别";
+                        module-detail: stt-detail;
+                        dot-text: stt-dot;
+                        dot-color: stt-dot-color;
+                    }
+                    ModuleCardView {
+                        module-icon: "🔊";
+                        module-name: "TTS 语音合成";
+                        module-detail: tts-detail;
+                        dot-text: tts-dot;
+                        dot-color: tts-dot-color;
+                    }
+                }
+
+                // ── Filter Bar ──
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+
+                    FilterChip { chip-label: "全部"; checked: active-filter == 0; clicked => { root.set-filter(0); } }
+                    FilterChip { chip-label: "🎤 语音"; checked: active-filter == 1; clicked => { root.set-filter(1); } }
+                    FilterChip { chip-label: "💬 回答"; checked: active-filter == 2; clicked => { root.set-filter(2); } }
+                    FilterChip { chip-label: "🧠 状态"; checked: active-filter == 3; clicked => { root.set-filter(3); } }
+                    FilterChip { chip-label: "⚠️ 错误"; checked: active-filter == 4; clicked => { root.set-filter(4); } }
+                    FilterChip { chip-label: "📋 系统"; checked: active-filter == 5; clicked => { root.set-filter(5); } }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    LineEdit {
+                        placeholder-text: "🔍 搜索事件...";
+                        preferred-width: 160px;
+                        accepted => { root.search-changed(self.text); }
+                        edited => { root.search-changed(self.text); }
+                    }
+                }
+
+                // ── Event Log ──
+                ListView {
+                    min-height: 200px;
+                    vertical-stretch: 1;
+
+                    for event[idx] in events : EventBubbleView {
+                        ev-time: event.time;
+                        ev-icon: event.icon;
+                        ev-type: event.etype;
+                        ev-text: event.text;
+                        ev-bg: event.bg-color;
+                        ev-fg: event.fg-color;
+                    }
+                }
+
+                // ── Bottom Bar ──
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    // Restart button
+                    Rectangle {
+                        width: 100px;
+                        height: 32px;
+                        border-radius: 6px;
+                        background: restart-touch.pressed ? #ff6b81 : Palette.red;
+
+                        Text {
+                            text: "🔄 重启Live2D";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: white;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        restart-touch := TouchArea {
+                            clicked => { root.restart-pet(); }
+                        }
+                    }
+
+                    // Auto-restart checkbox
+                    CheckBox {
+                        text: "自动重启";
+                        checked: auto-restart;
+                        toggled => { root.toggle-auto-restart(self.checked); }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: restart-count;
+                        font-size: 11px;
+                        color: Palette.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    // Clear button
+                    Rectangle {
+                        width: 70px;
+                        height: 28px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: Palette.card-border;
+                        background: clear-touch.pressed ? Palette.card-border : transparent;
+
+                        Text {
+                            text: "🗑 清空";
+                            font-size: 11px;
+                            color: Palette.text-dim;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        clear-touch := TouchArea {
+                            clicked => { root.clear-events(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Internal state ──
+    in property <int> active-filter: 0;
+}

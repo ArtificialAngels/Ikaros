@@ -2,7 +2,7 @@
 REM ============================================================
 REM  Ikaros - Graceful Shutdown (no-bridge 2026-07-03)
 REM ============================================================
-REM  Stops: Memory Watchdog + Desktop Pet + Hermes Desktop + safety sweep.
+REM  Stops: Memory Watchdog + Voice WS (:7870) + Desktop Pet + Hermes Desktop + safety sweep.
 REM  No supervisor needed (retired).
 REM ============================================================
 setlocal
@@ -22,9 +22,14 @@ echo [0] Stopping Memory Watchdog...
 "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --stop >nul 2>&1
 echo       done
 
-REM ---- Step 1: Stop Desktop Pet ----
-echo [1] Stopping Desktop Pet...
-call "%IKAROS_BIN%\hermes-pet.bat" stop >nul 2>&1
+REM ---- Step 0b: Stop Voice WS (:7870) ----
+echo [0b] Stopping Voice WS (:7870)...
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":7870" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+echo       done
+
+REM ---- Step 1: Stop Desktop Pet (Tauri v2) ----
+echo [1] Stopping Desktop Pet (Tauri)...
+call "%IKAROS_BIN%\ikaros-live2d.bat" stop >nul 2>&1
 echo       done
 
 REM ---- Step 2: Stop Hermes Desktop (Electron) ----

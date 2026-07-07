@@ -43,7 +43,7 @@ $env:IKAROS_MEMORY          = "$env:IKAROS_ROOT\Ikaros-memory"
 $env:IKAROS_MEMORY_DATA     = "$env:IKAROS_MEMORY\data"
 $env:IKAROS_MEMORY_MODELS   = "$env:IKAROS_MEMORY\models"
 $env:IKAROS_MEMORY_SERVICES = "$env:IKAROS_MEMORY\services"
-$env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\ikaros-memory-v3.py"
+$env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\v4\store.py"
 
 # ---- Step 4b: Ikaros-Live2D 桌宠路径 ----
 $env:IKAROS_LIVE2D       = "$env:IKAROS_ROOT\Ikaros-Live2D"
@@ -68,8 +68,9 @@ $env:IKAROS_MODEL_LLM       = "$env:IKAROS_MEMORY_MODELS\qwen3-8b.gguf"
 $env:IKAROS_PORT_EMBEDDING      = "8587"
 $env:IKAROS_PORT_LLM            = "8589"
 $env:IKAROS_PORT_BRIDGE         = "7860"
-$env:IKAROS_PORT_WEBUI          = "8648"
-$env:IKAROS_PORT_WEBUI_INTERNAL = "8649"
+# 2026-07-05: hermes-web-ui 卸了 (哥哥).  :8648 让给 Ikaros-Live2D Tauri webview.
+$env:IKAROS_PORT_LIVE2D_WEBVIEW          = "8648"
+$env:IKAROS_PORT_LIVE2D_WEBVIEW_INTERNAL = "8649"
 $env:IKAROS_PORT_LLAMA          = "8080"
 
 # ---- Step 8: Python 环境变量 ----

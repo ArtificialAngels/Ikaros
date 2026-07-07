@@ -3,8 +3,9 @@ REM ============================================================
 REM  Ikaros - Desktop Pet Launcher (no-bridge 2026-07-03)
 REM ============================================================
 REM  No-bridge: no bridge / supervisor / webui.
-REM  Hermes Desktop launches as standalone app.
-REM  Desktop Pet stays in system tray.
+REM  2026-07-05 哥哥装了 hermes-web-ui 后又卸了, :8648 已释放给
+REM  Ikaros-Live2D Tauri webview.  Hermes Desktop launches as
+REM  standalone app.  Desktop Pet stays in system tray.
 REM ============================================================
 REM -- Why NO setlocal -----------------------------------------------
 REM  Windows 25H2: child processes created by start within setlocal
@@ -27,12 +28,13 @@ if errorlevel 1 (
 echo ============================================================
 echo   Ikaros - No-Bridge Launcher
 echo.
-echo   Pet:       Ikaros Desktop Pet  (system tray, cloud chat)
+echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D, click-through)
 echo   Frontend:  Hermes Desktop       (Electron)
 echo.
 echo   Memory:    Embedding :8587 + LLM :8080 (Hermes Agent unified)
 echo   LLM:       cloud (DeepSeek V4 / minimax) + local :8080
 echo   Dashboard: http://127.0.0.1:9119  (hermes dashboard)
+echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws (Tauri Pet speech)
 echo   5D Cog:    cogno + soul injected by cloud_chat.py
 echo   Memory:    ikaros-memory-watchdog auto-check + restart
 echo   Logs:      %IKAROS_LOGS%\
@@ -68,11 +70,38 @@ type "%IKAROS_MEMORY_DATA%\endpoints.json" 2>nul
 echo.
 :after_memory
 
-REM ---- Step 3: Launch Desktop Pet ----
+REM ---- Step 2b: Launch Voice WS (:7870) for Tauri Pet ----
 echo.
-echo [3] Launching Desktop Pet...
-start "" /B cmd /c ""%IKAROS_BIN%\hermes-pet.bat" start" >nul 2>&1
-echo       Pet started (system tray)
+echo [2b] Launching Voice WS (:7870)...
+echo       Tauri Pet speech link (cogno_5d + cloud_chat + edge-tts)
+echo.
+start "VoiceWS" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-voice-ws.py" > "%IKAROS_LOGS%\voice-ws.log" 2>&1
+REM Wait for :7870 (max 20s)
+set "WAIT=0"
+:wait_voice
+"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',7870));s.close();exit(0 if r==0 else 1)" >nul 2>&1
+if not errorlevel 1 goto :voice_ready
+timeout /t 2 /nobreak >nul
+set /a WAIT+=2
+if %WAIT% lss 20 goto :wait_voice
+echo       [WARN] Voice WS may not be ready (timeout)
+goto :after_voice
+:voice_ready
+echo       Voice WS: ws://127.0.0.1:7870/v1/voice/ws
+echo.
+:after_voice
+
+REM ---- Step 3: Launch Desktop Pet v2 (Tauri) ----
+echo.
+echo [3] Launching Desktop Pet v2 (Tauri)...
+set "PET_EXE=%IKAROS_ROOT%\Ikaros-Live2D\src-tauri\target\release\ikaros-desktop-pet.exe"
+if not exist "%PET_EXE%" (
+    echo       [WARN] %PET_EXE% not found. Skipping pet.
+    goto :after_pet
+)
+start "" "%PET_EXE%"
+echo       Pet started (Tauri v2 release)
+:after_pet
 
 REM ---- Step 4: Launch Hermes Dashboard (web UI :9119) ----
 echo.
@@ -104,9 +133,10 @@ REM ---- Done ----
 echo ============================================================
 echo   Ikaros is ready!
 echo.
-echo   Pet:       Ikaros Desktop Pet  (system tray)
+echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
 echo   Frontend:  Hermes Desktop       (Electron)
 echo   Dashboard: http://127.0.0.1:9119
+echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
 echo   Memory:    Embedding :8587 + LLM :8080 (unified)
 echo   LLM:       cloud (DeepSeek V4) + local :8080
 echo.

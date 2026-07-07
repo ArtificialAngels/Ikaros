@@ -130,8 +130,8 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 | `ports.llama` | 8080 |
 | `ports.bridge` | 7860 |
 | `ports.embedding` | 8587 |
-| `ports.webui` | 8648 |
-| `ports.webui_internal` | 8649 |
+| `ports.live2d_webview` | 8648 |  ← 2026-07-05 哥哥 hermes-web-ui 卸了, 这端口让给 Ikaros-Live2D Tauri webview |
+| `ports.live2d_webview_internal` | 8649 |  ← 同上 |
 
 ---
 
