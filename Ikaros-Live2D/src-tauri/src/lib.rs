@@ -246,6 +246,54 @@ pub fn run() {
 
             // Sync window bounds cache from main thread (required for cursor tracking)
             if let Some(main_win) = app.get_webview_window("main") {
+                // ── Place the pet on a real (physical) monitor ──
+                // On machines with virtual display adapters (Todesk / GameViewer
+                // remote-control drivers), `center: true` can drop this transparent,
+                // borderless window onto a phantom monitor → it renders but is
+                // invisible to the user ("pet won't open"). Explicitly move it to a
+                // physical monitor's work-area center.
+                if let Ok(mut monitors) = app.available_monitors() {
+                    // Drop known virtual/remote displays if identifiable by name.
+                    monitors.retain(|m| {
+                        m.name()
+                            .map(|n| {
+                                let l = n.to_lowercase();
+                                !(l.contains("virtual")
+                                    || l.contains("todesk")
+                                    || l.contains("gameviewer")
+                                    || l.contains("remote")
+                                    || l.contains("dummy"))
+                            })
+                            .unwrap_or(true)
+                    });
+                    if monitors.is_empty() {
+                        monitors = app.available_monitors().unwrap_or_default();
+                    }
+                    // Prefer the monitor at virtual-desktop origin (0,0) = physical
+                    // primary in the normal Windows layout; otherwise largest area.
+                    monitors.sort_by_key(|m| {
+                        let p = m.position();
+                        let s = m.size();
+                        let at_origin = if p.x == 0 && p.y == 0 { 1 } else { 0 };
+                        (at_origin, (s.width as i64) * (s.height as i64))
+                    });
+                    if let Some(target) = monitors.last() {
+                        let wa = target.work_area();
+                        let win_size =
+                            main_win.outer_size().unwrap_or(tauri::PhysicalSize::new(400, 500));
+                        let x = wa.position.x
+                            + ((wa.size.width as i32 - win_size.width as i32) / 2);
+                        let y = wa.position.y
+                            + ((wa.size.height as i32 - win_size.height as i32) / 2);
+                        let _ = main_win.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                }
+                // Guarantee it is actually visible & focused (covers minimized /
+                // off-screen / not-yet-shown states).
+                let _ = main_win.unminimize();
+                let _ = main_win.show();
+                let _ = main_win.set_focus();
+
                 // Initial bounds
                 if let Ok(pos) = main_win.outer_position() {
                     if let Ok(size) = main_win.outer_size() {
