@@ -436,18 +436,68 @@ async def cloud_chat(
 
     # V5 Router: 分类输入, 任务指令用本地 LLM 优化
     _optimized = None
+    _is_task = False
     try:
         from v5.router import route as _route
         _r = _route(text)
         if _r["type"] == "task" and _r.get("optimized_text"):
             _optimized = _r["optimized_text"]
+            _is_task = True
             log.info("router: task optimized (%d chars → %d chars, %.0fms)",
                      len(text), len(_optimized), _r["elapsed_ms"])
     except Exception:
         pass
 
-    # 构建 system prompt (soul + cogno + 记忆 + V5 情感)
-    system_prompt = build_system_prompt(text)
+    # V5 Task Runner: 检查待交付结果
+    try:
+        from v5.task_runner import check_result, check_pending_reminder
+        from v5.task_runner import consume_result, consume_reminder, set_reminder
+
+        _pending_result = check_result()
+        _pending_reminder = check_pending_reminder()
+    except Exception:
+        _pending_result = None
+        _pending_reminder = None
+
+    # ─── 任务分支: 后台执行, 立即返回 ───
+    if _is_task:
+        try:
+            from v5.task_runner import call_async
+            call_async(text, optimized=_optimized)
+        except Exception:
+            pass
+        return "好的哥哥，这个任务我已经在后台处理了，完成后会告诉你结果。"
+
+    # ─── 结果交付: 用户有空/没空 ───
+    if _pending_result:
+        _user_reply_lower = text.strip().lower()
+        if any(kw in _user_reply_lower for kw in ("有空", "好的", "说吧", "说", "听", "好呀", "嗯", "可以")):
+            # 用户有空 → 交付结果 + 清提醒
+            result = consume_result()
+            consume_reminder()  # 清除可能的提醒标记
+            if result and result.get("result"):
+                reply = result["result"]
+                log.info("task: delivered result (%d chars)", len(reply))
+                return reply
+        elif any(kw in _user_reply_lower for kw in ("没空", "等一下", "等等", "忙", "回头", "稍后", "之后再说")):
+            # 用户没空 → 设提醒
+            set_reminder({"text": text, "result_pending": True})
+            log.info("task: user busy, reminder set")
+            # 继续正常对话 (不阻塞)
+        else:
+            # 默认: 设提醒, 下次主动提
+            set_reminder({"text": text, "result_pending": True})
+            log.info("task: ambiguous reply, reminder set")
+
+    # ─── 提醒分支: 之前没空, 下次主动提 ───
+    if _pending_reminder:
+        # 注入到系统提示
+        _reminder_note = "\n(提醒：之前有个任务结果还没告诉哥哥，找机会主动提起。)"
+    else:
+        _reminder_note = ""
+
+    # 构建 system prompt (soul + cogno + 记忆 + V5 情感 + 提醒)
+    system_prompt = build_system_prompt(text) + _reminder_note
 
     # 构建 messages
     msgs: list[dict] = [{"role": "system", "content": system_prompt}]
