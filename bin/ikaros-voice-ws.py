@@ -9,11 +9,14 @@ service 走新端口 :7870 接 cogno_5D + cloud_chat 真物 — 不重复发明.
     {"action":"start","session_id":"..."}        # 进 session
     {"action":"transcript","text":"哥哥说的话"}    # STT 真物 (client 上已做)
     {"action":"text","text":"..."}                # 纯文本输入
+    {"action":"look"}                              # 让 pet 看屏幕 (Layer3: 截图+视觉LLM, 配置门控)
   server → client:
     {"type":"status","message":"thinking"}        # 状态提示
     {"type":"transcription","text":"..."}         # 复述输入
     {"type":"thinking"}                            # 进入思考
     {"type":"done","text":"reply"}                  # LLM reply 真物
+    {"type":"activity","state":...,"phrase":...}   # 前台活动变化推送 (N.E.K.O 主动搭话触发)
+    {"type":"screen","desc":"..."}                 # look 动作: 屏幕视觉描述 (未配置视觉模型时 desc=null)
     {"type":"error","message":"..."}               # 失败静默
     binary frame: TTS audio bytes                  # Hermes Agent 内置 TTS (mp3) 或 edge-tts 兜底
 
@@ -32,10 +35,11 @@ import time
 import wave
 from typing import Any
 
-# 让 import 找到 cogno_5d + cloud_chat
+# 让 import 找到 cogno_5d + cloud_chat + ikaros_monitor
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for p in (os.path.join(_ROOT, "Ikaros-memory"),
-         os.path.join(_ROOT, "bin", "ikaros-desktop-pet")):
+         os.path.join(_ROOT, "bin", "ikaros-desktop-pet"),
+         os.path.join(_ROOT, "bin")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -52,6 +56,80 @@ log = logging.getLogger("ikaros.voice-ws")
 # 8648 = EKKOLearnAI/hermes-web-ui 7-5 被哥哥卸了, 现让给 Ikaros-Live2D webview (本服务暂不 bind, 占着等 Live2D Tauri 用).
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7870
+
+# 已连接 pet webview 集合 (用于活动状态变化广播)
+_CLIENTS: set = set()
+
+
+def _activity_payload(snap: dict) -> dict:
+    """把 monitor 快照转成推送给 pet 的 activity 消息 (隐私安全).
+
+    private 状态只给中性句, 绝不附带进程名/标题/路径等细节。
+    """
+    state = snap.get("activity_state", "idle")
+    if state == "private":
+        phrase = "哥哥在使用一个隐私应用"
+        canonical = None
+        category = "private"
+    else:
+        try:
+            from ikaros_monitor import activity_phrase
+            phrase = activity_phrase(snap) or ""
+        except Exception:
+            phrase = ""
+        canonical = snap.get("canonical")
+        category = snap.get("category")
+    return {
+        "type": "activity",
+        "state": state,
+        "phrase": phrase,
+        "canonical": canonical,
+        "category": category,
+        "idle_seconds": snap.get("idle_seconds"),
+        "cpu_avg_30s": snap.get("cpu_avg_30s"),
+        "ts": snap.get("timestamp"),
+    }
+
+
+async def _activity_broadcaster():
+    """每 5s 检查前台活动, 状态变化时推送给所有已连 pet webview。
+
+    对应 N.E.K.O 的 UserActivityTracker 主动搭话触发: 用户切换应用 /
+    进入游戏 / 离开键盘时, pet 立刻感知并可能主动搭话。
+    """
+    try:
+        from ikaros_monitor import get_monitor
+    except Exception as e:
+        log.warning("activity broadcaster: ikaros_monitor 不可用: %s", e)
+        return
+    mon = get_monitor()
+    mon.start()
+    last_state = None
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if not _CLIENTS:
+                last_state = None  # 客户端全掉线, 重连后重推
+                continue
+            snap = mon.snapshot()
+            if not snap.get("os_signals_available"):
+                continue
+            state = snap.get("activity_state")
+            if state == last_state:
+                continue
+            last_state = state
+            payload = _activity_payload(snap)
+            dead = []
+            for ws in list(_CLIENTS):
+                try:
+                    await ws.send(json.dumps(payload))
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                _CLIENTS.discard(ws)
+            log.debug("activity broadcast -> %s (%d clients)", state, len(_CLIENTS))
+        except Exception as e:
+            log.debug("activity broadcaster tick failed: %s", e)
 
 
 def _load_cogno_5d():
@@ -302,6 +380,57 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
             log.debug("TTS push failed: %s", e)
 
 
+async def _handle_look(ws, enrich, enrich_reply, history, state=None, my_id=0):
+    """Layer 3: 用户让 pet 看屏幕 (截图 + 视觉 LLM, 配置门控).
+
+    仅当用户显式触发 (前端发 {action:"look"}) 时才截图, 隐私安全。
+    未配置 IKAROS_VISION_* 时返回提示, 不报错。
+    """
+    try:
+        from ikaros_monitor import get_monitor
+        mon = get_monitor()
+        loop = asyncio.get_running_loop()
+        # refresh_screen_desc 含网络调用 (视觉 LLM), 丢到线程避免阻塞事件循环
+        desc = await loop.run_in_executor(None, mon.refresh_screen_desc)
+    except Exception as e:
+        log.warning("screen capture failed: %s", e)
+        desc = None
+
+    if not desc:
+        await ws.send(json.dumps({
+            "type": "screen",
+            "desc": None,
+            "message": "视觉模型未配置或截图失败 (需设置 IKAROS_VISION_MODEL/BASE_URL/API_KEY)",
+        }))
+        return
+
+    # 推回屏幕描述 (pet 可展示 / 用表情反应)
+    await ws.send(json.dumps({"type": "screen", "desc": desc}))
+
+    # 让 LLM 基于看到的画面接一句话
+    if state is not None and state.get("utt_id", 0) != my_id:
+        return
+    try:
+        cogno_prefix = enrich("（看到屏幕）", history=history)
+        if not cogno_prefix or not cogno_prefix.startswith("【认知5D】"):
+            cogno_prefix = "【认知5D】 " + cogno_prefix
+        cogno_prefix += "\n[屏幕内容] " + desc
+        reply = await _call_llm("我刚才看了一眼你的屏幕，说说你看到了什么。", cogno_prefix)
+        if state is not None and state.get("utt_id", 0) != my_id:
+            return
+        await ws.send(json.dumps({
+            "type": "done", "text": reply, "cogno": "screen-look", "ms": 0,
+        }))
+        audio = await _tts_hermes(reply)
+        if audio:
+            try:
+                await ws.send(audio)
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("look LLM failed: %s", e)
+
+
 _VOSK_MODEL = None  # 惰性加载的本地离线 STT 模型
 
 
@@ -430,6 +559,7 @@ async def _serve(ws, path=None):
     except Exception:
         pass
     log.info("client connected: %s", peer)
+    _CLIENTS.add(ws)
 
     # 每连接状态: vosk 流式识别器 + 原始 PCM 缓冲(SenseVoice 终句精修) +
     # utterance id (barge-in 过期判定) + inflight (当前在生成/播放的 utt id)
@@ -486,6 +616,14 @@ async def _serve(ws, path=None):
                     "type": "status",
                     "message": f"session {msg.get('session_id', '?')} ready",
                 }))
+                # 推送当前活动状态给 pet (表情/主动搭话依据)
+                try:
+                    from ikaros_monitor import get_monitor
+                    snap = get_monitor().snapshot()
+                    if snap.get("os_signals_available"):
+                        await ws.send(json.dumps(_activity_payload(snap)))
+                except Exception:
+                    pass
                 sv = _get_sensevoice()
                 if _get_vosk_model() is None and sv is None:
                     await ws.send(json.dumps({
@@ -512,6 +650,13 @@ async def _serve(ws, path=None):
                 my_id = _new_utt()
                 await _handle_text(
                     ws, msg, enrich, enrich_reply, history,
+                    state=st, my_id=my_id,
+                )
+            elif action == "look":
+                # Layer 3: 用户让 pet 看屏幕 (截图 + 视觉 LLM, 配置门控)
+                my_id = _new_utt()
+                await _handle_look(
+                    ws, enrich, enrich_reply, history,
                     state=st, my_id=my_id,
                 )
             elif action == "end_utterance":
@@ -547,10 +692,21 @@ async def _serve(ws, path=None):
                 }))
     except Exception as e:
         log.warning("client disconnected (%s): %s", peer, e)
+    finally:
+        _CLIENTS.discard(ws)
 
 
 async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     import websockets
+    # 启动本地活动监测 (前台进程/空闲/CPU/截图), 供 cogno_5d + pet 使用
+    try:
+        from ikaros_monitor import get_monitor
+        get_monitor().start()
+        log.info("SystemMonitor started")
+    except Exception as e:
+        log.warning("SystemMonitor 启动失败 (降级): %s", e)
+    # 活动状态变化广播给已连 pet webview (N.E.K.O 主动搭话触发)
+    asyncio.ensure_future(_activity_broadcaster())
     log.info("starting voice-ws on ws://%s:%d/v1/voice/ws", host, port)
     async with websockets.serve(_serve, host, port):
         log.info("voice-ws ready")

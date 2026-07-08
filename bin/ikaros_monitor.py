@@ -32,10 +32,18 @@ import ctypes
 import logging
 import os
 import platform
+import sys
 import threading
 import time
 from ctypes import wintypes
 from collections import deque
+
+# 让 import 找到同目录的 activity_keywords。
+# 注意：本项目的 portable-python 是内嵌发行版（sys.path[0]=python312.zip），
+# 不会自动把脚本所在目录加入 sys.path，必须显式插入（与 voice-ws 一致）。
+_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
 
 logger = logging.getLogger("ikaros.monitor")
 
@@ -115,6 +123,11 @@ class SystemMonitor:
                 self._psutil.cpu_percent(interval=None)
         except Exception:
             pass
+        # 同步首拍：start() 返回即可用真实前台活动 (避免 snapshot() 抢到空默认值)
+        try:
+            self._poll()
+        except Exception as e:
+            logger.debug("monitor 首拍失败: %s", e)
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="ikaros-monitor", daemon=True)
         self._thread.start()
@@ -263,7 +276,8 @@ class SystemMonitor:
         try:
             from activity_keywords import classify as _classify
             return _classify(proc, title, url=None)
-        except Exception:
+        except Exception as e:
+            logger.warning("classify 失败: proc=%r err=%s", proc, e)
             return {"category": "unknown", "subcategory": None,
                     "canonical": None, "is_browser": False}
 
@@ -272,7 +286,7 @@ class SystemMonitor:
         if category == "private":
             return "private"
         if category == "own_app":
-            return "idle"  # 桌宠自身前台，不算用户活动
+            return "own_app"  # 桌宠自身前台：哥哥正在看着伊卡洛斯
         if idle >= _AWAY_IDLE_SECONDS:
             return "away"
         if category == "gaming":
@@ -283,7 +297,8 @@ class SystemMonitor:
             return "chatting"
         if category in ("entertainment", "browser"):
             return "casual_browsing"
-        return "idle"
+        # 未识别进程 + 用户在键盘前：归为一般性电脑使用（不谎称"发呆"）
+        return "casual_browsing"
 
     # ── 截图 + 视觉描述（Layer 3，配置门控）──
 
@@ -393,7 +408,7 @@ def activity_phrase(snap: dict | None) -> str:
     if state == "private":
         return "哥哥在使用一个隐私应用"
     phrase = _ACTIVITY_PHRASE.get(state, "在桌前")
-    if canon and state not in ("idle", "away", "private"):
+    if canon and state not in ("idle", "away", "private", "own_app"):
         return f"哥哥{phrase}（{canon}）"
     return f"哥哥{phrase}"
 

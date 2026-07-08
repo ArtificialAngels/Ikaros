@@ -35,6 +35,15 @@ from typing import Optional
 
 logger = logging.getLogger("ikaros.cogno")
 
+# ─── 接入真实前台活动采集器 (ikaros_monitor, 位于 bin/) ───
+# 本项目的 portable-python 是内嵌发行版, 不会自动把脚本目录加入 sys.path,
+# 必须显式插入 bin/ 才能让 cogno_5d 找到 ikaros_monitor (与 voice-ws 一致).
+import os as _os
+import sys as _sys
+_BIN_DIR = _os.path.abspath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "bin"))
+if _BIN_DIR not in _sys.path:
+    _sys.path.insert(0, _BIN_DIR)
+
 # ─── 缓存 ───
 
 _geo_cache: Optional[str] = None
@@ -102,16 +111,51 @@ def get_time_str() -> str:
 
 
 def _get_time_narrative() -> str:
-    """时间维度: 压缩格式 '周六晚(23:30)'."""
+    """时间维度: 压缩格式 '周六（23:30）'.
+
+    活动不再内嵌于此 — 改由 _get_activity_narrative() 提供真实前台感知
+    (N.E.K.O 移植), 不可用时由该函数回退到时间作息推断。
+    """
     try:
         now = datetime.now()
         wd = get_weekday_str(now.weekday())
-        activity = infer_activity(now.hour, now.weekday())
-        # 从 "哥哥可能在写代码" → 取关键词 2 字
-        act_short = activity.replace("哥哥可能", "").replace("在", "").strip()[:4] if activity else ""
-        return f"{wd}{act_short}({now.hour:02d}:{now.minute:02d})"
+        return f"{wd}（{now.hour:02d}:{now.minute:02d}）"
     except Exception:
         return f"{get_time_str()}"
+
+
+# ─── 维度 6 (新增): 真实前台活动 (N.E.K.O 移植) ───
+
+def _get_activity_narrative() -> str:
+    """真实前台活动描述 (来自 ikaros_monitor 采集器).
+
+    返回自然语言, 如 "哥哥在专注写代码（VS Code）" / "哥哥在聊天（微信）".
+    隐私状态 (KeePass 等) 由 ikaros_monitor.activity_phrase 自动转为中性句,
+    绝不泄露进程细节给 LLM。采集不可用时优雅回退到时间作息推断。
+    """
+    try:
+        from ikaros_monitor import get_monitor, activity_phrase
+        mon = get_monitor()
+        if not mon.available:
+            now = datetime.now()
+            return infer_activity(now.hour, now.weekday())
+        mon.start()  # 幂等: 首次对话即拉起后台轮询 (5s)
+        snap = mon.snapshot()
+        if not snap.get("os_signals_available"):
+            now = datetime.now()
+            return infer_activity(now.hour, now.weekday())
+        phrase = activity_phrase(snap)
+        if phrase:
+            return phrase
+        now = datetime.now()
+        return infer_activity(now.hour, now.weekday())
+    except Exception as e:
+        logger.debug("activity 采集失败, 回退时间推断: %s", e)
+        try:
+            now = datetime.now()
+            return infer_activity(now.hour, now.weekday())
+        except Exception:
+            return ""
 
 
 # ─── 维度 2: 设备 ───
@@ -358,9 +402,10 @@ def enrich(user_text: str, history: list | None = None) -> str:
             parts.append(geo)
         sentence1 = "，".join(parts) + "。"
 
+        activity = _get_activity_narrative()
         ctx = _get_context_narrative(user_text)
         emo = _get_emotion_narrative(user_text)
-        sentence2 = f"{ctx}。{emo}。"
+        sentence2 = f"{activity}。{ctx}。{emo}。"
 
         return f"{sentence1}\n{sentence2}"
     except Exception:
@@ -392,7 +437,7 @@ def enrich_reply(reply: str, user_text: str = "", emotion_after: str = "") -> di
             "context_turn": _turn_counter,
             "topic": _topic_summary,
             "weekday": get_weekday_str(now.weekday()),
-            "activity": infer_activity(now.hour, now.weekday()),
+            "activity": _get_activity_narrative() or infer_activity(now.hour, now.weekday()),
             **v5_pad,  # V5 情感指纹
         }
     except Exception:
