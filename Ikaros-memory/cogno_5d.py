@@ -370,24 +370,7 @@ def enrich(user_text: str, history: list | None = None) -> str:
         emo = _get_emotion_narrative(user_text)
         sentence2 = f"{ctx}。{emo}。"
 
-        # V5: 附加情感状态 (PAD, 失败静默, 不破坏主流程)
-        try:
-            from v5.affect import current_prompt
-            v5_affect = current_prompt()
-        except Exception:
-            v5_affect = ""
-        # V5: 挂起的内心独白 (如果有, 注入对话思路)
-        try:
-            from v5.think import check_pending
-            _pending = check_pending()
-        except Exception:
-            _pending = None
-        v5_lines = [v5_affect] if v5_affect else []
-        if _pending:
-            v5_lines.append(f"【内心独白】{_pending.text}")
-        sentence3 = ("\n" + "\n".join(v5_lines)) if v5_lines else ""
-
-        return f"{sentence1}\n{sentence2}{sentence3}"
+        return f"{sentence1}\n{sentence2}"
     except Exception:
         return "【认知上下文】(获取失败, 静默跳过)"
 

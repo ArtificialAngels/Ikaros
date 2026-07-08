@@ -359,3 +359,4 @@ tmp/**
 # host-specific and must NEVER enter the repo.
 .workbuddy/
 .codebuddy/
+nul

@@ -324,7 +324,35 @@ def build_system_prompt(user_text: str) -> str:
         memory_section = "\n".join(lines)
         log.info("injected %d memories from v4.db", len(memories))
 
-    return f"{axiom}\n\n{cogno}\n\n{personality}{memory_section}"
+    v5 = _build_v5_affect_block()
+
+    return f"{axiom}\n\n{cogno}\n\n{personality}{memory_section}{v5}"
+
+
+# ─── V5 情感 + 内心独白注入 ───
+
+
+def _build_v5_affect_block() -> str:
+    """加载 V5 情感状态 + 挂起的内心独白, 返回注入文本."""
+    lines = []
+    try:
+        import sys as _sys
+        _v5_path = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5_path not in _sys.path:
+            _sys.path.insert(0, _v5_path)
+        from v5.affect import AffectState
+        state = AffectState.load().decay()
+        lines.append(state.to_prompt())
+        # 挂起的内心独白 (如果有)
+        from v5.think import check_pending
+        pending = check_pending()
+        if pending is not None:
+            lines.append(f"【内心独白】{pending.text}")
+    except Exception:
+        pass
+    if not lines:
+        return ""
+    return "\n" + "\n".join(lines) + "\n"
 
 
 # ─── Cloud LLM 调用 ───
@@ -359,7 +387,18 @@ async def cloud_chat(
     """
     env_map = _load_env()
 
-    # 构建 system prompt (soul + cogno + 记忆)
+    # V5: 哥哥的输入更新伊卡洛斯情感状态 (PAD)
+    try:
+        import sys as _sys2
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in _sys2.path:
+            _sys2.path.insert(0, _v5p)
+        from v5.affect import apply_event
+        apply_event(text)
+    except Exception:
+        pass
+
+    # 构建 system prompt (soul + cogno + 记忆 + V5 情感)
     system_prompt = build_system_prompt(text)
 
     # 构建 messages
