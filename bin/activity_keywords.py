@@ -83,6 +83,8 @@ PROCESS_MAP: dict[str, tuple[str, str, str]] = {
     "element.exe":         ("communication", "im", "Element"),
     "skype.exe":           ("communication", "im", "Skype"),
     "wxwork.exe":          ("communication", "im", "企业微信"),
+    # --- Ikaros 自家对话 UI (Hermes 聊天桌面) ---
+    "hermes.exe":          ("communication", "ai", "Hermes"),
     "mail.exe":            ("communication", "mail", "邮件"),
     "thunderbird.exe":     ("communication", "mail", "Thunderbird"),
     # --- 娱乐 / 视频音乐 ---

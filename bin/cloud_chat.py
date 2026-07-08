@@ -317,7 +317,7 @@ def build_system_prompt(user_text: str) -> str:
 
 
 def _build_v5_affect_block() -> list[str]:
-    """V5 情感状态 + 内心独白, 返行列表. 压缩格式: '状态=X,Y,Z'."""
+    """V5 情感状态 + 内联内心独白 (对话时即时生成, 不依赖 cron)."""
     lines: list[str] = []
     try:
         import sys as _sys
@@ -325,15 +325,25 @@ def _build_v5_affect_block() -> list[str]:
         if _v5_path not in _sys.path:
             _sys.path.insert(0, _v5_path)
         from v5.affect import AffectState
+        from v5.think import _intensity as _calc_i, _pad_to_mood, _TEMPLATES
+        import random as _rand
+
         state = AffectState.load().decay()
-        # 压缩格式: 状态=欣喜,专注,乖巧
+        p, a, d = state.pleasure, state.arousal, state.dominance
+
+        # Lorenz 已由 cloud_chat() 在调用本函数前 tick 过
+        # 直接用当前 PAD 生成情感标签
         label = state.to_prompt().replace("【情感状态】", "").strip()
         lines.append(f"状态={label.replace(' ', ',')}")
-        # 只注入高强度内心独白 (intensity ≥ 0.5)
-        from v5.think import check_pending
-        pending = check_pending()
-        if pending is not None and pending.intensity >= 0.5:
-            lines.append(f"心里: {pending.text[:40]}")
+
+        # 内联内心独白: 使用已加载的 Lorenz+ECA 驱动的 PAD
+        intensity = _calc_i(p, a, d)
+        if intensity >= 0.3:  # 降低阈值, 让更多思考可见
+            mood = _pad_to_mood(p, a, d)
+            templates = _TEMPLATES.get(mood, _TEMPLATES.get("neutral_calm", []))
+            if templates:
+                text = _rand.choice(templates)
+                lines.append(f"心里: {text[:40]}")
     except Exception:
         pass
     return lines
@@ -407,6 +417,20 @@ async def cloud_chat(
             _sys2.path.insert(0, _v5p)
         from v5.affect import apply_event
         apply_event(text)
+    except Exception:
+        pass
+
+    # V5: 对话时线性 Lorenz 漂移 + ECA 主题演化 (~38μs, 免费)
+    try:
+        import v5.think as _think
+        if _think._lorenz is None or _think._eca is None:
+            _think.inner_monologue(now=time_module.time())
+        # Lorenz 漂移 3 步, ECA 1 步 (每次对话情感自然流动)
+        for _ in range(3):
+            if _think._lorenz is not None:
+                _think._lorenz.tick()
+        if _think._eca is not None:
+            _think._eca.tick()
     except Exception:
         pass
 

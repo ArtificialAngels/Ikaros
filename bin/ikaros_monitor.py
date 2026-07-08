@@ -28,11 +28,13 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import logging
 import os
 import platform
 import threading
 import time
+from ctypes import wintypes
 from collections import deque
 
 logger = logging.getLogger("ikaros.monitor")
@@ -46,24 +48,24 @@ _FOCUSED_WORK_MIN_IDLE = 0   # 工作态要求的前沿空闲下限（简化：>
 
 
 # ── Win32 常量 / 结构体 ──
-class _LASTINPUTINFO:
-    _fields_ = [("cbSize", "I"), ("dwTime", "I")]
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint32), ("dwTime", ctypes.c_uint32)]
 
 
 def _build_user32():
     if not _IS_WINDOWS:
         return None
     try:
-        import ctypes
         u = ctypes.windll.user32
         # 设置参数/返回类型，避免 64 位截断
-        u.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-        u.GetWindowThreadProcessId.restype = ctypes.c_uint32
-        u.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        # HWND / DWORD 用 wintypes 精确类型；指针用 ctypes.POINTER(...)
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        u.GetWindowThreadProcessId.restype = wintypes.DWORD
+        u.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
         u.GetWindowTextW.restype = ctypes.c_int
-        u.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+        u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         u.GetWindowTextLengthW.restype = ctypes.c_int
-        u.GetForegroundWindow.restype = ctypes.c_void_p
+        u.GetForegroundWindow.restype = wintypes.HWND
         u.GetLastInputInfo.argtypes = [ctypes.POINTER(_LASTINPUTINFO)]
         u.GetLastInputInfo.restype = ctypes.c_int
         return u
@@ -191,7 +193,6 @@ class SystemMonitor:
         if not self._user32:
             return None
         try:
-            import ctypes
             info = _LASTINPUTINFO()
             info.cbSize = ctypes.sizeof(_LASTINPUTINFO)
             if not self._user32.GetLastInputInfo(ctypes.byref(info)):
@@ -214,12 +215,11 @@ class SystemMonitor:
         if not self._user32:
             return (None, None)
         try:
-            import ctypes
             hwnd = self._user32.GetForegroundWindow()
             if not hwnd:
                 return (None, None)
             # 进程名
-            pid = ctypes.c_uint32(0)
+            pid = wintypes.DWORD(0)
             self._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             proc = None
             if pid.value and self._psutil:
