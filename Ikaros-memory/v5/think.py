@@ -41,6 +41,10 @@ logger = logging.getLogger("ikaros.v5.think")
 V5_ROOT = Path(__file__).resolve().parent.parent  # Ikaros-memory/
 _PENDING_PATH = V5_ROOT / "data" / "v5" / "pending_thought.json"
 
+# ─── Lorenz 混沌驱动 (模块级单例, 懒加载) ─────────────────────
+
+_lorenz: object | None = None  # LorenzPAD 实例, inner_monologue 首次调用时初始化
+
 # ─── 情感区间 → 模板映射 ─────────────────────────────────────
 # 每个 (P, A) 区间对应一组思考模板, {slot} 会被填充上下文
 
@@ -165,10 +169,22 @@ def _intensity(p: float, a: float, d: float) -> float:
 def inner_monologue(*, now: float | None = None) -> Thought | None:
     """生成一条内心独白, 写入 V4 memory + pending 文件.
 
-    Returns Thought 或 None (写入失败时).
+    驱动引擎:
+      - 事件驱动 PAD (AffectState, 来自对话)
+      - 时间驱动 Lorenz 混沌吸引子 (自发漂移, blend_factor=0.3)
+      - 两者叠加后映射到 mood → 模板
     """
     if now is None:
         now = time.time()
+
+    # 0) 懒加载 LorenzPAD (模块级单例)
+    global _lorenz
+    if _lorenz is None:
+        try:
+            from v5.drivers import LorenzPAD
+            _lorenz = LorenzPAD()
+        except Exception as exc:
+            logger.debug("think: LorenzPAD unavailable (%s)", exc)
 
     # 1) 加载情感状态
     try:
@@ -179,6 +195,12 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
         return None
 
     p, a, d = state.pleasure, state.arousal, state.dominance
+
+    # 2) Lorenz 混沌漂移 — 即使没对话 PAD 也在动
+    if _lorenz is not None:
+        bp, ba, bd = _lorenz.blend((p, a, d), blend_factor=0.3)
+        p, a, d = bp, ba, bd
+
     mood = _pad_to_mood(p, a, d)
     templates = _TEMPLATES.get(mood, _TEMPLATES["neutral_calm"])
     text = random.choice(templates)
