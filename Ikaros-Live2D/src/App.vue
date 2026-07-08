@@ -26,6 +26,9 @@
         <div class="mode-toggle" @click.stop="toggleFloatBall" :class="{ active: floatBallMode }" title="切换悬浮球">
           🔮
         </div>
+        <div class="mode-toggle" @click.stop="toggleMic" :class="{ active: micActive }" title="麦克风聆听">
+          🎤
+        </div>
         <div class="mode-toggle" @click.stop="monitorVisible = !monitorVisible" :class="{ active: monitorVisible }" title="监控面板">
           📊
         </div>
@@ -91,6 +94,7 @@ import FloatBall from './components/FloatBall.vue'
 import { useMouseTracking } from './composables/useMouseTracking'
 import { useStateReactions } from './composables/useStateReactions'
 import { useLipSync } from './composables/useLipSync'
+import { useSpeechInput } from './composables/useSpeechInput'
 import { loadConfig, saveConfig, type PetConfig } from './services/pet-config'
 import { NeuroService, type NeuroStatus } from './services/neuro'
 import { llmManager } from './services/llm-manager'
@@ -467,22 +471,31 @@ let ws: WebSocket | null = null
 function connectWebSocket() {
   ws = new WebSocket('ws://127.0.0.1:7870/v1/voice/ws')
   ws.onopen = () => {
-    ws!.send(JSON.stringify({ action: 'start', session_id: 'icarus_tauri' }))
-    state.value = 'listening'
-    monitorData.value.stt = { status: 'connected', label: 'STT' }
+      ws!.send(JSON.stringify({ action: 'start', session_id: 'icarus_tauri' }))
+      state.value = 'idle'
+      monitorData.value.stt = { status: 'connected', label: 'STT' }
     addMonitorEvent('🔌', 'WebSocket 已连接')
   }
+  ws.binaryType = 'arraybuffer'
   ws.onmessage = (event) => {
-    if (event.data instanceof Blob) return
+    // 二进制帧 = TTS 音频 (Hermes/edge 产出的 mp3/wav)。原代码在此直接 return
+    // 丢弃, 导致 TTS 永不发声 —— 现在真正播放。
+    if (event.data instanceof ArrayBuffer) {
+      playTtsAudio(new Blob([event.data]))
+      return
+    }
     try {
       const msg = JSON.parse(event.data)
       switch (msg.type) {
         case 'transcription':
+          // 真实识别到用户语音 → 若正在 TTS 播放则打断 (barge-in)
+          if (state.value === 'speaking') stopTtsAudio()
           showBubble(`👤 ${msg.text}`, 3000)
           addMonitorEvent('🎤', msg.text)
           neuroService?.setState('listening')
           break
         case 'thinking':
+          if (state.value === 'speaking') stopTtsAudio()
           state.value = 'thinking'
           monitorData.value.llm = { status: 'thinking', label: 'LLM' }
           addMonitorEvent('🧠', '思考中...')
@@ -493,17 +506,48 @@ function connectWebSocket() {
           addMonitorEvent('📋', msg.message)
           break
         case 'done':
+          // 不静音麦克风: TTS 期间保持聆听, 以支持自动打断 (barge-in)
           showBubble(msg.text, 5000)
           state.value = 'speaking'
           monitorData.value.tts = { status: 'speaking', label: 'TTS' }
           addMonitorEvent('🔊', msg.text?.substring(0, 30) || '完成')
           neuroService?.setState('speaking')
-          emotionSystem?.trigger('happy', 0.3)
+          // 用户语气驱动宠物反应 (SenseVoice 检测)
+          if (msg.emotion) {
+            const emoMap: Record<string, string> = {
+              HAPPY: 'happy', SAD: 'sad', ANGRY: 'angry',
+              DISGUSTED: 'disgusted', SURPRISED: 'surprised',
+            }
+            const pe = emoMap[msg.emotion]
+            if (pe) emotionSystem?.trigger(pe, 0.35)
+          } else {
+            emotionSystem?.trigger('happy', 0.3)
+          }
           setTimeout(() => {
             state.value = 'listening'
             monitorData.value.tts = { status: 'connected', label: 'TTS' }
             neuroService?.setState('listening')
-          }, 2000)
+          }, 4000)
+          break
+        case 'partial':
+          showBubble(`🎤 ${msg.text}`, 1500)
+          addMonitorEvent('🎤', msg.text)
+          break
+        case 'stop_tts':
+          // 后端下发: 检测到用户插话, 立即中断旧 TTS
+          stopTtsAudio()
+          break
+        case 'emotion':
+          // 用户语气/事件标签 (SenseVoice), 仅作监控展示
+          if (msg.emotion || msg.event) {
+            const label = [msg.emotion, msg.event].filter(Boolean).join(' / ')
+            addMonitorEvent('😊', '用户: ' + label)
+          }
+          break
+        case 'stt_status':
+          monitorData.value.stt = { status: msg.status, label: 'STT' }
+          if (msg.status === 'unavailable') showBubble('⚠️ ' + msg.message, 4000)
+          else addMonitorEvent('🎙', msg.message)
           break
       }
     } catch (_e) {}
@@ -517,6 +561,48 @@ function connectWebSocket() {
   ws.onerror = () => {
     monitorData.value.stt = { status: 'error', label: 'STT' }
   }
+}
+
+// ─── TTS 音频播放 (二进制帧 → Blob → <audio>) ───
+let _ttsAudio: HTMLAudioElement | null = null
+function playTtsAudio(blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  if (!_ttsAudio) _ttsAudio = new Audio()
+  _ttsAudio.src = url
+  _ttsAudio.play().catch((e: unknown) => {
+    console.warn('[TTS] play failed:', e)
+  })
+  // 延迟释放 object URL, 等播放已启动
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+/** 立即中断当前 TTS 播放 (用于自动打断 barge-in)。 */
+function stopTtsAudio() {
+  if (_ttsAudio) {
+    try { _ttsAudio.pause() } catch {}
+    try { _ttsAudio.currentTime = 0 } catch {}
+  }
+}
+
+// ─── Speech input (microphone → WS PCM → server local STT) ───
+const micActive = ref(false)
+const speech = useSpeechInput({
+  ws: () => ws,
+  onPartial: (text: string) => showBubble('🎤 ' + text, 1500),
+  onError: (msg: string) => {
+    showBubble('⚠️ ' + msg, 4000)
+    addMonitorEvent('⚠️', msg)
+  },
+  onStatus: (on: boolean) => {
+    micActive.value = on
+    state.value = on ? 'listening' : 'idle'
+    showBubble(on ? '🎤 聆听中' : '🔇 已静音', 1500)
+  },
+})
+
+function toggleMic() {
+  if (micActive.value) speech.stop()
+  else speech.start()
 }
 
 // ─── Health check for LLM ───

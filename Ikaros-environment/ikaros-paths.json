@@ -12,6 +12,7 @@
     "gopeed": "E:\\Ikaros\\runtime\\gopeed",
     "rpc_server": "E:\\Ikaros\\runtime\\rpc-server",
     "data": "E:\\Ikaros\\data",
+    "data_models": "E:\\Ikaros\\data\\models",
     "bin": "E:\\Ikaros\\bin",
     "config": "E:\\Ikaros\\config",
     "modules": "E:\\Ikaros\\modules",

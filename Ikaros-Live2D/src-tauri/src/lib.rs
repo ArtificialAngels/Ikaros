@@ -246,6 +246,41 @@ pub fn run() {
 
             // Sync window bounds cache from main thread (required for cursor tracking)
             if let Some(main_win) = app.get_webview_window("main") {
+                // ── Grant microphone permission for WebView2 getUserMedia ──
+                // wry only auto-allows the clipboard permission; microphone
+                // requests would otherwise be denied by default, so we
+                // explicitly allow them on the CoreWebView2 controller.
+                #[cfg(windows)]
+                {
+                    if let Err(e) = main_win.with_webview(|pw| {
+                        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+                        use webview2_com::PermissionRequestedEventHandler;
+                        let controller = pw.controller();
+                        if let Ok(webview) = unsafe { controller.CoreWebView2() } {
+                            let mut token: i64 = 0;
+                            let handler = PermissionRequestedEventHandler::create(Box::new(
+                                |_sender: Option<ICoreWebView2>,
+                                 args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+                                    if let Some(args) = args {
+                                        let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                                        let is_mic = unsafe { args.PermissionKind(&mut kind).is_ok() }
+                                            && kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE;
+                                        if is_mic {
+                                            unsafe {
+                                                let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+                                            }
+                                        }
+                                    }
+                                    Ok(())
+                                },
+                            ));
+                            let _ = unsafe { webview.add_PermissionRequested(&handler, &mut token) };
+                        }
+                    }) {
+                        eprintln!("failed to install microphone permission hook: {e}");
+                    }
+                }
+
                 // ── Place the pet on a real (physical) monitor ──
                 // On machines with virtual display adapters (Todesk / GameViewer
                 // remote-control drivers), `center: true` can drop this transparent,

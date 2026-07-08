@@ -167,8 +167,8 @@ def test_unknown_provider_raises():
     from v4.reflect import llm_client
     try:
         llm_client.call_llm("sys", "user", provider="invalid")  # type: ignore
-        assert False, "应该抛 ValueError"
-    except ValueError as e:
+        assert False, "应该抛 RuntimeError"
+    except RuntimeError as e:
         assert "unknown provider" in str(e)
 
 

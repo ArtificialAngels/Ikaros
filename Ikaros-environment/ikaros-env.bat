@@ -39,6 +39,7 @@ set "IKAROS_CONFIG=%IKAROS_ROOT%\config"
 set "IKAROS_MODULES=%IKAROS_ROOT%\modules"
 set "IKAROS_DEPS=%IKAROS_ROOT%\deps"
 set "IKAROS_LOGS=%IKAROS_ROOT%\data\logs"
+set "IKAROS_DATA_MODELS=%IKAROS_ROOT%\data\models"
 
 REM ---- Step 3: Hermes component paths ----
 set "IKAROS_HERMES_AGENT=%IKAROS_ROOT%\hermes-agent"
@@ -56,6 +57,28 @@ set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\v4\store.py"
 REM ---- Step 4b: Ikaros-Live2D desktop pet paths ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"
 set "IKAROS_NODE_MODULES=%IKAROS_RUNTIME%\node23\node_modules"
+
+REM ---- Step 4b-2: Ensure pet node_modules link (portable) ----
+REM  Pet MUST reuse runtime\node23\node_modules (no duplicate copy).
+REM  Ikaros-Live2D\node_modules is a JUNCTION to the shared node_modules.
+REM  Why junction (not a relative symlink): Node's realpathSync does an
+REM  EPERM stat on directory symlinks in this sandbox, breaking vite build.
+REM  Junctions have no such restriction. Portability is handled HERE: this
+REM  block recreates the junction from %IKAROS_NODE_MODULES% (derived from
+REM  %IKAROS_ROOT%, i.e. the CURRENT drive), so if the whole project tree
+REM  is moved to another drive letter the link is rebuilt with the right
+REM  path on next launch. If the link is already valid (vue reachable) we
+REM  skip, to avoid needless churn.
+set "IKAROS_LIVE2D_NM=%IKAROS_LIVE2D%\node_modules"
+if exist "%IKAROS_LIVE2D_NM%\vue" goto :nm_ok
+if exist "%IKAROS_LIVE2D_NM%" rmdir "%IKAROS_LIVE2D_NM%" >nul 2>&1
+mklink /J "%IKAROS_LIVE2D_NM%" "%IKAROS_NODE_MODULES%" >nul 2>&1
+if errorlevel 1 (
+    echo [warn] pet node_modules link could not be created; build may fail
+) else (
+    echo [env] pet node_modules -^> %IKAROS_NODE_MODULES% (junction)
+)
+:nm_ok
 
 REM ---- Step 4c: Portable Rust toolchain (standalone rustc + cargo) ----
 REM No rustup needed - just bin/ on PATH. Truly portable, zero registry deps.

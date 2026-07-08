@@ -161,7 +161,7 @@ def _call_local(system: str, user: str, max_tokens: int,
         "temperature": temperature,
     }
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(transport=httpx.HTTPTransport(retries=0), timeout=timeout) as client:
             r = client.post(LOCAL_LLM_URL, json=body)
             r.raise_for_status()
             data = r.json()

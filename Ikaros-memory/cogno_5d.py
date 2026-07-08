@@ -370,15 +370,44 @@ def enrich(user_text: str, history: list | None = None) -> str:
         emo = _get_emotion_narrative(user_text)
         sentence2 = f"{ctx}。{emo}。"
 
-        return f"{sentence1}\n{sentence2}"
+        # V5: 附加情感状态 (PAD, 失败静默, 不破坏主流程)
+        try:
+            from v5.affect import current_prompt
+            v5_affect = current_prompt()
+        except Exception:
+            v5_affect = ""
+        # V5: 挂起的内心独白 (如果有, 注入对话思路)
+        try:
+            from v5.think import check_pending
+            _pending = check_pending()
+        except Exception:
+            _pending = None
+        v5_lines = [v5_affect] if v5_affect else []
+        if _pending:
+            v5_lines.append(f"【内心独白】{_pending.text}")
+        sentence3 = ("\n" + "\n".join(v5_lines)) if v5_lines else ""
+
+        return f"{sentence1}\n{sentence2}{sentence3}"
     except Exception:
         return "【认知上下文】(获取失败, 静默跳过)"
 
 
 def enrich_reply(reply: str, user_text: str = "", emotion_after: str = "") -> dict:
-    """给回复加 5 维标签, 用于记忆层 ingest."""
+    """给回复加 5 维标签, 用于记忆层 ingest.
+    
+    V5 附加: 当前情感状态 (pad_p/a/d) 用于记忆情感指纹.
+    """
     try:
         now = datetime.now()
+        # V5: 当前情感状态 (失败静默)
+        try:
+            from v5.affect import AffectState
+            _v5 = AffectState.load().decay()
+            v5_pad = {"pad_p": round(_v5.pleasure, 3),
+                       "pad_a": round(_v5.arousal, 3),
+                       "pad_d": round(_v5.dominance, 3)}
+        except Exception:
+            v5_pad = {}
         return {
             "time": get_time_str(),
             "machine": get_machine_id(),
@@ -389,6 +418,7 @@ def enrich_reply(reply: str, user_text: str = "", emotion_after: str = "") -> di
             "topic": _topic_summary,
             "weekday": get_weekday_str(now.weekday()),
             "activity": infer_activity(now.hour, now.weekday()),
+            **v5_pad,  # V5 情感指纹
         }
     except Exception:
         return {"time": get_time_str()}

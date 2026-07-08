@@ -2,7 +2,7 @@
 v4.tests.test_registry — V4 反思 registry 测试
 
 覆盖:
-  - make_default_scheduler 注册 6 个 op
+  - make_default_scheduler 注册 7 个 op
   - 每个 op 的 interval 与 V3 对齐
   - reflect 是 V4 新增 (7d), V3 没有
   - dry-run 报告包含所有 op
@@ -20,13 +20,13 @@ V4_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(V4_ROOT.parent))
 
 
-def test_registry_registers_six_ops():
-    """默认 scheduler 注册 6 个 op (V3 5 个 + V4 reflect)."""
+def test_registry_registers_seven_ops():
+    """默认 scheduler 注册 7 个 op (V3 5 个 + V4 reflect + V4 vector_sync)."""
     from v4.reflect.registry import make_default_scheduler
     from v4.reflect.scheduler import ScheduleState
     sched = make_default_scheduler(state=ScheduleState.empty())
     names = [op.name for op in sched._ops]
-    assert names == ["consolidate", "dedup", "promote", "distill", "reflect", "cleanup"]
+    assert names == ["consolidate", "dedup", "promote", "distill", "reflect", "cleanup", "vector_sync"]
 
 
 def test_registry_intervals_align_with_v3():
@@ -53,12 +53,12 @@ def test_registry_intervals_align_with_v3():
 
 
 def test_registry_dry_run_includes_all_ops():
-    """dry-run 报告覆盖 6 个 op."""
+    """dry-run 报告覆盖 7 个 op."""
     from v4.reflect.registry import make_default_scheduler
     from v4.reflect.scheduler import ScheduleState
     sched = make_default_scheduler(state=ScheduleState.empty())
     report = sched.dry_run()
-    expected = {"consolidate", "dedup", "promote", "distill", "reflect", "cleanup"}
+    expected = {"consolidate", "dedup", "promote", "distill", "reflect", "cleanup", "vector_sync"}
     assert set(report.keys()) == expected
 
 
@@ -81,8 +81,8 @@ def test_registry_run_all_with_force_calls_each_op():
         sched._ops[sched._ops.index(op)] = new_op
 
     results = sched.run_all(force=True)
-    # 6 个 op 都跑过
-    assert len(results) == 6
+    # 7 个 op 都跑过
+    assert len(results) == 7
     for name, mock in mock_calls:
         assert name in results
         assert results[name] == 42

@@ -25,6 +25,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ---- Step 0: Quick self-check (suite green for recent changes) ----
+call "%IKAROS_BIN%\ikaros-verify.bat" --quick
+if errorlevel 1 (
+    echo [FATAL] Self-check failed. Fix before continuing.
+    pause
+    exit /b 1
+)
+echo.
 echo ============================================================
 echo   Ikaros - No-Bridge Launcher
 echo.

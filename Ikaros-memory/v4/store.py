@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS memory (
     last_accessed REAL NOT NULL DEFAULT 0,
     created REAL NOT NULL DEFAULT (strftime('%s','now')),
     short_term INTEGER NOT NULL DEFAULT 1,
-    long_term INTEGER NOT NULL DEFAULT 0
+    long_term INTEGER NOT NULL DEFAULT 0,
+    -- V5 情感指纹 (PAD 模型: pleasure / arousal / dominance)
+    pad_p REAL NOT NULL DEFAULT 0.0,
+    pad_a REAL NOT NULL DEFAULT 0.0,
+    pad_d REAL NOT NULL DEFAULT 0.0
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_type ON memory(type);
@@ -108,7 +112,19 @@ def conn() -> Iterator[sqlite3.Connection]:
             c.execute("PRAGMA busy_timeout=30000")
         except Exception:
             pass
+        # WAL 模式: 写事务不阻塞读事务, 解决 watchdog 长连接锁全库
+        # (store(), search(), v4_store tool 同时读/写时不再 locked)
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
         c.executescript(SCHEMA)
+        # V5: 给已有表加 PAD 列 (幂等, 已存在则跳过)
+        for col in ("pad_p", "pad_a", "pad_d"):
+            try:
+                c.execute(f"ALTER TABLE memory ADD COLUMN {col} REAL NOT NULL DEFAULT 0.0")
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                pass  # 已存在: SQLite 报 duplicate column name
         c.commit()
         _tls.c = c
         logger.info("V4 store: initialized at %s", V4_DB_PATH)
@@ -134,6 +150,7 @@ class Memory:
 
     V3 返 dict, 调用方易拼错字段名。
     V4 返 frozen dataclass, IDE 提示 + 不可变。
+    V5 新增: pad_p / pad_a / pad_d (情感指纹, 默认 0.0).
     """
     id: int
     content: str
@@ -145,40 +162,56 @@ class Memory:
     created: float
     short_term: bool
     long_term: bool
+    # V5 情感指纹
+    pad_p: float = 0.0
+    pad_a: float = 0.0
+    pad_d: float = 0.0
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Memory":
+        def _r(key: str, default=0.0):
+            try:
+                return row[key]
+            except (IndexError, KeyError):
+                return default
         return cls(
-            id=row["id"],
-            content=row["content"],
-            type=row["type"],
-            tags=row["tags"] or "",
-            weight=float(row["weight"]),
-            access_count=int(row["access_count"]),
-            last_accessed=float(row["last_accessed"]),
-            created=float(row["created"]),
-            short_term=bool(row["short_term"]),
-            long_term=bool(row["long_term"]),
+            id=_r("id"),
+            content=_r("content", ""),
+            type=_r("type", "fact"),
+            tags=_r("tags", "") or "",
+            weight=float(_r("weight", 0.6)),
+            access_count=int(_r("access_count", 0)),
+            last_accessed=float(_r("last_accessed", 0.0)),
+            created=float(_r("created", 0.0)),
+            short_term=bool(_r("short_term", 1)),
+            long_term=bool(_r("long_term", 0)),
+            pad_p=float(_r("pad_p", 0.0)),
+            pad_a=float(_r("pad_a", 0.0)),
+            pad_d=float(_r("pad_d", 0.0)),
         )
 
 
 def store(content: str, type: str = "fact", weight: float = 0.6,
-          tags: str = "") -> int:
+          tags: str = "", *,  # V5: keyword-only args, 不破坏 V3 调用方
+          pad_p: float = 0.0, pad_a: float = 0.0, pad_d: float = 0.0) -> int:
     """存一条记忆, 返 id.
 
     V3 兼容 API: 同样 4 个参数 + 同样返 int.
-    V4 改进:
-      - weight 显式 clamp 到 [0, 1]
-      - 失败时抛, 不返 -1
+    V5 新增: pad_p/a/d, keyword-only, 默认 0.0 (不传则不记录情感).
     """
     weight = max(0.0, min(1.0, weight))
+    # 用 conn() 确保 schema 就绪, 然后写并提交
+    # 写完后关闭连接 (不让写连接在 _tls 里缓存), 下次写开新连接
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO memory (content, type, tags, weight) VALUES (?, ?, ?, ?)",
-            (content, type, tags, weight),
+            "INSERT INTO memory (content, type, tags, weight, pad_p, pad_a, pad_d) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (content, type, tags, weight, pad_p, pad_a, pad_d),
         )
         c.commit()
         mid = int(cur.lastrowid)
+    # 关掉这个连接, 让它不留在线程缓存里
+    close()
     # A1 修复: 写库后 best-effort 同步向量到 Chroma (失败不影响主流程)
     _sync_vector_best_effort(mid, content, type, tags, weight)
     return mid
