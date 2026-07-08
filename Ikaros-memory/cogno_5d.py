@@ -397,25 +397,13 @@ def _get_context_narrative(user_text: str) -> str:
 # ─── 组合 API ───
 
 def enrich(user_text: str, history: list | None = None) -> str:
-    """返回自然语言认知上下文, 注入 system prompt.
+    """返回简洁时间信息, 注入 system prompt.
 
-    v2 输出 (~150-250 chars, 自然语言):
-      现在是7月5日周六深夜 23:30, 哥哥通常在写代码...
-      在上海。对话已5轮, 在聊记忆系统优化。哥哥语气好奇。
+    v3: 只留时间线. V5 的 状态= 已覆盖情绪, 其他维度本地记录即可.
     """
     try:
-        parts = [_get_time_narrative()]
-        geo = _get_geo_narrative()
-        if geo:
-            parts.append(geo)
-        sentence1 = "，".join(parts) + "。"
-
-        activity = _get_activity_narrative()
-        ctx = _get_context_narrative(user_text)
-        emo = _get_emotion_narrative(user_text)
-        sentence2 = f"{activity}。{ctx}。{emo}。"
-
-        return f"{sentence1}\n{sentence2}"
+        t = _get_time_narrative()
+        return t + "\n" if t else ""
     except Exception:
         return "【认知上下文】(获取失败, 静默跳过)"
 
