@@ -421,16 +421,28 @@ async def cloud_chat(
         pass
 
     # V5: 对话时线性 Lorenz 漂移 + ECA 主题演化 (~38μs, 免费)
+    # V5: 对话时线性 Lorenz 漂移 + ECA 主题演化 (~38μs, 免费)
     try:
         import v5.think as _think
         if _think._lorenz is None or _think._eca is None:
             _think.inner_monologue(now=time_module.time())
-        # Lorenz 漂移 3 步, ECA 1 步 (每次对话情感自然流动)
         for _ in range(3):
             if _think._lorenz is not None:
                 _think._lorenz.tick()
         if _think._eca is not None:
             _think._eca.tick()
+    except Exception:
+        pass
+
+    # V5 Router: 分类输入, 任务指令用本地 LLM 优化
+    _optimized = None
+    try:
+        from v5.router import route as _route
+        _r = _route(text)
+        if _r["type"] == "task" and _r.get("optimized_text"):
+            _optimized = _r["optimized_text"]
+            log.info("router: task optimized (%d chars → %d chars, %.0fms)",
+                     len(text), len(_optimized), _r["elapsed_ms"])
     except Exception:
         pass
 
@@ -441,7 +453,9 @@ async def cloud_chat(
     msgs: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         msgs.extend(history)
-    msgs.append({"role": "user", "content": text})
+    # 如果有优化后的任务指令, 用它替代原始用户输入
+    user_content = _optimized if _optimized else text
+    msgs.append({"role": "user", "content": user_content})
 
     # 尝试 DeepSeek → minimax
     deepseek_key = _get_api_key(env_map, "DEEPSEEK_API_KEY")
