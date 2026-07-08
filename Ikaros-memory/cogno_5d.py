@@ -228,7 +228,15 @@ def _get_geo_narrative() -> str:
     geo = get_geo_location()
     if geo and geo != "未知":
         parts = geo.split("/")
-        return parts[0] if parts else geo
+        raw = parts[0] if parts else geo
+        # 英文城市名 → 中文
+        _city_map = {"Shanghai": "上海", "Beijing": "北京", "Guangzhou": "广州",
+                     "Shenzhen": "深圳", "Hangzhou": "杭州", "Nanjing": "南京",
+                     "Chengdu": "成都", "Wuhan": "武汉", "Tokyo": "东京",
+                     "Seoul": "首尔", "New York": "纽约", "London": "伦敦",
+                     "San Francisco": "旧金山", "Singapore": "新加坡",
+                     "Hong Kong": "香港"}
+        return _city_map.get(raw, raw)
     return ""
 
 
