@@ -102,15 +102,16 @@ def get_time_str() -> str:
 
 
 def _get_time_narrative() -> str:
-    """时间维度: 自然语言叙述 (含时段推断)."""
+    """时间维度: 压缩格式 '周六晚(23:30)'."""
     try:
         now = datetime.now()
         wd = get_weekday_str(now.weekday())
-        td = f"{now.month}月{now.day}日{wd} {now.hour:02d}:{now.minute:02d}"
         activity = infer_activity(now.hour, now.weekday())
-        return f"现在是{td}, {activity}"
+        # 从 "哥哥可能在写代码" → 取关键词 2 字
+        act_short = activity.replace("哥哥可能", "").replace("在", "").strip()[:4] if activity else ""
+        return f"{wd}{act_short}({now.hour:02d}:{now.minute:02d})"
     except Exception:
-        return f"当前时间: {get_time_str()}"
+        return f"{get_time_str()}"
 
 
 # ─── 维度 2: 设备 ───
@@ -179,12 +180,11 @@ def get_geo_location() -> str:
 
 
 def _get_geo_narrative() -> str:
-    """地理维度: 自然语言叙述."""
+    """地理维度: 压缩格式 '上海'."""
     geo = get_geo_location()
     if geo and geo != "未知":
         parts = geo.split("/")
-        city = parts[0] if parts else geo
-        return f"在{city}"
+        return parts[0] if parts else geo
     return ""
 
 
@@ -258,19 +258,11 @@ def infer_emotion(text: str) -> str:
 
 
 def _get_emotion_narrative(user_text: str) -> str:
-    """情绪维度: 自然语言叙述."""
+    """情绪维度: 压缩格式 (只返情绪词)."""
     global _emotion_state
     emotion = infer_emotion(user_text)
     _emotion_state = emotion
-    narratives = {
-        "开心": "哥哥心情不错",
-        "好奇": "哥哥在探索新问题",
-        "感谢": "哥哥表达了感谢",
-        "烦躁": "哥哥遇到了一些麻烦, 语气有些烦躁",
-        "悲伤": "哥哥看起来有些低落",
-        "平静": "哥哥语气平静",
-    }
-    return narratives.get(emotion, "哥哥语气平静")
+    return emotion
 
 
 # ─── 维度 5: 上下文 (v2: 话题追踪) ───
@@ -341,12 +333,12 @@ def compress_context(user_text: str, history: list | None = None) -> str:
 
 
 def _get_context_narrative(user_text: str) -> str:
-    """上下文维度: 自然语言叙述."""
+    """上下文: 压缩格式 '(第5轮)'."""
     global _turn_counter
     _turn_counter += 1
     topic = _update_topic(user_text)
     if _turn_counter <= 1:
-        return f"刚开始新对话, {topic}"
+        return f"新对话"
     return f"对话已{_turn_counter}轮, 当前{topic}"
 
 

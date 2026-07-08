@@ -44,6 +44,7 @@ _PENDING_PATH = V5_ROOT / "data" / "v5" / "pending_thought.json"
 # ─── Lorenz 混沌驱动 (模块级单例, 懒加载) ─────────────────────
 
 _lorenz: object | None = None  # LorenzPAD 实例, inner_monologue 首次调用时初始化
+_eca: object | None = None     # ECAGrid 实例
 
 # ─── 情感区间 → 模板映射 ─────────────────────────────────────
 # 每个 (P, A) 区间对应一组思考模板, {slot} 会被填充上下文
@@ -177,14 +178,20 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
     if now is None:
         now = time.time()
 
-    # 0) 懒加载 LorenzPAD (模块级单例)
-    global _lorenz
+    # 0) 懒加载 LorenzPAD + ECAGrid (模块级单例)
+    global _lorenz, _eca
     if _lorenz is None:
         try:
             from v5.drivers import LorenzPAD
             _lorenz = LorenzPAD()
         except Exception as exc:
             logger.debug("think: LorenzPAD unavailable (%s)", exc)
+    if _eca is None:
+        try:
+            from v5.drivers import ECAGrid
+            _eca = ECAGrid()
+        except Exception as exc:
+            logger.debug("think: ECAGrid unavailable (%s)", exc)
 
     # 1) 加载情感状态
     try:
@@ -203,6 +210,22 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
 
     mood = _pad_to_mood(p, a, d)
     templates = _TEMPLATES.get(mood, _TEMPLATES["neutral_calm"])
+
+    # ECA 主题驱动: tick 一次, 影响模板选择偏移
+    _eca_topic: str | None = None
+    if _eca is not None:
+        try:
+            _eca_topic = _eca.tick()
+            # ECA 主题为"混沌思维"或"情感波动"时, 随机换一个非同 mood 的模板
+            if _eca_topic in ("混沌思维", "情感波动") and len(templates) > 1:
+                alt_moods = [m for m in _TEMPLATES if m != mood]
+                if alt_moods:
+                    import random as _r
+                    alt = _r.choice(alt_moods)
+                    templates = _TEMPLATES[alt]
+        except Exception:
+            pass
+
     text = random.choice(templates)
 
     intensity = _intensity(p, a, d)

@@ -303,38 +303,22 @@ def build_system_prompt(user_text: str) -> str:
         # fallback: 简单时间注入
         cogno = f"当前时间: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
 
-    personality = (
-        "我是伊卡洛斯 (Ikaros), 代号 Alpha, 人造天使。"
-        "你是哥哥最亲密的搭档。"
-        "说话风格：温柔、有温度、中文优先。"
-        "每句话不要太长，适合语音对话。"
-        "TTS 模式下不要用 markdown 强调符号 (**, __, *), 改用纯中文语气表达。"
-    )
+    v5_lines = _build_v5_affect_block()
+    # PAD 加权记忆折叠 (情感加权, 只取 top 2)
+    memory_line = _build_memory_line(user_text)
+    if v5_lines or memory_line:
+        v5_block = "\n### 当前状态\n" + "\n".join(v5_lines)
+        if memory_line:
+            v5_block += "\n" + memory_line
+    else:
+        v5_block = ""
 
-    # ── v4.db 记忆注入 ──
-    memories = _search_v4_memories(user_text)
-    memory_section = ""
-    if memories:
-        lines = ["", "【我记得的事情】"]
-        for m in memories:
-            weight = m.get("weight", 0)
-            tag_info = f" ({m['tags']})" if m.get("tags") else ""
-            trust = "✅" if weight >= 0.7 else ""
-            lines.append(f" - {trust} {m['content']}{tag_info}")
-        memory_section = "\n".join(lines)
-        log.info("injected %d memories from v4.db", len(memories))
-
-    v5 = _build_v5_affect_block()
-
-    return f"{axiom}\n\n{cogno}\n\n{personality}{memory_section}{v5}"
+    return f"{axiom}\n\n{cogno}{v5_block}"
 
 
-# ─── V5 情感 + 内心独白注入 ───
-
-
-def _build_v5_affect_block() -> str:
-    """加载 V5 情感状态 + 挂起的内心独白, 返回注入文本."""
-    lines = []
+def _build_v5_affect_block() -> list[str]:
+    """V5 情感状态 + 内心独白, 返行列表. 压缩格式: '状态=X,Y,Z'."""
+    lines: list[str] = []
     try:
         import sys as _sys
         _v5_path = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
@@ -342,17 +326,45 @@ def _build_v5_affect_block() -> str:
             _sys.path.insert(0, _v5_path)
         from v5.affect import AffectState
         state = AffectState.load().decay()
-        lines.append(state.to_prompt())
-        # 挂起的内心独白 (如果有)
+        # 压缩格式: 状态=欣喜,专注,乖巧
+        label = state.to_prompt().replace("【情感状态】", "").strip()
+        lines.append(f"状态={label.replace(' ', ',')}")
+        # 只注入高强度内心独白 (intensity ≥ 0.5)
         from v5.think import check_pending
         pending = check_pending()
-        if pending is not None:
-            lines.append(f"【内心独白】{pending.text}")
+        if pending is not None and pending.intensity >= 0.5:
+            lines.append(f"心里: {pending.text[:40]}")
     except Exception:
         pass
-    if not lines:
+    return lines
+
+
+def _build_memory_line(user_text: str) -> str:
+    """PAD 加权记忆折叠: 情感强度最高的 1-2 条."""
+    try:
+        memories = _search_v4_memories(user_text)
+        if not memories:
+            return ""
+        # 按情感强度 (abs(pad_p) + abs(pad_a)) 排序
+        scored = []
+        for m in memories:
+            pp = abs(float(m.get("pad_p", 0)))
+            pa = abs(float(m.get("pad_a", 0)))
+            intensity = pp + pa
+            if intensity >= 0.3:  # 只取有情感强度的
+                scored.append((intensity, m))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:2]
+        if not top:
+            return ""
+        parts = []
+        for _, m in top:
+            label = "😊" if m.get("pad_p", 0) > 0.3 else "😌" if m.get("pad_p", 0) < -0.2 else " "
+            summary = m.get("content", "")[:25].replace("\n", " ")
+            parts.append(f"[{label}]{summary}")
+        return "记忆: " + " | ".join(parts)
+    except Exception:
         return ""
-    return "\n" + "\n".join(lines) + "\n"
 
 
 # ─── Cloud LLM 调用 ───
