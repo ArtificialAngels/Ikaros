@@ -26,6 +26,12 @@ echo [ikaros] Usage: bin\ikaros-live2d.bat [start^|stop^|status]
 exit /b 1
 
 :start
+REM -- Ensure Voice WS (:7870) is up FIRST: pet speech (STT/TTS) depends on it.
+REM A standalone `ikaros-live2d.bat start` (without the full ikaros-start.bat)
+REM left voice-ws unstarted, so the pet's WebSocket stayed disconnected and the
+REM in-app status showed "STT disconnected / WebSocket 断开".
+call :ensure_voice
+
 REM -- Singleton check --
 echo [ikaros] Checking for existing instance...
 tasklist /FI "IMAGENAME eq ikaros-desktop-pet.exe" /FO CSV /NH 2>nul | find /I "ikaros-desktop-pet.exe" >nul
@@ -89,4 +95,31 @@ if not errorlevel 1 (
     echo   Not running
 )
 echo.
+exit /b 0
+
+REM ============================================================
+REM  :ensure_voice - make sure Voice WS (:7870) is listening.
+REM  Pulls it up (detached) if missing, so the pet's speech link
+REM  is never left disconnected.
+REM ============================================================
+:ensure_voice
+"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',7870));s.close();exit(0 if r==0 else 1)" >nul 2>&1
+if not errorlevel 1 (
+    echo [ikaros] Voice WS (:7870) already running.
+    exit /b 0
+)
+echo [ikaros] Starting Voice WS (:7870) for speech...
+start "VoiceWS" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-voice-ws.py" > "%IKAROS_LOGS%\voice-ws.log" 2>&1
+set "WAIT=0"
+:wait_voice_live2d
+"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',7870));s.close();exit(0 if r==0 else 1)" >nul 2>&1
+if not errorlevel 1 goto :voice_ready_live2d
+timeout /t 2 /nobreak >nul
+set /a WAIT+=2
+if %WAIT% lss 20 goto :wait_voice_live2d
+echo [ikaros] WARNING: Voice WS not ready (timeout)
+goto :after_voice_live2d
+:voice_ready_live2d
+echo [ikaros] OK Voice WS ready: ws://127.0.0.1:7870/v1/voice/ws
+:after_voice_live2d
 exit /b 0
