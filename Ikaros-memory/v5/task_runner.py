@@ -66,15 +66,17 @@ def call_async(text: str, optimized: Optional[str] = None) -> dict:
 
 
 def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
-    """后台: 调 cloud LLM, 写结果文件."""
+    """后台: 复用 cloud_chat 的 async API 路径调云 LLM, 写结果文件."""
     try:
         import sys as _sys
+        import asyncio as _asyncio
         _root = str(V5_ROOT.parent)
         if _root not in _sys.path:
             _sys.path.insert(0, _root)
-        from bin.cloud_chat import _call_cloud_llm, _load_env, build_system_prompt
+        from bin.cloud_chat import build_system_prompt, _load_env as _le
+        from bin.cloud_chat import _call_openai_compatible as _call_llm
 
-        env_map = _load_env()
+        env_map = _le()
         system_prompt = build_system_prompt(text)
         user_content = optimized if optimized else text
         msgs = [
@@ -82,23 +84,41 @@ def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
             {"role": "user", "content": user_content},
         ]
 
-        # 优先 DeepSeek
         deepseek_key = env_map.get("DEEPSEEK_API_KEY", "")
+        minimax_key = env_map.get("MINIMAX_CN_API_KEY", "")
+
+        reply: str | None = None
         if deepseek_key:
-            base = env_map.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-            model = env_map.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
-            reply = _call_openai(msgs, base, deepseek_key, model,
-                                 max_tokens=1024, temperature=0.4)
-        else:
-            reply = "（任务执行失败：没有可用的 API key）"
+            try:
+                base = env_map.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+                model = env_map.get("DEEPSEEK_MODEL", "deepseek-chat")
+                reply = _asyncio.run(_call_llm(
+                    base_url=base, api_key=deepseek_key,
+                    model=model, messages=msgs,
+                    max_tokens=1024, temperature=0.4,
+                    label="DeepSeek",
+                ))
+            except Exception as e:
+                logger.warning("task %s: DeepSeek failed (%s), trying minimax", task_id, e)
+
+        if reply is None and minimax_key:
+            try:
+                reply = _asyncio.run(_call_llm(
+                    base_url="https://api.minimaxi.chat/v1", api_key=minimax_key,
+                    model="MiniMax-M3", messages=msgs,
+                    max_tokens=1024, temperature=0.4,
+                    label="MiniMax",
+                ))
+            except Exception as e:
+                logger.error("task %s: MiniMax also failed (%s)", task_id, e)
+
+        if reply is None:
+            reply = "（任务执行失败：所有 API 不可用）"
 
         _write_json(_RESULT_PATH, {
-            "task_id": task_id,
-            "status": "done",
-            "text": text,
-            "optimized": optimized,
-            "result": reply,
-            "completed_at": time.time(),
+            "task_id": task_id, "status": "done",
+            "text": text, "optimized": optimized,
+            "result": reply, "completed_at": time.time(),
         })
         logger.info("task %s: done (%d chars)", task_id, len(reply))
 
@@ -111,25 +131,6 @@ def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
             "error": str(e),
             "completed_at": time.time(),
         })
-
-
-def _call_openai(
-    messages: list[dict], base_url: str, api_key: str, model: str,
-    max_tokens: int, temperature: float,
-) -> str:
-    """调 OpenAI 兼容接口."""
-    import urllib.request
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    body = json.dumps({
-        "model": model, "messages": messages,
-        "max_tokens": max_tokens, "temperature": temperature,
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
 
 
 def check_result() -> Optional[dict]:
