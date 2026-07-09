@@ -1,0 +1,17 @@
+{
+  "taskmgr.exe": [
+    "work",
+    "system",
+    "任务管理器"
+  ],
+  "explorer.exe": [
+    "work",
+    "file_manager",
+    "Windows资源管理器"
+  ],
+  "python.exe": [
+    "work",
+    "ide",
+    "Python"
+  ]
+}

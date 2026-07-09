@@ -16,11 +16,61 @@ category 优先级（高→低）：gaming > work > communication > entertainmen
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger("ikaros.activity")
+
 __all__ = [
     "PROCESS_MAP", "BROWSER_PROCESS", "BROWSER_DOMAIN", "TITLE_MAP",
     "PRIVATE_PROCESS", "PRIVATE_TITLE", "OWN_APP_PROCESS",
-    "classify",
+    "classify", "add_override", "PROCESS_OVERRIDES_PATH",
 ]
+
+# ── 用户学习到的进程覆盖（持久化到 JSON，优先级高于静态 PROCESS_MAP）──
+# 监测到未知进程时，process_learner 会用 LLM 识别并写回这里，
+# 下次启动自动加载。只存 exe 名，绝不存窗口标题（隐私）。
+PROCESS_OVERRIDES_PATH = Path(__file__).resolve().with_name("process_overrides.json")
+
+
+def _load_overrides() -> dict[str, tuple[str, str, str]]:
+    try:
+        if PROCESS_OVERRIDES_PATH.exists():
+            data = json.loads(PROCESS_OVERRIDES_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k).lower(): tuple(v) for k, v in data.items()
+                        if isinstance(v, (list, tuple)) and len(v) >= 3}
+    except Exception as e:
+        logger.warning("加载 process_overrides.json 失败: %s", e)
+    return {}
+
+
+# 运行时 + 持久化的用户覆盖表
+_USER_PROCESS_MAP: dict[str, tuple[str, str, str]] = _load_overrides()
+
+
+def add_override(proc: str, category: str, subcategory: str, canonical: str) -> None:
+    """把一个识别到的进程写回 process_overrides.json（持久化 + 当前进程即时生效）。
+
+    只接受白名单 category，避免 LLM 胡写污染分类。
+    """
+    ALLOWED = {"gaming", "work", "communication", "entertainment", "browser", "private"}
+    if category not in ALLOWED:
+        logger.debug("add_override 拒绝非法 category=%r (proc=%r)", category, proc)
+        return
+    p = (proc or "").lower().strip()
+    if not p:
+        return
+    _USER_PROCESS_MAP[p] = (category, subcategory, canonical)
+    try:
+        data = {k: list(v) for k, v in _USER_PROCESS_MAP.items()}
+        PROCESS_OVERRIDES_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("已学习并持久化进程: %s -> %s/%s/%s", p, category, subcategory, canonical)
+    except Exception as e:
+        logger.warning("写 process_overrides.json 失败: %s", e)
+
 
 # ── 进程名精确匹配 (小写 exe 名) ──
 # value: (category, subcategory, canonical)
@@ -285,6 +335,11 @@ def classify(process_name: str | None, title: str | None, url: str | None = None
     # 2) 自家应用
     if proc in OWN_APP_PROCESS:
         return {"category": "own_app", "subcategory": "pet", "canonical": "伊卡洛斯", "is_browser": False}
+
+    # 2.5) 用户学习到的 override（持久化，优先级高于静态 PROCESS_MAP，但低于隐私/自家）
+    if proc in _USER_PROCESS_MAP:
+        c, sc, canon = _USER_PROCESS_MAP[proc]
+        return {"category": c, "subcategory": sc, "canonical": canon, "is_browser": is_browser}
 
     # 3) 进程精确匹配
     if proc in PROCESS_MAP:

@@ -107,6 +107,10 @@ class SystemMonitor:
         self._latest: dict = self._default_snapshot()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # 未知进程学习（节流 + 异步）：streak 计数 + 在途去重
+        self._learn_lock = threading.Lock()
+        self._unknown_streak: dict[str, int] = {}
+        self._learning: set[str] = set()
 
     # ── 公共 ──
 
@@ -180,6 +184,13 @@ class SystemMonitor:
 
         cls = self._classify(proc, title)
         state = self._derive_state(cls["category"], idle)
+
+        # 未知进程：节流触发联网学习（只传 exe 名）；已知则清零其未知计数
+        if cls["category"] == "unknown":
+            if proc:
+                self._maybe_learn(proc)
+        else:
+            self._unknown_streak.pop((proc or "").lower(), None)
 
         snap = {
             "timestamp": time.time(),
@@ -299,6 +310,40 @@ class SystemMonitor:
             return "casual_browsing"
         # 未识别进程 + 用户在键盘前：归为一般性电脑使用（不谎称"发呆"）
         return "casual_browsing"
+
+    # ── 未知进程学习（节流 + 异步，仅用 exe 名）──
+
+    def _maybe_learn(self, proc: str) -> None:
+        """未知进程连续出现 ≥2 拍才联网学习，避免闪烁/过渡窗口触发。
+
+        只把 exe 名交给 process_learner（窗口标题/URL 绝不外传）。
+        """
+        p = (proc or "").lower()
+        if not p or "." not in p:
+            return
+        self._unknown_streak[p] = self._unknown_streak.get(p, 0) + 1
+        # 限制字典规模
+        if len(self._unknown_streak) > 64:
+            self._unknown_streak = {k: v for k, v in self._unknown_streak.items() if k == p}
+        with self._learn_lock:
+            if self._unknown_streak[p] >= 2 and p not in self._learning:
+                self._learning.add(p)
+                threading.Thread(
+                    target=self._learn, args=(proc,),
+                    name="ikaros-learn", daemon=True,
+                ).start()
+
+    def _learn(self, proc: str) -> None:
+        try:
+            from process_learner import learn_process
+            learned = learn_process(proc)
+            if learned:
+                logger.info("已学习未知进程 %s", proc)
+        except Exception as e:
+            logger.debug("learn thread error (%s): %s", proc, e)
+        finally:
+            with self._learn_lock:
+                self._learning.discard(proc)
 
     # ── 截图 + 视觉描述（Layer 3，配置门控）──
 
