@@ -232,6 +232,7 @@ pub fn run() {
             set_always_on_top,
             toggle_monitor_window,
             tray::sync_tray_menu,
+            tray::update_audio_devices,
             input_poll::set_ball_mode,
             input_poll::set_manual_override,
             input_poll::force_click_through,

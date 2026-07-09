@@ -60,6 +60,47 @@ fn chk(checked: bool) -> &'static str {
     if checked { "✓ " } else { "  " }
 }
 
+/// Build a device-picker submenu ("🎤 麦克风" / "🔊 扬声器").
+///
+/// Each entry emits `mic:<device_id>` / `speaker:<device_id>`; the special
+/// entry "系统默认" emits `mic:default` / `speaker:default`. The frontend
+/// applies the selection when it receives the `tray-event`.
+fn build_device_submenu(
+    app: &AppHandle,
+    submenu_id: &str,
+    title: &str,
+    devices: &[(String, String)],
+    selected: &str,
+    prefix: &str,
+) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
+    // "系统默认" always first; collect owned items so references stay valid
+    // until Submenu::with_id_and_items consumes them (Tauri retains internally).
+    let default_item = MenuItem::with_id(
+        app,
+        format!("{}default", prefix),
+        format!("{}系统默认", chk(selected == "default")),
+        true,
+        None::<&str>,
+    )?;
+    let mut owned: Vec<MenuItem<tauri::Wry>> = vec![default_item];
+    for (dev_id, label) in devices {
+        if dev_id.is_empty() {
+            continue; // skip unusable empty-id devices
+        }
+        let item = MenuItem::with_id(
+            app,
+            format!("{}{}", prefix, dev_id),
+            format!("{}{}", chk(selected == dev_id), label),
+            true,
+            None::<&str>,
+        )?;
+        owned.push(item);
+    }
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        owned.iter().map(|m| m as &dyn tauri::menu::IsMenuItem<_>).collect();
+    Ok(Submenu::with_id_and_items(app, submenu_id, title, true, &refs)?)
+}
+
 /// Runtime menu state for dynamic checkmarks.
 #[derive(Debug, Clone)]
 pub struct TrayMenuState {
@@ -71,6 +112,11 @@ pub struct TrayMenuState {
     pub neuro_patience: u32,
     pub current_model: usize,
     pub current_scale: u32,
+    // ── Audio device selection (populated by the frontend via update_audio_devices) ──
+    pub mic_devices: Vec<(String, String)>,     // (device_id, label)
+    pub speaker_devices: Vec<(String, String)>, // (device_id, label)
+    pub selected_mic: String,
+    pub selected_speaker: String,
 }
 
 impl Default for TrayMenuState {
@@ -84,6 +130,10 @@ impl Default for TrayMenuState {
             neuro_patience: 30,
             current_model: 0,
             current_scale: 100,
+            mic_devices: Vec::new(),
+            speaker_devices: Vec::new(),
+            selected_mic: "default".to_string(),
+            selected_speaker: "default".to_string(),
         }
     }
 }
@@ -150,6 +200,10 @@ fn build_menu(app: &AppHandle, state: &TrayMenuState) -> Result<Menu<tauri::Wry>
     let random_model = MenuItem::with_id(app, RANDOM_MODEL, "🔀 随机模型", true, None::<&str>)?;
     let always_on_top = MenuItem::with_id(app, ALWAYS_ON_TOP,
         format!("{}📌 窗口置顶", chk(state.always_on_top)), true, None::<&str>)?;
+    let mic_submenu = build_device_submenu(app, "mic", "🎤 麦克风",
+        &state.mic_devices, &state.selected_mic, "mic:")?;
+    let speaker_submenu = build_device_submenu(app, "speaker", "🔊 扬声器",
+        &state.speaker_devices, &state.selected_speaker, "speaker:")?;
     let sep2 = PredefinedMenuItem::separator(app)?;
 
     // ── Mode submenu ──
@@ -223,6 +277,8 @@ fn build_menu(app: &AppHandle, state: &TrayMenuState) -> Result<Menu<tauri::Wry>
         &hit_frames,
         &random_model,
         &always_on_top,
+        &mic_submenu,
+        &speaker_submenu,
         &sep2,
         &mode_submenu,
         &neuro_submenu,
@@ -344,6 +400,39 @@ pub fn sync_tray_menu(
     if let Some(v) = neuro_patience { state.neuro_patience = v; }
     if let Some(v) = current_model { state.current_model = v; }
     if let Some(v) = current_scale { state.current_scale = v; }
+
+    let new_menu = build_menu(&app, &state).map_err(|e| e.to_string())?;
+    if let Some(tray) = app.tray_by_id("ikaros-tray") {
+        tray.set_menu(Some(new_menu)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Tauri command: receive the frontend's enumerated audio devices and the
+/// current selection, then rebuild the tray menu to show device submenus.
+///
+/// The frontend is the only side that can enumerate Web Audio devices
+/// (`navigator.mediaDevices.enumerateDevices`), so it pushes the lists here
+/// and the tray menu is regenerated with "🎤 麦克风" / "🔊 扬声器" submenus.
+#[tauri::command]
+pub fn update_audio_devices(
+    app: AppHandle,
+    menu_state: State<'_, Mutex<TrayMenuState>>,
+    mics: Vec<(String, String)>,
+    speakers: Vec<(String, String)>,
+    selected_mic: String,
+    selected_speaker: String,
+) -> Result<(), String> {
+    let mut state = menu_state.lock().map_err(|e| e.to_string())?;
+
+    state.mic_devices = mics;
+    state.speaker_devices = speakers;
+    if !selected_mic.is_empty() {
+        state.selected_mic = selected_mic;
+    }
+    if !selected_speaker.is_empty() {
+        state.selected_speaker = selected_speaker;
+    }
 
     let new_menu = build_menu(&app, &state).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("ikaros-tray") {

@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { selectedMic } from './useAudioDevices'
 
 export interface SpeechInputHooks {
   ws: () => WebSocket | null
@@ -47,13 +48,16 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
     try {
       // 降噪三件套: 浏览器自带 WebRTC 降噪/回声消除/自动增益, 低成本显著提升
       // 远场/环境噪声下的识别率 (此前是裸 {audio:true}, 无处理)
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true,
-        },
-      })
+      const audioConstraints: MediaTrackConstraints = {
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl: true,
+      }
+      // 指定麦克风设备（右键菜单选择；'default' 用系统默认）
+      if (selectedMic.value && selectedMic.value !== 'default') {
+        audioConstraints.deviceId = { exact: selectedMic.value }
+      }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
     } catch (e: any) {
       error.value = micErrorText(e)
       hooks.onError?.(error.value)
