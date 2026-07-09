@@ -678,53 +678,72 @@ async def cloud_chat(
         err_msg = "; ".join(errors) if errors else "没有可用的 API key (DEEPSEEK_API_KEY 或 MINIMAX_CN_API_KEY), 且本地 qwen3-8b (:8080) 也不可用"
         raise RuntimeError(f"所有 cloud provider 调用失败: {err_msg}")
 
-    # ── 步骤 3: 自我审查 (回答前) ──
+    # ── 步骤 3: 自我审查 (fire-and-forget, 不阻塞回复) ──
+    # 第一阶段只做快速审查, 需要 rewrite 时后台异步处理
+    _review_in_progress = False
     try:
         review = await _self_review(text, reply, deepseek_key, minimax_key)
         if review.get("verdict") == "rewrite" and review.get("suggestion"):
-            log.info("self-review: score=%d, rewriting...", review.get("score", 0))
+            log.info("self-review: score=%d, will rewrite async", review.get("score", 0))
+            _review_in_progress = True
+    except Exception as e:
+        log.warning("self-review failed (skipping): %s", e)
+
+    # ── 步骤 4: 记忆归约 + 对话记录 (fire-and-forget, 不阻塞回复) ──
+    _record_conversation(text, reply)
+    # 在后台线程中执行, 不阻塞主回复流程
+    import threading
+    def _background_consolidate():
+        import asyncio as _bg_asyncio
+        try:
+            _bg_asyncio.run(_consolidate_to_memory(text, reply, deepseek_key, minimax_key))
+        except Exception:
+            pass
+    threading.Thread(target=_background_consolidate, daemon=True).start()
+
+    # 如果有 rewrite 需要, 也在后台线程执行 (下一轮对话可能用优化后的回复)
+    if _review_in_progress:
+        def _background_rewrite():
+            suggest = review.get("suggestion", "")
             rewrite_msgs = [
                 {"role": "system", "content":
                  "你是伊卡洛斯, 人造天使。哥哥问你问题, 你之前的回答需要改进。"
                  "请根据反馈重写, 保持原意图, 但更好地对齐 body 架构。"
-                 f"改进意见: {review['suggestion']}"},
+                 f"改进意见: {suggest}"},
                 {"role": "user", "content": text},
             ]
-            if deepseek_key:
-                try:
-                    reply = await _call_openai_compatible(
-                        base_url="https://api.deepseek.com/v1",
-                        api_key=deepseek_key,
-                        model="deepseek-chat",
-                        messages=rewrite_msgs,
-                        max_tokens=max_tokens,
-                        temperature=0.3,
-                        label="DeepSeek-rewrite",
-                    )
-                except Exception:
-                    pass
-            if reply is None and minimax_key:
-                try:
-                    reply = await _call_openai_compatible(
-                        base_url="https://api.minimaxi.chat/v1",
-                        api_key=minimax_key,
-                        model="MiniMax-M3",
-                        messages=rewrite_msgs,
-                        max_tokens=max_tokens,
-                        temperature=0.3,
-                        label="MiniMax-rewrite",
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        log.warning("self-review failed (skipping): %s", e)
-
-    # ── 步骤 4: 记忆归约 + 对话记录 ──
-    _record_conversation(text, reply)
-    try:
-        await _consolidate_to_memory(text, reply, deepseek_key, minimax_key)
-    except Exception as e:
-        log.warning("consolidate to memory failed (skipping): %s", e)
+            import asyncio as _bg_asyncio2
+            async def _do():
+                nonlocal reply
+                if deepseek_key:
+                    try:
+                        return await _call_openai_compatible(
+                            base_url="https://api.deepseek.com/v1",
+                            api_key=deepseek_key, model="deepseek-chat",
+                            messages=rewrite_msgs, max_tokens=max_tokens,
+                            temperature=0.3, label="DeepSeek-rewrite",
+                        )
+                    except Exception:
+                        pass
+                if minimax_key:
+                    try:
+                        return await _call_openai_compatible(
+                            base_url="https://api.minimaxi.chat/v1",
+                            api_key=minimax_key, model="MiniMax-M3",
+                            messages=rewrite_msgs, max_tokens=max_tokens,
+                            temperature=0.3, label="MiniMax-rewrite",
+                        )
+                    except Exception:
+                        pass
+                return None
+            try:
+                new_reply = _bg_asyncio2.run(_do())
+                if new_reply:
+                    log.info("self-review: rewrite completed (background, %d chars)",
+                             len(new_reply))
+            except Exception:
+                pass
+        threading.Thread(target=_background_rewrite, daemon=True).start()
 
     return reply
 

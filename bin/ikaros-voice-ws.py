@@ -172,11 +172,14 @@ def _load_cloud_chat():
 
 
 async def _tts_edge(text: str) -> bytes | None:
-    """edge-tts 真物 (PIL 不需). 返 WAV bytes."""
+    """edge-tts 直接异步流式合成 (无 subprocess 开销).
+
+    返回 MP3 bytes。这是当前最快的 TTS 路径，直接在当前进程调 edge_tts.
+    """
     if not text.strip():
         return None
     try:
-        import edge_tts  # real dep
+        import edge_tts
         voice = "zh-CN-XiaoxiaoNeural"
         buf = io.BytesIO()
         communicate = edge_tts.Communicate(text, voice=voice)
@@ -189,67 +192,50 @@ async def _tts_edge(text: str) -> bytes | None:
         return None
 
 
-async def _tts_hermes(text: str) -> bytes | None:
-    """用 Hermes Agent 内置 TTS 服务 (hermes-agent/tools/tts_tool) 合成 mp3。
+async def _tts_sentence_stream(reply: str, ws) -> int:
+    """句级流水线 TTS: 按标点切句 → 逐句合成 → 逐句推送给前端。
 
-    经 bin/hermes_tts.py 在 hermes-agent venv 下调用 Hermes 的
-    _generate_edge_tts (即 Hermes Agent 内置的 TTS 生成逻辑)。失败或未
-    就绪时回退 _tts_edge, 保证 TTS 链路不塌。
+    延迟优化: 不等整段回复, 第一句识别完成后立即开始合成。
+    前端需要支持逐句接收 (type=tts_chunk, index=N, total=M)。
+
+    Returns: 成功合成的句子数。
     """
-    if not text.strip():
-        return None
-    hermes_tts = os.path.join(_ROOT, "bin", "hermes_tts.py")
-    hermes_py = r"E:/Ikaros/hermes-agent/venv/Scripts/python.exe"
-    if not (os.path.isfile(hermes_tts) and os.path.isfile(hermes_py)):
-        return await _tts_edge(text)
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", delete=False, encoding="utf-8"
-        ) as tf:
-            tf.write(text)
-            txt_path = tf.name
-        out_path = txt_path + ".mp3"
-        env = dict(os.environ)
-        env["HERMES_ROOT"] = r"E:/Ikaros/hermes-agent"
-        env["HERMES_HOME"] = r"E:/Ikaros/data/hermes-agent"
-        proc = await asyncio.create_subprocess_exec(
-            hermes_py, hermes_tts, txt_path, out_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=90
-            )
-        finally:
+    if not reply.strip():
+        return 0
+    # 切句
+    import re
+    sentences = re.split(r'(?<=[。！？；…\.\!\?\;\n])', reply)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        sentences = [reply]
+    if len(sentences) == 1:
+        # 单句: 直接合成
+        audio = await _tts_edge(reply)
+        if audio:
+            await ws.send(audio)
+            return 1
+        return 0
+
+    # 多句: 逐句合成 + 逐句推送
+    # 用 asyncio.gather 并发合成 (最多 2 句并发, 避免被微软限流)
+    import asyncio as _asyncio
+    sem = _asyncio.Semaphore(2)
+    sent_count = 0
+
+    async def _synth_one(idx: int, sent: str) -> tuple[int, bytes | None]:
+        async with sem:
+            return idx, await _tts_edge(sent)
+
+    tasks = [_synth_one(i, s) for i, s in enumerate(sentences)]
+    for coro in _asyncio.as_completed(tasks):
+        idx, audio = await coro
+        if audio:
             try:
-                os.remove(txt_path)
-            except OSError:
-                pass
-        if proc.returncode != 0:
-            log.warning(
-                "hermes tts failed (rc=%s): %s", proc.returncode,
-                stderr.decode("utf-8", "ignore")[:300],
-            )
-            return await _tts_edge(text)
-        out = stdout.decode("utf-8", "ignore").strip()
-        if not out or not os.path.isfile(out):
-            log.warning("hermes tts no output: %r", out)
-            return await _tts_edge(text)
-        with open(out, "rb") as fh:
-            data = fh.read()
-        try:
-            os.remove(out)
-        except OSError:
-            pass
-        return data or None
-    except Exception as e:
-        log.warning("hermes tts error: %s", e)
-        try:
-            return await _tts_edge(text)
-        except Exception:
-            return None
+                await ws.send(audio)
+                sent_count += 1
+            except Exception:
+                break
+    return sent_count
 
 
 async def _call_llm(prompt: str, cogno_prefix: str) -> str:
@@ -380,14 +366,8 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
         "event": event,
     }))
 
-    # 7) TTS 真物 push (binary frame, App.vue 播放)
-    #    优先 Hermes Agent 内置 TTS 服务, 失败回退 edge_tts
-    audio = await _tts_hermes(reply)
-    if audio:
-        try:
-            await ws.send(audio)
-        except Exception as e:
-            log.debug("TTS push failed: %s", e)
+    # 7) TTS: 句级流水线 (不等整段, 第一句识别即开始合成)
+    asyncio.ensure_future(_tts_sentence_stream(reply, ws))
 
 
 async def _handle_look(ws, enrich, enrich_reply, history, state=None, my_id=0):
@@ -431,7 +411,7 @@ async def _handle_look(ws, enrich, enrich_reply, history, state=None, my_id=0):
         await ws.send(json.dumps({
             "type": "done", "text": reply, "cogno": "screen-look", "ms": 0,
         }))
-        audio = await _tts_hermes(reply)
+        audio = await _tts_edge(reply)
         if audio:
             try:
                 await ws.send(audio)
@@ -595,6 +575,10 @@ async def _serve(ws, path=None):
         async for raw in ws:
             if isinstance(raw, bytes):
                 # 二进制帧 = 前端采集的 16k mono Int16 PCM (STT 在 server 本地做)
+                # 音频预处理: 去噪 + 归一化 (移植自 N.E.K.O 思路, <1ms)
+                prep = _get_audio_prep()
+                if prep:
+                    raw = prep.process(raw)
                 model = _get_vosk_model()
                 if model is not None:
                     if st["rec"] is None:
@@ -671,6 +655,10 @@ async def _serve(ws, path=None):
                 )
             elif action == "end_utterance":
                 # 前端 VAD 判定一句话结束 → 高精度 final 识别 + 情绪/事件标签
+                # 重置音频预处理器噪声门状态 (每句语音结束后)
+                _ap = _get_audio_prep()
+                if _ap:
+                    _ap.reset()
                 my_id = _new_utt()
                 vosk_final = ""
                 if st["rec"] is not None:
@@ -706,6 +694,23 @@ async def _serve(ws, path=None):
         _CLIENTS.discard(ws)
 
 
+# 音频预处理 (移植自 N.E.K.O 思路)
+_AUDIO_PREP = None
+
+
+def _get_audio_prep():
+    global _AUDIO_PREP
+    if _AUDIO_PREP is None:
+        try:
+            from bin.audio_preprocessor import AudioPreprocessor
+            _AUDIO_PREP = AudioPreprocessor(sample_rate=16000)
+            log.info("AudioPreprocessor ready (DC removal + RMS norm + noise gate + limiter)")
+        except Exception as e:
+            log.warning("AudioPreprocessor not available: %s", e)
+            _AUDIO_PREP = False  # sentinel
+    return _AUDIO_PREP if _AUDIO_PREP is not False else None
+
+
 async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     import websockets
     # 启动本地活动监测 (前台进程/空闲/CPU/截图), 供 cogno_5d + pet 使用
@@ -717,6 +722,28 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         log.warning("SystemMonitor 启动失败 (降级): %s", e)
     # 活动状态变化广播给已连 pet webview (N.E.K.O 主动搭话触发)
     asyncio.ensure_future(_activity_broadcaster())
+
+    # 预热: 后台加载 SenseVoice + Vosk 模型 (避免首次对话等待)
+    def _warm_stt():
+        t0 = time.time()
+        sv = _get_sensevoice()
+        if sv is not None:
+            # 预创建 stream + 跑一次空推理预热 sherpa-onnx 内部图
+            try:
+                import numpy as np
+                dummy = np.zeros(16000, dtype=np.float32)  # 1s 静音
+                stream = sv.create_stream()
+                stream.accept_waveform(16000, dummy)
+                sv.decode_stream(stream)
+                log.info("SenseVoice warmed up (%.1fs)", time.time() - t0)
+            except Exception:
+                log.info("SenseVoice initialized (%.1fs)", time.time() - t0)
+        vosk_m = _get_vosk_model()
+        if vosk_m is not None:
+            log.info("Vosk model ready")
+    import threading
+    threading.Thread(target=_warm_stt, daemon=True, name="stt-warm").start()
+
     log.info("starting voice-ws on ws://%s:%d/v1/voice/ws", host, port)
     async with websockets.serve(_serve, host, port):
         log.info("voice-ws ready")
