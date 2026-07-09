@@ -16,7 +16,7 @@
       <Live2DCanvas ref="live2dRef" />
 
       <!-- Status bar -->
-      <StatusBar :emoji="statusEmoji" :text="statusText" />
+      <StatusBar :emoji="statusEmoji" :text="statusText" :activity="activityText" />
 
       <!-- Mode toggle + FloatBall + Monitor buttons -->
       <div class="bottom-buttons">
@@ -38,6 +38,7 @@
       <MonitorPanel
         :visible="monitorVisible"
         :state="state"
+        :activity="activityText"
         :stt-status="monitorData.stt"
         :tts-status="monitorData.tts"
         :llm-status="monitorData.llm"
@@ -95,6 +96,10 @@ import { useMouseTracking } from './composables/useMouseTracking'
 import { useStateReactions } from './composables/useStateReactions'
 import { useLipSync } from './composables/useLipSync'
 import { useSpeechInput } from './composables/useSpeechInput'
+import {
+  selectedMic, selectedSpeaker, setSelectedMic, setSelectedSpeaker,
+  labelForMic, labelForSpeaker, enumerateAudioDevices,
+} from './composables/useAudioDevices'
 import { loadConfig, saveConfig, type PetConfig } from './services/pet-config'
 import { NeuroService, type NeuroStatus } from './services/neuro'
 import { llmManager } from './services/llm-manager'
@@ -146,6 +151,9 @@ const live2dRef = ref<InstanceType<typeof Live2DCanvas> | null>(null)
 const statusEmoji = computed(() => STATES[state.value]?.emoji || '🪽')
 const contextOverride = ref('')
 const statusText = computed(() => contextOverride.value || STATES[state.value]?.text || '待机')
+
+// 当前前台窗口/程序名 (voice-ws 推 {type:activity}, 由本地监测采集)
+const activityText = ref('')
 
 // ─── Config ───
 const petConfig = ref<PetConfig>(loadConfig())
@@ -549,6 +557,16 @@ function connectWebSocket() {
           if (msg.status === 'unavailable') showBubble('⚠️ ' + msg.message, 4000)
           else addMonitorEvent('🎙', msg.message)
           break
+        case 'activity':
+          // 哥哥当前前台窗口/程序 (N.E.K.O 式本地活动监测, voice-ws 推)
+          activityText.value = msg.phrase || ''
+          if (msg.phrase) addMonitorEvent('🖥️', msg.phrase)
+          break
+        case 'screen':
+          // look 动作: 屏幕视觉描述 (Layer3, 配置门控 IKAROS_VISION_*)
+          if (msg.desc) showBubble('👀 ' + msg.desc, 5000)
+          else if (msg.message) showBubble(msg.message, 3000)
+          break
       }
     } catch (_e) {}
   }
@@ -567,7 +585,13 @@ function connectWebSocket() {
 let _ttsAudio: HTMLAudioElement | null = null
 function playTtsAudio(blob: Blob) {
   const url = URL.createObjectURL(blob)
-  if (!_ttsAudio) _ttsAudio = new Audio()
+  if (!_ttsAudio) {
+    _ttsAudio = new Audio()
+    // 套用已选扬声器 (系统默认则不动)
+    if (selectedSpeaker.value && selectedSpeaker.value !== 'default' && typeof (_ttsAudio as any).setSinkId === 'function') {
+      (_ttsAudio as any).setSinkId(selectedSpeaker.value).catch(() => {})
+    }
+  }
   _ttsAudio.src = url
   _ttsAudio.play().catch((e: unknown) => {
     console.warn('[TTS] play failed:', e)
@@ -597,6 +621,8 @@ const speech = useSpeechInput({
     micActive.value = on
     state.value = on ? 'listening' : 'idle'
     showBubble(on ? '🎤 聆听中' : '🔇 已静音', 1500)
+    // 首次授权麦克风后设备 label 才会填充, 重新推给托盘菜单
+    if (on) pushAudioDevicesToTray()
   },
 })
 
@@ -738,6 +764,48 @@ async function syncTrayMenu() {
   }
 }
 
+// ─── Audio device selection (right-click tray menu) ───
+async function pushAudioDevicesToTray() {
+  if (!tauriInvoke) return
+  try {
+    const { mics, speakers } = await enumerateAudioDevices()
+    await tauriInvoke('update_audio_devices', {
+      mics: mics.map((d) => [d.deviceId, d.label]),
+      speakers: speakers.map((d) => [d.deviceId, d.label]),
+      selected_mic: selectedMic.value,
+      selected_speaker: selectedSpeaker.value,
+    })
+  } catch (e) {
+    console.warn('[App] pushAudioDevicesToTray failed:', e)
+  }
+}
+
+async function selectMic(dev: string) {
+  setSelectedMic(dev)
+  showBubble(`🎤 麦克风: ${labelForMic(dev)}`, 2000)
+  // 若正在聆听, 重启以套用新设备
+  if (speech.active.value) {
+    speech.stop()
+    await new Promise((r) => setTimeout(r, 150))
+    speech.start()
+  }
+  await pushAudioDevicesToTray()
+}
+
+async function selectSpeaker(dev: string) {
+  setSelectedSpeaker(dev)
+  // 套用到当前 TTS 播放元素 (系统默认则不动)
+  if (_ttsAudio && typeof (_ttsAudio as any).setSinkId === 'function') {
+    try {
+      if (dev !== 'default') await (_ttsAudio as any).setSinkId(dev)
+    } catch (e) {
+      console.warn('[App] setSinkId failed:', e)
+    }
+  }
+  showBubble(`🔊 扬声器: ${labelForSpeaker(dev)}`, 2000)
+  await pushAudioDevicesToTray()
+}
+
 // ─── Lifecycle ───
 let healthTimer: ReturnType<typeof setInterval> | null = null
 
@@ -806,9 +874,12 @@ onMounted(async () => {
   // Listen to tray events from Rust
   if (tauriListen) {
     try {
-      await tauriListen('tray-event', (event: any) => {
+      await tauriListen('tray-event', async (event: any) => {
         const id = event.payload as string
         console.log('[App] tray-event:', id)
+        // ── Audio device selection (dynamic ids from device submenus) ──
+        if (id.startsWith('mic:')) { await selectMic(id.slice(4)); return }
+        if (id.startsWith('speaker:')) { await selectSpeaker(id.slice(9)); return }
         switch (id) {
           // ── Model switching ──
           case 'model_prev':  doPrevModel(); currentModelIdx = live2dRef.value?.getCurrentModelIndex() ?? 0; syncTrayMenu(); break
@@ -833,7 +904,12 @@ onMounted(async () => {
           case 'screenshot':   doScreenshot(); break
           case 'hit_frames':   doToggleHitFrames(); syncTrayMenu(); break
           case 'monitor':
-            // Independent monitor window toggled by Rust
+            // Independent monitor window toggled by Rust — push current state so it
+            // isn't empty/stale when it opens (it only holds default "unknown" otherwise)
+            emitMonitorStatus()
+            for (const ev of monitorEvents.value.slice(0, 20)) {
+              emitMonitorEvent(ev)
+            }
             break
           case 'settings':     settingsVisible.value = !settingsVisible.value; break
           case 'restart':      doRestart(); break
@@ -908,6 +984,12 @@ onMounted(async () => {
     }
   } else {
     console.warn('[App] tauriListen not available — tray events disabled')
+  }
+
+  // ── Audio device enumeration → push to tray menu (so 麦克风/扬声器 submenus populate) ──
+  pushAudioDevicesToTray()
+  if (navigator.mediaDevices?.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => pushAudioDevicesToTray())
   }
 
   // Click-through is now handled by polling-based mouse tracking

@@ -47,6 +47,12 @@
             <span class="state-value">{{ stateEmoji }} {{ stateText }}</span>
           </div>
 
+          <!-- Current Activity (foreground window / program) -->
+          <div class="current-activity" v-if="activity">
+            <span class="activity-label">当前窗口:</span>
+            <span class="activity-value">{{ activity }}</span>
+          </div>
+
           <!-- Event Log -->
           <div class="event-log">
             <div class="log-header">事件日志</div>
@@ -74,6 +80,7 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 const props = defineProps<{
   visible: boolean
   state: string
+  activity?: string
   sttStatus: { status: string; label: string }
   ttsStatus: { status: string; label: string }
   llmStatus: { status: string; label: string }
@@ -266,6 +273,23 @@ function getStatusClass(status: string): string {
 
 .state-value {
   color: rgba(255, 255, 255, 0.9);
+}
+
+.current-activity {
+  padding: 8px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.activity-label {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.activity-value {
+  color: rgba(120, 200, 255, 0.95);
 }
 
 .event-log {
