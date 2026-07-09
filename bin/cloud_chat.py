@@ -364,6 +364,17 @@ def _build_v5_affect_block() -> list[str]:
             if templates:
                 text = _rand.choice(templates)
                 lines.append(f"心里: {text[:40]}")
+
+        # 空闲自想循环 (ikaros-think.bat --watch) 落盘的强情感独白:
+        # 强度>=0.35 时写入 data/v5/pending_thought.json, 这里消费并提示主动提起
+        try:
+            from v5.think import check_pending
+            _pending = check_pending()
+            if _pending:
+                lines.append(f"心里惦记: {_pending.text}")
+                lines.append("如果对话合适，可以自然地提起这件事。")
+        except Exception:
+            pass
     except Exception:
         pass
     return lines

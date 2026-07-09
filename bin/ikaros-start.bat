@@ -99,6 +99,14 @@ echo       Voice WS: ws://127.0.0.1:7870/v1/voice/ws
 echo.
 :after_voice
 
+REM ---- Step 2c: Launch V5 idle self-think loop (Inner Monologue) ----
+echo.
+echo [2c] Launching V5 idle self-think loop...
+echo       Inner monologue every 45 min (writes data/v5/pending_thought.json)
+echo       Consumed by cloud_chat._build_v5_affect_block on next chat turn
+echo.
+start "V5Think" /MIN "%IKAROS_BIN%\ikaros-think.bat" --watch
+
 REM ---- Step 3: Launch Desktop Pet v2 (Tauri) ----
 echo.
 echo [3] Launching Desktop Pet v2 (Tauri)...
@@ -145,6 +153,7 @@ echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
 echo   Frontend:  Hermes Desktop       (Electron)
 echo   Dashboard: http://127.0.0.1:9119
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
+echo   Think:     V5 idle self-think loop (45min, pending_thought.json)
 echo   Memory:    Embedding :8587 + LLM :8080 (unified)
 echo   LLM:       cloud (DeepSeek V4) + local :8080
 echo.

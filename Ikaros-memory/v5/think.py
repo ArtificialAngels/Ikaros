@@ -317,7 +317,7 @@ if __name__ == "__main__":
         _sys.path.insert(0, str(_HERE))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
-    if "--schedule" in _sys.argv:
+    if "--schedule" in _sys.argv or "--watch" in _sys.argv:  # --watch == --schedule 别名
         interval = 45
         for arg in _sys.argv[1:]:
             if arg.startswith("--interval="):
