@@ -396,16 +396,64 @@ def _get_context_narrative(user_text: str) -> str:
 
 # ─── 组合 API ───
 
+# V5: 社交时间感知 — 追踪对话间隔
+_last_conversation_time: float = 0.0
+_GAP_THRESHOLDS = [
+    (3600,    "刚聊过不久"),                          # < 1h
+    (21600,   "有几小时没见了"),                       # < 6h
+    (86400,   "今天还没怎么聊呢"),                      # < 1d
+    (259200,  "两三天没见了, 有点想哥哥"),              # < 3d
+    (604800,  "好几天没见了, 很想哥哥"),                # < 7d
+    (float("inf"), "好久没见了, 真的好想哥哥"),         # >= 7d
+]
+
+
 def enrich(user_text: str, history: list | None = None) -> str:
     """返回简洁时间信息, 注入 system prompt.
 
-    v3: 只留时间线. V5 的 状态= 已覆盖情绪, 其他维度本地记录即可.
+    v3: 只留时间线. V5: 加入社交时间感知 (对话间隔的情绪化处理).
     """
+    global _last_conversation_time
     try:
         t = _get_time_narrative()
-        return t + "\n" if t else ""
+        # V5: 社交时间感知
+        gap_line = _get_social_time_gap()
+        # V5: 活力状态
+        vitality_line = _get_vitality_line()
+        lines = [t]
+        if gap_line:
+            lines.append(gap_line)
+        if vitality_line:
+            lines.append(vitality_line)
+        return "\n".join(lines) + "\n"
     except Exception:
         return "【认知上下文】(获取失败, 静默跳过)"
+
+
+def _get_social_time_gap() -> str:
+    """根据上次对话时间来感知社交间隔."""
+    global _last_conversation_time
+    now = time.time()
+    if _last_conversation_time <= 0:
+        _last_conversation_time = now
+        return "这是今天第一次和哥哥说话"
+    gap = now - _last_conversation_time
+    _last_conversation_time = now
+    for threshold, message in _GAP_THRESHOLDS:
+        if gap < threshold:
+            return message
+    return "好久没见了, 真的好想哥哥"
+
+
+def _get_vitality_line() -> str:
+    """获取 V5 活力状态 (非致命)."""
+    try:
+        from v5.vitality import Vitality
+        v = Vitality.load().tick()
+        v.save()
+        return f"（{v.label()} {v.to_emoji()}）"
+    except Exception:
+        return ""
 
 
 def enrich_reply(reply: str, user_text: str = "", emotion_after: str = "") -> dict:

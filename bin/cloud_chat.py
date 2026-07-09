@@ -337,7 +337,7 @@ def _maybe_inject_identity_refresh() -> str:
 
 
 def _build_v5_affect_block() -> list[str]:
-    """V5 情感状态 + 内联内心独白 (对话时即时生成, 不依赖 cron)."""
+    """V5 情感状态 + 内联内心独白 + 活力 + 关系 (对话时即时生成, 不依赖 cron)."""
     lines: list[str] = []
     try:
         import sys as _sys
@@ -355,6 +355,22 @@ def _build_v5_affect_block() -> list[str]:
         # 直接用当前 PAD 生成情感标签
         label = state.to_prompt().replace("【情感状态】", "").strip()
         lines.append(f"状态={label.replace(' ', ',')}")
+
+        # V5 #8: 活力状态
+        try:
+            from v5.vitality import Vitality
+            v = Vitality.load()
+            lines.append(f"精力: {v.label()}")
+        except Exception:
+            pass
+
+        # V5 #2: 关系亲密度
+        try:
+            from v5.relationship import Relationship
+            rel = Relationship.load()
+            lines.append(f"关系: {rel.stage()}")
+        except Exception:
+            pass
 
         # 内联内心独白: 使用已加载的 Lorenz+ECA 驱动的 PAD
         intensity = _calc_i(p, a, d)
@@ -463,8 +479,40 @@ async def cloud_chat(
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
         if _v5p not in _sys2.path:
             _sys2.path.insert(0, _v5p)
-        from v5.affect import apply_event
+        from v5.affect import apply_event, AffectState
+        old_state = AffectState.load()  # V5 #1: 记录旧 PAD 用于因果检测
         apply_event(text)
+        new_state = AffectState.load()
+    except Exception:
+        old_state = None
+        new_state = None
+
+    # V5 #1: 情感因果记忆 — PAD 变化大时自动记录因果链
+    try:
+        from v5.emotional_memory import maybe_record_emotion
+        if old_state is not None and new_state is not None:
+            old_pad = (old_state.pleasure, old_state.arousal, old_state.dominance)
+            new_pad = (new_state.pleasure, new_state.arousal, new_state.dominance)
+            maybe_record_emotion(old_pad, new_pad, text)
+    except Exception:
+        pass
+
+    # V5 #2: 关系亲密度更新
+    try:
+        from v5.relationship import Relationship
+        rel = Relationship.load()
+        intensity = (abs(new_state.pleasure) + abs(new_state.arousal) + abs(new_state.dominance)*0.5)/2.0 if new_state else 0.3
+        rel = rel.record_interaction(intensity)
+        rel.save()
+    except Exception:
+        pass
+
+    # V5 #8: 活力状态更新
+    try:
+        from v5.vitality import Vitality
+        v = Vitality.load()
+        v = v.tick(conversation=True)
+        v.save()
     except Exception:
         pass
 
@@ -971,6 +1019,14 @@ async def _consolidate_to_memory(
         try:
             v4_store.store(content=fact[:300], type="fact", weight=0.6, tags="consolidated,cloud_chat")
             log.info("consolidated fact to v4.db: %.80s", fact)
+            # V5 #5: 认知失调检测 — 新事实写完后检查是否与旧记忆矛盾
+            try:
+                from v5.dissonance import detect_dissonance
+                _dd = detect_dissonance(fact[:300], "fact")
+                if _dd.get("conflicts"):
+                    log.info("dissonance: %d conflicts detected for new fact", len(_dd["conflicts"]))
+            except Exception:
+                pass
             return True
         except Exception as e:
             log.warning("consolidate write failed: %s", e)

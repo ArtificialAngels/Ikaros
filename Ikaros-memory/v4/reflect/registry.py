@@ -18,6 +18,7 @@ sys.path.insert(0, str(V4_ROOT.parent))
 
 from v4.reflect.scheduler import (  # noqa: E402
     DEFAULT_CLEANUP_INTERVAL,
+    DEFAULT_NARRATIVE_INTERVAL,
     DEFAULT_CONSOLIDATE_INTERVAL,
     DEFAULT_DEDUP_INTERVAL,
     DEFAULT_DISTILL_INTERVAL,
@@ -183,6 +184,7 @@ def make_default_scheduler(state: ScheduleState | None = None) -> ReflectSchedul
     s.register(make_reflect_op())
     s.register(make_cleanup_op())
     s.register(make_vector_sync_op())
+    s.register(make_narrative_op())
     return s
 
 
@@ -226,4 +228,25 @@ def make_vector_sync_op() -> ReflectOp:
         fn=_fn,
         interval_sec=DEFAULT_VECTOR_SYNC_INTERVAL,
         last_run_key="last_vector_sync",
+    )
+
+
+def make_narrative_op() -> ReflectOp:
+    """自我叙事连续性: 30d, 大模型 (V5 #7).
+
+    每月生成连贯的自我叙事 — "这个月我变成了什么样".
+    """
+    from v5.narrative import generate_narrative
+
+    def _fn() -> int:
+        result = generate_narrative()
+        if result.get("narrative"):
+            return 1
+        return 0
+
+    return ReflectOp(
+        name="narrative",
+        fn=_fn,
+        interval_sec=DEFAULT_NARRATIVE_INTERVAL,
+        last_run_key="last_narrative",
     )

@@ -118,6 +118,16 @@ async def _activity_broadcaster():
             if state == last_state:
                 continue
             last_state = state
+            # V5 #3: 事件驱动觉醒 — 活动状态变化触发内心独白
+            try:
+                from v5.think import on_activity_change
+                on_activity_change(
+                    state,
+                    activity_phrase=snap.get("phrase", ""),
+                    category=snap.get("category", ""),
+                )
+            except Exception:
+                pass
             payload = _activity_payload(snap)
             dead = []
             for ws in list(_CLIENTS):

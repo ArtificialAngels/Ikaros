@@ -39,6 +39,8 @@ DEFAULT_REFLECT_INTERVAL = 604800       # 7d
 # V4 新增: vector_sync (向量回填/校正) — 24h, 确保 v4.db 每条记忆都有 Chroma 向量
 #   A1 已让 store() 写时同步; 此 op 作崩溃恢复 + 历史回填的安全网 (A2 修复)
 DEFAULT_VECTOR_SYNC_INTERVAL = 86400    # 24h
+# V5 新增: narrative (自我叙事连续性) — 30d
+DEFAULT_NARRATIVE_INTERVAL = 2592000   # 30d
 
 
 @dataclass(frozen=True)

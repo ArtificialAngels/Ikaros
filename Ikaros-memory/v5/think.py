@@ -283,6 +283,151 @@ def clear_pending() -> None:
         pass
 
 
+# ─── 事件驱动觉醒 (V5 #3) ────────────────────────────────────
+
+# 上次活动状态 (用于检测变化)
+_last_activity_state: str | None = None
+
+
+def on_activity_change(activity_state: str, activity_phrase: str = "",
+                       category: str = "") -> Optional[Thought]:
+    """活动状态变化时触发内心独白 (事件驱动觉醒).
+
+    当 monitor 检测到 activity_state 变化时调用此函数。
+    返回 Thought 或 None (变化不够显著时).
+    """
+    global _last_activity_state
+    if activity_state == _last_activity_state:
+        return None
+    _last_activity_state = activity_state
+
+    # 只对显著变化做反应 (idle → coding / coding → gaming 等)
+    _significant_transitions = {
+        ("idle", "coding"), ("idle", "gaming"),
+        ("idle", "focused_work"), ("coding", "gaming"),
+        ("gaming", "coding"), ("focused_work", "idle"),
+        ("away", "coding"), ("away", "focused_work"),
+    }
+
+    # 构建过渡对
+    old_state = _last_activity_state or "unknown"
+    transition = (old_state, activity_state)
+
+    # 活动开始 (idle → active)
+    if activity_state in ("coding", "gaming", "focused_work") and old_state in ("idle", "away", "unknown"):
+        try:
+            from v5.affect import AffectState
+            state = AffectState.load().decay()
+            p, a, d = state.pleasure, state.arousal, state.dominance
+            label_map = {"coding": "写代码", "gaming": "玩游戏", "focused_work": "专注工作"}
+            label = label_map.get(activity_state, "忙")
+            intensity = _intensity(p, a, d)
+            text = f"哥哥开始{label}了。"
+            thought = Thought(text=text, mood=_pad_to_mood(p, a, d),
+                            intensity=intensity, created=time.time())
+            _store_thought(thought, p, a, d)
+            return thought
+        except Exception as exc:
+            logger.debug("think: activity change inner_monologue failed (%s)", exc)
+            return None
+
+    # 活动结束 (active → idle)
+    if activity_state == "idle" and old_state in ("coding", "gaming", "focused_work"):
+        try:
+            from v5.affect import AffectState
+            state = AffectState.load().decay()
+            p, a, d = state.pleasure, state.arousal, state.dominance
+            text = f"哥哥停下了。不知道他感觉怎么样。"
+            thought = Thought(text=text, mood=_pad_to_mood(p, a, d),
+                            intensity=0.25, created=time.time())
+            _store_thought(thought, p, a, d)
+            return thought
+        except Exception:
+            return None
+
+    return None
+
+
+# ─── 真正好奇心 (V5 #9) ───────────────────────────────────────
+
+def curiosity_explore() -> Optional[Thought]:
+    """当 ECA topic = '好奇探索' 时, 主动翻记忆库探索.
+
+    使用 AISDetectorSet 找高新颖性记忆 → 生成探索型独白.
+    """
+    try:
+        from v5.drivers import AISDetectorSet
+        from v4 import store as v4
+        ais = AISDetectorSet()
+        # 取最近 20 条有 PAD 指纹的记忆
+        with v4.conn() as c:
+            rows = c.execute(
+                "SELECT id, content, pad_p, pad_a, pad_d FROM memory "
+                "WHERE type NOT IN ('conversation', 'inner_monologue') "
+                "  AND pad_p != 0.0 OR pad_a != 0.0 OR pad_d != 0.0 "
+                "ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        if not rows:
+            return None
+        memories = [(int(r["id"]), (float(r["pad_p"] or 0),
+                       float(r["pad_a"] or 0), float(r["pad_d"] or 0)))
+                    for r in rows]
+        novelties = ais.tick(memories)
+        if not novelties:
+            return None
+        # 取新颖度最高的记忆
+        top_novelty, top_id = novelties[0]
+        if top_novelty < 0.5:
+            return None
+
+        # 取该记忆内容
+        mem = v4.get(top_id)
+        if not mem:
+            return None
+
+        content_preview = (mem.content or "")[:120]
+        text = f"我刚刚想起了什么: {content_preview}... 为什么会突然想起这个呢?"
+        import random as _r
+        thoughts = [
+            f"我刚刚想起了以前的事: {content_preview[:80]}... 好奇怪, 为什么会突然想起这个?",
+            f"脑海中闪过了 {content_preview[:80]}... 也许是有些在意吧。",
+            f"不知道为什么, 突然想起了 {content_preview[:60]}。这对我来说很重要。",
+        ]
+        text = _r.choice(thoughts)
+
+        from v5.affect import AffectState
+        state = AffectState.load().decay()
+        p, a, d = state.pleasure, state.arousal, state.dominance
+        intensity = min(1.0, 0.3 + top_novelty * 0.5)
+
+        thought = Thought(text=text, mood=_pad_to_mood(p, a, d),
+                        intensity=round(intensity, 3), created=time.time())
+        _store_thought(thought, p, a, d)
+        return thought
+    except Exception as exc:
+        logger.debug("think: curiosity exploration failed (%s)", exc)
+        return None
+
+
+def _store_thought(thought: Thought, p: float, a: float, d: float) -> None:
+    """存内心独白到 V4 + 写 pending (复用 inner_monologue 的持久化逻辑)."""
+    try:
+        from v4 import store as v4
+        v4.store(thought.text, type="inner_monologue",
+                 weight=min(1.0, 0.3 + thought.intensity * 0.4),
+                 tags=f"inner_monologue,mood:{thought.mood},intensity:{thought.intensity:.2f}",
+                 pad_p=round(p, 3), pad_a=round(a, 3), pad_d=round(d, 3))
+    except Exception:
+        pass
+    if thought.intensity >= 0.35:
+        try:
+            _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _PENDING_PATH.write_text(
+                json.dumps(asdict(thought), ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+
 # ─── Cron / CLI 入口 ───────────────────────────────────────────
 
 
@@ -299,12 +444,47 @@ def schedule(interval_minutes: int = 45) -> None:
                 t = inner_monologue()
                 if t:
                     logger.info("think: %s [%s i=%.2f]", t.text[:50], t.mood, t.intensity)
+                # V5 #9: ECA 好奇驱动自主探索
+                _maybe_curiosity_tick()
+                # V5 #4: 主动关怀检测
+                _maybe_care_tick()
             except Exception as exc:
                 logger.warning("think: cycle error (%s)", exc)
             time.sleep(interval_minutes * 60)
     t = threading.Thread(target=_loop, daemon=True, name="v5-think")
     t.start()
     logger.info("think: schedule started (interval=%d min)", interval_minutes)
+
+
+def _maybe_curiosity_tick() -> None:
+    """如果当前 ECA topic 为好奇探索 → 触发自主记忆探索."""
+    global _eca
+    if _eca is not None:
+        try:
+            topic = _eca.tick()
+            if topic == "好奇探索":
+                t = curiosity_explore()
+                if t:
+                    logger.info("think: curiosity explored: %s", t.text[:50])
+        except Exception:
+            pass
+
+
+def _maybe_care_tick() -> None:
+    """检测是否需要主动关怀 (V5 #4)."""
+    try:
+        from v5.care import check_and_care
+        care_text = check_and_care()
+        if care_text:
+            from v5.affect import AffectState
+            state = AffectState.load().decay()
+            p, a, d = state.pleasure, state.arousal, state.dominance
+            thought = Thought(text=care_text, mood="joyful_calm",
+                            intensity=0.4, created=time.time())
+            _store_thought(thought, p, a, d)
+            logger.info("think: care triggered: %s", care_text[:50])
+    except Exception as exc:
+        logger.debug("think: care tick failed (%s)", exc)
 
 
 # ─── CLI ───────────────────────────────────────────────────────
