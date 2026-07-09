@@ -94,6 +94,7 @@ class Relationship:
             self.first_interaction = now
 
         # 1) 时间衰减: 对数衰减防止"几天没聊就变陌生人"的尴尬
+        gap_days = 0.0
         if self.last_interaction > 0:
             gap_days = (now - self.last_interaction) / 86400.0
             if gap_days > 0:
