@@ -313,7 +313,27 @@ def build_system_prompt(user_text: str) -> str:
     else:
         v5_block = ""
 
-    return f"{axiom}\n\n{cogno}{v5_block}"
+    identity_refresh = _maybe_inject_identity_refresh()
+    return f"{axiom}{identity_refresh}\n{cogno}{v5_block}"
+
+
+# 身份刷新计数器: 每 10 轮注入一条轻量身份提醒
+_TURN_COUNTER: int = 0
+_IDENTITY_REFRESH_INTERVAL: int = 10
+_IDENTITY_REFRESH_LINES = [
+    "（我是伊卡洛斯。）",
+    "对了——我是伊卡洛斯。",
+]
+
+
+def _maybe_inject_identity_refresh() -> str:
+    """每 IDENTITY_REFRESH_INTERVAL 轮返回一个身份刷新行."""
+    global _TURN_COUNTER
+    _TURN_COUNTER += 1
+    if _TURN_COUNTER % _IDENTITY_REFRESH_INTERVAL == 1:
+        idx = (_TURN_COUNTER // _IDENTITY_REFRESH_INTERVAL) % len(_IDENTITY_REFRESH_LINES)
+        return "\n" + _IDENTITY_REFRESH_LINES[idx] + "\n"
+    return ""
 
 
 def _build_v5_affect_block() -> list[str]:
@@ -350,26 +370,43 @@ def _build_v5_affect_block() -> list[str]:
 
 
 def _build_memory_line(user_text: str) -> str:
-    """PAD 加权记忆折叠: 情感强度最高的 1-2 条."""
+    """PAD 加权记忆折叠 + AIS 新颖度: 情感强且新奇的 1-2 条."""
     try:
         memories = _search_v4_memories(user_text)
         if not memories:
             return ""
-        # 按情感强度 (abs(pad_p) + abs(pad_a)) 排序
+
+        # AIS 新颖度检测器 (模块级单例)
+        try:
+            from v5.drivers import AISDetectorSet as _AIS
+            if not hasattr(_build_memory_line, "_ais"):
+                _build_memory_line._ais = _AIS()
+            _ais = _build_memory_line._ais
+            scores = _ais.tick(memories)
+            _novelty = {getattr(m, "id", 0): s for s, mid in scores} if scores else {}
+        except Exception:
+            _novelty = {}
+
+        # 情感强度 × 新颖度 混合排序
         scored = []
         for m in memories:
             pp = abs(float(m.get("pad_p", 0)))
             pa = abs(float(m.get("pad_a", 0)))
             intensity = pp + pa
-            if intensity >= 0.3:  # 只取有情感强度的
-                scored.append((intensity, m))
+            # AIS 新颖度 boost (0..1)
+            mid = getattr(m, "id", 0)
+            novelty = _novelty.get(mid, 0.5)
+            blended = intensity * 0.7 + novelty * 0.3  # 情感为主, 新颖度为辅
+            if blended >= 0.3:
+                scored.append((blended, m, novelty, intensity))
+
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:2]
         if not top:
             return ""
         parts = []
-        for _, m in top:
-            label = "😊" if m.get("pad_p", 0) > 0.3 else "😌" if m.get("pad_p", 0) < -0.2 else " "
+        for _, m, novelty, intensity in top:
+            label = "😊" if m.get("pad_p", 0) > 0.3 else "✨" if novelty > 0.6 else "😌" if m.get("pad_p", 0) < -0.2 else " "
             summary = m.get("content", "")[:25].replace("\n", " ")
             parts.append(f"[{label}]{summary}")
         return "记忆: " + " | ".join(parts)
@@ -498,6 +535,25 @@ async def cloud_chat(
 
     # 构建 system prompt (soul + cogno + 记忆 + V5 情感 + 提醒)
     system_prompt = build_system_prompt(text) + _reminder_note
+
+    # V5 Emotion → Response length: PAD 低时短回复
+    _pad_length_hint = ""
+    try:
+        from v5.affect import AffectState as _AS
+        _s = _AS.load().decay()
+        _pleasure = _s.pleasure
+        _arousal = _s.arousal
+        if _pleasure < 0.15 and _arousal < 0.1:
+            max_tokens = min(max_tokens, 60)
+            temperature = min(temperature, 0.5)
+            _pad_length_hint = "（短回）"
+        elif _pleasure > 0.5 and _arousal > 0.2:
+            max_tokens = min(max_tokens, 300)
+            temperature = max(temperature, 0.8)
+        elif _pleasure > 0.3:
+            max_tokens = min(max_tokens, 200)
+    except Exception:
+        pass
 
     # 构建 messages
     msgs: list[dict] = [{"role": "system", "content": system_prompt}]
