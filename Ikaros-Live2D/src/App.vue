@@ -29,24 +29,8 @@
         <div class="mode-toggle" @click.stop="toggleMic" :class="{ active: micActive }" title="麦克风聆听">
           🎤
         </div>
-        <div class="mode-toggle" @click.stop="monitorVisible = !monitorVisible" :class="{ active: monitorVisible }" title="监控面板">
-          📊
-        </div>
       </div>
-
-      <!-- Monitor panel -->
-      <MonitorPanel
-        :visible="monitorVisible"
-        :state="state"
-        :activity="activityText"
-        :stt-status="monitorData.stt"
-        :tts-status="monitorData.tts"
-        :llm-status="monitorData.llm"
-        :live2d-status="monitorData.live2d"
-        :events="monitorEvents"
-        @close="monitorVisible = false"
-      />
-
+      <!-- Monitor panel now in independent window (tray → 📊 监控面板) -->
       <!-- Settings panel -->
       <SettingsPanel
         :visible="settingsVisible"
@@ -89,7 +73,6 @@ import { ref, computed, onMounted, onUnmounted, watch, type Ref } from 'vue'
 import Live2DCanvas from './components/Live2DCanvas.vue'
 import StatusBar from './components/StatusBar.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import MonitorPanel from './components/MonitorPanel.vue'
 import ChatDock from './components/ChatDock.vue'
 import FloatBall from './components/FloatBall.vue'
 import { useMouseTracking } from './composables/useMouseTracking'
@@ -98,7 +81,7 @@ import { useLipSync } from './composables/useLipSync'
 import { useSpeechInput } from './composables/useSpeechInput'
 import {
   selectedMic, selectedSpeaker, setSelectedMic, setSelectedSpeaker,
-  labelForMic, labelForSpeaker, enumerateAudioDevices,
+  labelForMic, labelForSpeaker, enumerateAudioDevices, acquireMediaPermission,
 } from './composables/useAudioDevices'
 import { loadConfig, saveConfig, type PetConfig } from './services/pet-config'
 import { NeuroService, type NeuroStatus } from './services/neuro'
@@ -263,8 +246,7 @@ function onMouseLeave() {
   dragStarted = false
 }
 
-// ─── Monitor Panel ───
-const monitorVisible = ref(false)
+// ─── Settings Panel ───
 const settingsVisible = ref(false)
 
 // ─── Neuro / PATIENCE ───
@@ -283,9 +265,9 @@ function onContextChange(ctx: WindowContext) {
   const info = getCategoryInfo(ctx.category)
   // Update status bar with context info
   contextOverride.value = `${info.emoji} ${info.label}`
-  // Show bubble on category change
-  showBubble(`${info.emoji} ${info.label}`, 2000)
-  addMonitorEvent(info.emoji, `${ctx.processName} — ${info.label}`)
+  // Context change — only log to monitor, don't show bubble
+  // (voice-ws activity messages provide the natural-language bubble)
+  addMonitorEvent(info.emoji, `${ctx.processName} → ${info.label}`)
 }
 
 function onNeuroStatusChange(status: NeuroStatus) {
@@ -366,8 +348,10 @@ async function toggleFloatBall() {
 }
 
 function onFloatBallContext(_pos: { x: number; y: number }) {
-  // Context menu moved to system tray — toggle monitor instead
-  monitorVisible.value = !monitorVisible.value
+  // Open independent monitor window via Tauri
+  if (tauriInvoke) {
+    tauriInvoke('toggle_monitor_window').catch(() => {})
+  }
 }
 
 // ─── LLM Model ───
@@ -464,6 +448,7 @@ function onConfigUpdate(newConfig: PetConfig) {
 
 // ─── Bubble ───
 let bubbleTimer: ReturnType<typeof setTimeout> | null = null
+let streamAccum = ''
 
 function showBubble(text: string, duration = 3000) {
   bubbleText.value = text
@@ -489,21 +474,20 @@ function connectWebSocket() {
     // 二进制帧 = TTS 音频 (Hermes/edge 产出的 mp3/wav)。原代码在此直接 return
     // 丢弃, 导致 TTS 永不发声 —— 现在真正播放。
     if (event.data instanceof ArrayBuffer) {
-      playTtsAudio(new Blob([event.data]))
+      enqueueTtsAudio(new Blob([event.data]))
       return
     }
     try {
       const msg = JSON.parse(event.data)
       switch (msg.type) {
         case 'transcription':
-          // 真实识别到用户语音 → 若正在 TTS 播放则打断 (barge-in)
-          if (state.value === 'speaking') stopTtsAudio()
+          // 真实识别到用户语音 → 不再打断正在播放的 TTS (按顺序播放)
           showBubble(`👤 ${msg.text}`, 3000)
           addMonitorEvent('🎤', msg.text)
           neuroService?.setState('listening')
           break
         case 'thinking':
-          if (state.value === 'speaking') stopTtsAudio()
+          // 不再打断播放: 旧音频继续播完, 新音频入队后排其后
           state.value = 'thinking'
           monitorData.value.llm = { status: 'thinking', label: 'LLM' }
           addMonitorEvent('🧠', '思考中...')
@@ -541,8 +525,21 @@ function connectWebSocket() {
           showBubble(`🎤 ${msg.text}`, 1500)
           addMonitorEvent('🎤', msg.text)
           break
+        case 'delta':
+          // 流式首字上屏 (对标 N.E.K.O gemini_response)
+          // is_first 时重置累积气泡, 把宠物状态切到 speaking (清 thinking)
+          if (msg.is_first) {
+            streamAccum = ''
+            state.value = 'speaking'
+            monitorData.value.tts = { status: 'speaking', label: 'TTS' }
+            neuroService?.setState('speaking')
+          }
+          streamAccum += msg.text || ''
+          showBubble(streamAccum, 5000)
+          break
         case 'stop_tts':
-          // 后端下发: 检测到用户插话, 立即中断旧 TTS
+          // 显式中断: 清空队列并停掉当前播放 (正常对话不再自动下发,
+          // 仅作手动 "闭嘴" 逃生口保留)
           stopTtsAudio()
           break
         case 'emotion':
@@ -581,31 +578,66 @@ function connectWebSocket() {
   }
 }
 
-// ─── TTS 音频播放 (二进制帧 → Blob → <audio>) ───
-let _ttsAudio: HTMLAudioElement | null = null
-function playTtsAudio(blob: Blob) {
-  const url = URL.createObjectURL(blob)
-  if (!_ttsAudio) {
-    _ttsAudio = new Audio()
+// ─── TTS 音频队列 (二进制帧 → 顺序播放, 不打断) ───
+// 每句 TTS 是一个独立的完整音频 blob; 全部入队, 由播放循环逐个播完,
+// 新的音频不再覆盖/打断正在播放的旧音频 (满足"按顺序逐个播放完成")。
+let _ttsQueue: Blob[] = []
+let _ttsElem: HTMLAudioElement | null = null
+let _ttsBusy = false
+let _ttsCurUrl: string | null = null
+
+function _ensureTtsElem(): HTMLAudioElement {
+  if (!_ttsElem) {
+    _ttsElem = new Audio()
     // 套用已选扬声器 (系统默认则不动)
-    if (selectedSpeaker.value && selectedSpeaker.value !== 'default' && typeof (_ttsAudio as any).setSinkId === 'function') {
-      (_ttsAudio as any).setSinkId(selectedSpeaker.value).catch(() => {})
+    if (selectedSpeaker.value && selectedSpeaker.value !== 'default' && typeof (_ttsElem as any).setSinkId === 'function') {
+      (_ttsElem as any).setSinkId(selectedSpeaker.value).catch(() => {})
     }
+    _ttsElem.addEventListener('ended', _ttsOnEnded)
+    _ttsElem.addEventListener('error', _ttsOnEnded)
   }
-  _ttsAudio.src = url
-  _ttsAudio.play().catch((e: unknown) => {
-    console.warn('[TTS] play failed:', e)
-  })
-  // 延迟释放 object URL, 等播放已启动
-  setTimeout(() => URL.revokeObjectURL(url), 30000)
+  return _ttsElem
 }
 
-/** 立即中断当前 TTS 播放 (用于自动打断 barge-in)。 */
-function stopTtsAudio() {
-  if (_ttsAudio) {
-    try { _ttsAudio.pause() } catch {}
-    try { _ttsAudio.currentTime = 0 } catch {}
+/** 新音频入队 (不打断正在播放的) */
+function enqueueTtsAudio(blob: Blob) {
+  _ttsQueue.push(blob)
+  _pumpTtsQueue()
+}
+
+function _pumpTtsQueue() {
+  if (_ttsBusy) return
+  const blob = _ttsQueue.shift()
+  if (!blob) return
+  _ttsBusy = true
+  if (_ttsCurUrl) {
+    URL.revokeObjectURL(_ttsCurUrl)
+    _ttsCurUrl = null
   }
+  const url = URL.createObjectURL(blob)
+  _ttsCurUrl = url
+  const elem = _ensureTtsElem()
+  elem.src = url
+  elem.play().catch((e: unknown) => {
+    console.warn('[TTS] play failed:', e)
+    _ttsBusy = false
+    _pumpTtsQueue()
+  })
+}
+
+function _ttsOnEnded() {
+  _ttsBusy = false
+  _pumpTtsQueue()
+}
+
+/** 显式中断: 清空队列并停掉当前播放 (手动 "闭嘴" 用, 正常对话不再自动触发) */
+function stopTtsAudio() {
+  _ttsQueue = []
+  if (_ttsElem) {
+    try { _ttsElem.pause() } catch {}
+    try { _ttsElem.currentTime = 0 } catch {}
+  }
+  _ttsBusy = false
 }
 
 // ─── Speech input (microphone → WS PCM → server local STT) ───
@@ -768,6 +800,8 @@ async function syncTrayMenu() {
 async function pushAudioDevicesToTray() {
   if (!tauriInvoke) return
   try {
+    // 确保媒体权限已获取 (否则 enumerateDevices 只返回默认设备)
+    await acquireMediaPermission()
     const { mics, speakers } = await enumerateAudioDevices()
     await tauriInvoke('update_audio_devices', {
       mics: mics.map((d) => [d.deviceId, d.label]),
@@ -795,9 +829,9 @@ async function selectMic(dev: string) {
 async function selectSpeaker(dev: string) {
   setSelectedSpeaker(dev)
   // 套用到当前 TTS 播放元素 (系统默认则不动)
-  if (_ttsAudio && typeof (_ttsAudio as any).setSinkId === 'function') {
+  if (_ttsElem && typeof (_ttsElem as any).setSinkId === 'function') {
     try {
-      if (dev !== 'default') await (_ttsAudio as any).setSinkId(dev)
+      if (dev !== 'default') await (_ttsElem as any).setSinkId(dev)
     } catch (e) {
       console.warn('[App] setSinkId failed:', e)
     }
@@ -808,6 +842,7 @@ async function selectSpeaker(dev: string) {
 
 // ─── Lifecycle ───
 let healthTimer: ReturnType<typeof setInterval> | null = null
+let devicePollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
   // ── Ensure Tauri APIs are loaded ──
@@ -988,9 +1023,11 @@ onMounted(async () => {
 
   // ── Audio device enumeration → push to tray menu (so 麦克风/扬声器 submenus populate) ──
   pushAudioDevicesToTray()
+  // devicechange 在某些 WebView2 里不可靠, 加 15s 轮询兜底
   if (navigator.mediaDevices?.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', () => pushAudioDevicesToTray())
   }
+  devicePollTimer = setInterval(() => pushAudioDevicesToTray(), 15000)
 
   // Click-through is now handled by polling-based mouse tracking
   // Initial state: cursor events pass through transparent areas
@@ -1009,6 +1046,7 @@ onUnmounted(() => {
   if (emotionSystem) emotionSystem.stop()
   if (vlmService) vlmService.stop()
   if (contextEngine) contextEngine.stop()
+  if (devicePollTimer) clearInterval(devicePollTimer)
 })
 </script>
 

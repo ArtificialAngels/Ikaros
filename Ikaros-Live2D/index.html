@@ -5,6 +5,34 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>伊卡洛斯</title>
+    <script>
+      // 诊断层: 捕获资源加载 / JS / Promise 错误并显示在屏幕上 (正常时不显示)
+      (function () {
+        function show(msg) {
+          try {
+            var el = document.getElementById('boot-error');
+            if (!el) {
+              el = document.createElement('div');
+              el.id = 'boot-error';
+              el.style.cssText = 'position:fixed;left:6px;top:6px;right:6px;z-index:2147483647;background:rgba(176,0,0,.92);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:8px 10px;border-radius:6px;white-space:pre-wrap;word-break:break-all;';
+              (document.body || document.documentElement).appendChild(el);
+            }
+            el.textContent = '⚠️ ' + msg;
+          } catch (e) {}
+        }
+        window.addEventListener('error', function (e) {
+          if (e && e.target && e.target !== window && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK' || e.target.tagName === 'IMG')) {
+            show('资源加载失败: ' + (e.target.src || e.target.href || '?'));
+          } else if (e && e.message) {
+            show('JS错误: ' + e.message + (e.filename ? (' @ ' + e.filename + ':' + e.lineno) : ''));
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason;
+          show('Promise错误: ' + (r && (r.stack || r.message) ? (r.stack || r.message) : String(r)));
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

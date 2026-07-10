@@ -10,8 +10,12 @@ export interface SpeechInputHooks {
 
 /**
  * 前端语音采集: getUserMedia → 重采样 16k mono Int16 → WebSocket 二进制帧。
- * 后端 (ikaros-voice-ws :7870) 用本地 vosk 流式识别; 前端用简单能量 VAD,
- * 静音超时后发送 {action:end_utterance} 触发一句话的最终识别并走 LLM/TTS。
+ * 后端 (ikaros-voice-ws :7870) 用本地 SenseVoice/Whisper 终句高精度识别;
+ * 前端用自适应能量 VAD, 静音超时后发送 {action:end_utterance} 触发一句话的最终识别。
+ *
+ * B1: 优先用 new AudioContext({sampleRate:16000}) 让浏览器原生重采样
+ *     (高质量 sinc, 无混叠), 不 honoring 时回退线性插值。
+ * B2: 自适应噪声底 + 迟滞双阈值 + 尾静挂起, 改善句边界。
  */
 export function useSpeechInput(hooks: SpeechInputHooks) {
   const active = ref(false)
@@ -25,10 +29,12 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
   let source: MediaStreamAudioSourceNode | null = null
   let processor: ScriptProcessorNode | null = null
   let gain: GainNode | null = null
+  // B2: 自适应 VAD 状态
   let speaking = false
   let lastSpeech = 0
-  const SILENCE_MS = 1200
-  const RMS_THRESHOLD = 0.012
+  let noiseFloor = 0.01 // 长期低能量帧的指数滑动均值 (噪声底估计)
+  const SILENCE_MS = 1200 // 尾静挂起: 超过此时长无语音才判定句尾
+  const RMS_ABS_MIN = 0.008 // 绝对下限, 防止噪声底被压到 0
   const muted = ref(false)
 
   function micErrorText(e: any): string {
@@ -63,9 +69,10 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
       hooks.onError?.(error.value)
       return
     }
-    audioCtx = new AudioContext()
-    const targetRate = 16000
-    const ratio = audioCtx.sampleRate / targetRate
+    // B1: 优先创建 16k AudioContext, 让浏览器原生重采样 (高质量 sinc, 无混叠)
+    audioCtx = new AudioContext({ sampleRate: 16000 })
+    const nativeRate = audioCtx.sampleRate // 浏览器可能不 honor 16k, 回退判断
+    const useNative = nativeRate === 16000
     source = audioCtx.createMediaStreamSource(stream)
     processor = audioCtx.createScriptProcessor(4096, 1, 1)
     gain = audioCtx.createGain()
@@ -73,34 +80,51 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
 
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
       if (muted.value) return
-      const input = e.inputBuffer.getChannelData(0)
-      // 重采样到 16k mono Int16
-      const outLen = Math.floor(input.length / ratio)
-      const out = new Int16Array(outLen)
-      for (let i = 0; i < outLen; i++) {
-        const pos = i * ratio
-        const i0 = Math.floor(pos)
-        const frac = pos - i0
-        const s0 = input[i0] ?? 0
-        const s1 = input[i0 + 1] ?? 0
-        const s = s0 + (s1 - s0) * frac
-        out[i] = Math.max(-1, Math.min(1, s)) * 0x7fff
+      const input = e.inputBuffer.getChannelData(0) // 原生 16k 时为 16k 信号
+      let pcm16: Int16Array
+      if (useNative) {
+        // B1: 无需重采样, 直接量化为 16k mono Int16
+        pcm16 = new Int16Array(input.length)
+        for (let i = 0; i < input.length; i++) {
+          pcm16[i] = Math.max(-1, Math.min(1, input[i])) * 0x7fff
+        }
+      } else {
+        // B1 回退: 线性插值重采样到 16k (仅在不 honor 16k 时触发)
+        const ratio = nativeRate / 16000
+        const outLen = Math.floor(input.length / ratio)
+        pcm16 = new Int16Array(outLen)
+        for (let i = 0; i < outLen; i++) {
+          const pos = i * ratio
+          const i0 = Math.floor(pos)
+          const frac = pos - i0
+          const s0 = input[i0] ?? 0
+          const s1 = input[i0 + 1] ?? 0
+          const s = s0 + (s1 - s0) * frac
+          pcm16[i] = Math.max(-1, Math.min(1, s)) * 0x7fff
+        }
       }
-      // 简单能量 VAD
+      // B2: 自适应 VAD — 在 (16k) 缓冲上算 RMS
       let sum = 0
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i]
       const rms = Math.sqrt(sum / input.length)
       const now = Date.now()
-      if (rms > RMS_THRESHOLD) {
+      // 噪声底: 仅当能量明显低于当前底时缓慢下探, 避免被短暂静音拉低
+      if (rms < noiseFloor * 2.5) {
+        noiseFloor = noiseFloor * 0.999 + rms * 0.001
+      }
+      const startTh = Math.max(RMS_ABS_MIN, noiseFloor * 1.8) // 起音阈值(迟滞上沿)
+      const stopTh = Math.max(RMS_ABS_MIN * 0.5, noiseFloor * 1.2) // 止音阈值(迟滞下沿, 更低)
+      if (rms > startTh) {
         speaking = true
         lastSpeech = now
       } else if (speaking && now - lastSpeech > SILENCE_MS) {
         speaking = false
+        noiseFloor = Math.max(RMS_ABS_MIN, noiseFloor * 0.95) // 句尾下探重置, 下次更灵敏
         sendEndUtterance()
       }
       const ws = hooks.ws()
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(out.buffer)
+        ws.send(pcm16.buffer)
       }
     }
 
@@ -140,6 +164,7 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
     source = null
     audioCtx = null
     speaking = false
+    noiseFloor = 0.01
     active.value = false
     hooks.onStatus?.(false)
   }

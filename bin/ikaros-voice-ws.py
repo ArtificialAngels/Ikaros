@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -238,12 +239,15 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
     return sent_count
 
 
-async def _call_llm(prompt: str, cogno_prefix: str) -> str:
-    """cloud_chat → :8080 qwen3-8b fallback (镜像 ikaros-repl 真物)."""
+async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None) -> str:
+    """cloud_chat → :8080 qwen3-8b fallback (镜像 ikaros-repl 真物).
+
+    on_delta: 流式回调 (逐 token). 传了就启用 cloud_chat 流式首字上屏。
+    """
     cc = _load_cloud_chat()
     if cc is not None:
         try:
-            res = cc(prompt, session_id="ikaros_live2d_ws")
+            res = cc(prompt, session_id="ikaros_live2d_ws", on_delta=on_delta)
             if asyncio.iscoroutine(res):
                 res = await res
             if isinstance(res, dict):
@@ -315,16 +319,38 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
             bits.append(f"事件:{event}")
         cogno_prefix += "\n[" + " | ".join(bits) + "]"
 
-    # 4) LLM 真答
+    # 4) LLM 真答 (流式: 首 token 即推 delta, 气泡逐字上屏)
     t0 = time.time()
+    _stream_parts: list[str] = []
+    _first_delta_sent = False
+
+    async def _on_delta(chunk: str):
+        nonlocal _first_delta_sent
+        if state is not None and state.get("utt_id", 0) != my_id:
+            return  # 已被打断, 丢弃后续增量
+        _stream_parts.append(chunk)
+        is_first = not _first_delta_sent
+        _first_delta_sent = True
+        await ws.send(json.dumps({
+            "type": "delta",
+            "text": chunk,
+            "is_first": is_first,
+        }))
+
     try:
-        reply = await _call_llm(user_text, cogno_prefix)
+        reply = await _call_llm(user_text, cogno_prefix, on_delta=_on_delta)
     except Exception as e:
         log.warning("LLM call failed: %s", e)
         await ws.send(json.dumps({"type": "error",
                                    "message": f"LLM: {type(e).__name__}"}))
         return
     dt_ms = int((time.time() - t0) * 1000)
+
+    # 流式未触发 (无 on_delta 支持 / 降级路径) → 用完整 reply 兜底推首块
+    if not _first_delta_sent and reply:
+        await ws.send(json.dumps({
+            "type": "delta", "text": reply, "is_first": True,
+        }))
 
     # 又被打断? (LLM 调用期间可能来了新 utterance)
     if state is not None and state.get("utt_id", 0) != my_id:
@@ -458,13 +484,28 @@ def _get_vosk_model():
 
 _SENSEVOICE = None  # 惰性加载的高精度离线 STT (sherpa-onnx SenseVoice)
 
+# SenseVoice 输出 text 自带语言/情绪/事件标签, 如 "<|zh|><|NEUTRAL|><|Speech|>你好"
+# (sherpa-onnx 不会自动剥离, 只把 emotion/event 作为独立字段; text 仍含前缀标签).
+# 这些标签若直接进 chat 会污染 LLM 上下文 → 终句前必须剥掉 (A1 修复丢分④).
+_SV_TAG_RE = re.compile(r"<\|[^|]*\|>")
+
+
+def _strip_sv_tags(text: str) -> str:
+    """剥掉 SenseVoice 的 <|zh|><|NEUTRAL|><|Speech|> 类标签并规整空白."""
+    if not text:
+        return ""
+    text = _SV_TAG_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 
 def _get_sensevoice():
     """惰性加载本地 sherpa-onnx SenseVoice 高精度离线 STT。
 
     中文多语种, 自带情绪/事件标签 + ITN 逆文本规整, 精度远高于 vosk
     small-cn。模型目录默认 E:/Ikaros/data/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue
-    (model.int8.onnx + tokens.txt), 可用 IKAROS_SENSEVOICE_DIR 覆盖。
+    (model.onnx fp32 + model.int8.onnx int8 + tokens.txt), 可用 IKAROS_SENSEVOICE_DIR 覆盖。
+    默认优先 fp32 (model.onnx, 精度最高, 但多占 ~2GB RAM), 缺失时回退 int8。
     缺失/不可用时返回 None (降级到 vosk) —— 借鉴自 exProject/MewCo-AI/asr.py。
     """
     global _SENSEVOICE
@@ -487,9 +528,10 @@ def _get_sensevoice():
     if not os.path.isdir(model_dir):
         log.info("SenseVoice model not found at %s (降级 vosk)", model_dir)
         return None
-    model_file = os.path.join(model_dir, "model.int8.onnx")
+    # C1: 默认优先 fp32 (精度高), 缺失时回退 int8 (省内存)
+    model_file = os.path.join(model_dir, "model.onnx")
     if not os.path.isfile(model_file):
-        model_file = os.path.join(model_dir, "model.onnx")
+        model_file = os.path.join(model_dir, "model.int8.onnx")
     tokens = os.path.join(model_dir, "tokens.txt")
     if not (os.path.isfile(model_file) and os.path.isfile(tokens)):
         log.warning("SenseVoice model files incomplete in %s", model_dir)
@@ -524,13 +566,95 @@ def _sensevoice_recognize(pcm: bytes):
         stream.accept_waveform(16000, audio)
         sv.decode_stream(stream)
         res = json.loads(str(stream.result))
-        text = (res.get("text") or "").strip()
-        emotion = (res.get("emotion") or "").strip("<|>")
-        event = (res.get("event") or "").strip("<|>")
+        # A1: 剥掉 <|zh|><|NEUTRAL|><|Speech|> 等标签, 避免污染 chat 文本
+        text = _strip_sv_tags(res.get("text") or "")
+        # emotion/event 同理做防御性清洗 (可能带 <|...|> 或含多个标签)
+        emotion = (res.get("emotion") or "").replace("<|", "").replace("|>", "").strip()
+        event = (res.get("event") or "").replace("<|", "").replace("|>", "").strip()
         return text, emotion, event
     except Exception as e:
         log.debug("SenseVoice recognize failed: %s", e)
         return "", "", ""
+
+
+# C2: 可选 Whisper 后端 (sherpa-onnx Whisper). 仅当模型目录存在时启用,
+# 否则保持 None/False 不阻塞, 回退 SenseVoice. 本地高精度, 中文口音/专有名词
+# 更稳, 但模型较大 (~1.5GB), 需自行下载到 IKAROS_WHISPER_DIR 或
+# data/models/sherpa-onnx-whisper-* 目录. 用 False 哨兵缓存"探测过且不存在".
+_WHISPER = None
+
+
+def _get_whisper():
+    """惰性加载本地 sherpa-onnx Whisper 高精度离线 STT (可选).
+
+    优先级高于 SenseVoice (口音/专有名词更稳), 但模型重 (~1.5GB) 且需自行
+    下载, 故仅当模型目录存在时启用; 否则返回 False 哨兵, 不重复探测。
+    """
+    global _WHISPER
+    if _WHISPER is not None:
+        return _WHISPER if _WHISPER is not False else None
+    try:
+        import sherpa_onnx  # noqa: F401
+    except Exception:
+        _WHISPER = False
+        return None
+    if not hasattr(sherpa_onnx.OfflineRecognizer, "from_whisper"):
+        _WHISPER = False
+        return None
+    model_dir = os.environ.get("IKAROS_WHISPER_DIR")
+    if not model_dir:
+        import glob
+        base = os.environ.get(
+            "IKAROS_DATA_MODELS", os.path.join(_ROOT, "data", "models")
+        )
+        cand = sorted(glob.glob(os.path.join(base, "sherpa-onnx-whisper-*")))
+        model_dir = cand[0] if cand else None
+    if not model_dir or not os.path.isdir(model_dir):
+        _WHISPER = False
+        return None
+    enc = os.path.join(model_dir, "encoder.int8.onnx")
+    if not os.path.isfile(enc):
+        enc = os.path.join(model_dir, "encoder.onnx")
+    dec = os.path.join(model_dir, "decoder.int8.onnx")
+    if not os.path.isfile(dec):
+        dec = os.path.join(model_dir, "decoder.onnx")
+    tokens = os.path.join(model_dir, "tokens.txt")
+    if not (os.path.isfile(enc) and os.path.isfile(dec) and os.path.isfile(tokens)):
+        log.debug("Whisper model incomplete in %s (跳过)", model_dir)
+        _WHISPER = False
+        return None
+    try:
+        _WHISPER = sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=enc,
+            decoder=dec,
+            tokens=tokens,
+            language="zh",
+            num_threads=max(1, (os.cpu_count() or 2) - 1),
+        )
+        log.info("Whisper loaded: %s", model_dir)
+    except Exception as e:
+        log.warning("Whisper load failed: %s", e)
+        _WHISPER = False
+        return None
+    return _WHISPER
+
+
+def _whisper_recognize(pcm: bytes) -> str:
+    """用 Whisper 对一段 16k mono Int16 PCM 做识别. 失败/未启用返回 ''."""
+    wh = _get_whisper()
+    if wh is None or not pcm:
+        return ""
+    try:
+        import numpy as np
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        stream = wh.create_stream()
+        stream.accept_waveform(16000, audio)
+        wh.decode_stream(stream)
+        res = json.loads(str(stream.result))
+        return _strip_sv_tags(res.get("text") or "")
+    except Exception as e:
+        log.debug("Whisper recognize failed: %s", e)
+        return ""
 
 
 async def _serve(ws, path=None):
@@ -563,11 +687,8 @@ async def _serve(ws, path=None):
     def _new_utt():
         st["utt_id"] += 1
         my_id = st["utt_id"]
-        if st["inflight"] is not None:
-            # barge-in: 上一轮仍在生成/播放 → 先让前端停掉旧 TTS
-            asyncio.ensure_future(
-                ws.send(json.dumps({"type": "stop_tts"}))
-            )
+        # 不再强制打断旧 TTS: 前端按队列顺序逐个播完,
+        # 新音频自然排在旧音频之后 (满足"按顺序逐个播放完成")。
         st["inflight"] = my_id
         return my_id
 
@@ -575,10 +696,11 @@ async def _serve(ws, path=None):
         async for raw in ws:
             if isinstance(raw, bytes):
                 # 二进制帧 = 前端采集的 16k mono Int16 PCM (STT 在 server 本地做)
-                # 音频预处理: 去噪 + 归一化 (移植自 N.E.K.O 思路, <1ms)
+                # A2 修复丢分③: 音频预处理(去DC+RMS归一+噪声门)只用于 vosk 流式
+                # partial 回声; SenseVoice 终句识别用【原始 PCM】, 避免预处理把词间
+                # 静音放大/噪声门泄漏/短帧不连续等畸变带入最终识别信号.
                 prep = _get_audio_prep()
-                if prep:
-                    raw = prep.process(raw)
+                processed = prep.process(raw) if prep else raw
                 model = _get_vosk_model()
                 if model is not None:
                     if st["rec"] is None:
@@ -586,14 +708,14 @@ async def _serve(ws, path=None):
                         st["rec"] = KaldiRecognizer(model, 16000)
                     # 同步调用: KaldiRecognizer 非线程安全, 音频帧小(≈256ms)不阻塞循环
                     try:
-                        st["rec"].AcceptWaveform(raw)
+                        st["rec"].AcceptWaveform(processed)
                         partial = json.loads(st["rec"].PartialResult()).get("partial", "")
                     except Exception as e:
                         log.debug("AcceptWaveform failed: %s", e)
                         partial = ""
                     if partial:
                         await ws.send(json.dumps({"type": "partial", "text": partial}))
-                # 累积原始 PCM, 供 SenseVoice 终句高精度精修
+                # 累积【原始】PCM, 供 SenseVoice 终句高精度精修 (不经预处理)
                 st["pcm"].extend(raw)
                 continue
 
@@ -619,11 +741,18 @@ async def _serve(ws, path=None):
                 except Exception:
                     pass
                 sv = _get_sensevoice()
-                if _get_vosk_model() is None and sv is None:
+                wh = _get_whisper()
+                if _get_vosk_model() is None and sv is None and wh is None:
                     await ws.send(json.dumps({
                         "type": "stt_status",
                         "status": "unavailable",
                         "message": "本地语音识别未就绪",
+                    }))
+                elif wh is not None:
+                    await ws.send(json.dumps({
+                        "type": "stt_status",
+                        "status": "ready",
+                        "message": "高精度语音识别已就绪 (Whisper)",
                     }))
                 elif sv is not None:
                     await ws.send(json.dumps({
@@ -669,9 +798,14 @@ async def _serve(ws, path=None):
                     except Exception:
                         vosk_final = ""
                     st["rec"] = None
-                text, emotion, event = _sensevoice_recognize(bytes(st["pcm"]))
+                # C2: 优先级 Whisper > SenseVoice > vosk final
+                text, emotion, event = "", "", ""
+                wh_text = _whisper_recognize(bytes(st["pcm"]))
+                if wh_text:
+                    text = wh_text
+                else:
+                    text, emotion, event = _sensevoice_recognize(bytes(st["pcm"]))
                 st["pcm"] = bytearray()
-                # SenseVoice 精度高, 优先; 缺失时回退 vosk final
                 final_text = text if text else vosk_final
                 if not final_text:
                     continue
