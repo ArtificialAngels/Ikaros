@@ -674,14 +674,34 @@ async def cloud_chat(
     # 监控: 用户输入
     _push_monitor("user_msg", text=text[:200], session_id=session_id)
 
-    # 尝试 DeepSeek → minimax
+    # ── 尝试 Hermes Agent (优先) → DeepSeek → minimax → local ──
     deepseek_key = _get_api_key(env_map, "DEEPSEEK_API_KEY")
     minimax_key = _get_api_key(env_map, "MINIMAX_CN_API_KEY")
 
     reply: str | None = None
     errors: list[str] = []
 
-    if deepseek_key:
+    # ── 主路径: Hermes Agent 内循环 (工具/技能/子代理) ──
+    try:
+        _hermes = str(_HERMES_ROOT / "hermes-agent" / "venv" / "Scripts" / "hermes.exe")
+        if Path(_hermes).is_file():
+            import subprocess as _sp
+            _result = _sp.run(
+                [_hermes, "chat", "-q", user_content[:400], "--max-turns", "5"],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(_HERMES_ROOT),
+            )
+            if _result.stdout.strip() and _result.returncode == 0:
+                reply = _result.stdout.strip()
+                log.info("hermes agent OK (%d chars)", len(reply))
+            else:
+                raise RuntimeError(_result.stderr[:200] or "hermes agent empty reply")
+    except Exception as e:
+        log.warning("hermes agent failed: %s — falling back to direct API", e)
+        errors.append(f"hermes: {e}")
+
+    # ── 回退: 直调 DeepSeek / MiniMax ──
+    if reply is None and deepseek_key:
         try:
             reply = await _call_openai_compatible(
                 base_url="https://api.deepseek.com/v1",
