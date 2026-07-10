@@ -17,7 +17,12 @@ if errorlevel 1 (
 echo [sleep] Stopping all Ikaros processes...
 echo.
 
-REM ---- Step 0: Stop Memory Watchdog (stop memory first, then pet) ----
+REM ---- Step 0: Flush V5 affect state (save emotional drift to disk) ----
+echo [0] Flushing V5 affect state...
+"%IKAROS_PYTHON%" -c "import sys; sys.path.insert(0, r'%IKAROS_ROOT%\Ikaros-memory'); from v5.affect import flush; flush()" >nul 2>&1
+echo       done
+
+REM ---- Step 0b: Stop Memory Watchdog ----
 echo [0] Stopping Memory Watchdog...
 "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --stop >nul 2>&1
 echo       done

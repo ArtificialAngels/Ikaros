@@ -172,6 +172,14 @@ class AffectState:
         p = _BASELINE_P + (self.pleasure - _BASELINE_P) * math.exp(-ln2 * dt_min / _HALF_LIFE_P)
         a = _BASELINE_A + (self.arousal - _BASELINE_A) * math.exp(-ln2 * dt_min / _HALF_LIFE_A)
         d = _BASELINE_D + (self.dominance - _BASELINE_D) * math.exp(-ln2 * dt_min / _HALF_LIFE_D)
+
+        # 自动保存: 衰减超过 5 分钟就写盘
+        if dt_min >= 5:
+            try:
+                AffectState(pleasure=p, arousal=a, dominance=d, last_updated=now)._clamped().save()
+            except Exception:
+                pass
+
         return AffectState(pleasure=p, arousal=a, dominance=d, last_updated=now)._clamped()
 
     # ── 应用事件 ──────────────────────────────────────────────
@@ -292,6 +300,15 @@ def current_emoji() -> str:
     if ple >= -0.5:
         return "😔"
     return "😢"
+
+
+def flush() -> None:
+    """加载→衰减→保存. 睡前列队刷新情感漂移."""
+    try:
+        s = AffectState.load().decay()
+        s.save()
+    except Exception as e:
+        print(f"[flush] affect save failed: {e}")
 
 
 # ─── CLI 快速尝试 ─────────────────────────────────────────────
