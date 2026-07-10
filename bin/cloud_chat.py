@@ -29,10 +29,6 @@ from typing import Optional, Callable, Any
 
 log = logging.getLogger("ikaros.cloud_chat")
 
-# ─── 监控日志路径 (给 ikaros-dashboard 用) ───
-_MONITOR_LOG_DIR = _HERMES_ROOT / "data" / "logs"
-_MONITOR_FILE = _MONITOR_LOG_DIR / "ikaros-monitor.jsonl"
-
 # ─── 监控推送 (对话流 + 内心思考) ───
 _MONITOR_LOG: list[dict] = []
 _MONITOR_MAX = 300
@@ -67,6 +63,10 @@ _LOCAL_LLM_URL = os.environ.get(
     "IKAROS_LLM_URL",
     os.environ.get("HERMES_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1"),
 )
+
+# ─── 监控日志路径 (给 ikaros-dashboard 用) ───
+_MONITOR_LOG_DIR = _HERMES_ROOT / "data" / "logs"
+_MONITOR_FILE = _MONITOR_LOG_DIR / "ikaros-monitor.jsonl"
 
 # ─── 缓存 ───
 
