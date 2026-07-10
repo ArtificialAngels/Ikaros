@@ -25,9 +25,38 @@ import threading
 import time as time_module
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable, Any
 
 log = logging.getLogger("ikaros.cloud_chat")
+
+# ─── 监控日志路径 (给 ikaros-dashboard 用) ───
+_MONITOR_LOG_DIR = _HERMES_ROOT / "data" / "logs"
+_MONITOR_FILE = _MONITOR_LOG_DIR / "ikaros-monitor.jsonl"
+
+# ─── 监控推送 (对话流 + 内心思考) ───
+_MONITOR_LOG: list[dict] = []
+_MONITOR_MAX = 300
+
+
+def _push_monitor(kind: str, **data) -> None:
+    """推一条监控事件到循环缓冲区 + 文件 (给仪表盘用)."""
+    global _MONITOR_LOG
+    entry = {"kind": kind, "ts": time_module.time(), **data}
+    _MONITOR_LOG.append(entry)
+    if len(_MONITOR_LOG) > _MONITOR_MAX:
+        _MONITOR_LOG = _MONITOR_LOG[-_MONITOR_MAX:]
+    # 写文件 IPC — 同名子进程 (ikaros-dashboard) 通过 tail 读取
+    try:
+        _MONITOR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(str(_MONITOR_FILE), "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def get_monitor_log(limit: int = 100) -> list[dict]:
+    """取最近 N 条监控事件."""
+    return _MONITOR_LOG[-limit:]
 
 # ─── 路径常量 ───
 
@@ -380,6 +409,7 @@ def _build_v5_affect_block() -> list[str]:
             if templates:
                 text = _rand.choice(templates)
                 lines.append(f"心里: {text[:40]}")
+                _push_monitor("thought", text=text[:120], mood=mood, intensity=round(intensity, 3))
 
         # 空闲自想循环 (ikaros-think.bat --watch) 落盘的强情感独白:
         # 强度>=0.35 时写入 data/v5/pending_thought.json, 这里消费并提示主动提起
@@ -451,6 +481,7 @@ async def cloud_chat(
     session_id: str = "",
     max_tokens: int = 200,
     temperature: float = 0.7,
+    on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str:
     """直调 cloud LLM (DeepSeek 优先 → minimax 备选), 带 soul + cogno 5D + 记忆注入.
 
@@ -640,6 +671,9 @@ async def cloud_chat(
     user_content = _optimized if _optimized else text
     msgs.append({"role": "user", "content": user_content})
 
+    # 监控: 用户输入
+    _push_monitor("user_msg", text=text[:200], session_id=session_id)
+
     # 尝试 DeepSeek → minimax
     deepseek_key = _get_api_key(env_map, "DEEPSEEK_API_KEY")
     minimax_key = _get_api_key(env_map, "MINIMAX_CN_API_KEY")
@@ -657,6 +691,7 @@ async def cloud_chat(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 label="DeepSeek",
+                on_delta=on_delta,
             )
         except Exception as e:
             log.warning("DeepSeek failed: %s — falling back to minimax", e)
@@ -672,6 +707,7 @@ async def cloud_chat(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 label="MiniMax",
+                on_delta=on_delta,
             )
         except Exception as e:
             log.error("MiniMax also failed: %s", e)
@@ -683,7 +719,8 @@ async def cloud_chat(
         try:
             log.info("all cloud providers failed — fallback to local qwen3-8b (:8080)")
             local_reply = await _call_local_llm(
-                msgs, max_tokens=max_tokens, temperature=temperature
+                msgs, max_tokens=max_tokens, temperature=temperature,
+                on_delta=on_delta,
             )
             if local_reply:
                 reply = local_reply
@@ -763,6 +800,10 @@ async def cloud_chat(
                 pass
         threading.Thread(target=_background_rewrite, daemon=True).start()
 
+    # 监控: 助手回复
+    if reply:
+        _push_monitor("assistant_msg", text=reply[:500], session_id=session_id)
+
     return reply
 
 
@@ -774,9 +815,19 @@ async def _call_openai_compatible(
     max_tokens: int,
     temperature: float,
     label: str,
+    on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str:
-    """调用 OpenAI 兼容接口 (DeepSeek / minimax 等)"""
+    """调用 OpenAI 兼容接口 (DeepSeek / minimax 等).
+
+    流式: 传 on_delta 时启用 SSE (stream=True), 每个 content chunk 即调
+    on_delta(chunk) 并累积, 返回完整文本。不传则整包返回 (原行为),
+    保证 self-review / consolidate 等非流式调用路径不变。
+    """
     url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
     body = {
         "model": model,
         "messages": messages,
@@ -786,30 +837,52 @@ async def _call_openai_compatible(
 
     try:
         import httpx
+        if on_delta is not None:
+            # ── 流式: 首 token 即上屏 (对标 N.E.K.O gemini_response) ──
+            stream_body = dict(body)
+            stream_body["stream"] = True
+            stream_body["stream_options"] = {"include_usage": False}
+            acc: list[str] = []
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                async with client.stream(
+                    "POST", url, json=stream_body, headers=headers
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            delta = chunk["choices"][0]["delta"].get("content")
+                        except Exception:
+                            continue
+                        if delta:
+                            acc.append(delta)
+                            try:
+                                await on_delta(delta)
+                            except Exception:
+                                pass
+            reply = "".join(acc)
+            log.info("%s OK (stream, %d chunks, %d chars)", label, len(acc), len(reply))
+            return reply
+        # ── 非流式 (原行为) ──
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                url,
-                json=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-            )
+            resp = await client.post(url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             reply = data["choices"][0]["message"]["content"]
             log.info("%s OK (input=%d msgs, output=%d chars)", label, len(messages), len(reply))
             return reply
     except ImportError:
-        # fallback: urllib (同步)
+        # fallback: urllib (同步, 非流式)
         import urllib.request
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -824,11 +897,16 @@ async def _call_local_llm(
     *,
     max_tokens: int = 512,
     temperature: float = 0.1,
+    on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str | None:
     """调本地 Qwen3-8B (:8080/v1/chat/completions).
 
     用于 self-review / consolidate, 不阻塞主对话流程.
     连接失败 / 超时 / 模型未加载时返回 None, caller 自行 fallback.
+
+    流式: 传 on_delta 时启用 SSE, 边生成边调 on_delta (首 token 即上屏).
+    仅流式显示 content (避免把 <think> 推理块灌进气泡); 思考模式 content
+    全空时回退非流式读 reasoning_content 兜底.
 
     2026-07-04 修:
     - 端口从 :8589 改为 :8080 (watchdog 管理的 LLM)
@@ -844,10 +922,49 @@ async def _call_local_llm(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    headers = {"Content-Type": "application/json"}
     try:
         import httpx
+        if on_delta is not None:
+            # ── 流式: 首 token 即上屏 ──
+            stream_body = dict(body)
+            stream_body["stream"] = True
+            acc: list[str] = []
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST", url, json=stream_body, headers=headers
+                ) as resp:
+                    if resp.status_code != 200:
+                        log.warning("local LLM returned %d", resp.status_code)
+                        return None
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            delta = chunk["choices"][0]["delta"]
+                        except Exception:
+                            continue
+                        # 仅流式显示 content (避免 <think> 推理块进气泡)
+                        content = delta.get("content") or ""
+                        if content:
+                            acc.append(content)
+                            try:
+                                await on_delta(content)
+                            except Exception:
+                                pass
+            reply = "".join(acc)
+            if reply.strip():
+                log.info("local LLM OK (stream, %d chars)", len(reply))
+                return reply
+            # 思考模式 content 全空 → 非流式回退读 reasoning_content
+            log.info("local LLM: stream content empty (thinking mode), fallback to reasoning")
+        # ── 非流式 (原行为 / thinking 兜底) ──
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=body)
+            resp = await client.post(url, json=body, headers=headers)
             if resp.status_code != 200:
                 log.warning("local LLM returned %d", resp.status_code)
                 return None
@@ -873,7 +990,7 @@ async def _call_local_llm(
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(body).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=30) as resp:
