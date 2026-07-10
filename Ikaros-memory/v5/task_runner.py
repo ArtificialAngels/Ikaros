@@ -20,7 +20,6 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -66,54 +65,33 @@ def call_async(text: str, optimized: Optional[str] = None) -> dict:
 
 
 def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
-    """后台: 复用 cloud_chat 的 async API 路径调云 LLM, 写结果文件."""
+    """后台: 委托 Hermes Agent 执行任务 (hermes chat -q), 写结果文件.
+
+    Hermes Agent 有全套工具/技能/记忆/子代理, 比裸调 API 强得多.
+    """
     try:
+        import subprocess as _sp
         import sys as _sys
-        import asyncio as _asyncio
-        _root = str(V5_ROOT.parent)
-        if _root not in _sys.path:
-            _sys.path.insert(0, _root)
-        from bin.cloud_chat import build_system_prompt, _load_env as _le
-        from bin.cloud_chat import _call_openai_compatible as _call_llm
 
-        env_map = _le()
-        system_prompt = build_system_prompt(text)
+        # 定位 hermes 可执行文件
+        _hermes = str(Path(__file__).resolve().parent.parent.parent
+                      / "hermes-agent" / "venv" / "Scripts" / "hermes.exe")
+        if not Path(_hermes).is_file():
+            raise FileNotFoundError(f"hermes not found: {_hermes}")
+
         user_content = optimized if optimized else text
-        msgs = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+        # 构建指令: 简短任务标签让 Hermes Agent 的 router 自己决定用什么工具
+        goal = f"执行这个任务: {user_content}"
 
-        deepseek_key = env_map.get("DEEPSEEK_API_KEY", "")
-        minimax_key = env_map.get("MINIMAX_CN_API_KEY", "")
+        _result = _sp.run(
+            [_hermes, "chat", "-q", goal, "--max-turns", "3"],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(Path(__file__).resolve().parent.parent.parent),
+        )
 
-        reply: str | None = None
-        if deepseek_key:
-            try:
-                base = env_map.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-                model = env_map.get("DEEPSEEK_MODEL", "deepseek-chat")
-                reply = _asyncio.run(_call_llm(
-                    base_url=base, api_key=deepseek_key,
-                    model=model, messages=msgs,
-                    max_tokens=1024, temperature=0.4,
-                    label="DeepSeek",
-                ))
-            except Exception as e:
-                logger.warning("task %s: DeepSeek failed (%s), trying minimax", task_id, e)
-
-        if reply is None and minimax_key:
-            try:
-                reply = _asyncio.run(_call_llm(
-                    base_url="https://api.minimaxi.chat/v1", api_key=minimax_key,
-                    model="MiniMax-M3", messages=msgs,
-                    max_tokens=1024, temperature=0.4,
-                    label="MiniMax",
-                ))
-            except Exception as e:
-                logger.error("task %s: MiniMax also failed (%s)", task_id, e)
-
-        if reply is None:
-            reply = "（任务执行失败：所有 API 不可用）"
+        reply = _result.stdout.strip()
+        if not reply or _result.returncode != 0:
+            reply = _result.stderr.strip() or "（任务执行失败）"
 
         _write_json(_RESULT_PATH, {
             "task_id": task_id, "status": "done",
