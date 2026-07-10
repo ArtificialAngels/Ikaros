@@ -617,6 +617,24 @@ async def cloud_chat(
     # 构建 messages
     msgs: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
+        # 节省 token: 只保留最后 10 条 (5 轮对话)
+        if len(history) > 10:
+            # 用本地模型压缩旧历史为一句话摘要
+            try:
+                _old = history[:-10]
+                _recent = history[-10:]
+                _summary_text = " ".join(
+                    m["content"][:60] for m in _old if m.get("content")
+                )
+                from v4.reflect.llm_client import call_llm as _cl
+                _resp = _cl(
+                    "压缩这段对话历史为 20 字以内一句话摘要, 只输出摘要",
+                    _summary_text, provider="local", max_tokens=60, timeout=30)
+                if _resp and _resp.content and len(_resp.content) > 3:
+                    msgs.append({"role": "system", "content": f"对话摘要: {_resp.content[:60].strip()}"})
+                history = _recent
+            except Exception:
+                history = history[-10:]  # fallback: 直接截断
         msgs.extend(history)
     # 如果有优化后的任务指令, 用它替代原始用户输入
     user_content = _optimized if _optimized else text
