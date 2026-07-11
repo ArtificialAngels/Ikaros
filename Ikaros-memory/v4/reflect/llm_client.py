@@ -146,6 +146,33 @@ def call_llm(
     raise RuntimeError(f"LLM call failed after {MAX_RETRIES} attempts ({elapsed:.1f}s): {last_err}") from last_err
 
 
+def call_llm_auto(
+    system: str,
+    user: str,
+    *,
+    max_tokens: int = 1024,
+    temperature: float = 0.0,
+    timeout: int | None = None,
+) -> LLMResponse:
+    """本地 Qwen2.5-7B 优先, 云端 DeepSeek 兜底 (无 key 则仅本地).
+
+    缓解 :8080 单点 —— 本地 llama-server 挂掉时, 依赖 LLM 的模块
+    (emotional_memory / care / router / 等) 仍能经云端跑, 不再静默降级为
+    模板/None。失败语义同 call_llm: 重试耗尽后抛 RuntimeError。
+    """
+    try:
+        return call_llm(system, user, provider="local", max_tokens=max_tokens,
+                        temperature=temperature, timeout=timeout)
+    except Exception:
+        if has_api_key():
+            try:
+                return call_llm(system, user, provider="deepseek", max_tokens=max_tokens,
+                                temperature=temperature, timeout=timeout)
+            except Exception:
+                raise
+        raise
+
+
 # ─── 本地 (Qwen2.5-7B) ─────────────────────────────────────────
 
 def _call_local(system: str, user: str, max_tokens: int,

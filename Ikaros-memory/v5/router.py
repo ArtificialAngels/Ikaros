@@ -155,10 +155,10 @@ def _call_task_refiner(text: str, memory_context: str) -> Optional[str]:
         user += f"\n\n相关记忆:\n{memory_context}"
 
     try:
-        from v4.reflect.llm_client import call_llm
-        result = call_llm(
+        from v4.reflect.llm_client import call_llm_auto
+        result = call_llm_auto(
             system, user,
-            provider="local", max_tokens=512, timeout=60,
+            max_tokens=512, timeout=60,
         )
         out = result.content.strip()
         if len(out) < 10:

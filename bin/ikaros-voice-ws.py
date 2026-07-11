@@ -1015,7 +1015,16 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     threading.Thread(target=_warm_stt, daemon=True, name="stt-warm").start()
 
     log.info("starting voice-ws on ws://%s:%d/v1/voice/ws", host, port)
-    async with websockets.serve(_serve, host, port):
+    # 2026-07-11 修复: 关掉 server 主动 ping (ping_interval=None)。
+    # 原默认 20s 严格超时, pet(Tauri webview) 在 Live2D 渲染/ TTS 忙时偶发不回 pong,
+    # 被 server 判 keepalive ping timeout 踢 1011, 回复在断线瞬间推送丢失 → chat 流"没通"。
+    # localhost 本机连接无需这层死连接检测, 关掉后连接稳定。close_timeout 给正常关闭留 10s。
+    async with websockets.serve(
+        _serve, host, port,
+        ping_interval=None,
+        ping_timeout=None,
+        close_timeout=10,
+    ):
         log.info("voice-ws ready")
         await asyncio.Future()  # run forever
 

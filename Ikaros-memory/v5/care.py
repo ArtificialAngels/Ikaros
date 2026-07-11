@@ -216,9 +216,9 @@ def _llm_care(care_type: str, coding_sec: float, gaming_sec: float,
     )
 
     try:
-        from v4.reflect.llm_client import call_llm
-        result = call_llm(prompt_system, context, provider="local",
-                          max_tokens=80, temperature=0.7, timeout=30)
+        from v4.reflect.llm_client import call_llm_auto
+        result = call_llm_auto(prompt_system, context,
+                               max_tokens=80, temperature=0.7, timeout=30)
         text = result.content.strip()
         if 6 < len(text) < 200:
             return text

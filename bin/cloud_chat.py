@@ -20,6 +20,7 @@ import importlib.util
 import json
 import logging
 import os
+import re as _re
 import sys
 import asyncio
 import threading
@@ -68,6 +69,17 @@ _LOCAL_LLM_URL = os.environ.get(
 # ─── 监控日志路径 (给 ikaros-dashboard 用) ───
 _MONITOR_LOG_DIR = _HERMES_ROOT / "data" / "logs"
 _MONITOR_FILE = _MONITOR_LOG_DIR / "ikaros-monitor.jsonl"
+
+# ─── V5 自我认知数据 (供上下文补全注入) ───
+_V5_DATA_DIR = Path(__file__).resolve().parent.parent / "Ikaros-memory" / "data" / "v5"
+_LATEST_THOUGHT_PATH = _V5_DATA_DIR / "latest_thought.json"
+_SELF_MODEL_PATH = _V5_DATA_DIR / "self_model.json"
+
+# 上下文补全用的模块级状态
+_LAST_USER_TEXT = ""
+_SELF_STATUS_INTERVAL = 5
+_self_status_counter = 0
+_last_activity_phrase = ""
 
 # ─── 缓存 ───
 
@@ -323,6 +335,8 @@ def _load_axiom() -> str:
 
 def build_system_prompt(user_text: str) -> str:
     """构建带 soul + cogno 5D + 记忆检索的 system prompt"""
+    global _LAST_USER_TEXT
+    _LAST_USER_TEXT = user_text
     axiom = _load_axiom()
 
     # cogno 5D v2: 自然语言认知上下文 (enrich 一次调用搞定 5 维)
@@ -345,7 +359,13 @@ def build_system_prompt(user_text: str) -> str:
 
     identity_refresh = _maybe_inject_identity_refresh()
     thought_note = _maybe_self_thought_note(user_text)
-    return f"{axiom}{identity_refresh}\n{cogno}{v5_block}{thought_note}"
+    # V5 上下文补全 (伊卡洛斯 handoff): 让对话角色知道后台在做什么
+    auto_thought = _maybe_auto_thought()
+    self_status = _maybe_self_status()
+    task_note = _maybe_task_note()
+    activity_note = _maybe_activity_note()
+    return (f"{axiom}{identity_refresh}\n{cogno}{v5_block}"
+            f"{thought_note}{auto_thought}{self_status}{task_note}{activity_note}")
 
 
 def _is_asking_thinking(text: str) -> bool:
@@ -374,6 +394,119 @@ def _maybe_self_thought_note(user_text: str) -> str:
     except Exception:
         pass
     return ""
+
+
+# ─── V5 上下文补全 (伊卡洛斯 handoff 2026-07-11) ───
+# 让对话角色知道后台在做什么: 自我思考 / 自我状态 / 任务 / 活动
+# 所有函数返回 str, 空字符串 = 本轮不注入。拼在 build_system_prompt 末尾。
+
+def _cjk_bigrams(s: str) -> set[str]:
+    """取中文二元组集合 (用于话题相关性判断)。"""
+    s = "".join(_re.findall(r"[一-鿿]", s or ""))
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def _maybe_auto_thought() -> str:
+    """P0: 每轮把最近一次自我思考(若相关且探索欲够)作为一句自然提醒注入。
+
+    数据: latest_thought.json (metacog 已写入, 监控卡片同源)。
+    门槛: curiosity>=0.4 且与当前话题有共享中文二元组, 才轻提醒一句, 不塞整段。
+    """
+    try:
+        if not _LATEST_THOUGHT_PATH.is_file():
+            return ""
+        obj = json.loads(_LATEST_THOUGHT_PATH.read_text(encoding="utf-8"))
+        text = (obj.get("text") or "").strip()
+        if not text:
+            return ""
+        cu = float(obj.get("curiosity", 0) or 0)
+        if cu < 0.4:
+            return ""
+        # 相关性: 与用户当前话题共享中文二元组才打扰 (避免整句匹配漏判)
+        a = _cjk_bigrams(text)
+        b = _cjk_bigrams(_LAST_USER_TEXT or "")
+        if a and b and not (a & b):
+            return ""  # 完全不相关则不打扰, 避免生硬
+        return "\n(你最近在想: " + text[:120] + ")\n"
+    except Exception:
+        return ""
+
+
+def _maybe_self_status() -> str:
+    """P0: 每 5 轮注入一行自我状态 (探索欲/哲思次数/最近信念更新)。
+
+    注意: 这是状态信息, 不是身份提醒 (identity_refresh 负责身份), 不重复。
+    """
+    global _self_status_counter
+    _self_status_counter += 1
+    if _self_status_counter % _SELF_STATUS_INTERVAL != 1:
+        return ""
+    try:
+        if not _SELF_MODEL_PATH.is_file():
+            return ""
+        d = json.loads(_SELF_MODEL_PATH.read_text(encoding="utf-8"))
+        cu = round(float((d.get("curiosity") or {}).get("level", 0)), 2)
+        philo = len(d.get("philosophy") or [])
+        # 最近更新的信念主题
+        last_theme = ((d.get("metacog") or {}).get("last_changed_theme")) or None
+        if not last_theme:
+            beliefs = d.get("beliefs") or {}
+            last_theme = "—"
+            best = 0.0
+            for k, v in beliefs.items():
+                if isinstance(v, dict):
+                    ts = v.get("updated", 0) or 0
+                    if ts > best:
+                        best = ts
+                        last_theme = k
+        return (f"\n(自我状态: 探索欲={cu} | 哲思={philo}次 | "
+                f"信念更新: {last_theme})\n")
+    except Exception:
+        return ""
+
+
+def _maybe_task_note() -> str:
+    """P1: 后台任务已完成/失败时, 注入一行任务状态 (等哥哥有空时交付)。
+
+    复用 task_runner.check_result() (任务结果已落在 task_result.json)。
+    """
+    try:
+        from v5.task_runner import check_result
+        r = check_result()
+        if not r:
+            return ""
+        status = r.get("status")
+        goal = (r.get("optimized") or r.get("text") or "后台任务")[:40]
+        summary = (r.get("result") or r.get("error") or "")[:120]
+        label = "已完成" if status == "done" else "失败"
+        return (f"\n(后台任务「{goal}」{label} — 结果: {summary} "
+                f"——哥哥有空时告诉他)\n")
+    except Exception:
+        return ""
+
+
+def _maybe_activity_note() -> str:
+    """P2: 哥哥活动状态变化时注入一句 (复用 cogno_5d 实时活动叙述)。
+
+    注: 伊卡洛斯 handoff 写的是读 ikaros-monitor.jsonl, 但该文件实为
+    cloud_chat 自己的对话事件日志, 不含哥哥活动; 真正的活动叙述在
+    cogno_5d._get_activity_narrative() (已实时取自 ikaros_monitor)。
+    故这里复用它, 且只在变化时注入, 避免与 cogno 5D 块重复。
+    """
+    try:
+        c = _load_cogno()
+        if not c:
+            return ""
+        phrase = c._get_activity_narrative()
+        if not phrase:
+            return ""
+        global _last_activity_phrase
+        if phrase == _last_activity_phrase:
+            return ""  # 只在变化时注入
+        _last_activity_phrase = phrase
+        return f"\n(哥哥现状: {phrase})\n"
+    except Exception:
+        return ""
 
 
 # 身份刷新计数器: 每 10 轮注入一条轻量身份提醒
@@ -757,12 +890,31 @@ async def cloud_chat(
         if Path(_hermes).is_file():
             import subprocess as _sp
 
+            # GAP-A 修复 (2026-07-11): Hermes 主路径原本只把 user_content[:400]
+            # 喂进去, 丢掉了 build_system_prompt 里的四注入(自我思考/自我状态/
+            # 任务/活动) 与 soul+cogno+记忆上下文, 导致主路径比回退路径还"瞎"。
+            # 现把完整 system_prompt 拼进 -q, 让 Hermes 内循环也带 Ikaros 上下文。
+            #
+            # 修复2 (2026-07-11): hermes.exe 自身跑在 GBK-locale 的 venv python 上,
+            # 其内循环读子进程 UTF-8 输出时会抛 UnicodeDecodeError / 偶发
+            # 'NoneType' object has no attribute 'strip' 而崩溃, 导致主路径每次
+            # 都失败回退。这里强制 hermes 子进程用 UTF-8 (PYTHONUTF8=1 +
+            # PYTHONIOENCODING=utf-8), 并显式指定 subprocess 解码编码, 消除
+            # locale 相关的随机崩溃; 失败时只告警并自然回退, 不再把 stderr 当
+            # 异常抛出 (避免日志出现误导性的 'NoneType'... 字样)。
+            _instruction = f"{system_prompt}\n\n--- 用户消息 ---\n{user_content[:400]}"
+            if len(_instruction) > 6000:
+                _instruction = _instruction[:6000]
             def _run_hermes() -> "subprocess.CompletedProcess[str]":
+                _henv = dict(os.environ)
+                _henv["PYTHONUTF8"] = "1"
+                _henv["PYTHONIOENCODING"] = "utf-8"
                 return _sp.run(
-                    [_hermes, "chat", "-q", user_content[:400], "-Q",
+                    [_hermes, "chat", "-q", _instruction, "-Q",
                      "--max-turns", "5"],
-                    capture_output=True, text=True, timeout=110,
-                    cwd=str(_HERMES_ROOT),
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=110,
+                    cwd=str(_HERMES_ROOT), env=_henv,
                 )
 
             _result = await asyncio.to_thread(_run_hermes)
@@ -772,13 +924,22 @@ async def cloud_chat(
                     if not ln.strip().startswith("session_id:")
                 ]
                 _text = "\n".join(_lines).strip()
+                # 削除 ANSI escape 序列 + reasoning block 框线
+                # (Hermes -Q 不抑制 reasoning block, display.show_reasoning=true
+                #  会让思考过程混进输出)
+                import re as _re
+                _text = _re.sub(r'\x1b\[[0-9;]*m', '', _text)  # ANSI SGR
+                _text = _re.sub(r'(?:\[[0-9;]+m)?[┌└├┤┐┘─│].*Reasoning.*\n?', '', _text)
+                _text = _re.sub(r'\[[0-9;]+m', '', _text)       # 裸 SGR (ESC 丢失时)
+                _text = _text.strip()
                 if _text:
                     reply = _text
                     log.info("hermes agent OK (%d chars)", len(reply))
                 else:
-                    raise RuntimeError("hermes agent empty reply")
+                    log.warning("hermes agent empty reply — falling back to direct API")
             else:
-                raise RuntimeError(_result.stderr[:200] or "hermes agent empty reply")
+                log.warning("hermes agent rc=%s stderr=%s — falling back to direct API",
+                            _result.returncode, (_result.stderr or "")[:200])
     except Exception as e:
         log.warning("hermes agent failed: %s — falling back to direct API", e)
         errors.append(f"hermes: {e}")

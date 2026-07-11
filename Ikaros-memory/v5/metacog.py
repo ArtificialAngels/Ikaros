@@ -292,7 +292,7 @@ def reflect_once(provider: str = "local", now: float | None = None) -> Optional[
             v4.store(text, type="self_reflection", weight=0.7,
                      tags="self_reflection,metacog")
         except Exception as exc:
-            logger.warning("metacog reflect store failed: %s", exc)
+            logger.debug("metacog reflect store skipped (db busy): %s", exc)
 
         sm.record_reflection("self", now=now)
         sm.save()
@@ -349,7 +349,7 @@ def explore_philosophy(provider: str | None = None, theme: str = "",
             v4.store(text, type="philosophy", weight=0.85,
                      tags=f"philosophy,theme:{theme},metacog")
         except Exception as exc:
-            logger.warning("metacog philosophy store failed: %s", exc)
+            logger.debug("metacog philosophy store skipped (db busy): %s", exc)
 
         sm.record_reflection("philosophy", theme=theme, now=now)
         if new_belief:
@@ -433,10 +433,30 @@ def surface_utterance() -> Optional[dict]:
 
 # ─── 节拍编排 (供 think 循环调用) ─────────────────────────────
 
+def _fallback_thought(sm: "SelfModel") -> None:
+    """LLM 不可用时, 用探索队列里的问题作一句占位思考, 保持'正在想'不空。
+
+    让监控面板/对话自动注入在 :8080 挂掉时仍有内容 (而非一直占位),
+    是 #2 统一思考出口的第一步: 所有'正在想'都走 latest_thought.json。
+    """
+    try:
+        qs = sm.data.get("questions", []) or []
+        if qs:
+            q0 = qs[0]
+            qtext = q0 if isinstance(q0, str) else (q0.get("text") if isinstance(q0, dict) else str(q0))
+            text = f"我在想一个问题：{str(qtext)[:80]}"
+        else:
+            text = "我安静地待着，偶尔想起和哥哥之间的事。"
+        _write_latest(text, "mood", "", sm.get_curiosity())
+    except Exception as exc:
+        logger.debug("metacog _fallback_thought failed: %s", exc)
+
+
 def cycle(now: float | None = None) -> Optional[dict]:
     """一次完整节拍: 探索欲 tick → 选焦点 → 反思或哲学。
 
-    内部有最小间隔门控, 可安全被高频调用。
+    内部有最小间隔门控, 可安全被高频调用。LLM 挂掉时仍写占位思考,
+    保持 latest_thought.json 非空 (监控卡片/对话自动注入不空白)。
     """
     now = now or time.time()
     try:
@@ -445,8 +465,12 @@ def cycle(now: float | None = None) -> Optional[dict]:
         sm.save()
         focus = choose_focus(sm, curiosity)
         if focus["mode"] == "philosophy":
-            return explore_philosophy(theme=focus["theme"], question=focus["question"], now=now)
-        return reflect_once(now=now)
+            r = explore_philosophy(theme=focus["theme"], question=focus["question"], now=now)
+        else:
+            r = reflect_once(now=now)
+        if not r:
+            _fallback_thought(sm)   # LLM 挂了也要保持"正在想"非空
+        return r
     except Exception as exc:
         logger.warning("metacog cycle error: %s", exc)
         return None

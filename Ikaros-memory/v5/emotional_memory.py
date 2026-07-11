@@ -110,7 +110,7 @@ def _generate_causal(
 ) -> str | None:
     """用本地 LLM 推断情感变化的因果."""
     try:
-        from v4.reflect.llm_client import call_llm
+        from v4.reflect.llm_client import call_llm_auto
     except Exception as exc:
         logger.debug("emotional_memory: LLM unavailable (%s)", exc)
         return _rule_based_causal(user_text, old_pad, new_pad)
@@ -135,10 +135,9 @@ def _generate_causal(
     context += f"\n\n情绪从 [{old_desc}] 变成了 [{new_desc}]"
 
     try:
-        result = call_llm(
+        result = call_llm_auto(
             _CAUSAL_PROMPT,
             context,
-            provider="local",
             max_tokens=128,
             temperature=0.3,
             timeout=45,
