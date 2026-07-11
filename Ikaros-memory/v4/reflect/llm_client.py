@@ -1,14 +1,14 @@
 """
-v4.reflect.llm_client — V4 LLM client (DeepSeek V4 flash + 本地 Qwen3-8B)
+v4.reflect.llm_client — V4 LLM client (DeepSeek V4 flash + 本地 Qwen2.5-7B)
 
 设计目标:
-  - 双轨: 本地小模型 (Qwen3-8B :8080) + cloud 大模型 (DeepSeek V4 flash)
+  - 双轨: 本地小模型 (Qwen2.5-7B :8080) + cloud 大模型 (DeepSeek V4 flash)
   - 统一接口: 一处定义, 两处实现, 调用方不感知
   - 密钥零接触: API key 只从 os.environ / .env 读, 不写进代码, 不进 git
   - 显式错误: 失败时抛, 不静默
 
 V3 vs V4:
-  - V3 memory_reflect.py 只用本地 Qwen3-8B (line 58-62)
+  - V3 memory_reflect.py 风格的本地小模型调用 (现本地模型为 Qwen2.5-7B)
   - V4 新增大模型反思 (哥哥 id 158 长线目标), 用 DeepSeek V4 flash
   - 小模型仍然在 (consolidate 提取用, 因为便宜/快)
 """
@@ -54,14 +54,14 @@ try:
 except ImportError:
     pass  # dotenv 不可用, 走 os.environ 裸读
 
-# ─── 小模型 (本地 Qwen3-8B) ─────────────────────────────────────
+# ─── 小模型 (本地 Qwen2.5-7B) ───────────────────────────────────
 
 # V3 memory_reflect.py:58-61 风格一致: env var + hardcoded fallback
 LOCAL_LLM_URL = os.environ.get(
     "HERMES_LOCAL_LLM_URL",
     "http://127.0.0.1:8080/v1",
 ).rstrip("/") + "/chat/completions"
-LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "qwen3-8b")
+LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "qwen2.5-7b")
 LOCAL_LLM_TIMEOUT = int(os.environ.get("HERMES_LOCAL_LLM_TIMEOUT", "60"))
 
 # ─── 大模型 (DeepSeek V4 flash) ────────────────────────────────
@@ -112,7 +112,7 @@ def call_llm(
     Args:
         system: system prompt
         user: user prompt
-        provider: "local" (Qwen3-8B) 或 "deepseek" (V4 flash)
+        provider: "local" (Qwen2.5-7B) 或 "deepseek" (V4 flash)
         max_tokens: 最大输出 token
         temperature: 0 = 确定性, 1 = 创造性
         timeout: 超时秒数, None 用 provider 默认
@@ -146,7 +146,7 @@ def call_llm(
     raise RuntimeError(f"LLM call failed after {MAX_RETRIES} attempts ({elapsed:.1f}s): {last_err}") from last_err
 
 
-# ─── 本地 (Qwen3-8B) ──────────────────────────────────────────
+# ─── 本地 (Qwen2.5-7B) ─────────────────────────────────────────
 
 def _call_local(system: str, user: str, max_tokens: int,
                 temperature: float, timeout: int) -> LLMResponse:
@@ -170,7 +170,7 @@ def _call_local(system: str, user: str, max_tokens: int,
 
     msg = data["choices"][0]["message"]
     content = msg.get("content", "") or ""
-    # Qwen3 思考模式: content 空时回退 reasoning_content
+    # 思维链兜底: 部分模型(content 空)把思考放在 reasoning_content (Qwen3 等带思维链模型); qwen2.5 不吐此字段, .get 安全返回空
     if not content.strip():
         content = msg.get("reasoning_content", "") or ""
     if not content.strip():

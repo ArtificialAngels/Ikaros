@@ -344,7 +344,36 @@ def build_system_prompt(user_text: str) -> str:
         v5_block = ""
 
     identity_refresh = _maybe_inject_identity_refresh()
-    return f"{axiom}{identity_refresh}\n{cogno}{v5_block}"
+    thought_note = _maybe_self_thought_note(user_text)
+    return f"{axiom}{identity_refresh}\n{cogno}{v5_block}{thought_note}"
+
+
+def _is_asking_thinking(text: str) -> bool:
+    """检测哥哥是否在问'你在想什么'类问题。"""
+    t = (text or "").strip().lower()
+    return any(k in t for k in (
+        "你在想什么", "在想什么", "你在思考什么", "你想什么呢",
+        "你刚才在想", "你心里在想", "你正想着", "你脑子里在想",
+        "你最近在想", "你在琢磨什么", "你刚才想啥", "你想啥呢",
+    ))
+
+
+def _maybe_self_thought_note(user_text: str) -> str:
+    """哥哥问'你在想什么'时, 取伊卡洛斯最近的自我反思/哲思注入提示。"""
+    if not _is_asking_thinking(user_text):
+        return ""
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.metacog import latest_thought
+        thought = latest_thought()
+        if thought:
+            return ("\n(哥哥问你在想什么——你可以自然地告诉他你最近在思考：「"
+                    + thought[:200] + "」)\n")
+    except Exception:
+        pass
+    return ""
 
 
 # 身份刷新计数器: 每 10 轮注入一条轻量身份提醒
@@ -545,6 +574,13 @@ async def cloud_chat(
         v = Vitality.load()
         v = v.tick(conversation=True)
         v.save()
+    except Exception:
+        pass
+
+    # V5 metacog: 对话发生 → 探索欲回落 (被打断)
+    try:
+        import v5.metacog as _mc
+        _mc.mark_interaction()
     except Exception:
         pass
 

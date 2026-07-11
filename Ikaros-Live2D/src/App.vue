@@ -394,6 +394,7 @@ async function emitMonitorStatus() {
   if (!_emitToMonitor) return
   _emitToMonitor('monitor-status', {
     state: state.value,
+    activity: activityText.value,
     stt: monitorData.value.stt,
     tts: monitorData.value.tts,
     llm: monitorData.value.llm,
@@ -414,6 +415,11 @@ watch(monitorData, () => {
 
 // Also emit state changes
 watch(state, () => {
+  emitMonitorStatus()
+})
+
+// Emit activity changes
+watch(activityText, () => {
   emitMonitorStatus()
 })
 

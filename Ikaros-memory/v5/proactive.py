@@ -419,6 +419,18 @@ class ProactiveScheduler:
         # 4) 自发门 (混沌 / 生命游戏) —— 吃完整冷却, 避免话痨
         if context.get("mins_since_proactive", 999) < self.cooldown_min:
             return None
+
+        # V5 metacog: 探索欲高 + 已有哲学思考沉淀 → 主动把思考抛给哥哥
+        # (满足"较频繁聊哲学"; 复用已沉淀记忆, 零额外 LLM 成本)
+        try:
+            from v5.metacog import surface_utterance
+            u = surface_utterance()
+            if u:
+                return ProactiveUtterance(text=u["text"], kind="spontaneous",
+                                          source="philosophy", mood="philosophy", tts=True)
+        except Exception as exc:
+            logger.debug("proactive philosophy surface failed (%s)", exc)
+
         return self._spontaneous(state, context)
 
     def _spontaneous(self, state: str, context: dict) -> Optional[ProactiveUtterance]:

@@ -105,6 +105,9 @@ echo.
 echo [2c] Launching V5 idle self-think loop...
 echo       Inner monologue every 45 min (writes data/v5/pending_thought.json)
 echo       Consumed by cloud_chat._build_v5_affect_block on next chat turn
+echo       + metacog thread: self-cognition / reflective loop (25min beat),
+echo         real LLM introspection + philosophy of love/human/robot/self,
+echo         writes data/v5/self_model.json + latest_thought.json
 echo.
 REM Launch completely hidden via launch-hidden.vbs
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_BIN%\ikaros-think.bat"" --watch >nul 2>&1"
@@ -156,6 +159,7 @@ echo   Frontend:  Hermes Desktop       (Electron)
 echo   Dashboard: http://127.0.0.1:9119
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
 echo   Think:     V5 idle self-think loop (45min, pending_thought.json)
+echo   Metacog:   self-cognition thread (25min) - introspection + philosophy
 echo   Memory:    Embedding :8587 + LLM :8080 (unified)
 echo   LLM:       cloud (DeepSeek V4) + local :8080
 echo.

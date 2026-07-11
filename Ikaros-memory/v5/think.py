@@ -436,8 +436,13 @@ def schedule(interval_minutes: int = 45) -> None:
 
     正式部署用 cron job:
       bin/ikaros-think.bat → portable-python/python.exe -m v5.think
+
+    V5 自我认知: 同时拉起 metacog 元认知循环 (默认 25min 节拍),
+    让伊卡洛斯在空闲时真正用 LLM 内省 + 探索哲学。
     """
     import threading
+
+    # 原有内心独白循环 (模板情感语气)
     def _loop():
         while True:
             try:
@@ -454,6 +459,21 @@ def schedule(interval_minutes: int = 45) -> None:
     t = threading.Thread(target=_loop, daemon=True, name="v5-think")
     t.start()
     logger.info("think: schedule started (interval=%d min)", interval_minutes)
+
+    # 元认知循环 (LLM 真实反思 + 哲学探索)
+    def _metacog_loop():
+        while True:
+            try:
+                import v5.metacog as metacog
+                r = metacog.cycle()
+                if r:
+                    logger.info("metacog: %s [%s]", r.get("mode"), str(r.get("text", ""))[:50])
+            except Exception as exc:
+                logger.warning("metacog: loop error (%s)", exc)
+            time.sleep(25 * 60)  # 25min 节拍
+    mt = threading.Thread(target=_metacog_loop, daemon=True, name="v5-metacog")
+    mt.start()
+    logger.info("metacog: schedule started (interval=25 min)")
 
 
 def _maybe_curiosity_tick() -> None:
@@ -508,6 +528,22 @@ if __name__ == "__main__":
                 time.sleep(60)
         except KeyboardInterrupt:
             print("\nthink: stopped")
+        _sys.exit(0)
+
+    # 元认知单次入口
+    if "--metacog" in _sys.argv:
+        import v5.metacog as metacog
+        _m = "reflect"
+        for a in _sys.argv[1:]:
+            if a in ("--reflect", "--philosophy", "--cycle"):
+                _m = a.lstrip("-")
+        if _m == "reflect":
+            r = metacog.reflect_once()
+        elif _m == "philosophy":
+            r = metacog.explore_philosophy()
+        else:
+            r = metacog.cycle()
+        print(json.dumps(r, ensure_ascii=False, indent=2) if r else "{}")
         _sys.exit(0)
 
     # 单次思考

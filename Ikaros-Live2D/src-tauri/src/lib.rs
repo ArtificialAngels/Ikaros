@@ -198,6 +198,77 @@ fn set_always_on_top(window: tauri::Window, on_top: bool) -> Result<(), String> 
     window.set_always_on_top(on_top).map_err(|e| e.to_string())
 }
 
+/// Resolve the Ikaros root directory (containing `Ikaros-memory`, `data`, ...).
+/// Order: $IKAROS_ROOT env → walk up from the exe looking for `Ikaros-memory`
+/// → hard fallback `E:\Ikaros`.
+fn ikaros_root() -> std::path::PathBuf {
+    if let Ok(r) = std::env::var("IKAROS_ROOT") {
+        let p = std::path::PathBuf::from(&r);
+        if p.join("Ikaros-memory").is_dir() {
+            return p;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent();
+        while let Some(dir) = cur {
+            if dir.join("Ikaros-memory").is_dir() {
+                return dir.to_path_buf();
+            }
+            cur = dir.parent();
+        }
+    }
+    std::path::PathBuf::from("E:\\Ikaros")
+}
+
+/// Read Ikaros' live inner state (V5 affect/vitality/care/relationship) plus the
+/// tail of the conversation log (ikaros-monitor.jsonl). Powers the monitor panel
+/// so it mirrors the browser dashboard without needing the Python server.
+#[tauri::command]
+fn read_ikaros_state(count: Option<usize>) -> Result<serde_json::Value, String> {
+    let root = ikaros_root();
+    let v5 = root.join("Ikaros-memory").join("data").join("v5");
+
+    let read_json = |name: &str| -> serde_json::Value {
+        let p = v5.join(name);
+        std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .unwrap_or(serde_json::Value::Null)
+    };
+
+    let affect = read_json("affect.json");
+    let vitality = read_json("vitality.json");
+    let care = read_json("care.json");
+    let relationship = read_json("relationship.json");
+    // V5 self-cognition layer: persistent "I" model + latest metacog thought
+    let self_model = read_json("self_model.json");
+    let latest_thought = read_json("latest_thought.json");
+
+    // Tail the conversation log.
+    let n = count.unwrap_or(60).min(500);
+    let log_path = root.join("data").join("logs").join("ikaros-monitor.jsonl");
+    let mut log_entries: Vec<serde_json::Value> = Vec::new();
+    if let Ok(content) = std::fs::read_to_string(&log_path) {
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        let start = lines.len().saturating_sub(n);
+        for line in &lines[start..] {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                log_entries.push(v);
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "affect": affect,
+        "vitality": vitality,
+        "care": care,
+        "relationship": relationship,
+        "log": log_entries,
+        "self_model": self_model,
+        "latest_thought": latest_thought,
+    }))
+}
+
 #[tauri::command]
 fn toggle_monitor_window(app: tauri::AppHandle) -> Result<bool, String> {
     if let Some(win) = app.get_webview_window("monitor") {
@@ -231,6 +302,7 @@ pub fn run() {
             restart_app,
             set_always_on_top,
             toggle_monitor_window,
+            read_ikaros_state,
             tray::sync_tray_menu,
             tray::update_audio_devices,
             input_poll::set_ball_mode,
