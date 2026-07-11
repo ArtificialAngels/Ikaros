@@ -80,6 +80,25 @@ _LAST_SPOKEN_TS: float = 0.0
 _LAST_SPOKEN_GUARD: float = 0.0
 _ECHO_GUARD_SEC: float = float(os.environ.get("IKAROS_ECHO_GUARD_SEC", "8.0"))
 
+# 每连接对话历史: ws -> [{"role":"user"|"assistant","content":str}, ...]
+# 用户对话 (_handle_text) 与伊卡洛斯主动开口 (_speak_to_all) 都写入这里,
+# 于是下一轮 LLM 能看到"自己刚说过的话", 上下文连贯、且意识到是自己开的口。
+# cloud_chat 内部还会再把过长历史压到最近 30 条, 这里粗裁到 _HISTORY_MAX。
+_HISTORY_BY_WS: dict = {}
+# 标记某连接"上一条 assistant 是主动开口(proactive)", 供下一轮在 cogno_prefix
+# 注入"刚才那句是你主动跟哥哥说的"以强化自我意识; 处理一次后即清除。
+_PROACTIVE_PENDING: set = set()
+_HISTORY_MAX: int = int(os.environ.get("IKAROS_HISTORY_MAX", "40"))
+
+
+def _history_append(history: list, role: str, content: str) -> None:
+    """向连接历史追加一条消息并粗裁长度 (保留最近 _HISTORY_MAX 条)。"""
+    if not content:
+        return
+    history.append({"role": role, "content": content})
+    if len(history) > _HISTORY_MAX:
+        del history[: len(history) - _HISTORY_MAX]
+
 
 def _activity_payload(snap: dict) -> dict:
     """把 monitor 快照转成推送给 pet 的 activity 消息 (隐私安全).
@@ -189,6 +208,27 @@ async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") ->
             dead.append(ws)
     for ws in dead:
         _CLIENTS.discard(ws)
+    # 写入每个在线连接的历史: 主动开口作为 assistant turn 存入, 让下一轮
+    # 用户回复时 LLM 看到"自己刚主动说过这句", 并标记 proactive 供 cogno 提示。
+    for ws in list(_CLIENTS):
+        try:
+            hist = _HISTORY_BY_WS.setdefault(ws, [])
+            _history_append(hist, "assistant", text)
+            _PROACTIVE_PENDING.add(ws)
+        except Exception:
+            pass
+    # 主动内容也写进 V4 长期记忆 (绕过 _record_conversation 的 user 质量门控,
+    # 直接 store 一条 proactive 类型记忆, 长期可回忆"我曾主动开过口")。
+    try:
+        from cloud_chat import _get_v4_store
+        v4s = _get_v4_store()
+        if v4s is not None:
+            v4s.store(
+                content=f"(我主动开口/{kind}) {text[:200]}",
+                type="conversation", weight=0.4, tags="proactive,cloud_chat",
+            )
+    except Exception as e:
+        log.debug("proactive v4 record failed: %s", e)
     # TTS: 单次合成后发给所有仍在线的 pet
     try:
         audio = await _tts_dispatch(text)
@@ -502,15 +542,19 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
     return sent_count
 
 
-async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None) -> str:
+async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
+                    history=None) -> str:
     """cloud_chat → :8080 qwen3-8b fallback (镜像 ikaros-repl 真物).
 
-    on_delta: 流式回调 (逐 token). 传了就启用 cloud_chat 流式首字上屏。
+    on_delta: 流式回调 (逐 token). 传了就启用 cloud_chat 流式首字上屏.
+    history: 本连接的历史消息 (含伊卡洛斯主动开口), 传给 cloud_chat 拼进上下文,
+             使多轮连贯且能意识到自己主动说过的话。
     """
     cc = _load_cloud_chat()
     if cc is not None:
         try:
-            res = cc(prompt, session_id="ikaros_live2d_ws", on_delta=on_delta)
+            res = cc(prompt, history=history, session_id="ikaros_live2d_ws",
+                     on_delta=on_delta)
             if asyncio.iscoroutine(res):
                 res = await res
             if isinstance(res, dict):
@@ -520,12 +564,16 @@ async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None) -> str:
             log.warning("cloud_chat call failed: %s", e)
     # Fallback: :8080 qwen3-8b via http.client (urllib absolute-URI bug workaround)
     import json, http.client
+    _msgs = [
+        {"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
+    ]
+    # 带上最近历史 (含伊卡洛斯主动开口), 保证降级路径也多轮连贯
+    if history:
+        _msgs.extend(history[-20:])
+    _msgs.append({"role": "user", "content": cogno_prefix + "\n\n" + prompt})
     body = json.dumps({
         "model": "qwen3-8b",
-        "messages": [
-            {"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
-            {"role": "user", "content": cogno_prefix + "\n\n" + prompt},
-        ],
+        "messages": _msgs,
         "max_tokens": 600,
         "temperature": 0.7,
     }).encode("utf-8")
@@ -594,6 +642,11 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
         if event:
             bits.append(f"事件:{event}")
         cogno_prefix += "\n[" + " | ".join(bits) + "]"
+    # 主动搭话意识: 若上一条 assistant 是伊卡洛斯主动开口, 提示 LLM 意识到
+    # "刚才那句是我主动说的" —— 用户这条是对我主动搭话的回应, 而非新话题。
+    if ws in _PROACTIVE_PENDING:
+        _PROACTIVE_PENDING.discard(ws)
+        cogno_prefix += "\n[提示] 刚才那句话是你主动开口跟哥哥说的，哥哥现在是在回应你，请顺着这个话头自然接下去。"
 
     # 4) LLM 真答 (流式: 首 token 即推 delta, 气泡逐字上屏)
     t0 = time.time()
@@ -614,7 +667,8 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
         }))
 
     try:
-        reply = await _call_llm(user_text, cogno_prefix, on_delta=_on_delta)
+        reply = await _call_llm(user_text, cogno_prefix, on_delta=_on_delta,
+                                history=history)
     except Exception as e:
         log.warning("LLM call failed: %s", e)
         await ws.send(json.dumps({"type": "error",
@@ -671,6 +725,12 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
     }))
     _LAST_SPOKEN_TS = time.time()  # 回声抑制用: 标记 pet 刚发声
     _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(reply) * 0.35)
+
+    # 6b) 把本轮 user + assistant 写入连接历史, 保证下一轮多轮连贯。
+    # (V4 长期记忆已由 cloud_chat 内部 _record_conversation 自动写, 此处不重复)
+    if reply:
+        _history_append(history, "user", user_text)
+        _history_append(history, "assistant", reply)
 
     # 7) TTS: 句级流水线 (不等整段, 第一句识别即开始合成)
     asyncio.ensure_future(_tts_sentence_stream(reply, ws))
@@ -949,7 +1009,9 @@ async def _serve(ws, path=None):
     """
     enrich, enrich_reply, reset_context = _load_cogno_5d()
     reset_context()
-    history: list[dict] = []
+    # 连接历史提升为模块级映射 (ws -> history), 使 _speak_to_all 主动开口时
+    # 也能写进同一份历史; _handle_text 收到的 history 与此为同一 list 引用。
+    history: list[dict] = _HISTORY_BY_WS.setdefault(ws, [])
     peer = "?"
     try:
         peer = ws.remote_address[0] if ws.remote_address else "?"
@@ -1109,6 +1171,8 @@ async def _serve(ws, path=None):
         log.warning("client disconnected (%s): %s", peer, e)
     finally:
         _CLIENTS.discard(ws)
+        _HISTORY_BY_WS.pop(ws, None)
+        _PROACTIVE_PENDING.discard(ws)
 
 
 # 音频预处理 (移植自 N.E.K.O 思路)
