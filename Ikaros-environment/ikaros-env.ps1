@@ -63,7 +63,7 @@ $env:IKAROS_LLAMA_CLI     = "$env:IKAROS_LLAMA_DIR\llama-cli.exe"
 
 # ---- Step 6: 模型路径 ----
 $env:IKAROS_MODEL_EMBEDDING = "$env:IKAROS_MEMORY_MODELS\nomic-embed-text.gguf"
-$env:IKAROS_MODEL_LLM       = "$env:IKAROS_MEMORY_MODELS\qwen3-8b.gguf"
+$env:IKAROS_MODEL_LLM       = "$env:IKAROS_MEMORY_MODELS\qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf"
 
 # ---- Step 7: 服务端口 ----
 $env:IKAROS_PORT_EMBEDDING      = "8587"

@@ -3,7 +3,7 @@
 
 管理记忆服务 (统一架构):
   1. Embedding (:8587) — nomic-embed-text, 供 v4 记忆库语义搜索
-  2. LLM (:8080) — qwen3-8b, 供 v4 记忆提取 (extract / 反思)
+  2. LLM (:8080) — qwen2.5-7b, 供 v4 记忆提取 (extract / 反思)
 
 启动后:
   - 启动 embedding + LLM 服务
@@ -42,11 +42,11 @@ LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
     str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text.gguf")))
 LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
-    str(ROOT / "Ikaros-memory" / "models" / "qwen3-8b.gguf")))
+    str(ROOT / "Ikaros-memory" / "models" / "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf")))
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # qwen3-8b for v4 memory extraction
+LLM_PORT = 8080  # qwen2.5-7b for v4 memory extraction
 
 CHECK_INTERVAL = 10  # patrol interval (seconds)
 PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
@@ -164,7 +164,7 @@ class MemoryWatchdog:
         return ok
 
     def _start_llm(self) -> bool:
-        """启动/检测 llama-server (:8080) — qwen3-8b for v4 memory extraction (extract / 反思)."""
+        """启动/检测 llama-server (:8080) — qwen2.5-7b for v4 memory extraction (extract / 反思)."""
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
@@ -184,7 +184,7 @@ class MemoryWatchdog:
                 "--port", str(LLM_PORT),
                 "-c", "4096",
                 "-ngl", "99",
-                "--alias", "qwen3-8b",
+                "--alias", "qwen2.5-7b",
                 "--cont-batching",
             ],
             stdout=subprocess.DEVNULL,
@@ -335,7 +335,7 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",
                     "port": LLM_PORT,
                     "alive": llm_ok,
-                    "model": "qwen3-8b",
+                    "model": "qwen2.5-7b",
                     "note": "Managed by memory watchdog for v4 extraction",
                 },
                 "updated_at": time.time(),
@@ -467,7 +467,7 @@ def cmd_status():
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
-    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-8b)")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen2.5-7b)")
 
     if PID_FILE.exists():
         pid_str = PID_FILE.read_text(encoding="utf-8").strip()

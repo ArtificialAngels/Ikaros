@@ -61,6 +61,10 @@ DEFAULT_PORT = 7870
 # 已连接 pet webview 集合 (用于活动状态变化广播)
 _CLIENTS: set = set()
 
+# 主动搭话节流用时间戳: 最近一次用户交互 / 最近一次伊卡洛斯主动开口
+_LAST_INTERACTION_TS: float = 0.0
+_LAST_PROACTIVE_TS: float = 0.0
+
 
 def _activity_payload(snap: dict) -> dict:
     """把 monitor 快照转成推送给 pet 的 activity 消息 (隐私安全).
@@ -129,6 +133,13 @@ async def _activity_broadcaster():
                 )
             except Exception:
                 pass
+            # 主动搭话调度器: 喂活动变化, 让任务计时器学哥哥作息
+            # (上下班/写代码/吃饭时间 → EWMA)
+            try:
+                from v5.proactive import get_scheduler
+                get_scheduler().observe_activity(state, snap)
+            except Exception:
+                pass
             payload = _activity_payload(snap)
             dead = []
             for ws in list(_CLIENTS):
@@ -141,6 +152,91 @@ async def _activity_broadcaster():
             log.debug("activity broadcast -> %s (%d clients)", state, len(_CLIENTS))
         except Exception as e:
             log.debug("activity broadcaster tick failed: %s", e)
+
+
+async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") -> None:
+    """伊卡洛斯主动开口: 把一句话推给所有已连 pet (气泡 done + edge-tts 音频)。
+
+    这是"主动搭话"真正让桌宠开口的落点 —— 不需要用户先说话。
+    """
+    global _LAST_PROACTIVE_TS
+    if not text or not _CLIENTS:
+        return
+    payload = json.dumps({
+        "type": "done", "text": text, "cogno": f"proactive:{kind}",
+        "ms": 0, "proactive": True, "mood": mood,
+    })
+    dead = []
+    for ws in list(_CLIENTS):
+        try:
+            await ws.send(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _CLIENTS.discard(ws)
+    # TTS: 单次合成后发给所有仍在线的 pet
+    try:
+        audio = await _tts_edge(text)
+        if audio:
+            for ws in list(_CLIENTS):
+                try:
+                    await ws.send(audio)
+                except Exception:
+                    pass
+    except Exception as e:
+        log.debug("proactive tts failed: %s", e)
+    _LAST_PROACTIVE_TS = time.time()
+    log.info("proactive speak [%s]: %s", kind, text[:40])
+
+
+async def _proactive_loop():
+    """主动搭话循环: 任务计时器 (作息/记忆) + 混沌/生命游戏门 触发主动开口。
+
+    每 IKAROS_PROACTIVE_TICK_SEC 秒 tick 一次调度器; 命中则让 pet 主动说话。
+    IKAROS_PROACTIVE=0 可整体关闭。
+    """
+    if os.environ.get("IKAROS_PROACTIVE", "1") == "0":
+        log.info("proactive loop disabled (IKAROS_PROACTIVE=0)")
+        return
+    try:
+        from v5.proactive import get_scheduler
+    except Exception as e:
+        log.warning("proactive loop: v5.proactive unavailable: %s", e)
+        return
+    sched = get_scheduler()
+    try:
+        tick_sec = int(os.environ.get("IKAROS_PROACTIVE_TICK_SEC", "30"))
+    except Exception:
+        tick_sec = 30
+    try:
+        from ikaros_monitor import get_monitor
+        mon = get_monitor()
+    except Exception:
+        mon = None
+    log.info("proactive loop started (tick=%ds, gate=%s)",
+             tick_sec, os.environ.get("IKAROS_PROACTIVE_GATE", "both"))
+    while True:
+        await asyncio.sleep(tick_sec)
+        try:
+            if not _CLIENTS:
+                continue
+            now = time.time()
+            snap = mon.snapshot() if mon else {}
+            state = snap.get("activity_state", "unknown")
+            ctx = {
+                "now": now,
+                "activity_state": state,
+                "idle_seconds": snap.get("idle_seconds"),
+                "mins_since_interaction": (now - _LAST_INTERACTION_TS) / 60.0
+                    if _LAST_INTERACTION_TS else 999.0,
+                "mins_since_proactive": (now - _LAST_PROACTIVE_TS) / 60.0
+                    if _LAST_PROACTIVE_TS else 999.0,
+            }
+            utt = sched.tick(ctx)
+            if utt and utt.text:
+                await _speak_to_all(utt.text, kind=utt.kind, mood=utt.mood)
+        except Exception as e:
+            log.debug("proactive loop tick failed: %s", e)
 
 
 def _load_cogno_5d():
@@ -296,6 +392,9 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
         await ws.send(json.dumps({"type": "error",
                                    "message": "empty text"}))
         return
+    # 记录交互时刻: 主动搭话循环据此做"刚聊完不打扰"的静默期判断
+    global _LAST_INTERACTION_TS
+    _LAST_INTERACTION_TS = time.time()
     # 已被打断 → 丢弃过期回复
     if state is not None and state.get("utt_id", 0) != my_id:
         log.debug("utterance %s superseded before STT, drop", my_id)
@@ -856,6 +955,8 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         log.warning("SystemMonitor 启动失败 (降级): %s", e)
     # 活动状态变化广播给已连 pet webview (N.E.K.O 主动搭话触发)
     asyncio.ensure_future(_activity_broadcaster())
+    # 主动搭话循环: 任务计时器(作息/记忆) + 混沌/生命游戏门 → pet 主动开口
+    asyncio.ensure_future(_proactive_loop())
 
     # 预热: 后台加载 SenseVoice + Vosk 模型 (避免首次对话等待)
     def _warm_stt():

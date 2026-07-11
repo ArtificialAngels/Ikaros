@@ -60,7 +60,7 @@ REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM) ----
 echo.
 echo [2] Starting Memory Services...
 echo       Embedding :8587 (nomic-embed-text)
-echo       LLM       :8080 (qwen3-8b, watchdog managed)
+echo       LLM       :8080 (qwen2.5-7b, watchdog managed)
 echo.
 start "MemoryWatchdog" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --detach >nul 2>&1
 REM Wait for endpoints file (max 40s)
@@ -79,11 +79,12 @@ echo.
 :after_memory
 
 REM ---- Step 2b: Launch Voice WS (:7870) for Tauri Pet ----
-echo.
+REM ---- Step 2b: Launch Voice WS (:7870) ----
 echo [2b] Launching Voice WS (:7870)...
 echo       Tauri Pet speech link (cogno_5d + cloud_chat + edge-tts)
 echo.
-start "VoiceWS" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-voice-ws.py" > "%IKAROS_LOGS%\voice-ws.log" 2>&1
+REM Launch completely hidden via launch-hidden.vbs (no CMD flash)
+wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_PYTHON%"" ""%IKAROS_BIN%\ikaros-voice-ws.py"" > ""%IKAROS_LOGS%\voice-ws.log"" 2>&1"
 REM Wait for :7870 (max 20s)
 set "WAIT=0"
 :wait_voice
@@ -105,7 +106,8 @@ echo [2c] Launching V5 idle self-think loop...
 echo       Inner monologue every 45 min (writes data/v5/pending_thought.json)
 echo       Consumed by cloud_chat._build_v5_affect_block on next chat turn
 echo.
-start "V5Think" /MIN "%IKAROS_BIN%\ikaros-think.bat" --watch
+REM Launch completely hidden via launch-hidden.vbs
+wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_BIN%\ikaros-think.bat"" --watch >nul 2>&1"
 
 REM ---- Step 3: Launch Desktop Pet v2 (Tauri) ----
 echo.

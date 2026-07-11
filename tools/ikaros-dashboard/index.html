@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🪶 Ikaros 仪表盘</title>
+<style>
+/* ── css variables: ikaros warm dark ── */
+:root {
+  --bg: #181612;
+  --surface: #24201c;
+  --surface2: #2d2823;
+  --border: #3d3530;
+  --text: #e2d8ce;
+  --text-muted: #9b9086;
+  --accent: #d4a574;
+  --accent-dim: #b8895e;
+  --warm-green: #7da87d;
+  --warm-green-bg: rgba(125, 168, 125, .12);
+  --warm-orange: #c48b5e;
+  --warm-orange-bg: rgba(196, 139, 94, .12);
+  --warm-purple: #b58bc4;
+  --warm-purple-bg: rgba(181, 139, 196, .12);
+  --warm-gray: #6b6260;
+  --warm-gray-bg: rgba(107, 98, 96, .12);
+  --scrollbar: #3d3530;
+  --scrollbar-hover: #554a44;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 var(--font);
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+/* ── layout ── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── top bar ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topbar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+.topbar h1 span { color: var(--accent); }
+.status-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.conn-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #666;
+  transition: background .3s;
+}
+.conn-dot.on  { background: #7da87d; box-shadow: 0 0 6px rgba(125,168,125,.5); }
+.conn-dot.off { background: #c48b5e; }
+
+/* ── main columns ── */
+.main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── left: conversation stream ── */
+.stream-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+.stream-header {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+.stream-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 20px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.stream-empty .icon { font-size: 32px; display: block; margin-bottom: 8px; }
+
+/* single message */
+.msg {
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.6;
+  animation: fadeIn .25s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+.msg-user_msg {
+  background: var(--warm-orange-bg);
+  border-left: 3px solid var(--warm-orange);
+}
+.msg-assistant_msg {
+  background: var(--warm-green-bg);
+  border-left: 3px solid var(--warm-green);
+}
+.msg-thought {
+  background: var(--warm-purple-bg);
+  border-left: 3px solid var(--warm-purple);
+  font-style: italic;
+}
+.msg-other {
+  background: var(--warm-gray-bg);
+  border-left: 3px solid var(--warm-gray);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.msg .head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+  gap: 8px;
+}
+.msg .label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.msg-user_msg .label    { color: var(--warm-orange); }
+.msg-assistant_msg .label { color: var(--warm-green); }
+.msg-thought .label     { color: var(--warm-purple); }
+.msg .time {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.msg .body {
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.msg .mood-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,.06);
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ── right: state panel ── */
+.state-col {
+  width: 340px;
+  min-width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.state-header {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.state-content {
+  padding: 16px;
+  flex: 1;
+}
+
+/* state card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.card-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* affect bars */
+.affect-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+.affect-row:last-child { margin-bottom: 0; }
+.affect-label {
+  width: 88px;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.affect-track {
+  flex: 1;
+  height: 16px;
+  background: var(--surface2);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+.affect-fill {
+  height: 100%;
+  border-radius: 8px;
+  transition: width .6s ease, background .4s;
+}
+.affect-fill.P { background: linear-gradient(90deg, #b8895e, #d4a574); }
+.affect-fill.A { background: linear-gradient(90deg, #7da87d, #a8d4a8); }
+.affect-fill.D { background: linear-gradient(90deg, #b58bc4, #d4b0e0); }
+.affect-value {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  width: 44px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.affect-emoji {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* vitality */
+.vitality-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.vitality-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.vitality-track {
+  flex: 1;
+  height: 10px;
+  background: var(--surface2);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.vitality-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width .6s ease;
+}
+.vitality-num {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* monologue */
+.monologue-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--warm-purple);
+  font-style: italic;
+  word-break: break-word;
+}
+.monologue-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.monologue-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  display: flex;
+  gap: 10px;
+}
+
+/* status/thinking bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  min-height: 34px;
+}
+.status-bar .thinking {
+  display: none;
+  gap: 4px;
+  align-items: center;
+}
+.status-bar .thinking.active { display: flex; }
+.thinking-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) { animation-delay: .2s; }
+.thinking-dot:nth-child(3) { animation-delay: .4s; }
+@keyframes pulse {
+  0%, 80%, 100% { opacity: .3; transform: scale(.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.status-bar .event-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+/* responsive */
+@media (max-width: 720px) {
+  .main { flex-direction: column; }
+  .state-col { width: 100%; min-width: 0; max-height: 40vh; }
+  .stream-col { border-right: none; border-bottom: 1px solid var(--border); }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- top bar -->
+  <div class="topbar">
+    <h1>🪶 <span>Ikaros</span> 仪表盘</h1>
+    <div class="status-group">
+      <span class="conn-dot" id="connDot"></span>
+      <span id="connLabel">连接中…</span>
+    </div>
+  </div>
+
+  <!-- main columns -->
+  <div class="main">
+    <div class="stream-col">
+      <div class="stream-header">💬 对话流</div>
+      <div class="stream" id="stream">
+        <div class="stream-empty" id="emptyMsg">
+          <span class="icon">🪶</span>
+          等待伊卡洛斯的消息…
+        </div>
+      </div>
+    </div>
+    <div class="state-col">
+      <div class="state-header">📊 状态</div>
+      <div class="state-content">
+        <!-- affect -->
+        <div class="card">
+          <div class="card-title">🎭 情感 (PAD)</div>
+          <div id="affectPanel">
+            <div class="affect-row"><span class="affect-label">愉悦</span><span class="affect-emoji">😊</span><div class="affect-track"><div class="affect-fill P" id="barP" style="width:50%"></div></div><span class="affect-value" id="valP">—</span></div>
+            <div class="affect-row"><span class="affect-label">唤醒</span><span class="affect-emoji">⚡</span><div class="affect-track"><div class="affect-fill A" id="barA" style="width:50%"></div></div><span class="affect-value" id="valA">—</span></div>
+            <div class="affect-row"><span class="affect-label">支配</span><span class="affect-emoji">👑</span><div class="affect-track"><div class="affect-fill D" id="barD" style="width:50%"></div></div><span class="affect-value" id="valD">—</span></div>
+          </div>
+        </div>
+
+        <!-- vitality -->
+        <div class="card">
+          <div class="card-title">✨ 生命活力</div>
+          <div id="vitalityPanel">
+            <div class="vitality-row">
+              <span class="vitality-label">V5 活力</span>
+              <div class="vitality-track"><div class="vitality-fill" id="barV" style="width:0%"></div></div>
+              <span class="vitality-num" id="valV">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- monologue -->
+        <div class="card">
+          <div class="card-title">💭 内心独白</div>
+          <div id="monologuePanel">
+            <div class="monologue-empty" id="monoEmpty">暂无内心独白</div>
+            <div class="monologue-text" id="monoText" style="display:none"></div>
+            <div class="monologue-meta" id="monoMeta" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div class="status-bar">
+    <div class="thinking" id="thinking">
+      <span>思考中</span>
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+    </div>
+    <span id="statusText">就绪</span>
+    <span class="event-count" id="eventCount">0 事件</span>
+  </div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// ── dom refs ──
+const stream       = document.getElementById('stream');
+const emptyMsg     = document.getElementById('emptyMsg');
+const connDot      = document.getElementById('connDot');
+const connLabel    = document.getElementById('connLabel');
+const statusText   = document.getElementById('statusText');
+const thinkingEl   = document.getElementById('thinking');
+const eventCount   = document.getElementById('eventCount');
+
+const barP = document.getElementById('barP');
+const barA = document.getElementById('barA');
+const barD = document.getElementById('barD');
+const valP = document.getElementById('valP');
+const valA = document.getElementById('valA');
+const valD = document.getElementById('valD');
+const barV = document.getElementById('barV');
+const valV = document.getElementById('valV');
+const monoText  = document.getElementById('monoText');
+const monoEmpty = document.getElementById('monoEmpty');
+const monoMeta  = document.getElementById('monoMeta');
+
+// ── state ──
+let msgCount = 0;
+let lastThoughtTs = 0;
+
+// ── helpers ──
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN', {hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+function fmtAffect(val) {
+  if (val == null) return '—';
+  return (val >= 0 ? '+' : '') + (val * 100).toFixed(0) + '%';
+}
+
+function affectWidth(val) {
+  if (val == null) return 50;
+  // map [-1,1] → [0,100], center at 50%
+  return Math.round((val + 1) * 50);
+}
+
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+// ── add message to stream ──
+function addMessage(entry) {
+  const dk = entry.display_kind || entry.kind || 'other';
+  const text = entry.text || '';
+  const ts = entry.ts || Date.now() / 1000;
+  const mood = entry.mood || '';
+  const session = entry.session_id || '';
+
+  // hide empty state
+  emptyMsg.style.display = 'none';
+
+  const el = document.createElement('div');
+  const kindClass = ['user_msg','assistant_msg','thought'].includes(dk) ? dk : 'other';
+  el.className = 'msg msg-' + kindClass;
+
+  let label = dk;
+  if (dk === 'user_msg') label = '👤 用户';
+  else if (dk === 'assistant_msg') label = '🪶 伊卡洛斯';
+  else if (dk === 'thought') label = '💭 内心';
+  else if (dk === 'status') label = '📡 状态';
+  else if (dk === 'stt') label = '🎤 语音';
+  else label = '📋 ' + dk;
+
+  let moodHtml = '';
+  if (mood) moodHtml = `<span class="mood-tag">${mood}</span>`;
+
+  let body = text || '…';
+  // escape HTML
+  body = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  el.innerHTML = `<div class="head"><span class="label">${label}</span><span class="time">${fmtTime(ts)}</span></div><div class="body">${body}${moodHtml}</div>`;
+
+  stream.appendChild(el);
+  stream.scrollTop = stream.scrollHeight;
+  msgCount++;
+  eventCount.textContent = msgCount + ' 事件';
+
+  // Track thoughts for monologue
+  if (dk === 'thought' && text && ts > lastThoughtTs) {
+    lastThoughtTs = ts;
+    updateMonologue(entry);
+  }
+
+  // Thinking indicator
+  if (dk === 'user_msg') {
+    thinkingEl.classList.add('active');
+    statusText.textContent = '伊卡洛斯思考中…';
+  } else if (dk === 'assistant_msg') {
+    thinkingEl.classList.remove('active');
+    statusText.textContent = '就绪';
+  }
+}
+
+// ── update affect bars ──
+function updateAffect(state) {
+  const a = state && state.affect;
+  if (!a) return;
+  const p = a.pleasure, ar = a.arousal, d = a.dominance;
+
+  barP.style.width = affectWidth(p) + '%';
+  barA.style.width = affectWidth(ar) + '%';
+  barD.style.width = affectWidth(d) + '%';
+  valP.textContent = fmtAffect(p);
+  valA.textContent = fmtAffect(ar);
+  valD.textContent = fmtAffect(d);
+}
+
+// ── update vitality ──
+function updateVitality(state) {
+  // V5 vitality might be in thought.vitality or state.affect.vitality
+  let v = null;
+  if (state && state.thought && state.thought.vitality != null) {
+    v = state.thought.vitality;
+  } else if (state && state.affect && state.affect.vitality != null) {
+    v = state.affect.vitality;
+  }
+  if (v != null) {
+    const pct = clamp(Math.round(v * 100), 0, 100);
+    barV.style.width = pct + '%';
+    valV.textContent = pct + '%';
+  } else {
+    barV.style.width = '0%';
+    valV.textContent = '—';
+  }
+}
+
+// ── update monologue ──
+function updateMonologue(entry) {
+  const text = entry.text || '';
+  if (!text) return;
+  monoEmpty.style.display = 'none';
+  monoText.style.display = 'block';
+  monoMeta.style.display = 'flex';
+  monoText.textContent = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let metaParts = [];
+  if (entry.intensity != null) metaParts.push('强度: ' + entry.intensity.toFixed(2));
+  if (entry.mood) metaParts.push('情绪: ' + entry.mood);
+  if (entry.ts) metaParts.push(fmtTime(entry.ts));
+  monoMeta.innerHTML = metaParts.join(' · ');
+}
+
+// ── load initial state and log ──
+function loadInitial() {
+  // state
+  fetch('/api/state')
+    .then(r => r.json())
+    .then(s => {
+      updateAffect(s);
+      updateVitality(s);
+      if (s.thought && s.thought.text) {
+        updateMonologue({
+          text: s.thought.text,
+          intensity: s.thought.intensity,
+          mood: s.thought.mood,
+          ts: s.thought.created || s.thought.ts,
+        });
+      }
+    })
+    .catch(() => {});
+
+  // log
+  fetch('/api/log')
+    .then(r => r.json())
+    .then(events => {
+      if (events && events.length) {
+        events.forEach(addMessage);
+      }
+    })
+    .catch(() => {});
+}
+
+// ── SSE ──
+function connectSSE() {
+  const evtSource = new EventSource('/api/events');
+
+  evtSource.addEventListener('connected', () => {
+    connDot.className = 'conn-dot on';
+    connLabel.textContent = '已连接';
+  });
+
+  evtSource.addEventListener('monitor', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      addMessage(data);
+    } catch (_) {}
+  });
+
+  evtSource.addEventListener('ping', () => {
+    // keepalive — noop
+  });
+
+  evtSource.onerror = () => {
+    connDot.className = 'conn-dot off';
+    connLabel.textContent = '重连中…';
+    evtSource.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+// ── periodic state refresh ──
+function startStatePolling() {
+  setInterval(() => {
+    fetch('/api/state')
+      .then(r => r.json())
+      .then(s => {
+        updateAffect(s);
+        updateVitality(s);
+        if (s.thought && s.thought.text) {
+          const t = s.thought;
+          if ((t.created || t.ts || 0) >= lastThoughtTs) {
+            updateMonologue({
+              text: t.text,
+              intensity: t.intensity,
+              mood: t.mood,
+              ts: t.created || t.ts,
+            });
+          }
+        }
+      })
+      .catch(() => {});
+  }, 3000);
+}
+
+// ── go ──
+loadInitial();
+connectSSE();
+startStatePolling();
+
+})();
+</script>
+</body>
+</html>

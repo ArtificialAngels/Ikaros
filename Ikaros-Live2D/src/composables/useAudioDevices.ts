@@ -54,6 +54,26 @@ export function labelForSpeaker(id: string): string {
  * 枚举音频输入/输出设备。需要麦克风权限才能拿到真实 label；
  * 未授权时 label 为空，调用方可后续（权限授予后）再次枚举以补全。
  */
+/**
+ * 静默获取音频媒体权限（获取后立即释放），使 enumerateDevices 能看到完整
+ * 设备列表和设备 label。仅在权限未获取过时生效，已有权限则直接返回。
+ */
+export async function acquireMediaPermission(): Promise<void> {
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) return
+    // 先枚举一次看是否有 label——有 label 说明权限已存在, 无需重申请
+    let devices = await navigator.mediaDevices.enumerateDevices()
+    const hasLabels = devices.some((d) => d.label)
+    if (hasLabels) return
+    // 静默请求音频权限, 立即释放 track
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { noiseSuppression: false, echoCancellation: false, autoGainControl: false },
+    })
+    stream.getTracks().forEach((t) => t.stop())
+  } catch {
+    // 权限被拒等 — 忽略, 此时列表可能不全但能继续
+  }
+}
 export async function enumerateAudioDevices(): Promise<{ mics: DeviceInfo[]; speakers: DeviceInfo[] }> {
   try {
     if (!navigator.mediaDevices?.enumerateDevices) {

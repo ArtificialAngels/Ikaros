@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import sys
+import asyncio
 import threading
 import time as time_module
 from datetime import datetime
@@ -561,6 +562,32 @@ async def cloud_chat(
     except Exception:
         pass
 
+    # V5 记忆整理: "记住/提醒我/别让我忘了 ..." → 落进主动搭话任务计时器,
+    # 到点由 proactive 调度器自己开口提起。命中即短路 (省一次 LLM 调用)。
+    try:
+        from v5.proactive import (get_scheduler as _get_sched,
+                                   parse_remember_intent as _parse_rem,
+                                   fmt_due as _fmt_due)
+        _rem = _parse_rem(text)
+        if _rem:
+            _get_sched().remember_todo(_rem["text"], due_ts=_rem["due_ts"],
+                                       kind=_rem["kind"])
+            _when = _fmt_due(_rem["due_ts"])
+            if _when == "找机会":
+                _ack = f"好的哥哥，我记住了——「{_rem['text']}」，我会找机会提醒你的。"
+            else:
+                _ack = f"好的哥哥，记住啦——{_when}我会提醒你「{_rem['text']}」。"
+            if on_delta:
+                try:
+                    await on_delta(_ack)
+                except Exception:
+                    pass
+            log.info("remember-intent: kind=%s due=%s text=%r",
+                     _rem["kind"], _when, _rem["text"])
+            return _ack
+    except Exception as _e:
+        log.debug("remember-intent hook skipped: %s", _e)
+
     # V5 Router: 分类输入, 任务指令用本地 LLM 优化
     _optimized = None
     _is_task = False
@@ -682,18 +709,38 @@ async def cloud_chat(
     errors: list[str] = []
 
     # ── 主路径: Hermes Agent 内循环 (工具/技能/子代理) ──
+    # 2026-07-11 修复 (方案 X 落地):
+    #  - 加 -Q (quiet): 抑制 banner/spinner/工具预览, 只输出 final response
+    #  - 用 asyncio.to_thread 跑同步 subprocess, 不阻塞 voice-ws 的流式事件循环
+    #  - 过滤 stdout 里的 "session_id:" 诊断行, 只留真正的回复正文
+    # 本地 :8080 qwen3-8b 上下文仅 4K, 撑不住 Hermes >=64K 假设, 故 Hermes
+    # 主 provider 配为云端 DeepSeek (见 ~/.hermes/config.yaml); 无 key/失败时
+    # subprocess 报错 → 干净回退到下方直调/MiniMax/本地链。
     try:
         _hermes = str(_HERMES_ROOT / "hermes-agent" / "venv" / "Scripts" / "hermes.exe")
         if Path(_hermes).is_file():
             import subprocess as _sp
-            _result = _sp.run(
-                [_hermes, "chat", "-q", user_content[:400], "--max-turns", "5"],
-                capture_output=True, text=True, timeout=120,
-                cwd=str(_HERMES_ROOT),
-            )
-            if _result.stdout.strip() and _result.returncode == 0:
-                reply = _result.stdout.strip()
-                log.info("hermes agent OK (%d chars)", len(reply))
+
+            def _run_hermes() -> "subprocess.CompletedProcess[str]":
+                return _sp.run(
+                    [_hermes, "chat", "-q", user_content[:400], "-Q",
+                     "--max-turns", "5"],
+                    capture_output=True, text=True, timeout=110,
+                    cwd=str(_HERMES_ROOT),
+                )
+
+            _result = await asyncio.to_thread(_run_hermes)
+            if _result.returncode == 0 and _result.stdout.strip():
+                _lines = [
+                    ln for ln in _result.stdout.strip().splitlines()
+                    if not ln.strip().startswith("session_id:")
+                ]
+                _text = "\n".join(_lines).strip()
+                if _text:
+                    reply = _text
+                    log.info("hermes agent OK (%d chars)", len(reply))
+                else:
+                    raise RuntimeError("hermes agent empty reply")
             else:
                 raise RuntimeError(_result.stderr[:200] or "hermes agent empty reply")
     except Exception as e:

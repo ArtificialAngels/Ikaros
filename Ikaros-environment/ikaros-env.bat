@@ -93,7 +93,7 @@ set "IKAROS_LLAMA_CLI=%IKAROS_LLAMA_DIR%\llama-cli.exe"
 
 REM ---- Step 6: Model paths ----
 set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\nomic-embed-text.gguf"
-set "IKAROS_MODEL_LLM=%IKAROS_MEMORY_MODELS%\qwen3-8b.gguf"
+set "IKAROS_MODEL_LLM=%IKAROS_MEMORY_MODELS%\qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf"
 
 REM ---- Step 7: Service ports ----
 set "IKAROS_PORT_EMBEDDING=8587"
