@@ -928,13 +928,29 @@ async def cloud_chat(
                 # (Hermes -Q 不抑制 reasoning block, display.show_reasoning=true
                 #  会让思考过程混进输出)
                 import re as _re
-                _text = _re.sub(r'\x1b\[[0-9;]*m', '', _text)       # ANSI SGR
-                _text = _re.sub(r'\[[0-9;]+m', '', _text)            # 裸 SGR
-                # 削除整个 reasoning block (框线头 → 下一个空行)
-                _text = _re.sub(
-                    r'[┌].*Reasoning.*\n(?:.*\n)*?\n',
-                    '', _text, flags=_re.MULTILINE,
-                )
+                # 策略: 原始输出中, 所有带 ANSI escape (\x1b[) 或框线字符的行
+                # 都是 reasoning block → 全部削除。第一个不带的才是真实回复。
+                # 之后的行 (可能被 blank-line-separated) 从第一个非空行开始保留。
+                _raw = _result.stdout.strip()
+                _lines = _raw.split("\n")
+                _clean: list[str] = []
+                _in_reasoning = True
+                for _ln in _lines:
+                    _s = _ln.strip()
+                    if _s.startswith("session_id:"):
+                        continue
+                    if _in_reasoning:
+                        # reasoning 行特征: 带 ANSI escape、裸 SGR、或框线字符
+                        if ("\x1b[" in _ln or _re.match(r'\[[0-9;]+m', _s)
+                                or any(ch in _s for ch in "┌└├┤┐┘─│")):
+                            continue
+                        # 空行也可能是 reasoning 段落间隔 → 跳过
+                        if not _s:
+                            continue
+                        # 第一个不带 ANSI/框线的非空行 → 真实回复开始
+                        _in_reasoning = False
+                    _clean.append(_ln)
+                _text = "\n".join(_clean).strip()
                 _text = _text.strip()
                 if _text:
                     reply = _text

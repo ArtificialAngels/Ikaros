@@ -94,41 +94,57 @@ _tls = threading.local()
 
 @contextmanager
 def conn() -> Iterator[sqlite3.Connection]:
-    """获取 V4 db 连接 (thread-local, lazy init).
+    """获取 V4 db 连接 (每次新连接, 用完即关).
 
     V4 行为:
-      - 每个线程独立连接 (V3 模块级共享, 跨线程不安全)
+      - 每次操作开新连接 (不再缓存 thread-local, 避免读操作用完后
+        挂着隐式读事务阻塞后续 write 操作 → "database is locked")
       - 首次调用建库
       - 出错时显式抛, 不吞
+      - 上下文退出时自动 commit/rollback + close
     """
     c = getattr(_tls, "c", None)
-    if c is None:
-        V4_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        c = sqlite3.connect(str(V4_DB_PATH))
-        c.row_factory = sqlite3.Row
-        # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v4.db
-        # busy_timeout 让写入方等待而非立刻 "database is locked"
+    if c is not None:
         try:
-            c.execute("PRAGMA busy_timeout=30000")
+            c.close()
         except Exception:
             pass
-        # WAL 模式: 写事务不阻塞读事务, 解决 watchdog 长连接锁全库
-        # (store(), search(), v4_store tool 同时读/写时不再 locked)
+        _tls.c = None
+
+    V4_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(V4_DB_PATH))
+    c.row_factory = sqlite3.Row
+    # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v4.db
+    # busy_timeout 让写入方等待而非立刻 "database is locked"
+    try:
+        c.execute("PRAGMA busy_timeout=5000")
+    except Exception:
+        pass
+    # WAL 模式: 写事务不阻塞读事务
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+    c.executescript(SCHEMA)
+    # V5: 给已有表加 PAD 列 (幂等, 已存在则跳过)
+    for col in ("pad_p", "pad_a", "pad_d"):
         try:
-            c.execute("PRAGMA journal_mode=WAL")
+            c.execute(f"ALTER TABLE memory ADD COLUMN {col} REAL NOT NULL DEFAULT 0.0")
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+            pass  # 已存在: SQLite 报 duplicate column name
+    c.commit()
+    logger.info("V4 store: initialized at %s", V4_DB_PATH)
+    try:
+        yield c
+    finally:
+        try:
+            c.rollback()  # 结束任何未完成的读事务
         except Exception:
             pass
-        c.executescript(SCHEMA)
-        # V5: 给已有表加 PAD 列 (幂等, 已存在则跳过)
-        for col in ("pad_p", "pad_a", "pad_d"):
-            try:
-                c.execute(f"ALTER TABLE memory ADD COLUMN {col} REAL NOT NULL DEFAULT 0.0")
-            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-                pass  # 已存在: SQLite 报 duplicate column name
-        c.commit()
-        _tls.c = c
-        logger.info("V4 store: initialized at %s", V4_DB_PATH)
-    yield c
+        try:
+            c.close()
+        except Exception:
+            pass
 
 
 def close() -> None:
@@ -198,23 +214,41 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
 
     V3 兼容 API: 同样 4 个参数 + 同样返 int.
     V5 新增: pad_p/a/d, keyword-only, 默认 0.0 (不传则不记录情感).
+
+    并发安全: 多进程(看门狗+cloud_chat+Hermes Agent)同时读写 v4.db,
+    WAL 模式下写入者等待 busy_timeout=5000ms; 若仍被锁则重试 3 次
+    (间隔 1s/3s/5s), 最后一次抛异常 (调用方 decide 是否 swallow).
     """
+    import time as _time
     weight = max(0.0, min(1.0, weight))
-    # 用 conn() 确保 schema 就绪, 然后写并提交
-    # 写完后关闭连接 (不让写连接在 _tls 里缓存), 下次写开新连接
-    with conn() as c:
-        cur = c.execute(
-            "INSERT INTO memory (content, type, tags, weight, pad_p, pad_a, pad_d) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (content, type, tags, weight, pad_p, pad_a, pad_d),
-        )
-        c.commit()
-        mid = int(cur.lastrowid)
-    # 关掉这个连接, 让它不留在线程缓存里
-    close()
-    # A1 修复: 写库后 best-effort 同步向量到 Chroma (失败不影响主流程)
-    _sync_vector_best_effort(mid, content, type, tags, weight)
-    return mid
+    last_err = None
+    for attempt in range(4):
+        try:
+            with conn() as c:
+                # 写入前主动做 WAL checkpoint, 释放未决帧
+                # (Hermes Agent 可能通过其他连接写了大量未 checkpoint 数据)
+                try:
+                    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception:
+                    pass
+                cur = c.execute(
+                    "INSERT INTO memory (content, type, tags, weight, pad_p, pad_a, pad_d) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (content, type, tags, weight, pad_p, pad_a, pad_d),
+                )
+                c.commit()
+                mid = int(cur.lastrowid)
+            _sync_vector_best_effort(mid, content, type, tags, weight)
+            return mid
+        except sqlite3.OperationalError as e:
+            last_err = e
+            if "locked" in str(e).lower() and attempt < 3:
+                backoff = [1, 3, 5][attempt]
+                logger.warning("store: locked, retry %d/3 in %ds", attempt + 1, backoff)
+                _time.sleep(backoff)
+            else:
+                break
+    raise RuntimeError(f"store failed after retries: {last_err}") from last_err
 
 
 def _sync_vector_best_effort(memory_id: int, content: str, type: str,

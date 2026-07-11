@@ -191,7 +191,7 @@ async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") ->
         _CLIENTS.discard(ws)
     # TTS: 单次合成后发给所有仍在线的 pet
     try:
-        audio = await _tts_edge(text)
+        audio = await _tts_dispatch(text)
         if audio:
             for ws in list(_CLIENTS):
                 try:
@@ -286,25 +286,174 @@ def _load_cloud_chat():
         return None
 
 
-async def _tts_edge(text: str) -> bytes | None:
-    """edge-tts 直接异步流式合成 (无 subprocess 开销).
+def _mp3_to_wav(mp3: bytes) -> bytes | None:
+    """把 edge-tts 的 MP3 转成 16-bit PCM WAV (前端 Blob 嗅探为 WAV 直播).
 
-    返回 MP3 bytes。这是当前最快的 TTS 路径，直接在当前进程调 edge_tts.
+    优先用 PyAV (av, 自带 ffmpeg), 失败回退 subprocess ffmpeg。无可用解码器则返回 None。
+    """
+    try:
+        import av
+        inp = av.open(io.BytesIO(mp3))
+        out = io.BytesIO()
+        oav = av.open(out, mode="w", format="wav")
+        ostream = oav.add_stream("pcm_s16le", rate=24000)
+        ostream.layout = "mono"
+        for frame in inp.decode(audio=0):
+            for p in ostream.encode(frame):
+                oav.mux(p)
+        for p in ostream.encode(None):
+            oav.mux(p)
+        oav.close()
+        return out.getvalue() or None
+    except Exception:
+        pass
+    # 回退: ffmpeg 子进程
+    try:
+        import subprocess, tempfile, os as _os
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f_in:
+            f_in.write(mp3)
+            mp3_path = f_in.name
+        wav_path = mp3_path + ".wav"
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", mp3_path, "-ac", "1", "-ar", "24000",
+                 "-c:a", "pcm_s16le", wav_path],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with open(wav_path, "rb") as f:
+                return f.read()
+        finally:
+            for p in (mp3_path, wav_path):
+                try:
+                    _os.remove(p)
+                except OSError:
+                    pass
+    except Exception as e:
+        log.debug("mp3->wav fallback failed: %s", e)
+    return None
+
+
+async def _tts_edge(text: str) -> bytes | None:
+    """edge-tts 直接异步流式合成 (无 subprocess 开销), 转 WAV 后返回.
+
+    voice 默认 zh-CN-XiaoxiaoNeural (甜美中文女声), 可由 IKAROS_TTS_EDGE_VOICE 覆盖。
+    返回 WAV bytes (与本地 TTS 一致, 前端 Blob 直播)。
     """
     if not text.strip():
         return None
     try:
         import edge_tts
-        voice = "zh-CN-XiaoxiaoNeural"
+        voice = os.environ.get("IKAROS_TTS_EDGE_VOICE", "zh-CN-XiaoxiaoNeural")
         buf = io.BytesIO()
         communicate = edge_tts.Communicate(text, voice=voice)
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 buf.write(chunk["data"])
-        return buf.getvalue() or None
+        mp3 = buf.getvalue()
+        if not mp3:
+            return None
+        return _mp3_to_wav(mp3)
     except Exception as e:
         log.debug("edge-tts failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# 本地 TTS (sherpa-onnx VITS 中文, 离线零网络) — 替换 edge_tts 的慢速云端路径
+# 根因: edge_tts 连 speech.platform.bing.com 在哥哥网络下被限流到 ~1KB/s,
+#       单句 ~11s; 本地 VITS 同机合成 <1s, 且离线/零密钥/零成本。
+# ---------------------------------------------------------------------------
+_LOCAL_TTS = None
+_LOCAL_TTS_ERR = False
+
+
+def _get_local_tts():
+    """惰性加载本地 sherpa-onnx VITS 中文模型 (默认 vits-zh-aishell3, 本地唯一稳出中文者).
+
+    返回 OfflineTts 实例或 None。加载失败时置 _LOCAL_TTS_ERR 避免反复重试。
+    模型目录默认 IKAROS_ROOT/data/models/sherpa-onnx-vits-zh-aishell3/vits-zh-aishell3，
+    可由 IKAROS_TTS_MODEL_DIR 覆盖 (换模型时请确保该模型在本绑定下能说中文:
+    vits-zh-hf-* 字符声 / Piper 系在 sherpa-onnx 1.13.x Python 下无法出中文)。
+    说话人由 IKAROS_TTS_SPEAKER 选 (aishell3 有 174 个, sid 0-173)。
+    """
+    global _LOCAL_TTS, _LOCAL_TTS_ERR
+    if _LOCAL_TTS_ERR:
+        return None
+    if _LOCAL_TTS is not None:
+        return _LOCAL_TTS
+    try:
+        import glob as _glob
+        import sherpa_onnx
+        root = os.environ.get("IKAROS_ROOT", "E:/Ikaros")
+        base = os.environ.get("IKAROS_TTS_MODEL_DIR") or os.path.join(
+            root, "data/models/sherpa-onnx-vits-zh-aishell3/vits-zh-aishell3")
+        onnx = sorted(_glob.glob(os.path.join(base, "*.onnx")))
+        onnx = [o for o in onnx if "int8" not in o]
+        model = onnx[0] if onnx else os.path.join(base, "vits-aishell3.onnx")
+        cfg = sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                    model=model,
+                    tokens=os.path.join(base, "tokens.txt"),
+                    lexicon=os.path.join(base, "lexicon.txt"),
+                    data_dir=base,
+                ),
+                num_threads=int(os.environ.get("IKAROS_TTS_THREADS", "2")),
+                debug=False))
+        tts = sherpa_onnx.OfflineTts(cfg)
+        _LOCAL_TTS = tts
+        log.info("local TTS loaded: %s (sr=%d)", model, tts.sample_rate)
+        return tts
+    except Exception as e:
+        _LOCAL_TTS_ERR = True
+        log.warning("local TTS unavailable (will fall back to edge-tts): %s", e)
+        return None
+
+
+def _pcm_to_wav(samples, sr: int) -> bytes:
+    """把 sherpa_onnx 的 float32[-1,1] 样本编码成 16-bit PCM WAV bytes。"""
+    import struct, wave, io as _io
+    buf = _io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        data = struct.pack("<%dh" % len(samples),
+                           *[int(max(-1.0, min(1.0, s)) * 32767) for s in samples])
+        w.writeframes(data)
+    return buf.getvalue()
+
+
+async def _tts_local(text: str) -> bytes | None:
+    """本地 VITS 合成, 返回 WAV bytes (宠物端 Blob 嗅探即可播放, 无需前端改动)。"""
+    if not text.strip():
+        return None
+    tts = _get_local_tts()
+    if not tts:
+        return None
+    try:
+        sid = int(os.environ.get("IKAROS_TTS_SPEAKER", "0"))
+        speed = float(os.environ.get("IKAROS_TTS_SPEED", "1.0"))
+        a = await asyncio.to_thread(tts.generate, text, sid, speed)
+        if not a or not getattr(a, "samples", None):
+            return None
+        return _pcm_to_wav(a.samples, a.sample_rate)
+    except Exception as e:
+        log.debug("local tts failed: %s", e)
+        return None
+
+
+async def _tts_dispatch(text: str) -> bytes | None:
+    """TTS 后端选择: 默认云端 edge-tts 优先 (音质好/女声甜), 失败回退本地 VITS。
+
+    本地 VITS (aishell3) 虽快但 8kHz 偏闷、且字符 VITS/Piper 在本绑定下说不了中文,
+    故默认回云端。IKAROS_TTS_BACKEND=local 可强制走本地 (离线/零网络时)。
+    """
+    backend = os.environ.get("IKAROS_TTS_BACKEND", "edge").lower()
+    if backend != "local":
+        wav = await _tts_edge(text)
+        if wav:
+            return wav
+    return await _tts_local(text)
 
 
 async def _tts_sentence_stream(reply: str, ws) -> int:
@@ -325,7 +474,7 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
         sentences = [reply]
     if len(sentences) == 1:
         # 单句: 直接合成
-        audio = await _tts_edge(reply)
+        audio = await _tts_dispatch(reply)
         if audio:
             await ws.send(audio)
             return 1
@@ -339,10 +488,10 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
 
     async def _synth_one(idx: int, sent: str) -> tuple[int, bytes | None]:
         async with sem:
-            return idx, await _tts_edge(sent)
+            return idx, await _tts_dispatch(sent)
 
     tasks = [_synth_one(i, s) for i, s in enumerate(sentences)]
-    for coro in _asyncio.as_completed(tasks):
+    for coro in tasks:  # 按顺序 await, 保证句子播放次序正确
         idx, audio = await coro
         if audio:
             try:
@@ -571,7 +720,7 @@ async def _handle_look(ws, enrich, enrich_reply, history, state=None, my_id=0):
         global _LAST_SPOKEN_TS, _LAST_SPOKEN_GUARD
         _LAST_SPOKEN_TS = time.time()  # 回声抑制用: 标记 pet 刚发声
         _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(reply) * 0.35)
-        audio = await _tts_edge(reply)
+        audio = await _tts_dispatch(reply)
         if audio:
             try:
                 await ws.send(audio)
