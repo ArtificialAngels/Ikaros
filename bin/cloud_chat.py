@@ -928,9 +928,13 @@ async def cloud_chat(
                 # (Hermes -Q 不抑制 reasoning block, display.show_reasoning=true
                 #  会让思考过程混进输出)
                 import re as _re
-                _text = _re.sub(r'\x1b\[[0-9;]*m', '', _text)  # ANSI SGR
-                _text = _re.sub(r'(?:\[[0-9;]+m)?[┌└├┤┐┘─│].*Reasoning.*\n?', '', _text)
-                _text = _re.sub(r'\[[0-9;]+m', '', _text)       # 裸 SGR (ESC 丢失时)
+                _text = _re.sub(r'\x1b\[[0-9;]*m', '', _text)       # ANSI SGR
+                _text = _re.sub(r'\[[0-9;]+m', '', _text)            # 裸 SGR
+                # 削除整个 reasoning block (框线头 → 下一个空行)
+                _text = _re.sub(
+                    r'[┌].*Reasoning.*\n(?:.*\n)*?\n',
+                    '', _text, flags=_re.MULTILINE,
+                )
                 _text = _text.strip()
                 if _text:
                     reply = _text
