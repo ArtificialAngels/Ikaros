@@ -498,7 +498,9 @@ function connectWebSocket() {
           addMonitorEvent('📋', msg.message)
           break
         case 'done':
-          // 不静音麦克风: TTS 期间保持聆听, 以支持自动打断 (barge-in)
+          // 彻底修复回声自环: TTS 播放期间静音麦克风, 阻止 TTS 出声被麦克风
+          // 回流再次识别 (此前"念数字"的根因)。手动 stop_tts 仍可中断播放。
+          setMicMutedForTts(true)
           showBubble(msg.text, 5000)
           state.value = 'speaking'
           monitorData.value.tts = { status: 'speaking', label: 'TTS' }
@@ -610,6 +612,7 @@ function _pumpTtsQueue() {
   const blob = _ttsQueue.shift()
   if (!blob) return
   _ttsBusy = true
+  setMicMutedForTts(true) // TTS 开始播放即静音麦克风, 防回声回流
   if (_ttsCurUrl) {
     URL.revokeObjectURL(_ttsCurUrl)
     _ttsCurUrl = null
@@ -627,6 +630,8 @@ function _pumpTtsQueue() {
 
 function _ttsOnEnded() {
   _ttsBusy = false
+  // 仅当队列里再无待播音频时才恢复麦克风聆听 (彻底断开回声回路)
+  if (_ttsQueue.length === 0) setMicMutedForTts(false)
   _pumpTtsQueue()
 }
 
@@ -638,6 +643,15 @@ function stopTtsAudio() {
     try { _ttsElem.currentTime = 0 } catch {}
   }
   _ttsBusy = false
+  setMicMutedForTts(false) // 手动中断也恢复麦克风
+}
+
+/** TTS 播放期间静音客户端麦克风, 从根上阻断回声自环 (TTS出声→麦克风回流→再识别)。
+ *  依赖 useSpeechInput 的 muted ref: 置 true 时 onaudioprocess 直接 return, 不再发送 PCM。*/
+function setMicMutedForTts(m: boolean) {
+  try {
+    if (speech?.muted) speech.muted.value = m
+  } catch (_e) {}
 }
 
 // ─── Speech input (microphone → WS PCM → server local STT) ───

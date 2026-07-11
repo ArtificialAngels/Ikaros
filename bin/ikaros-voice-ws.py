@@ -50,6 +50,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("ikaros.voice-ws")
 
+# 诊断用独立文件处理器: 每条立即 flush, 绕过 PowerShell 重定向的 stderr 缓冲
+try:
+    _diag_fh = logging.FileHandler(r"E:/Ikaros/logs/voice-ws-diag.log", encoding="utf-8")
+    _diag_fh.setLevel(logging.INFO)
+    _diag_fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s"))
+    log.addHandler(_diag_fh)
+except Exception:
+    pass
+
 # 7860 端口 (FastAPI bridge) 在 7-04 quest "去桥架构" 删掉, 由
 # bin/ikaros-voice-ws.py 接 cogno_5d + cloud_chat 真物 (commit b16c8f8).
 # 8080 = Hermes Agent qwen3-8b (LLM / 记忆 extract 复用).
@@ -64,6 +73,12 @@ _CLIENTS: set = set()
 # 主动搭话节流用时间戳: 最近一次用户交互 / 最近一次伊卡洛斯主动开口
 _LAST_INTERACTION_TS: float = 0.0
 _LAST_PROACTIVE_TS: float = 0.0
+# 回声抑制: 伊卡洛斯最近一次"发声"(done+TTS)的时间戳 + 抑制窗口(秒).
+# 连续聆听模式下 pet 自己的 TTS 会被麦克风回流成"用户输入", 形成自言自语环;
+# 发声后按文本长度估算的窗口内忽略回流的 transcript, 打断该环.
+_LAST_SPOKEN_TS: float = 0.0
+_LAST_SPOKEN_GUARD: float = 0.0
+_ECHO_GUARD_SEC: float = float(os.environ.get("IKAROS_ECHO_GUARD_SEC", "8.0"))
 
 
 def _activity_payload(snap: dict) -> dict:
@@ -186,6 +201,9 @@ async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") ->
     except Exception as e:
         log.debug("proactive tts failed: %s", e)
     _LAST_PROACTIVE_TS = time.time()
+    global _LAST_SPOKEN_TS, _LAST_SPOKEN_GUARD
+    _LAST_SPOKEN_TS = time.time()
+    _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(text) * 0.35)
     log.info("proactive speak [%s]: %s", kind, text[:40])
 
 
@@ -388,9 +406,19 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
     检测到的用户语气/事件标签, 注入 LLM 上下文。
     """
     user_text = (payload.get("text") or "").strip()
+    global _LAST_SPOKEN_TS, _LAST_SPOKEN_GUARD
+    if os.environ.get("IKAROS_DIAG") == "1":
+        log.info("DIAG_USER_TEXT: %r", user_text)
     if not user_text:
         await ws.send(json.dumps({"type": "error",
                                    "message": "empty text"}))
+        return
+    # 回声抑制: pet 刚说完话, 麦克风回流的 transcript 当作回声丢弃, 不打断自环
+    if _LAST_SPOKEN_TS and (time.time() - _LAST_SPOKEN_TS) < _LAST_SPOKEN_GUARD:
+        log.info("DIAG_ECHO_SUPPRESSED (%.1fs<%.1fs): %r",
+                 time.time() - _LAST_SPOKEN_TS, _LAST_SPOKEN_GUARD, user_text)
+        await ws.send(json.dumps({"type": "error", "message": "echo"}))
+        # 注意: 不更新 _LAST_INTERACTION_TS, 避免回声刷新静默期
         return
     # 记录交互时刻: 主动搭话循环据此做"刚聊完不打扰"的静默期判断
     global _LAST_INTERACTION_TS
@@ -444,6 +472,8 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
                                    "message": f"LLM: {type(e).__name__}"}))
         return
     dt_ms = int((time.time() - t0) * 1000)
+    if os.environ.get("IKAROS_DIAG") == "1":
+        log.info("DIAG_REPLY_TEXT: %r", reply)
 
     # 流式未触发 (无 on_delta 支持 / 降级路径) → 用完整 reply 兜底推首块
     if not _first_delta_sent and reply:
@@ -490,6 +520,8 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
         "emotion": emotion,
         "event": event,
     }))
+    _LAST_SPOKEN_TS = time.time()  # 回声抑制用: 标记 pet 刚发声
+    _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(reply) * 0.35)
 
     # 7) TTS: 句级流水线 (不等整段, 第一句识别即开始合成)
     asyncio.ensure_future(_tts_sentence_stream(reply, ws))
@@ -536,6 +568,9 @@ async def _handle_look(ws, enrich, enrich_reply, history, state=None, my_id=0):
         await ws.send(json.dumps({
             "type": "done", "text": reply, "cogno": "screen-look", "ms": 0,
         }))
+        global _LAST_SPOKEN_TS, _LAST_SPOKEN_GUARD
+        _LAST_SPOKEN_TS = time.time()  # 回声抑制用: 标记 pet 刚发声
+        _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(reply) * 0.35)
         audio = await _tts_edge(reply)
         if audio:
             try:
