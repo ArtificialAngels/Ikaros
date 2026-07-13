@@ -281,11 +281,37 @@ def get(memory_id: int) -> Memory | None:
         return Memory.from_row(row) if row else None
 
 
-def search(query: str, top_k: int = 5, min_weight: float = 0.0) -> list[Memory]:
-    """FTS5 关键词搜索 (V3 兼容).
+def _sanitize_fts5_query(query: str) -> str:
+    """Sanitize a query string for FTS5 MATCH.
 
-    V4 行为: 返 typed Memory, 不返 dict.
+    FTS5 treats . : * " ( ) - AND OR NOT as special syntax.
+    Wrap each whitespace-separated token in double quotes to make it a
+    literal phrase, preventing syntax errors on real-world input
+    (file paths, version numbers, etc.).
     """
+    import re as _re
+    # Split on whitespace, filter empties
+    tokens = [t for t in _re.split(r"\s+", query.strip()) if t]
+    if not tokens:
+        return ""
+    # Wrap each token in double-quotes (FTS5 phrase syntax)
+    # Escape internal double-quotes by doubling them (FTS5 escape rule)
+    quoted = []
+    for t in tokens:
+        escaped = t.replace('"', '""')
+        quoted.append(f'"{escaped}"')
+    return " ".join(quoted)
+
+
+def search(query: str, top_k: int = 5, min_weight: float = 0.0) -> list[Memory]:
+    """FTS5 keyword search (V5, V3-compatible API).
+
+    Sanitizes the query to prevent FTS5 syntax errors on real-world input
+    (dots, colons, hyphens, etc. in file paths and version numbers).
+    """
+    fts_query = _sanitize_fts5_query(query)
+    if not fts_query:
+        return []
     with conn() as c:
         rows = c.execute(
             "SELECT m.* FROM memory m "
@@ -294,7 +320,7 @@ def search(query: str, top_k: int = 5, min_weight: float = 0.0) -> list[Memory]:
             "  AND m.weight >= ? "
             "ORDER BY bm25(memory_fts) "
             "LIMIT ?",
-            (query, min_weight, top_k),
+            (fts_query, min_weight, top_k),
         ).fetchall()
     return [Memory.from_row(r) for r in rows]
 

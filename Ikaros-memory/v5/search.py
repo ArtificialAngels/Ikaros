@@ -211,11 +211,12 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     sys.path.insert(0, str(V4_ROOT))
     from v5 import store  # noqa: F401
 
-    # 1. FTS5 关键词搜索
+    # 1. FTS5 keyword search
     fts_hits = store.search(query, top_k=top_k, min_weight=0.2)
     fts_results = [{
         "id": str(m.id), "content": m.content, "type": m.type,
         "weight": m.weight, "score": 0.3 * (1.0 / (i + 1)), "source": "fts",
+        "pad_p": getattr(m, "pad_p", 0.0), "pad_a": getattr(m, "pad_a", 0.0),
     } for i, m in enumerate(fts_hits)]
 
     # 2. 向量语义搜索

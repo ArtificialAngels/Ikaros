@@ -346,10 +346,11 @@ def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
         if vs is None:
             return []
         rows = vs.fused_search(search_query, top_k=top_k)
-        # 排除 conversation 类型, 过滤低分
-        return [{"content": r["content"], "type": r.get("type"),
+        # Exclude conversation type, filter low weight
+        return [{"id": r.get("id", ""), "content": r["content"], "type": r.get("type"),
                  "weight": r.get("weight", 0.5), "tags": r.get("tags", ""),
-                 "score": r.get("score", 0)}
+                 "score": r.get("score", 0),
+                 "pad_p": r.get("pad_p", 0.0), "pad_a": r.get("pad_a", 0.0)}
                 for r in rows
                 if r.get("type") != "conversation" and r.get("weight", 0) >= 0.6]
     except ImportError:
@@ -364,8 +365,9 @@ def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
         return []
     try:
         mems = v4s.search(search_query, top_k=top_k, min_weight=0.6)
-        return [{"content": m.content, "type": m.type, "weight": m.weight,
-                 "tags": m.tags, "score": 0.5}
+        return [{"id": str(m.id), "content": m.content, "type": m.type, "weight": m.weight,
+                 "tags": m.tags, "score": 0.5,
+                 "pad_p": getattr(m, "pad_p", 0.0), "pad_a": getattr(m, "pad_a", 0.0)}
                 for m in mems if m.type != "conversation"]
     except Exception as e:
         log.warning("v4.store search failed: %s", e)
@@ -724,33 +726,40 @@ def _build_v5_affect_block() -> list[str]:
 
 
 def _build_memory_line(user_text: str) -> str:
-    """PAD 加权记忆折叠 + AIS 新颖度: 情感强且新奇的 1-2 条."""
+    """PAD weighted memory folding + AIS novelty: emotionally strong and novel 1-2 items.
+
+    When PAD values are 0 (no emotional metadata stored), falls back to
+    using memory weight as the intensity signal.
+    """
     try:
         memories = _search_v4_memories(user_text)
         if not memories:
             return ""
 
-        # AIS 新颖度检测器 (模块级单例)
+        # AIS novelty detector (module-level singleton)
         try:
             from v5.drivers import AISDetectorSet as _AIS
             if not hasattr(_build_memory_line, "_ais"):
                 _build_memory_line._ais = _AIS()
             _ais = _build_memory_line._ais
             scores = _ais.tick(memories)
-            _novelty = {getattr(m, "id", 0): s for s, mid in scores} if scores else {}
+            _novelty = {mid: s for s, mid in scores} if scores else {}
         except Exception:
             _novelty = {}
 
-        # 情感强度 × 新颖度 混合排序
+        # Emotional intensity x novelty blended scoring
         scored = []
         for m in memories:
             pp = abs(float(m.get("pad_p", 0)))
             pa = abs(float(m.get("pad_a", 0)))
             intensity = pp + pa
-            # AIS 新颖度 boost (0..1)
-            mid = getattr(m, "id", 0)
+            # When no PAD data (intensity=0), use weight as fallback signal
+            if intensity == 0:
+                intensity = float(m.get("weight", 0.5))
+            # AIS novelty boost (0..1)
+            mid = m.get("id", 0)
             novelty = _novelty.get(mid, 0.5)
-            blended = intensity * 0.7 + novelty * 0.3  # 情感为主, 新颖度为辅
+            blended = intensity * 0.7 + novelty * 0.3
             if blended >= 0.3:
                 scored.append((blended, m, novelty, intensity))
 
