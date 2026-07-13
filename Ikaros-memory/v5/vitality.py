@@ -202,3 +202,14 @@ def vitality_prompt() -> str:
 def vitality_emoji() -> str:
     v = Vitality.load().tick()
     return v.to_emoji()
+
+# ─── V5.1 激活: 活动监测调用 ─────────────────
+
+def track_activity(activity_state: str = "idle") -> None:
+    """monitor/proactive 每拍调用, 更新精力."""
+    try:
+        v = Vitality.load()
+        v = v.tick()
+        v.save()
+    except Exception:
+        pass

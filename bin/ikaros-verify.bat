@@ -1,9 +1,9 @@
 @echo off
 REM ============================================================
-REM  ikaros-verify.bat -- Suite GREEN entry point for Ikaros V4
+REM  ikaros-verify.bat -- Suite GREEN entry point for Ikaros V5.1
 REM ============================================================
 REM  Usage:
-REM    ikaros-verify              -- run ALL V4 tests (full suite)
+REM    ikaros-verify              -- run ALL V5.1 tests (full suite)
 REM    ikaros-verify --quick      -- run only goal_contract tests
 REM    set IKAROS_SKIP_VERIFY=1   -- silence (exit 0 immediately)
 REM
@@ -32,11 +32,11 @@ if /i "%~1"=="--quick" set "_QUICK=1"
 if /i "%~1"=="-q"     set "_QUICK=1"
 
 if defined _QUICK (
-    set "_TARGET=%IKAROS_ROOT%\Ikaros-memory\v4\tests\test_goal_contract.py"
+    set "_TARGET=%IKAROS_ROOT%\Ikaros-memory\v5\tests\test_goal_contract.py"
     echo [verify] Quick mode -- test_goal_contract only
 ) else (
-    set "_TARGET=%IKAROS_ROOT%\Ikaros-memory\v4\tests"
-    echo [verify] Full mode -- all V4 tests
+    set "_TARGET=%IKAROS_ROOT%\Ikaros-memory\v5\tests"
+    echo [verify] Full mode -- all V5.1 tests
 )
 echo.
 

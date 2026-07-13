@@ -21,11 +21,17 @@ v5.drivers — 三种算法驱动内核 (Chaos PAD / ECA / AIS)
 """
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
+
+# 检测器集持久化路径: 让 AIS 负选择/克隆演化跨进程累积 (而非每次新建重置)
+_V5_ROOT = Path(__file__).resolve().parent.parent  # Ikaros-memory/
+_AIS_PATH = _V5_ROOT / "data" / "v5" / "ais_detectors.json"
 
 # ═══════════════════════════════════════════════════════════════
 # 1) CHAOS PAD — Lorenz 吸引子驱动情绪漂移
@@ -203,7 +209,16 @@ class AISDetectorSet:
     def _lazy_init(self):
         if self._initialized:
             return
-        # 负选择初始化: 均匀散布, 避免重叠
+        # 持久化优先: 若已存在演化过的检测器集, 直接加载, 让免疫演化跨进程累积
+        if _AIS_PATH.is_file():
+            try:
+                self._load()
+                if self.detectors:
+                    self._initialized = True
+                    return
+            except Exception:
+                pass
+        # 负选择初始化: 均匀散布, 避免重叠 (仅首次/加载失败)
         random.seed(42)
         self.detectors = []
         attempts = 0
@@ -225,6 +240,29 @@ class AISDetectorSet:
                 self.detectors.append(Detector(center=c, radius=r, created=time.time()))
             attempts += 1
         self._initialized = True
+
+    # ─── 持久化 (让负选择/克隆演化跨进程累积) ───────────────
+
+    def save(self, path: str | Path | None = None) -> None:
+        """把当前检测器集写盘. 在克隆/淘汰发生时调用, 避免高频 I/O."""
+        p = Path(path) if path else _AIS_PATH
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = [{"center": list(d.center), "radius": d.radius,
+                     "hit_count": d.hit_count, "created": d.created}
+                    for d in self.detectors]
+            p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load(self) -> None:
+        data = json.loads(_AIS_PATH.read_text(encoding="utf-8"))
+        self.detectors = [
+            Detector(center=tuple(d["center"]), radius=float(d.get("radius", 0.2)),
+                     hit_count=int(d.get("hit_count", 0)),
+                     created=float(d.get("created", 0.0)))
+            for d in data
+        ]
 
     def novelty(self, pad: tuple[float, float, float]) -> float:
         """
@@ -295,4 +333,27 @@ class AISDetectorSet:
             if len(self.detectors) < self.n_detectors * 1.5:
                 self.detectors.append(c)
 
+        # 演化发生时落盘, 让免疫学习跨进程保留
+        if clones or stale:
+            self.save()
+
         return results
+
+
+# ═══════════════════════════════════════════════════════════════
+# 模块级单例访问器 — 让演化跨调用累积 (修复"每次新建→永远相同"缺陷)
+# ═══════════════════════════════════════════════════════════════
+
+_ais_singleton: "AISDetectorSet | None" = None
+
+
+def get_ais_detector_set() -> "AISDetectorSet":
+    """返回跨调用持久的检测器集单例 (自动从 data/v5/ais_detectors.json 加载/演化).
+
+    调用方 (think.curiosity_explore) 应使用本函数而非反复 `AISDetectorSet()`,
+    否则每次新建都会触发 seed(42) 重置, 负选择/克隆演化永不生效, 新颖性排序静态。
+    """
+    global _ais_singleton
+    if _ais_singleton is None:
+        _ais_singleton = AISDetectorSet()
+    return _ais_singleton

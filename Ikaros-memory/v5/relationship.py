@@ -200,3 +200,21 @@ def relationship_prompt() -> str:
     r = r.record_interaction(intensity)
     r.save()
     return r.to_prompt()
+
+# ─── V5.1 激活: 每轮对话后调用 ─────────────────
+
+def track_interaction(intensity: float = 0.3) -> None:
+    """cloud_chat 每轮对话后调用, 累积亲密度."""
+    try:
+        r = Relationship.load()
+        # 粗略估算共享记忆数
+        try:
+            from v5 import store
+            stats = store.stats()
+            shared = stats.get("total", 0)
+        except Exception:
+            shared = 0
+        r = r.record_interaction(intensity, shared)
+        r.save()
+    except Exception:
+        pass

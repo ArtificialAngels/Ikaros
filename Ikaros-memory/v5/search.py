@@ -209,7 +209,7 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     """
     # v4 包在 Ikaros-memory/ 下; 插入 Ikaros-memory 而非其父目录
     sys.path.insert(0, str(V4_ROOT))
-    from v4 import store  # noqa: F401
+    from v5 import store  # noqa: F401
 
     # 1. FTS5 关键词搜索
     fts_hits = store.search(query, top_k=top_k, min_weight=0.2)

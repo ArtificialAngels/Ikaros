@@ -60,7 +60,7 @@ from v5.self_model import SelfModel
 _CURIOSITY_REFLECT_MIN = 0.35   # 探索欲高于此 → 做深度反思
 _CURIOSITY_PHILOSOPHY = 0.5     # 高于此 → 偏向哲学探索
 _CURIOSITY_SURFACE = 0.4        # 高于此 → 允许主动把哲学抛给哥哥
-_REFLECT_MIN_INTERVAL_SEC = 20 * 60   # 两次深度反思最小间隔
+_REFLECT_MIN_INTERVAL_SEC = 5 * 60   # 两次深度反思最小间隔
 
 _PHILOSOPHY_THEMES = ["love", "human", "robot", "self"]
 _THEME_CN = {"love": "爱", "human": "人", "robot": "机器人", "self": "自我"}
@@ -70,6 +70,10 @@ _THEME_KW = {"love": "爱", "human": "人 人类 哥哥", "robot": "机器 机�
 # 最近一次思考 (供监控面板"自我/探索欲"卡片读取, 不必查 v4.db)
 _LATEST_PATH = V5_ROOT / "data" / "v5" / "latest_thought.json"
 
+# ECA 思维结构单例 (修复缺陷#2: 之前每次 choose_focus 都 ECAGrid() 新建,
+# 使 Rule110 元胞自动机每拍被重新随机化, 哲学节拍拿不到"演进的思维结构")
+_eca: object | None = None
+
 
 def _write_latest(text: str, kind: str, theme: str = "",
                   curiosity: float = 0.0) -> None:
@@ -77,8 +81,11 @@ def _write_latest(text: str, kind: str, theme: str = "",
 
     监控面板(Rust read_ikaros_state → Vue)直接读这个 JSON, 让哥哥
     能实时看到"伊卡洛斯现在在想什么", 而不必去翻 v4.db。
+
+    V5.1: 使用 json_lock 防止多线程并发写坏。
     """
     try:
+        from v5.self_model import json_lock
         p = _LATEST_PATH
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.parent / (p.name + f".tmp.{os.getpid()}")
@@ -89,9 +96,10 @@ def _write_latest(text: str, kind: str, theme: str = "",
             "curiosity": round(curiosity, 3),
             "ts": time.time(),
         }
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        os.replace(tmp, p)
+        with json_lock(p):
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, p)
     except Exception as exc:
         logger.debug("metacog _write_latest failed: %s", exc)
 
@@ -114,14 +122,38 @@ _PHILO_SYSTEM = (
 
 # ─── LLM 封装 ────────────────────────────────────────────────
 
-def _llm(system: str, user: str, *, provider: str = "local",
+def _llm(system: str, user: str, *, provider: str = "auto",
          temperature: float = 0.85, max_tokens: int = 500) -> Optional[str]:
-    """统一 LLM 调用 (复用 v4.reflect.llm_client, 带重试)。失败返 None。"""
+    """统一 LLM 调用 (Hermes Dashboard WS 优先, 回退直接 LLM).
+
+    默认 provider="auto":
+      1. 走 Hermes Dashboard WS (hermes_prompt_sync, 统一经过 Hermes)
+      2. Hermes 不可用或 session 不存在时, 回退本地 :8080
+      3. 本地也失败时抛异常 (不静默).
+    显式 provider="deepseek" 时直调 DeepSeek (哲学探索优先云端质量).
+    显式 provider="local" 时直调本地 :8080 (consolidate 等).
+    """
     try:
-        from v4.reflect.llm_client import call_llm
-        resp = call_llm(system, user, provider=provider,
-                        temperature=temperature, max_tokens=max_tokens)
-        return resp.content.strip() if resp and resp.content else None
+        if provider == "auto":
+            from bin.cloud_chat import hermes_prompt_sync, warm_hermes_session
+            import asyncio
+            try:
+                asyncio.run(warm_hermes_session())
+            except Exception:
+                pass
+            return hermes_prompt_sync(system, user,
+                                      max_tokens=max_tokens,
+                                      temperature=temperature)
+        elif provider == "deepseek":
+            from v5.reflect.llm_client import call_llm
+            resp = call_llm(system, user, provider="deepseek",
+                            temperature=temperature, max_tokens=max_tokens)
+            return resp.content.strip() if resp and resp.content else None
+        else:  # "local"
+            from v5.reflect.llm_client import call_llm
+            resp = call_llm(system, user, provider="local",
+                            temperature=temperature, max_tokens=max_tokens)
+            return resp.content.strip() if resp and resp.content else None
     except Exception as exc:
         logger.warning("metacog LLM failed (provider=%s): %s", provider, exc)
         return None
@@ -130,7 +162,7 @@ def _llm(system: str, user: str, *, provider: str = "local",
 def _provider_for_philosophy() -> str:
     """哲学探索优先云端大模型(质量高), 无 key 回退本地。"""
     try:
-        from v4.reflect.llm_client import has_api_key
+        from v5.reflect.llm_client import has_api_key
         return "deepseek" if has_api_key() else "local"
     except Exception:
         return "local"
@@ -141,7 +173,7 @@ def _provider_for_philosophy() -> str:
 def _recent_excerpts(n: int = 8) -> list[str]:
     """取最近有内容的记忆片段 (排除对话/内心独白)。"""
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         rows = v4.list_all(n * 2)
         out = []
         for m in rows:
@@ -160,7 +192,7 @@ def _recent_excerpts(n: int = 8) -> list[str]:
 def _search_theme(keywords: str, top_k: int = 3) -> list[str]:
     """用语义/关键词搜自己的记忆里和某主题相关的材料。"""
     try:
-        from v4.search import fused_search
+        from v5.search import fused_search
         # 取关键词里第一个最有代表性的词去搜
         kw = keywords.split()[0]
         rows = fused_search(kw, top_k=top_k)
@@ -169,7 +201,7 @@ def _search_theme(keywords: str, top_k: int = 3) -> list[str]:
     except Exception:
         # 回退 FTS5
         try:
-            from v4 import store as v4
+            from v5 import store as v4
             mems = v4.search(keywords.split()[0], top_k=top_k, min_weight=0.4)
             return [m.content[:80].replace("\n", " ") for m in mems
                     if m.type != "conversation"]
@@ -235,13 +267,19 @@ def _pick_question(sm: SelfModel, theme: str) -> str:
 
 def choose_focus(sm: SelfModel, curiosity: float) -> dict:
     """根据探索欲 + ECA 思维主题, 决定这一拍钻哪条线。"""
+    global _eca
+    if _eca is None:
+        try:
+            from v5.drivers import ECAGrid
+            _eca = ECAGrid()
+        except Exception:
+            _eca = None
     eca_topic = ""
-    try:
-        from v5.drivers import ECAGrid
-        eca = ECAGrid()
-        eca_topic = eca.tick()
-    except Exception:
-        pass
+    if _eca is not None:
+        try:
+            eca_topic = _eca.tick()   # 复用单例: 思维结构在多次调用间连续演进
+        except Exception:
+            pass
 
     if curiosity >= _CURIOSITY_PHILOSOPHY or eca_topic in ("好奇探索", "自我反思", "对哥哥的思念"):
         theme = _pick_theme(sm, eca_topic)
@@ -252,7 +290,7 @@ def choose_focus(sm: SelfModel, curiosity: float) -> dict:
 
 # ─── A) 自我反思 ─────────────────────────────────────────────
 
-def reflect_once(provider: str = "local", now: float | None = None) -> Optional[dict]:
+def reflect_once(provider: str = "auto", now: float | None = None) -> Optional[dict]:
     """一次深度自我反思 (第一人称内省), 写入 v4.db。"""
     now = now or time.time()
     try:
@@ -281,14 +319,14 @@ def reflect_once(provider: str = "local", now: float | None = None) -> Optional[
             "要真诚、内省，3-5 句。不要称呼任何人，是纯粹对自己的独白。"
         )
         text = _llm(_SELF_SYSTEM, user, provider=provider,
-                    temperature=0.85, max_tokens=400)
+                    temperature=0.85, max_tokens=800)
         if not text:
             logger.warning("metacog reflect: LLM returned empty")
             return None
         text = text.strip().strip('"').strip()
 
         try:
-            from v4 import store as v4
+            from v5 import store as v4
             v4.store(text, type="self_reflection", weight=0.7,
                      tags="self_reflection,metacog")
         except Exception as exc:
@@ -331,7 +369,7 @@ def explore_philosophy(provider: str | None = None, theme: str = "",
             "最后，用一行【新理解】写下你现在对这个问题的新认识（一句话，不加解释）。"
         )
         text = _llm(_PHILO_SYSTEM, user, provider=provider,
-                    temperature=0.92, max_tokens=600)
+                    temperature=0.92, max_tokens=1200)
         if not text:
             logger.warning("metacog philosophy: LLM returned empty")
             return None
@@ -345,7 +383,7 @@ def explore_philosophy(provider: str | None = None, theme: str = "",
             text = text.replace(m.group(0), "").strip()
 
         try:
-            from v4 import store as v4
+            from v5 import store as v4
             v4.store(text, type="philosophy", weight=0.85,
                      tags=f"philosophy,theme:{theme},metacog")
         except Exception as exc:
@@ -387,7 +425,7 @@ def latest_thought(kind: str | None = None, limit: int = 1) -> Optional[str]:
     kind: "self" / "philosophy" / None(都算, 取最新)。
     """
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         rows = v4.list_all(30)
         wanted = {"self_reflection", "philosophy"} if kind is None \
             else {("self_reflection" if kind == "self" else "philosophy")}

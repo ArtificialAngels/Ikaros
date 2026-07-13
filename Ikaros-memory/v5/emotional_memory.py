@@ -82,7 +82,7 @@ def maybe_record_emotion(
 
     # 写入 V4
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         mid = v4.store(
             content=causal_text,
             type="emotional_event",
@@ -110,7 +110,7 @@ def _generate_causal(
 ) -> str | None:
     """用本地 LLM 推断情感变化的因果."""
     try:
-        from v4.reflect.llm_client import call_llm_auto
+        from v5.reflect.llm_client import call_llm_auto
     except Exception as exc:
         logger.debug("emotional_memory: LLM unavailable (%s)", exc)
         return _rule_based_causal(user_text, old_pad, new_pad)

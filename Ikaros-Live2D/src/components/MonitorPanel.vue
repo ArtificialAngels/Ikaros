@@ -14,7 +14,7 @@
       <div class="card">
         <div class="card-title">🔌 服务状态</div>
         <div class="status-grid">
-          <div class="status-card" :class="statusClass(sttStatus.status)">
+          <div class="status-card" :class="statusClass(sttStatus.status)" :title="sttStatus.label">
             <span class="sdot">{{ dot(sttStatus.status) }}</span>
             <span class="slabel">STT</span>
             <span class="stext">{{ statusText(sttStatus.status) }}</span>
@@ -292,8 +292,8 @@ function msgLabel(m: LogEntry): string {
 
 function dot(status: string): string {
   switch (status) {
-    case 'connected': case 'running': case 'active': case 'speaking': case 'thinking': return '🟢'
-    case 'disconnected': case 'offline': return '⚫'
+    case 'connected': case 'running': case 'active': case 'speaking': case 'thinking': case 'ready': return '🟢'
+    case 'disconnected': case 'offline': case 'unavailable': return '⚫'
     case 'error': return '🔴'
     default: return '⚪'
   }
@@ -301,20 +301,22 @@ function dot(status: string): string {
 function statusText(status: string): string {
   switch (status) {
     case 'connected': return '已连接'
+    case 'ready': return '就绪'
     case 'running': return '运行中'
     case 'active': return '活跃'
     case 'speaking': return '播报中'
     case 'thinking': return '思考中'
     case 'disconnected': return '已断开'
     case 'offline': return '离线'
+    case 'unavailable': return '不可用'
     case 'error': return '错误'
     default: return '未知'
   }
 }
 function statusClass(status: string): string {
   switch (status) {
-    case 'connected': case 'running': case 'active': case 'speaking': case 'thinking': return 'status-ok'
-    case 'disconnected': case 'offline': return 'status-off'
+    case 'connected': case 'running': case 'active': case 'speaking': case 'thinking': case 'ready': return 'status-ok'
+    case 'disconnected': case 'offline': case 'unavailable': return 'status-off'
     case 'error': return 'status-err'
     default: return 'status-unknown'
   }

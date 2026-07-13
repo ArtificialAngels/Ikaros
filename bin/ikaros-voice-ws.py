@@ -217,7 +217,7 @@ async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") ->
             _PROACTIVE_PENDING.add(ws)
         except Exception:
             pass
-    # 主动内容也写进 V4 长期记忆 (绕过 _record_conversation 的 user 质量门控,
+    # 主动内容也写进 V5.1 长期记忆 (绕过 _record_conversation 的 user 质量门控,
     # 直接 store 一条 proactive 类型记忆, 长期可回忆"我曾主动开过口")。
     try:
         from cloud_chat import _get_v4_store
@@ -228,7 +228,7 @@ async def _speak_to_all(text: str, kind: str = "spontaneous", mood: str = "") ->
                 type="conversation", weight=0.4, tags="proactive,cloud_chat",
             )
     except Exception as e:
-        log.debug("proactive v4 record failed: %s", e)
+        log.debug("proactive v5 record failed: %s", e)
     # TTS: 单次合成后发给所有仍在线的 pet
     try:
         audio = await _tts_dispatch(text)
@@ -516,8 +516,11 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
         # 单句: 直接合成
         audio = await _tts_dispatch(reply)
         if audio:
-            await ws.send(audio)
-            return 1
+            try:
+                await ws.send(audio)
+                return 1
+            except Exception:
+                pass
         return 0
 
     # 多句: 逐句合成 + 逐句推送
@@ -544,12 +547,47 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
 
 async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
                     history=None) -> str:
-    """cloud_chat → :8080 qwen3-8b fallback (镜像 ikaros-repl 真物).
+    """本地 :8080 优先 (直连, 无 Hermes WS 依赖), cloud_chat 兜底。
 
     on_delta: 流式回调 (逐 token). 传了就启用 cloud_chat 流式首字上屏.
     history: 本连接的历史消息 (含伊卡洛斯主动开口), 传给 cloud_chat 拼进上下文,
              使多轮连贯且能意识到自己主动说过的话。
     """
+    import json, http.client
+
+    # 优先直连本地 :8080 — 绕过 Hermes WS session.new 不稳定问题
+    try:
+        _msgs = [
+            {"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
+        ]
+        if history:
+            _msgs.extend(history[-20:])
+        _msgs.append({"role": "user", "content": cogno_prefix + "\n\n" + prompt})
+        body = json.dumps({
+            "model": "qwen3-8b",
+            "messages": _msgs,
+            "max_tokens": 600,
+            "temperature": 0.7,
+        }).encode("utf-8")
+        conn = http.client.HTTPConnection("127.0.0.1", 8080, timeout=30)
+        conn.request(
+            "POST", "/v1/chat/completions", body=body,
+            headers={"Content-Type": "application/json",
+                     "Host": "127.0.0.1:8080",
+                     "User-Agent": "ikaros-voice-ws/1.0",
+                     "Accept-Encoding": "identity"},
+        )
+        resp = conn.getresponse()
+        if resp.status == 200:
+            d = json.loads(resp.read().decode("utf-8"))
+            conn.close()
+            return d["choices"][0]["message"].get("content") or ""
+        conn.close()
+        log.debug("local :8080 returned HTTP %s, trying cloud_chat", resp.status)
+    except Exception as e:
+        log.debug("local :8080 unavailable (%s), trying cloud_chat", e)
+
+    # Fallback: cloud_chat via Hermes WS (support on_delta streaming)
     cc = _load_cloud_chat()
     if cc is not None:
         try:
@@ -562,36 +600,7 @@ async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
             return str(res)
         except Exception as e:
             log.warning("cloud_chat call failed: %s", e)
-    # Fallback: :8080 qwen3-8b via http.client (urllib absolute-URI bug workaround)
-    import json, http.client
-    _msgs = [
-        {"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
-    ]
-    # 带上最近历史 (含伊卡洛斯主动开口), 保证降级路径也多轮连贯
-    if history:
-        _msgs.extend(history[-20:])
-    _msgs.append({"role": "user", "content": cogno_prefix + "\n\n" + prompt})
-    body = json.dumps({
-        "model": "qwen3-8b",
-        "messages": _msgs,
-        "max_tokens": 600,
-        "temperature": 0.7,
-    }).encode("utf-8")
-    conn = http.client.HTTPConnection("127.0.0.1", 8080, timeout=60)
-    conn.request(
-        "POST", "/v1/chat/completions", body=body,
-        headers={"Content-Type": "application/json",
-                 "Host": "127.0.0.1:8080",
-                 "User-Agent": "ikaros-voice-ws/1.0",
-                 "Accept-Encoding": "identity"},
-    )
-    resp = conn.getresponse()
-    if resp.status != 200:
-        conn.close()
-        return f"(LLM fallback failed HTTP {resp.status})"
-    d = json.loads(resp.read().decode("utf-8"))
-    conn.close()
-    return d["choices"][0]["message"].get("content") or ""
+    return "(LLM unavailable)"
 
 
 async def _handle_text(ws, payload, enrich, enrich_reply, history,
@@ -678,11 +687,12 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
     if os.environ.get("IKAROS_DIAG") == "1":
         log.info("DIAG_REPLY_TEXT: %r", reply)
 
-    # 流式未触发 (无 on_delta 支持 / 降级路径) → 用完整 reply 兜底推首块
-    if not _first_delta_sent and reply:
-        await ws.send(json.dumps({
-            "type": "delta", "text": reply, "is_first": True,
-        }))
+    # 流式未触发的降级路径: 不再发 fallback delta — done 事件已负责气泡显示 + TTS
+    # 移除多余的 delta 避免本地模型回复出现一前一后的双气泡
+    # if not _first_delta_sent and reply:
+    #     await ws.send(json.dumps({
+    #         "type": "delta", "text": reply, "is_first": True,
+    #     }))
 
     # 又被打断? (LLM 调用期间可能来了新 utterance)
     if state is not None and state.get("utt_id", 0) != my_id:
@@ -727,7 +737,7 @@ async def _handle_text(ws, payload, enrich, enrich_reply, history,
     _LAST_SPOKEN_GUARD = max(_ECHO_GUARD_SEC, len(reply) * 0.35)
 
     # 6b) 把本轮 user + assistant 写入连接历史, 保证下一轮多轮连贯。
-    # (V4 长期记忆已由 cloud_chat 内部 _record_conversation 自动写, 此处不重复)
+    # (V5.1 长期记忆已由 cloud_chat 内部 _record_conversation 自动写, 此处不重复)
     if reply:
         _history_append(history, "user", user_text)
         _history_append(history, "assistant", reply)
@@ -1183,7 +1193,7 @@ def _get_audio_prep():
     global _AUDIO_PREP
     if _AUDIO_PREP is None:
         try:
-            from bin.audio_preprocessor import AudioPreprocessor
+            from audio_preprocessor import AudioPreprocessor
             _AUDIO_PREP = AudioPreprocessor(sample_rate=16000)
             log.info("AudioPreprocessor ready (DC removal + RMS norm + noise gate + limiter)")
         except Exception as e:
@@ -1206,8 +1216,9 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     # 主动搭话循环: 任务计时器(作息/记忆) + 混沌/生命游戏门 → pet 主动开口
     asyncio.ensure_future(_proactive_loop())
 
-    # 预热: 后台加载 SenseVoice + Vosk 模型 (避免首次对话等待)
-    def _warm_stt():
+    # 预热: 后台加载 SenseVoice + Vosk 模型 + Hermes 主 session
+    def _warm_all():
+        # STT 预热
         t0 = time.time()
         sv = _get_sensevoice()
         if sv is not None:
@@ -1225,7 +1236,14 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         if vosk_m is not None:
             log.info("Vosk model ready")
     import threading
-    threading.Thread(target=_warm_stt, daemon=True, name="stt-warm").start()
+    threading.Thread(target=_warm_all, daemon=True, name="stt-warm").start()
+
+    # Hermes 热启动: 预创建主 session (避免首次对话冷启动 ~500ms)
+    try:
+        from cloud_chat import warm_hermes_session
+        asyncio.ensure_future(warm_hermes_session())
+    except Exception:
+        pass
 
     log.info("starting voice-ws on ws://%s:%d/v1/voice/ws", host, port)
     # 2026-07-11 修复: 关掉 server 主动 ping (ping_interval=None)。

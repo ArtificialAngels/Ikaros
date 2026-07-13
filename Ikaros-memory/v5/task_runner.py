@@ -61,6 +61,7 @@ def call_async(text: str, optimized: Optional[str] = None) -> dict:
         name=f"task-{task_id}",
     )
     t.start()
+    _register_session(task_id, "", "running", text)
     return {"status": "running", "task_id": task_id}
 
 
@@ -84,12 +85,20 @@ def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
         goal = f"执行这个任务: {user_content}"
 
         _result = _sp.run(
-            [_hermes, "chat", "-q", goal, "--max-turns", "3"],
+            [_hermes, "chat", "-q", goal, "--max-turns", "3", "--pass-session-id"],
             capture_output=True, text=True, timeout=300,
             cwd=str(Path(__file__).resolve().parent.parent.parent),
         )
 
-        reply = _result.stdout.strip()
+        # 捕获 Hermes 子代理 session_id
+        _sub_session_id = ""
+        _reply_lines: list[str] = []
+        for _ln in _result.stdout.split("\n") + (_result.stderr or "").split("\n"):
+            if _ln.strip().startswith("session_id:"):
+                _sub_session_id = _ln.strip().split("session_id:")[-1].strip()
+            else:
+                _reply_lines.append(_ln)
+        reply = "\n".join(_reply_lines).strip()
         if not reply or _result.returncode != 0:
             reply = _result.stderr.strip() or "（任务执行失败）"
 
@@ -97,6 +106,7 @@ def _execute_async(task_id: str, text: str, optimized: Optional[str]) -> None:
             "task_id": task_id, "status": "done",
             "text": text, "optimized": optimized,
             "result": reply, "completed_at": time.time(),
+            "session_id": _sub_session_id,
         })
         logger.info("task %s: done (%d chars)", task_id, len(reply))
 
@@ -164,6 +174,112 @@ def consume_reminder() -> Optional[dict]:
     return data
 
 
+def _read_json(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# ─── 子代理会话追踪 ──────────────────────────────
+
+def check_running_tasks() -> list[dict]:
+    """检查所有正在运行/已完成待交付的任务."""
+    tasks: list[dict] = []
+    for p in [_RESULT_PATH, _PENDING_PATH]:
+        if p.is_file():
+            try:
+                d = _read_json(p)
+                if d:
+                    tasks.append(d)
+            except Exception:
+                pass
+    return tasks
+
+
+def resume_sub_session(session_id: str, extra_prompt: str = "") -> str | None:
+    """主 chat 推动子任务: 用 session_id resume 并追加提示.
+
+    Args:
+        session_id: Hermes 子代理 session ID
+        extra_prompt: 额外指令 (如 "继续 / 检查状态 / 汇报进度")
+
+    Returns:
+        子代理的文字回复, 或 None (session 不存在/失败)
+    """
+    import subprocess as _sp
+    _hermes = str(Path(__file__).resolve().parent.parent.parent
+                  / "hermes-agent" / "venv" / "Scripts" / "hermes.exe")
+    if not Path(_hermes).is_file():
+        return None
+    try:
+        _args = [_hermes, "chat", "-Q", "--resume", session_id,
+                 "--max-turns", "2"]
+        if extra_prompt:
+            _args += ["-q", extra_prompt]
+        _result = _sp.run(_args, capture_output=True, text=True, timeout=60,
+                          cwd=str(Path(__file__).resolve().parent.parent.parent))
+        if _result.returncode == 0:
+            return _result.stdout.strip() or None
+    except Exception:
+        pass
+    return None
+
+
+def task_status_summary() -> str:
+    """生成可注入 main chat 的任务摘要."""
+    tasks = list_task_sessions()
+    if not tasks:
+        return ""
+    lines = ["\n### 子代理任务"]
+    for t in tasks:
+        sid = t.get("session_id", "")
+        status = t.get("status", "?")
+        goal = (t.get("text") or t.get("optimized") or "未知任务")[:50]
+        if status == "running":
+            lines.append(f"- [{status}] {goal} (session: {sid[:12]}...)")
+        elif status == "done":
+            summary = (t.get("result") or "")[:80]
+            lines.append(f"- [done] {goal} → {summary}")
+        else:
+            lines.append(f"- [{status}] {goal}")
+    return "\n".join(lines)
+
+
+# ─── 子代理 Session 注册表 (监控面板可见) ─────────────────────
+
+_TASK_SESSIONS_PATH = _TASK_DIR / "task_sessions.json"
+
+def _register_session(task_id: str, session_id: str, status: str, goal: str):
+    """写入子代理 session 到注册表(可被监控面板/history-read)."""
+    try:
+        entries = _read_json(_TASK_SESSIONS_PATH) or []
+        # 去重: 同 session_id 覆盖
+        entries = [e for e in entries if e.get("session_id") != session_id]
+        entries.append({
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": status,
+            "goal": goal[:80],
+            "updated": time.time(),
+        })
+        _TASK_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(_TASK_SESSIONS_PATH, entries[-50:])  # keep last 50
+    except Exception:
+        pass
+
+def list_task_sessions() -> list[dict]:
+    """列出最近的子代理 session."""
+    return _read_json(_TASK_SESSIONS_PATH) or []
+
+def get_task_session(session_id: str) -> dict | None:
+    """按 session_id 查找子代理 session."""
+    entries = _read_json(_TASK_SESSIONS_PATH) or []
+    for e in entries:
+        if e.get("session_id") == session_id:
+            return e
+    return None

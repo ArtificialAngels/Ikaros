@@ -1,10 +1,10 @@
 """
-v4.reflect.registry — V4 反思 op 注册表
+v5.reflect.registry — V5.1 反思 op 注册表
 
-把 consolidate / distill / migrate 包装成 ReflectOp, 注入到 scheduler.
-scheduler 调 run_all() 时, 自动按 trigger 跑到期 op.
+把 consolidate / distill / narrative / self_discovery 包装成 ReflectOp,
+注入到 scheduler。scheduler 调 run_all() 时, 自动按 trigger 跑到期 op。
 
-哥哥 (2026-07-05) 拍 A: V4 scheduler 接 consolidate/distill/migrate.
+(原 v4.reflect.registry → V5.1 unified)
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ import logging
 import sys
 from pathlib import Path
 
-V4_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(V4_ROOT.parent))
+V5_ROOT = Path(__file__).resolve().parent.parent  # v5/
+sys.path.insert(0, str(V5_ROOT.parent))
 
-from v4.reflect.scheduler import (  # noqa: E402
+from v5.reflect.scheduler import (  # noqa: E402
     DEFAULT_CLEANUP_INTERVAL,
     DEFAULT_NARRATIVE_INTERVAL,
     DEFAULT_CONSOLIDATE_INTERVAL,
@@ -30,14 +30,14 @@ from v4.reflect.scheduler import (  # noqa: E402
     ScheduleState,
 )
 
-logger = logging.getLogger("ikaros.memory.v4.registry")
+logger = logging.getLogger("ikaros.memory.v5.registry")
 
 
 # ─── Op factory ──────────────────────────────────────────────
 
 def make_consolidate_op() -> ReflectOp:
     """对话整合: 1h, 小模型提取 + 大模型验证."""
-    from v4.reflect import consolidate
+    from v5.reflect import consolidate
 
     def _fn() -> int:
         result = consolidate.consolidate_conversations()
@@ -68,7 +68,7 @@ def make_dedup_op() -> ReflectOp:
 
 def make_promote_op() -> ReflectOp:
     """短期 → 长期晋升: 12h, 纯算法."""
-    from v4 import store
+    from v5 import store
 
     PROMOTE_WEIGHT = 0.7
     PROMOTE_ACCESSES = 3
@@ -97,7 +97,7 @@ def make_promote_op() -> ReflectOp:
 
 def make_distill_op() -> ReflectOp:
     """灵魂蒸馏: 24h, 小模型 (V4 已有 distill.distill)."""
-    from v4.reflect import distill
+    from v5.reflect import distill
 
     def _fn() -> int:
         result = distill.distill()
@@ -112,12 +112,12 @@ def make_distill_op() -> ReflectOp:
 
 
 def make_reflect_op() -> ReflectOp:
-    """灵魂层反思: 7d, 大模型 (V4 已有 distill.reflect).
+    """灵魂层反思: 3h, 大模型 (V4 已有 distill.reflect).
 
-    哥哥 id 158 长线目标核心: 从记忆反推"我是谁 / 我怎么变了".
-    7d 一次, 不频繁 (贵).
+    哥哥 7-12 要求提升自省频率: 从记忆反推"我是谁 / 我怎么变了".
+    3h 一次, 容许云 API 消耗增加.
     """
-    from v4.reflect import distill
+    from v5.reflect import distill
 
     def _fn() -> int:
         result = distill.reflect()
@@ -126,14 +126,14 @@ def make_reflect_op() -> ReflectOp:
     return ReflectOp(
         name="reflect",
         fn=_fn,
-        interval_sec=DEFAULT_REFLECT_INTERVAL,  # 7d
+        interval_sec=DEFAULT_REFLECT_INTERVAL,  # 3h
         last_run_key="last_reflect",
     )
 
 
 def make_cleanup_op() -> ReflectOp:
     """自动清理: 6h, 删除低 weight / 过期 conversation / 过期 decision."""
-    from v4 import store
+    from v5 import store
     import time
 
     def _fn() -> int:
@@ -185,6 +185,7 @@ def make_default_scheduler(state: ScheduleState | None = None) -> ReflectSchedul
     s.register(make_cleanup_op())
     s.register(make_vector_sync_op())
     s.register(make_narrative_op())
+    s.register(make_self_discovery_op())
     return s
 
 
@@ -195,8 +196,8 @@ def make_vector_sync_op() -> ReflectOp:
     A1 已让 store() 写时同步, 此 op 作崩溃恢复 + 历史回填的安全网。
     chromadb / :8587 不可用时静默返 0, 不阻塞其他反思 op。
     """
-    from v4 import store as _store
-    from v4.search import VectorIndex
+    from v5 import store as _store
+    from v5.search import VectorIndex
 
     def _fn() -> int:
         try:
@@ -249,4 +250,23 @@ def make_narrative_op() -> ReflectOp:
         fn=_fn,
         interval_sec=DEFAULT_NARRATIVE_INTERVAL,
         last_run_key="last_narrative",
+    )
+
+
+def make_self_discovery_op() -> ReflectOp:
+    """自我认知探索: 3h, Hermes Agent 分析自身架构.
+
+    每 3h 读关键文件 + 调 Hermes 分析项目结构,
+    让伊卡洛斯了解自己的真实架构, 而非被写死的描述。"""
+    DEFAULT_SELF_DISCOVERY_INTERVAL = 3 * 3600  # 3h
+
+    def _fn() -> int:
+        from v5.self_discovery import self_discover
+        return self_discover()
+
+    return ReflectOp(
+        name="self_discovery",
+        fn=_fn,
+        interval_sec=DEFAULT_SELF_DISCOVERY_INTERVAL,
+        last_run_key="last_self_discovery",
     )

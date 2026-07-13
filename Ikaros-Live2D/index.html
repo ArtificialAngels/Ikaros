@@ -8,6 +8,8 @@
     <script>
       // 诊断层: 捕获资源加载 / JS / Promise 错误并显示在屏幕上 (正常时不显示)
       (function () {
+        // __diag: report page load to dist server (dev only, fails silently in prod)
+        try { fetch('http://127.0.0.1:8999/__diag?step=index_html&ts=' + Date.now()).catch(function(){}) } catch(_) {}
         function show(msg) {
           try {
             var el = document.getElementById('boot-error');

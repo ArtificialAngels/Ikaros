@@ -59,7 +59,7 @@ def generate_narrative(
     Returns:
         {"narrative": str|None, "source_count": int, "changes_from_last": str|None}
     """
-    from v4 import store as v4
+    from v5 import store as v4
 
     t0 = time.time()
 
@@ -89,7 +89,7 @@ def generate_narrative(
     # 2) LLM 生成叙事
     if use_llm:
         try:
-            from v4.reflect.llm_client import call_llm
+            from v5.reflect.llm_client import call_llm
             result = call_llm(
                 _NARRATIVE_SYSTEM,
                 f"以下是我的近期记忆 ({len(rows)} 条):\n\n{entries_text}",
@@ -125,6 +125,18 @@ def generate_narrative(
         logger.error("narrative: v4 store failed (%s)", exc)
         mid = -1
 
+    # V5.1: 月度叙事成果回写 self_model, 打通"每月总结的我"和"持久的我"
+    try:
+        from v5.self_model import SelfModel
+        sm = SelfModel.load()
+        sm.data["self_narrative"] = narrative_text
+        # 同时记录叙事生成时间
+        sm.data.setdefault("metacog", {})["last_narrative_ts"] = time.time()
+        sm.save()
+        logger.info("narrative: self_model backfilled (%d chars)", len(narrative_text))
+    except Exception as exc:
+        logger.debug("narrative: self_model backfill failed (%s)", exc)
+
     elapsed = time.time() - t0
     return {
         "narrative": narrative_text,
@@ -157,7 +169,7 @@ def _simple_narrative(rows: list) -> str:
 def _compare_with_last(new_narrative: str) -> Optional[str]:
     """与上次叙事比对变化."""
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         with v4.conn() as c:
             last = c.execute(
                 "SELECT content FROM memory WHERE type='narrative' "

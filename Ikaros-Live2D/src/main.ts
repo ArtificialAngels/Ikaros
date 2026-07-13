@@ -21,17 +21,22 @@ function loadScript(src: string): Promise<void> {
 
 async function loadCubismCore(): Promise<void> {
   console.log('[main] Loading Live2D runtimes...')
-  // Load Cubism 2 runtime first (required by pixi-live2d-display)
-  await loadScript('/live2d/live2d.min.js')
-  // Then load Cubism 4 runtime (required for .model3.json models)
-  await loadScript('/live2d/live2dcubismcore.min.js')
+  await loadScript('/live2d/live2d.js')
+  await loadScript('/live2d/live2dcubismcore.js')
   console.log('[main] window.Live2D:', !!(window as any).Live2D)
   console.log('[main] window.Live2DCubismCore:', !!(window as any).Live2DCubismCore)
 }
 
 async function bootstrap() {
   console.log('[main] bootstrap start')
-  await loadCubismCore()
+  try {
+    await loadCubismCore()
+    console.log('[main] Live2D loaded')
+  } catch (e) {
+    // Live2D may fail to load in Tauri's wry custom protocol;
+    // the app works without it (WS + monitor + backend features).
+    console.warn('[main] Live2D failed to load, continuing without:', e)
+  }
   console.log('[main] importing Vue...')
   const { createApp } = await import('vue')
   console.log('[main] importing App.vue...')

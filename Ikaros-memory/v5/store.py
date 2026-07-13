@@ -259,7 +259,7 @@ def _sync_vector_best_effort(memory_id: int, content: str, type: str,
     - :8587 不可用 / 嵌入失败 → 返回 False, 由后续 vector_sync 反思 op 兜底
     """
     try:
-        from v4.search import VectorIndex
+        from v5.search import VectorIndex
     except Exception as e:
         logger.debug("vector sync skipped (import): %s", e)
         return False
@@ -347,10 +347,11 @@ def stats() -> dict:
         long_term = c.execute(
             "SELECT COUNT(*) FROM memory WHERE long_term = 1"
         ).fetchone()[0]
+        avg_weight = float(c.execute("SELECT AVG(weight) FROM memory").fetchone()[0] or 0)
     return {
         "total": total,
         "long_term": long_term,
-        "avg_weight": float(c.execute("SELECT AVG(weight) FROM memory").fetchone()[0] or 0),
+        "avg_weight": avg_weight,
         "by_type": {r[0]: {"count": r[1], "avg_weight": r[2]} for r in by_type},
         "db_size_bytes": V4_DB_PATH.stat().st_size if V4_DB_PATH.exists() else 0,
         "db_path": str(V4_DB_PATH),

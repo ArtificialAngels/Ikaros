@@ -58,6 +58,12 @@ REM ---- Step 4b: Ikaros-Live2D desktop pet paths ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"
 set "IKAROS_NODE_MODULES=%IKAROS_RUNTIME%\node23\node_modules"
 
+REM ---- TTS: 默认走 edge-tts (zh-CN-XiaoxiaoNeural, 中文甜美女声) ----
+REM 如需切回本地 VITS, 取消下面注释:
+REM set "IKAROS_TTS_BACKEND=local"
+REM set "IKAROS_TTS_MODEL_DIR=%IKAROS_DATA_MODELS%\sherpa-onnx-vits-zh-hf-keqing\vits-zh-hf-keqing"
+REM set "IKAROS_TTS_SPEAKER=0"
+
 REM ---- Step 4b-2: Ensure pet node_modules link (portable) ----
 REM  Pet MUST reuse runtime\node23\node_modules (no duplicate copy).
 REM  Ikaros-Live2D\node_modules is a JUNCTION to the shared node_modules.

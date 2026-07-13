@@ -1,5 +1,5 @@
 """
-v4.tests.test_goal_contract — GoalContract dataclass + draft_contract() 单测
+v5.tests.test_goal_contract — GoalContract dataclass + draft_contract() 单测
 
 覆盖 (21 case):
   - GoalContract dataclass 行为 (4)

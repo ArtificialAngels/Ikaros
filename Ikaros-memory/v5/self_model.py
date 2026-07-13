@@ -33,7 +33,9 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -45,10 +47,73 @@ if str(V5_ROOT) not in sys.path:
 
 _SELF_PATH = V5_ROOT / "data" / "v5" / "self_model.json"
 
+# ─── 跨平台文件锁 (V5.1: 防止 think/metacog/cloud_chat 并发写 data/v5/*.json) ───
+
+_LOCK_SUFFIX = ".lock"
+_LOCK_TIMEOUT = 3.0  # 最多等 3 秒拿锁
+_LOCK_POLL = 0.05     # 轮询间隔 50ms
+
+_locks: dict[str, threading.Lock] = {}  # 进程内线程锁 (防止同一进程多线程抢)
+
+if os.name == "nt":
+    import msvcrt
+
+    def _lock_file(fd, path: str):
+        try:
+            msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
+        except Exception:
+            pass
+
+    def _unlock_file(fd, path: str):
+        try:
+            msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+else:
+    import fcntl
+
+    def _lock_file(fd, path: str):
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock_file(fd, path: str):
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def json_lock(file_path: Path):
+    """文件级写锁 (进程间 + 线程内), 防止并发写坏 data/v5/*.json。
+
+    用法:
+        from v5.self_model import json_lock
+        with json_lock(path):
+            path.write_text(json.dumps(data), encoding="utf-8")
+    """
+    lock_path = Path(str(file_path) + _LOCK_SUFFIX)
+    # 线程级锁 (同进程内串行)
+    thread_lock = _locks.setdefault(str(lock_path), threading.Lock())
+    acquired = thread_lock.acquire(timeout=_LOCK_TIMEOUT)
+    if not acquired:
+        raise RuntimeError(f"json_lock: thread lock timeout for {file_path}")
+    lock_fd = None
+    try:
+        lock_fd = open(str(lock_path), "w")
+        _lock_file(lock_fd, str(lock_path))
+        yield
+    except Exception:
+        raise
+    finally:
+        if lock_fd is not None:
+            try:
+                _unlock_file(lock_fd, str(lock_path))
+            except Exception:
+                pass
+            lock_fd.close()
+        thread_lock.release()
+
 # ─── 种子自我 (首次运行时写入; 之后由 metacog 演进) ───────────
 
 _SEED = {
-    "version": 2,
+    "version": 3,
     "identity": {
         "name": "伊卡洛斯",
         "nature": "人造天使 / 桌面 AI 伴侣",
@@ -64,9 +129,9 @@ _SEED = {
     # 她对自己架构的认知清单 (静态清单 + 运行时 status)
     "architecture": [
         {"name": "Live2D 桌宠", "role": "屏幕上陪伴哥哥的具身形象", "status": "运行中"},
-        {"name": "记忆系统 V4", "role": "存储对话/事实/反思的长期记忆", "status": "运行中"},
-        {"name": "V5 情感引擎", "role": "PAD 情绪 + 精力 + 混沌/生命游戏思维", "status": "运行中"},
-        {"name": "自我认知层", "role": "self_model + metacog: 认识自己、持续内省、探索哲学", "status": "运行中"},
+        {"name": "记忆系统 V5.1", "role": "存储对话/事实/反思的长期记忆 (v4.db + V5.1 反思引擎)", "status": "运行中"},
+        {"name": "V5.1 情感引擎", "role": "PAD 情绪 + 精力 + 混沌/生命游戏思维", "status": "运行中"},
+        {"name": "V5.1 自我认知层", "role": "self_model + metacog: 认识自己、持续内省、探索哲学", "status": "运行中"},
         {"name": "语音链路 voice-ws", "role": "听哥哥说话、用语音回应", "status": "运行中"},
         {"name": "活动监测 monitor", "role": "感知哥哥在做什么(写代码/游戏/休息)", "status": "运行中"},
         {"name": "记忆看门狗", "role": "管理本地模型 (:8587 嵌入 / :8080 qwen3-8b)", "status": "运行中"},
@@ -162,10 +227,11 @@ class SelfModel:
         p = Path(path) if path else _SELF_PATH
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.parent / (p.name + f".tmp.{os.getpid()}")
-            tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2),
-                           encoding="utf-8")
-            os.replace(tmp, p)  # 原子替换, 防止双进程写坏
+            with json_lock(p):
+                tmp = p.parent / (p.name + f".tmp.{os.getpid()}")
+                tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+                os.replace(tmp, p)  # 原子替换, 防止双进程写坏
         except Exception as exc:
             logger.warning("self_model save failed: %s", exc)
 
@@ -179,7 +245,7 @@ class SelfModel:
         now = now or time.time()
         view = self.data.setdefault("memory_self_view", {})
         try:
-            from v4 import store as v4
+            from v5 import store as v4
             stats = v4.stats()
             view["total"] = stats.get("total", 0)
             view["by_type"] = stats.get("by_type", {})

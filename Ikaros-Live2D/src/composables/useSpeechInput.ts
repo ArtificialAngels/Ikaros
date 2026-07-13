@@ -33,8 +33,8 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
   let speaking = false
   let lastSpeech = 0
   let noiseFloor = 0.01 // 长期低能量帧的指数滑动均值 (噪声底估计)
-  const SILENCE_MS = 1200 // 尾静挂起: 超过此时长无语音才判定句尾
-  const RMS_ABS_MIN = 0.008 // 绝对下限, 防止噪声底被压到 0
+  const SILENCE_MS = 1200 // tail silence before end-of-utterance
+  const RMS_ABS_MIN = 0.010 // moderate floor (was 0.008 → 0.015, now 0.010)
   const muted = ref(false)
 
   function micErrorText(e: any): string {
@@ -109,11 +109,11 @@ export function useSpeechInput(hooks: SpeechInputHooks) {
       const rms = Math.sqrt(sum / input.length)
       const now = Date.now()
       // 噪声底: 仅当能量明显低于当前底时缓慢下探, 避免被短暂静音拉低
-      if (rms < noiseFloor * 2.5) {
+      if (rms < noiseFloor * 3.0) { // moderate: was 2.5 → 4.0, now 3.0
         noiseFloor = noiseFloor * 0.999 + rms * 0.001
       }
-      const startTh = Math.max(RMS_ABS_MIN, noiseFloor * 1.8) // 起音阈值(迟滞上沿)
-      const stopTh = Math.max(RMS_ABS_MIN * 0.5, noiseFloor * 1.2) // 止音阈值(迟滞下沿, 更低)
+      const startTh = Math.max(RMS_ABS_MIN, noiseFloor * 2.0) // moderate: was 1.8 → 2.5, now 2.0
+      const stopTh = Math.max(RMS_ABS_MIN * 0.5, noiseFloor * 1.3)
       if (rms > startTh) {
         speaking = true
         lastSpeech = now

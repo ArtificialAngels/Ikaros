@@ -75,7 +75,7 @@ def detect_dissonance(
 
     # 1) 语义搜索相似旧记忆
     try:
-        from v4.search import fused_search
+        from v5.search import fused_search
         similar = fused_search(content, top_k=top_k)
     except Exception as exc:
         logger.debug("dissonance: search failed (%s)", exc)
@@ -124,7 +124,7 @@ def detect_dissonance(
 def _nli_check(old_text: str, new_text: str) -> str | None:
     """用本地 LLM 做 NLI 判断."""
     try:
-        from v4.reflect.llm_client import call_llm
+        from v5.reflect.llm_client import call_llm
     except Exception:
         return None
 
@@ -146,7 +146,7 @@ def _nli_check(old_text: str, new_text: str) -> str | None:
 def _record_dissonance(new_content: str, conflicts: list[dict]) -> None:
     """记录认知失调事件到 V4."""
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         old_summaries = "; ".join(
             [c["old_content"][:60] for c in conflicts[:2]]
         )

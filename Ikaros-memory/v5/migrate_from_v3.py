@@ -104,11 +104,11 @@ def _insert_v4(v4_path: Path, rows: list[sqlite3.Row], dry_run: bool) -> int:
     if not v4_path.exists():
         v4_path.parent.mkdir(parents=True, exist_ok=True)
         # 用 v4.store 的 conn() 创建 schema
-        from v4 import store as v4_store
-        v4_store.V4_DATA_DIR = v4_path.parent
-        v4_store.V4_DB_PATH = v4_path
-        v4_store.close()  # 清掉旧 thread-local
-        with v4_store.conn() as c:
+        from v5 import store as v5_store
+        v5_store.V4_DATA_DIR = v4_path.parent
+        v5_store.V4_DB_PATH = v4_path
+        v5_store.close()  # 清掉旧 thread-local
+        with v5_store.conn() as c:
             pass  # conn() 内 lazy init schema
 
     with sqlite3.connect(str(v4_path)) as c:

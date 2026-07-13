@@ -1,5 +1,5 @@
 """
-v4.reflect.scheduler — V4 反思周期调度器
+v5.reflect.scheduler — V5.1 反思周期调度器
 
 V3 痛点 (已查, 757 行 memory_reflect.py):
   - trigger 与 logic 混在 reflect_cycle() (line 594-678)
@@ -34,8 +34,8 @@ DEFAULT_PROMOTE_INTERVAL = 43200        # 12h — V3 _DEFAULT_PROMOTE_INTERVAL
 DEFAULT_DISTILL_INTERVAL = 86400        # 24h — V3 _DEFAULT_DISTILL_INTERVAL
 # V3 bug 修复: cleanup 单独 interval, 不复用 dedup
 DEFAULT_CLEANUP_INTERVAL = 21600        # 6h  — V3 复用 bug (line 649) 已修
-# V4 新增: reflect (大模型灵魂层反思) — 7d, 不频繁 (贵, 哥哥 id 158 长线目标)
-DEFAULT_REFLECT_INTERVAL = 604800       # 7d
+# V4 新增: reflect (大模型灵魂层反思) — 3h, 哥哥 7-12 要求提升自省频率
+DEFAULT_REFLECT_INTERVAL = 10800        # 3h
 # V4 新增: vector_sync (向量回填/校正) — 24h, 确保 v4.db 每条记忆都有 Chroma 向量
 #   A1 已让 store() 写时同步; 此 op 作崩溃恢复 + 历史回填的安全网 (A2 修复)
 DEFAULT_VECTOR_SYNC_INTERVAL = 86400    # 24h

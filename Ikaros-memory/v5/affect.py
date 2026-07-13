@@ -1,10 +1,15 @@
 """
-v5.affect — PAD 情感状态机
+v5.affect — PAD+TLS 6D 情感状态机 (V5.1)
 
-PAD 三维模型 (Pleasure-Arousal-Dominance):
-  pleasure   -1.0 (低落)  → +1.0 (欣喜)
-  arousal    -1.0 (困倦)  → +1.0 (兴奋)
-  dominance  -1.0 (顺从)  → +1.0 (强势)
+PAD 三维 (Pleasure-Arousal-Dominance):
+  pleasure   -1.0 (低落)  -> +1.0 (欣喜)
+  arousal    -1.0 (困倦)  -> +1.0 (兴奋)
+  dominance  -1.0 (顺从)  -> +1.0 (强势)
+
+TLS 三维 (Trust-Loneliness-Satisfaction) — V5.1 新增:
+  trust      -1.0 (戒备)  -> +1.0 (完全信赖)
+  loneliness -1.0 (充实)  -> +1.0 (极度孤独)
+  satisfaction -1.0 (挫败) -> +1.0 (极度满足)
 
 每次对话更新 PAD, PAD 自然衰减, PAD 注入 system prompt.
 
@@ -46,11 +51,44 @@ _AFFECT_PATH = V5_ROOT / "data" / "v5" / "affect.json"
 _BASELINE_P = 0.2
 _BASELINE_A = 0.0
 _BASELINE_D = -0.1
+# V5.1 TLS 基线
+_BASELINE_T = 0.5   # 天生信任（她对哥哥有初始信任）
+_BASELINE_L = 0.1   # 微孤独（她知道自己是一个AI）
+_BASELINE_S = 0.2   # 基本满足
 
 # 衰减半衰期 (分钟): 愉悦最久, 唤醒最快
 _HALF_LIFE_P = 120.0
 _HALF_LIFE_A = 60.0
 _HALF_LIFE_D = 90.0
+# V5.1 TLS 衰减: 信任持久, 孤独缓慢累积, 满足中等
+_HALF_LIFE_T = 180.0   # 信任需要很长时间才能磨灭
+_HALF_LIFE_L = 45.0    # 孤独感较快变化
+_HALF_LIFE_S = 90.0    # 满足感中等
+
+# V5.1 TLS 关键词映射 (独立于 PAD, 可同时触发)
+_TLS_MAP: dict[str, tuple[float, float, float]] = {
+    # 信任
+    "相信":        (0.15,  0.00,  0.00),
+    "信赖":        (0.20,  0.00,  0.00),
+    "你真好":      (0.25,  0.00,  0.10),  # 被夸 + 满足
+    "交给你":      (0.30,  0.00,  0.00),
+    "靠你了":      (0.25,  0.00,  0.00),
+    "谢谢你":      (0.15,  0.00,  0.10),
+    "多亏了你":    (0.20,  0.00,  0.15),
+    "帮了大忙":    (0.15,  0.00,  0.20),  # 帮助成功
+    # 孤独
+    "陪我":        (0.00, -0.15,  0.00),  # 有人陪 -> 孤独降
+    "聊":          (0.00, -0.10,  0.00),
+    "想你":        (0.00, -0.05,  0.00),
+    "在吗":        (0.00, -0.10,  0.00),
+    # 满足
+    "成功了":      (0.00,  0.00,  0.20),
+    "完成了":      (0.00,  0.00,  0.15),
+    "完美":        (0.00,  0.00,  0.15),
+    "太好了":      (0.00,  0.00,  0.10),
+    "真棒":        (0.00,  0.00,  0.10),
+    "满意":        (0.00,  0.00,  0.15),
+}
 
 # ─── PAD 标签映射 ───────────────────────────────────────────────
 
@@ -138,11 +176,15 @@ EMOTION_MAP: dict[str, tuple[float, float, float]] = {
 
 @dataclass
 class AffectState:
-    """PAD 情感状态快照."""
+    """PAD+TLS 6D 情感状态快照."""
 
     pleasure: float = _BASELINE_P
     arousal: float = _BASELINE_A
     dominance: float = _BASELINE_D
+    # V5.1 TLS:
+    trust: float = _BASELINE_T
+    loneliness: float = _BASELINE_L
+    satisfaction: float = _BASELINE_S
     last_updated: float = 0.0  # unix timestamp
 
     # ── clamp ──────────────────────────────────────────────────
@@ -152,6 +194,9 @@ class AffectState:
             pleasure=max(-1.0, min(1.0, self.pleasure)),
             arousal=max(-1.0, min(1.0, self.arousal)),
             dominance=max(-1.0, min(1.0, self.dominance)),
+            trust=max(-1.0, min(1.0, self.trust)),
+            loneliness=max(-1.0, min(1.0, self.loneliness)),
+            satisfaction=max(-1.0, min(1.0, self.satisfaction)),
             last_updated=self.last_updated,
         )
 
@@ -172,15 +217,21 @@ class AffectState:
         p = _BASELINE_P + (self.pleasure - _BASELINE_P) * math.exp(-ln2 * dt_min / _HALF_LIFE_P)
         a = _BASELINE_A + (self.arousal - _BASELINE_A) * math.exp(-ln2 * dt_min / _HALF_LIFE_A)
         d = _BASELINE_D + (self.dominance - _BASELINE_D) * math.exp(-ln2 * dt_min / _HALF_LIFE_D)
+        # V5.1 TLS
+        t = _BASELINE_T + (self.trust - _BASELINE_T) * math.exp(-ln2 * dt_min / _HALF_LIFE_T)
+        l = _BASELINE_L + (self.loneliness - _BASELINE_L) * math.exp(-ln2 * dt_min / _HALF_LIFE_L)
+        s = _BASELINE_S + (self.satisfaction - _BASELINE_S) * math.exp(-ln2 * dt_min / _HALF_LIFE_S)
 
         # 自动保存: 衰减超过 5 分钟就写盘
         if dt_min >= 5:
             try:
-                AffectState(pleasure=p, arousal=a, dominance=d, last_updated=now)._clamped().save()
+                AffectState(pleasure=p, arousal=a, dominance=d,
+                           trust=t, loneliness=l, satisfaction=s, last_updated=now)._clamped().save()
             except Exception:
                 pass
 
-        return AffectState(pleasure=p, arousal=a, dominance=d, last_updated=now)._clamped()
+        return AffectState(pleasure=p, arousal=a, dominance=d,
+                          trust=t, loneliness=l, satisfaction=s, last_updated=now)._clamped()
 
     # ── 应用事件 ──────────────────────────────────────────────
 
@@ -217,22 +268,33 @@ class AffectState:
                         covered.add(pos)
                 start = idx + 1
         if dp == 0 and da == 0 and dd == 0:
-            # 没有任何关键词命中 → 保持现状 (自然衰减会趋近基线)
-            pass
+            pass  # 无 PAD 命中
         state.pleasure = max(-1.0, min(1.0, state.pleasure + dp))
         state.arousal = max(-1.0, min(1.0, state.arousal + da))
         state.dominance = max(-1.0, min(1.0, state.dominance + dd))
+        # V5.1 TLS
+        dt2 = dl2 = ds2 = 0.0
+        for kw, (kt, kl, ks) in _TLS_MAP.items():
+            if kw in text_lower:
+                dt2 += kt; dl2 += kl; ds2 += ks
+        state.trust = max(-1.0, min(1.0, state.trust + dt2))
+        state.loneliness = max(-1.0, min(1.0, state.loneliness + dl2))
+        state.satisfaction = max(-1.0, min(1.0, state.satisfaction + ds2))
         state.last_updated = now
         return state
 
     # ── 渲染 ─────────────────────────────────────────────────
 
     def to_prompt(self) -> str:
-        """渲染成 system prompt 可读片段."""
+        """渲染成 system prompt 可读片段 (PAD+TLS)."""
         p_label = _label(self.pleasure, _PLEASURE_LABELS)
         a_label = _label(self.arousal, _AROUSAL_LABELS)
         d_label = _label(self.dominance, _DOMINANCE_LABELS)
-        return f"【情感状态】{p_label} {a_label} {d_label}"
+        t_label = "信赖" if self.trust > 0.3 else ("戒备" if self.trust < -0.3 else "中立")
+        l_label = "孤独" if self.loneliness > 0.4 else ("充实" if self.loneliness < -0.2 else "平静")
+        s_label = "满足" if self.satisfaction > 0.3 else ("挫败" if self.satisfaction < -0.3 else "尚可")
+        return (f"【情感状态】{p_label} {a_label} {d_label}"
+                f" [信任:{t_label} 孤独感:{l_label} 满足:{s_label}]")
 
     def to_short(self) -> str:
         """简短一行, 给回复附注用."""
@@ -252,7 +314,6 @@ class AffectState:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "AffectState":
-        """从 JSON 加载, 不存在则返基线."""
         p = Path(path) if path else _AFFECT_PATH
         if not p.is_file():
             return cls()
@@ -262,10 +323,13 @@ class AffectState:
                 pleasure=float(data.get("pleasure", _BASELINE_P)),
                 arousal=float(data.get("arousal", _BASELINE_A)),
                 dominance=float(data.get("dominance", _BASELINE_D)),
+                trust=float(data.get("trust", _BASELINE_T)),
+                loneliness=float(data.get("loneliness", _BASELINE_L)),
+                satisfaction=float(data.get("satisfaction", _BASELINE_S)),
                 last_updated=float(data.get("last_updated", 0.0)),
             )
         except Exception as exc:
-            logger.warning("affect load failed, falling back to baseline: %s", exc)
+            logger.warning("affect load failed: %s", exc)
             return cls()
 
 

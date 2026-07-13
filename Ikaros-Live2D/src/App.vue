@@ -473,6 +473,7 @@ function connectWebSocket() {
       ws!.send(JSON.stringify({ action: 'start', session_id: 'icarus_tauri' }))
       state.value = 'idle'
       monitorData.value.stt = { status: 'connected', label: 'STT' }
+      monitorData.value.tts = { status: 'connected', label: 'TTS' }
     addMonitorEvent('🔌', 'WebSocket 已连接')
   }
   ws.binaryType = 'arraybuffer'
@@ -558,7 +559,7 @@ function connectWebSocket() {
           }
           break
         case 'stt_status':
-          monitorData.value.stt = { status: msg.status, label: 'STT' }
+          monitorData.value.stt = { status: msg.status, label: msg.message || 'STT' }
           if (msg.status === 'unavailable') showBubble('⚠️ ' + msg.message, 4000)
           else addMonitorEvent('🎙', msg.message)
           break
@@ -578,6 +579,7 @@ function connectWebSocket() {
   ws.onclose = () => {
     state.value = 'idle'
     monitorData.value.stt = { status: 'disconnected', label: 'STT' }
+    monitorData.value.tts = { status: 'disconnected', label: 'TTS' }
     addMonitorEvent('⚠️', 'WebSocket 断开')
     setTimeout(connectWebSocket, 3000)
   }

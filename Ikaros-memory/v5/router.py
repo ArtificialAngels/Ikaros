@@ -123,7 +123,7 @@ def optimize_task(text: str) -> Optional[str]:
 def _search_relevant(text: str) -> str:
     """搜 V4 找与当前任务相关的记忆上下文."""
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         hits = v4.search(text, top_k=3, min_weight=0.4)
         if not hits:
             return ""
@@ -155,7 +155,7 @@ def _call_task_refiner(text: str, memory_context: str) -> Optional[str]:
         user += f"\n\n相关记忆:\n{memory_context}"
 
     try:
-        from v4.reflect.llm_client import call_llm_auto
+        from v5.reflect.llm_client import call_llm_auto
         result = call_llm_auto(
             system, user,
             max_tokens=512, timeout=60,

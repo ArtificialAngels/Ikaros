@@ -1,5 +1,5 @@
 """
-v4.reflect.distill — V4 灵魂蒸馏 (小模型蒸馏 + 大模型反思)
+v5.reflect.distill — V5.1 灵魂蒸馏 (小模型蒸馏 + 大模型反思)
 
 设计目标:
   - V3 distill_soul (memory_reflect.py:468-542): 只用小模型蒸馏 identity/axiom/rule/lesson
@@ -94,8 +94,8 @@ def distill(*, min_entries: int = 3) -> dict:
 
     Returns: {distilled: int, original: int, elapsed_sec, error}
     """
-    from v4 import store
-    from v4.reflect import llm_client
+    from v5 import store
+    from v5.reflect import llm_client
 
     t0 = time.time()
     with store.conn() as c:
@@ -119,7 +119,7 @@ def distill(*, min_entries: int = 3) -> dict:
         result = llm_client.call_llm(
             _DISTILL_SYSTEM,
             f"以下是 {len(rows)} 条记忆, 请蒸馏精简:\n\n{entries_text}",
-            provider="local", max_tokens=2048,
+            provider="deepseek", max_tokens=2048,
         )
     except Exception as e:
         logger.error("distill: LLM 失败 %s, 不改 db", e)
@@ -187,8 +187,8 @@ def reflect(*, max_memories: int = 50, use_big_llm: bool = True) -> dict:
 
     Returns: {reflections: int, sources: int, provider: str, error: str|None}
     """
-    from v4 import store
-    from v4.reflect import llm_client
+    from v5 import store
+    from v5.reflect import llm_client
 
     t0 = time.time()
     with store.conn() as c:

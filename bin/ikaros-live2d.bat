@@ -29,7 +29,7 @@ exit /b 1
 REM -- Ensure Voice WS (:7870) is up FIRST: pet speech (STT/TTS) depends on it.
 REM A standalone `ikaros-live2d.bat start` (without the full ikaros-start.bat)
 REM left voice-ws unstarted, so the pet's WebSocket stayed disconnected and the
-REM in-app status showed "STT disconnected / WebSocket 断开".
+REM in-app status showed "STT disconnected / WebSocket lost".
 call :ensure_voice
 
 REM -- Singleton check --
@@ -105,10 +105,10 @@ REM ============================================================
 :ensure_voice
 "%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',7870));s.close();exit(0 if r==0 else 1)" >nul 2>&1
 if not errorlevel 1 (
-    echo [ikaros] Voice WS (:7870) already running.
+    echo [ikaros] Voice WS [7870] already running.
     exit /b 0
 )
-echo [ikaros] Starting Voice WS (:7870) for speech...
+echo [ikaros] Starting Voice WS [7870] for speech...
 start "VoiceWS" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-voice-ws.py" > "%IKAROS_LOGS%\voice-ws.log" 2>&1
 set "WAIT=0"
 :wait_voice_live2d

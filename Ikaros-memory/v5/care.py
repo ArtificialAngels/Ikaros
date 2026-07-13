@@ -160,10 +160,12 @@ class CareMonitor:
         return text
 
     def save(self, path: Path | None = None) -> None:
+        from v5.self_model import json_lock
         p = path or _CARE_PATH
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2),
-                     encoding="utf-8")
+        with json_lock(p):
+            p.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2),
+                         encoding="utf-8")
 
     @classmethod
     def load(cls, path: Path | None = None) -> "CareMonitor":
@@ -216,7 +218,7 @@ def _llm_care(care_type: str, coding_sec: float, gaming_sec: float,
     )
 
     try:
-        from v4.reflect.llm_client import call_llm_auto
+        from v5.reflect.llm_client import call_llm_auto
         result = call_llm_auto(prompt_system, context,
                                max_tokens=80, temperature=0.7, timeout=30)
         text = result.content.strip()
@@ -231,13 +233,18 @@ def check_and_care(snapshot: dict | None = None) -> Optional[str]:
     """便捷入口: 加载 monitor snapshot → 检测是否需要关怀.
 
     供 think.py 或 voice-ws 的活动广播调用。
+
+    V5.1 修复: 当调用方未传 snapshot 时, 主动尝试从 ikaros_monitor
+    获取当前活动数据, 避免静默空转 (此前直接 return None)。
     """
-    import random
     monitor = CareMonitor.load()
 
     if snapshot is None:
-        monitor.save()
-        return None
+        # V5.1: 主动获取活动数据, 不再静默 return None
+        snapshot = _get_current_snapshot()
+        if snapshot is None:
+            monitor.save()
+            return None
 
     category = snapshot.get("category", snapshot.get("activity_state", "idle"))
     idle_sec = snapshot.get("idle_seconds", 0)
@@ -255,3 +262,28 @@ def check_and_care(snapshot: dict | None = None) -> Optional[str]:
 
     monitor.save()
     return care
+
+
+def _get_current_snapshot() -> Optional[dict]:
+    """尝试从 ikaros_monitor 获取当前活动快照.
+
+    导入点放在函数内 (lazy), 避免循环依赖。
+    """
+    try:
+        import sys
+        sys.path.insert(0, str(V5_ROOT / ".." / "bin"))
+        from ikaros_monitor import SystemMonitor
+        mon = SystemMonitor.instance()
+        if mon is None:
+            return None
+        snap = mon.snapshot()
+        if not snap:
+            return None
+        return {
+            "activity_state": snap.get("activity_state", "idle"),
+            "category": snap.get("category", "idle"),
+            "idle_seconds": snap.get("idle_seconds", 0),
+        }
+    except Exception as exc:
+        logger.debug("care: unable to get current snapshot (%s)", exc)
+        return None

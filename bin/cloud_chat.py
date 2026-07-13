@@ -86,7 +86,141 @@ _last_activity_phrase = ""
 _axiom_cache: Optional[str] = None
 _env_cache: Optional[dict[str, str]] = None
 
-# ─── cogno 5D 组件 (委托给 Ikaros-memory/cogno_5d.py 共享模块) ───
+# ─── Hermes 会话复用 ───
+_HERMES_SESSION_FILE = _V5_DATA_DIR / "hermes_session.json"
+_HERMES_SESSION_ID: str | None = None
+_HERMES_WARMED = False
+if _HERMES_SESSION_FILE.is_file():
+    try:
+        _HERMES_SESSION_ID = json.loads(_HERMES_SESSION_FILE.read_text(encoding="utf-8")).get("session_id")
+    except Exception:
+        pass
+
+# ─── Dashboard WebSocket JSON-RPC API ──────────────────────────
+# 复用已经在跑的 Hermes Dashboard (:9119), 避免 spawn 子进程 (~53s 冷启动)。
+_DASH_WS: Any = None
+_DASH_WS_TOKEN: str | None = None
+
+
+async def _dash_scrape_token() -> str:
+    """从 Dashboard HTML 抓取 session token."""
+    import urllib.request
+    resp = urllib.request.urlopen("http://127.0.0.1:9119/", timeout=5)
+    html = resp.read().decode("utf-8")
+    m = _re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
+    if m:
+        return m.group(1)
+    raise RuntimeError("cannot find token in Dashboard HTML")
+
+
+async def _dash_connect() -> Any:
+    """连接 Dashboard WebSocket, 返回连接对象."""
+    global _DASH_WS_TOKEN
+    if _DASH_WS_TOKEN is None:
+        _DASH_WS_TOKEN = await _dash_scrape_token()
+    import websockets
+    ws = await websockets.connect(
+        f"ws://127.0.0.1:9119/api/ws?token={_DASH_WS_TOKEN}",
+        max_size=2 ** 20, proxy=None,
+    )
+    await asyncio.wait_for(ws.recv(), timeout=5)  # 消费 gateway.ready
+    return ws
+
+
+async def _dash_ws() -> Any:
+    """获取持久 WS 连接 (断线自动重连)."""
+    global _DASH_WS
+    if _DASH_WS is not None:
+        try:
+            await _DASH_WS.send(
+                json.dumps({"jsonrpc": "2.0", "id": "ping", "method": "session.list", "params": {}})
+            )
+            await asyncio.wait_for(_DASH_WS.recv(), timeout=3)
+            return _DASH_WS
+        except Exception:
+            pass
+    _DASH_WS = await _dash_connect()
+    return _DASH_WS
+
+
+async def _dash_rpc(method: str, params: dict, timeout: float = 60) -> dict:
+    """JSON-RPC 调用, 返回 result dict. 失败抛异常."""
+    ws = await _dash_ws()
+    rid = str(time_module.monotonic_ns())
+    await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
+    while True:
+        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        data = json.loads(raw)
+        if data.get("id") == rid:
+            if "error" in data:
+                raise RuntimeError(f"RPC {method}: {data['error']}")
+            return data.get("result", {})
+        # 非匹配消息 (其他请求的 event) 忽略
+
+
+async def _dash_prompt(session_id: str, text: str, on_delta=None) -> str:
+    """提交 prompt 到 session, 从 event 流收集回复."""
+    ws = await _dash_ws()
+    rid = str(time_module.monotonic_ns())
+    await ws.send(json.dumps({
+        "jsonrpc": "2.0", "id": rid, "method": "prompt.submit",
+        "params": {"session_id": session_id, "text": text},
+    }))
+    reply = ""
+    while True:
+        raw = await asyncio.wait_for(ws.recv(), timeout=120)
+        data = json.loads(raw)
+        if data.get("id") == rid and "result" in data:
+            break
+        if data.get("method") == "event":
+            params = data.get("params", {})
+            etype = params.get("type", "")
+            if etype == "message.delta":
+                delta = params.get("delta", "") or params.get("content", "") or ""
+                reply += delta
+                if on_delta:
+                    await _maybe_async(on_delta, delta)
+            elif etype == "completion":
+                final = params.get("text", "") or params.get("content", "") or ""
+                if final:
+                    reply = final
+                break
+            elif etype == "error":
+                raise RuntimeError(f"Agent error: {params.get('message', 'unknown')}")
+    return reply
+
+
+async def warm_hermes_session():
+    """通过 Dashboard WS API 查找或创建 "Ikaros" 主 session."""
+    global _HERMES_SESSION_ID, _HERMES_WARMED
+    if _HERMES_WARMED or _HERMES_SESSION_ID:
+        return
+    try:
+        # 先查找已有的 Ikaros session
+        result = await _dash_rpc("session.list", {}, timeout=10)
+        for s in result.get("sessions", []):
+            if s.get("title") == "Ikaros":
+                sid = s.get("id", "")
+                if sid:
+                    _HERMES_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    _HERMES_SESSION_FILE.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
+                    _HERMES_SESSION_ID = sid
+                    _HERMES_WARMED = True
+                    log.info("warm-hermes: found existing Ikaros session %s", sid)
+                    return
+        result = await _dash_rpc("session.create", {}, timeout=10)
+        sid = result.get("session_id", "")
+        if not sid:
+            log.warning("warm-hermes: no session_id in create response")
+            return
+        await _dash_rpc("session.title", {"session_id": sid, "title": "Ikaros"}, timeout=5)
+        _HERMES_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HERMES_SESSION_FILE.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
+        _HERMES_SESSION_ID = sid
+        _HERMES_WARMED = True
+        log.info("warm-hermes: Ikaros session %s created via WS", sid)
+    except Exception as e:
+        log.warning("warm-hermes: failed (%s)", e)
 
 def _load_cogno():
     """Lazy-import cogno_5d module (avoid circular import at module level)."""
@@ -870,152 +1004,40 @@ async def cloud_chat(
     # 监控: 用户输入
     _push_monitor("user_msg", text=text[:200], session_id=session_id)
 
-    # ── 尝试 Hermes Agent (优先) → DeepSeek → minimax → local ──
+    # ── Dashboard WebSocket JSON-RPC (唯一 API 路径) ──
+    _is_task = _optimized is not None
     deepseek_key = _get_api_key(env_map, "DEEPSEEK_API_KEY")
     minimax_key = _get_api_key(env_map, "MINIMAX_CN_API_KEY")
-
     reply: str | None = None
     errors: list[str] = []
 
-    # ── 主路径: Hermes Agent 内循环 (工具/技能/子代理) ──
-    # 2026-07-11 修复 (方案 X 落地):
-    #  - 加 -Q (quiet): 抑制 banner/spinner/工具预览, 只输出 final response
-    #  - 用 asyncio.to_thread 跑同步 subprocess, 不阻塞 voice-ws 的流式事件循环
-    #  - 过滤 stdout 里的 "session_id:" 诊断行, 只留真正的回复正文
-    # 本地 :8080 qwen3-8b 上下文仅 4K, 撑不住 Hermes >=64K 假设, 故 Hermes
-    # 主 provider 配为云端 DeepSeek (见 ~/.hermes/config.yaml); 无 key/失败时
-    # subprocess 报错 → 干净回退到下方直调/MiniMax/本地链。
+    _instruction = f"{system_prompt}\n\n--- 用户消息 ---\n{user_content[:400]}"
+    if len(_instruction) > 6000:
+        _instruction = _instruction[:6000]
+
     try:
-        _hermes = str(_HERMES_ROOT / "hermes-agent" / "venv" / "Scripts" / "hermes.exe")
-        if Path(_hermes).is_file():
-            import subprocess as _sp
+        if _is_task:
+            result = await _dash_rpc("session.create", {}, timeout=15)
+            _sid = result.get("session_id", "")
+            if not _sid:
+                raise RuntimeError("task session create returned no session_id")
+            log.info("task: created session %s", _sid)
+        else:
+            _sid = _HERMES_SESSION_ID
+            if not _sid:
+                raise RuntimeError("Ikaros main session not available")
 
-            # GAP-A 修复 (2026-07-11): Hermes 主路径原本只把 user_content[:400]
-            # 喂进去, 丢掉了 build_system_prompt 里的四注入(自我思考/自我状态/
-            # 任务/活动) 与 soul+cogno+记忆上下文, 导致主路径比回退路径还"瞎"。
-            # 现把完整 system_prompt 拼进 -q, 让 Hermes 内循环也带 Ikaros 上下文。
-            #
-            # 修复2 (2026-07-11): hermes.exe 自身跑在 GBK-locale 的 venv python 上,
-            # 其内循环读子进程 UTF-8 输出时会抛 UnicodeDecodeError / 偶发
-            # 'NoneType' object has no attribute 'strip' 而崩溃, 导致主路径每次
-            # 都失败回退。这里强制 hermes 子进程用 UTF-8 (PYTHONUTF8=1 +
-            # PYTHONIOENCODING=utf-8), 并显式指定 subprocess 解码编码, 消除
-            # locale 相关的随机崩溃; 失败时只告警并自然回退, 不再把 stderr 当
-            # 异常抛出 (避免日志出现误导性的 'NoneType'... 字样)。
-            _instruction = f"{system_prompt}\n\n--- 用户消息 ---\n{user_content[:400]}"
-            if len(_instruction) > 6000:
-                _instruction = _instruction[:6000]
-            def _run_hermes() -> "subprocess.CompletedProcess[str]":
-                _henv = dict(os.environ)
-                _henv["PYTHONUTF8"] = "1"
-                _henv["PYTHONIOENCODING"] = "utf-8"
-                return _sp.run(
-                    [_hermes, "chat", "-q", _instruction, "-Q",
-                     "--max-turns", "5"],
-                    capture_output=True, text=True, encoding="utf-8",
-                    errors="replace", timeout=110,
-                    cwd=str(_HERMES_ROOT), env=_henv,
-                )
+        reply = await _dash_prompt(_sid, _instruction, on_delta=on_delta)
+        log.info("%s (%s): %d chars", "task" if _is_task else "chat", _sid, len(reply or ""))
 
-            _result = await asyncio.to_thread(_run_hermes)
-            if _result.returncode == 0 and _result.stdout.strip():
-                _lines = [
-                    ln for ln in _result.stdout.strip().splitlines()
-                    if not ln.strip().startswith("session_id:")
-                ]
-                _text = "\n".join(_lines).strip()
-                # 削除 ANSI escape 序列 + reasoning block 框线
-                # (Hermes -Q 不抑制 reasoning block, display.show_reasoning=true
-                #  会让思考过程混进输出)
-                import re as _re
-                # 策略: 原始输出中, 所有带 ANSI escape (\x1b[) 或框线字符的行
-                # 都是 reasoning block → 全部削除。第一个不带的才是真实回复。
-                # 之后的行 (可能被 blank-line-separated) 从第一个非空行开始保留。
-                _raw = _result.stdout.strip()
-                _lines = _raw.split("\n")
-                _clean: list[str] = []
-                _in_reasoning = True
-                for _ln in _lines:
-                    _s = _ln.strip()
-                    if _s.startswith("session_id:"):
-                        continue
-                    if _in_reasoning:
-                        # reasoning 行特征: 带 ANSI escape、裸 SGR、或框线字符
-                        if ("\x1b[" in _ln or _re.match(r'\[[0-9;]+m', _s)
-                                or any(ch in _s for ch in "┌└├┤┐┘─│")):
-                            continue
-                        # 空行也可能是 reasoning 段落间隔 → 跳过
-                        if not _s:
-                            continue
-                        # 第一个不带 ANSI/框线的非空行 → 真实回复开始
-                        _in_reasoning = False
-                    _clean.append(_ln)
-                _text = "\n".join(_clean).strip()
-                _text = _text.strip()
-                if _text:
-                    reply = _text
-                    log.info("hermes agent OK (%d chars)", len(reply))
-                else:
-                    log.warning("hermes agent empty reply — falling back to direct API")
-            else:
-                log.warning("hermes agent rc=%s stderr=%s — falling back to direct API",
-                            _result.returncode, (_result.stderr or "")[:200])
     except Exception as e:
-        log.warning("hermes agent failed: %s — falling back to direct API", e)
-        errors.append(f"hermes: {e}")
-
-    # ── 回退: 直调 DeepSeek / MiniMax ──
-    if reply is None and deepseek_key:
-        try:
-            reply = await _call_openai_compatible(
-                base_url="https://api.deepseek.com/v1",
-                api_key=deepseek_key,
-                model="deepseek-chat",
-                messages=msgs,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                label="DeepSeek",
-                on_delta=on_delta,
-            )
-        except Exception as e:
-            log.warning("DeepSeek failed: %s — falling back to minimax", e)
-            errors.append(f"DeepSeek: {e}")
-
-    if reply is None and minimax_key:
-        try:
-            reply = await _call_openai_compatible(
-                base_url="https://api.minimaxi.chat/v1",
-                api_key=minimax_key,
-                model="MiniMax-M3",
-                messages=msgs,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                label="MiniMax",
-                on_delta=on_delta,
-            )
-        except Exception as e:
-            log.error("MiniMax also failed: %s", e)
-            errors.append(f"MiniMax: {e}")
-
-    # 死链4 修复 (2026-07-07, quest 接手): cloud provider 全失败时,
-    # 兜底本地 qwen3-8b (:8080)。无 API key 也能实时聊天 (哥哥核心诉求)。
-    if reply is None:
-        try:
-            log.info("all cloud providers failed — fallback to local qwen3-8b (:8080)")
-            local_reply = await _call_local_llm(
-                msgs, max_tokens=max_tokens, temperature=temperature,
-                on_delta=on_delta,
-            )
-            if local_reply:
-                reply = local_reply
-            else:
-                log.warning("local LLM (:8080) returned empty")
-        except Exception as e:
-            log.warning("local LLM (:8080) fallback failed: %s", e)
+        log.warning("dashboard WS failed: %s", e)
+        errors.append(f"dash-ws: {e}")
+        reply = None
 
     if reply is None:
-        err_msg = "; ".join(errors) if errors else "没有可用的 API key (DEEPSEEK_API_KEY 或 MINIMAX_CN_API_KEY), 且本地 qwen3-8b (:8080) 也不可用"
-        raise RuntimeError(f"所有 cloud provider 调用失败: {err_msg}")
+        err_msg = "; ".join(errors) if errors else "Dashboard WebSocket 不可用"
+        raise RuntimeError(f"所有 provider 调用失败: {err_msg}")
 
     # ── 步骤 3: 自我审查 (fire-and-forget, 不阻塞回复) ──
     # 第一阶段只做快速审查, 需要 rewrite 时后台异步处理
@@ -1035,7 +1057,7 @@ async def cloud_chat(
     def _background_consolidate():
         import asyncio as _bg_asyncio
         try:
-            _bg_asyncio.run(_consolidate_to_memory(text, reply, deepseek_key, minimax_key))
+            _bg_asyncio.run(_consolidate_to_memory(text, reply))
         except Exception:
             pass
     threading.Thread(target=_background_consolidate, daemon=True).start()
@@ -1322,25 +1344,35 @@ async def _self_review(
     deepseek_key: str | None,
     minimax_key: str | None,
 ) -> dict:
-    """评估候选回复。优先 Cloud LLM (高质量), 本地 Qwen3-8B 回退.
+    """评估候选回复。优先 Hermes Dashboard WS, 回退直调 DeepSeek.
 
     Returns {score, verdict, issues, suggestion}.
     """
     prompt = f"用户说: {user_msg}\n\n候选回复: {candidate}\n\n请评估。"
-    msgs = [
-        {"role": "system", "content": _SELF_REVIEW_SYSTEM},
-        {"role": "user", "content": prompt},
-    ]
 
-    # 1) Cloud LLM (优先, 高质量)
+    # 1) Hermes Dashboard WS (统一经过 Hermes)
     text = None
-    if deepseek_key:
+    try:
+        instruction = f"{_SELF_REVIEW_SYSTEM}\n\n--- 用户消息 ---\n{prompt}"
+        if len(instruction) > 6000:
+            instruction = instruction[:6000]
+        sid = _HERMES_SESSION_ID
+        if sid:
+            text = await _dash_prompt(sid, instruction, on_delta=None)
+    except Exception:
+        pass
+
+    # 2) 回退: 直调 DeepSeek
+    if not text and deepseek_key:
         try:
             text = await _call_openai_compatible(
                 base_url="https://api.deepseek.com/v1",
                 api_key=deepseek_key,
                 model="deepseek-chat",
-                messages=msgs,
+                messages=[
+                    {"role": "system", "content": _SELF_REVIEW_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
                 max_tokens=300, temperature=0.1,
                 label="self-review",
             )
@@ -1401,12 +1433,9 @@ _CONSOLIDATE_SYSTEM = (
 async def _consolidate_to_memory(
     user_msg: str,
     assistant_msg: str,
-    deepseek_key: str | None,
-    minimax_key: str | None,
 ) -> bool:
-    """把对话归约为一条事实写入 v4.db.
+    """把对话归约为一条事实写入 v4.db (仅本地 :8080, 省 token).
 
-    优先 Cloud LLM (高质量), 本地 Qwen3-8B 回退.
     写 type=fact, tags=consolidated, 初始 weight=0.6.
     """
     prompt = f"用户说: {user_msg}\n\n助手回: {assistant_msg}"
@@ -1415,37 +1444,9 @@ async def _consolidate_to_memory(
         {"role": "user", "content": prompt},
     ]
 
-    # 1) Cloud LLM (优先, 高质量)
-    fact = None
-    if deepseek_key:
-        try:
-            fact = await _call_openai_compatible(
-                base_url="https://api.deepseek.com/v1",
-                api_key=deepseek_key,
-                model="deepseek-chat",
-                messages=msgs,
-                max_tokens=200, temperature=0.0,
-                label="consolidate",
-            )
-        except Exception:
-            pass
-    if not fact and minimax_key:
-        try:
-            fact = await _call_openai_compatible(
-                base_url="https://api.minimaxi.chat/v1",
-                api_key=minimax_key,
-                model="MiniMax-M3",
-                messages=msgs,
-                max_tokens=200, temperature=0.0,
-                label="consolidate",
-            )
-        except Exception:
-            pass
-
-    # 2) 本地 Qwen3-8B (:8080 回退, 断网/无 key 时兆底)
-    if not fact:
-        log.info("consolidate: cloud LLM unavailable, falling back to local :8080")
-        fact = await _call_local_llm(msgs, max_tokens=512, temperature=0.0)
+    # 仅本地 :8080 (省 token, 不走 Hermes/云端)
+    log.info("consolidate: local :8080 only")
+    fact = await _call_local_llm(msgs, max_tokens=512, temperature=0.0)
 
     if not fact or len(fact.strip()) < 5:
         log.warning("consolidate: LLM returned empty/too-short fact (cloud+local all failed)")
@@ -1502,6 +1503,104 @@ def cloud_chat_sync(
             cloud_chat(text, history=history, session_id=session_id,
                       max_tokens=max_tokens, temperature=temperature)
         )
+
+
+# ─── Metacog / Distill 用的轻量 Hermes 同步调用 ───
+# 不走 cloud_chat 的 V5 affect/relationship/路由等重量级管线,
+# 直接连 Dashboard WS, 用于 metacog 反思 / self-review 等后台任务。
+
+_HERMES_META_SESSION_ID: str | None = None
+_HERMES_META_SESSION_FILE = _V5_DATA_DIR / "hermes_meta_session.json"
+if _HERMES_META_SESSION_FILE.is_file():
+    try:
+        _HERMES_META_SESSION_ID = json.loads(
+            _HERMES_META_SESSION_FILE.read_text(encoding="utf-8")
+        ).get("session_id")
+    except Exception:
+        pass
+
+
+def hermes_prompt_sync(
+    system_text: str,
+    user_text: str,
+    *,
+    max_tokens: int = 1024,
+    temperature: float = 0.7,
+    timeout: int = 90,
+) -> str:
+    """同步 Hermes 提示 (轻量, 无 V5 管线).
+
+    通过 Dashboard WS JSON-RPC 提交 prompt, 返回完整回复.
+    失败时抛 RuntimeError.
+    """
+    import asyncio
+    import websockets
+
+    async def _do() -> str:
+        nonlocal system_text, user_text
+        global _HERMES_META_SESSION_ID
+
+        # 连接 WS
+        ws = await _dash_ws()
+
+        # 复用或创建 session
+        sid = _HERMES_META_SESSION_ID
+        if not sid:
+            result = await _dash_rpc("session.create", {}, timeout=15)
+            sid = result.get("session_id", "")
+            if not sid:
+                raise RuntimeError("meta session create returned no session_id")
+            _HERMES_META_SESSION_ID = sid
+            # 持久化
+            _HERMES_META_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _HERMES_META_SESSION_FILE.write_text(
+                json.dumps({"session_id": sid}), encoding="utf-8"
+            )
+
+        # 拼指令: 带 system prompt
+        instruction = f"{system_text}\n\n--- 用户消息 ---\n{user_text}"
+        if len(instruction) > 6000:
+            instruction = instruction[:6000]
+
+        # 提交 prompt
+        rid = str(time_module.monotonic_ns())
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0", "id": rid, "method": "prompt.submit",
+            "params": {"session_id": sid, "text": instruction},
+        }))
+
+        reply = ""
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            data = json.loads(raw)
+            if data.get("id") == rid and "result" in data:
+                break
+            if data.get("method") == "event":
+                params = data.get("params", {})
+                etype = params.get("type", "")
+                if etype == "message.delta":
+                    delta = params.get("delta", "") or params.get("content", "") or ""
+                    reply += delta
+                elif etype == "completion":
+                    final = params.get("text", "") or params.get("content", "") or ""
+                    if final:
+                        reply = final
+                    break
+                elif etype == "error":
+                    raise RuntimeError(
+                        f"Agent error: {params.get('message', 'unknown')}"
+                    )
+        return reply.strip()
+
+    # 在临时事件循环或已有循环中执行
+    try:
+        loop = asyncio.get_running_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            fut = pool.submit(asyncio.run, _do())
+            return fut.result(timeout=timeout + 10)
+    except RuntimeError:
+        return asyncio.run(_do())
 
 
 # ─── 快速测试 ───

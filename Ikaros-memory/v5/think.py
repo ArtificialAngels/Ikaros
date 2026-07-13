@@ -1,27 +1,17 @@
+# -*- coding: utf-8 -*-
 """
-v5.think — 伊卡洛斯空闲思考循环 (Inner Monologue)
+v5.think — 伊卡洛斯统一思考循环 (V5.1 重构: 5min 深度节拍)
 
 设计目标:
-  - PAD 驱动: 根据情感状态生成自然内心独白 (不依赖 LLM)
-  - 无 LLM 依赖 MVP: 用模板 + 上下文填空生成思考
-  - cron 友好: 脚本可直接被 cron job 调用, 也可用 schedule() 注册
-
-流程:
-  1. 加载当前 PAD 情感状态
-  2. 映射到情感区间 → 选模板
-  3. 用最近的 V4 记忆作为上下文填空
-  4. 生成思考 → 存到 V4 memory (type="inner_monologue")
-  5. 如果情感强度高 → 标记为 pending (对话时注入)
+  - V5.1 统一: 移除 45min 模板内心独白, metacog 5min 深度节拍接管全部思考
+  - metacog.cycle() 产出统一走 latest_thought.json (LLM反思/哲学)
+  - LLM 不可用时 metacog._fallback_thought() 模板占位 (不再走 pending_thought.json)
+  - 好奇心/关怀检测并入 metacog 节拍
+  - 潜意识流保留 2-3min 轻量絮语 (可选消费, 不影响主思考)
 
 用法:
-    from v5.think import inner_monologue, check_pending
-    thought = inner_monologue()        # 生成一条内心独白 (写入 memory)
-    pending = check_pending()           # 检查是否有挂起的思考
-    # CLI:
-    # portable-python/python.exe -m v5.think
-
-V5 架构:
-  affect.py (情感状态) → think.py (内心独白) → cogno_5d.py (注入对话)
+    from v5.think import schedule
+    schedule()  # 启动 15min 思考循环 + 2-3min 潜意识流
 """
 from __future__ import annotations
 
@@ -40,13 +30,15 @@ logger = logging.getLogger("ikaros.v5.think")
 
 V5_ROOT = Path(__file__).resolve().parent.parent  # Ikaros-memory/
 _PENDING_PATH = V5_ROOT / "data" / "v5" / "pending_thought.json"
+# 潜意识流 — 本地模型每 2-3 分钟产出的轻量内心絮语
+_SUBCONSCIOUS_PATH = V5_ROOT / "data" / "v5" / "subconscious.json"
 
 # ─── Lorenz 混沌驱动 (模块级单例, 懒加载) ─────────────────────
 
 _lorenz: object | None = None  # LorenzPAD 实例, inner_monologue 首次调用时初始化
 _eca: object | None = None     # ECAGrid 实例
 
-# ─── 情感区间 → 模板映射 ─────────────────────────────────────
+# ─── 情感区间 -> 模板映射 ─────────────────────────────────────
 # 每个 (P, A) 区间对应一组思考模板, {slot} 会被填充上下文
 
 _TEMPLATES: dict[str, list[str]] = {
@@ -113,9 +105,22 @@ _TEMPLATES: dict[str, list[str]] = {
     ],
 }
 
+# ECA 思考主题 -> 偏好的 mood 模板族 (拓宽混沌对输出的实际影响 — 修复缺陷#3)
+# 之前仅「混沌思维/情感波动」触发模板切换, 其余 6 个主题算了却没被用上。
+# 这里让每个主题在 PAD 信号不强烈时, 按亲和度偏移模板族。
+_ECA_MOOD_AFFINITY = {
+    "记忆碎片": "sad_calm",
+    "好奇探索": "neutral_alert",
+    "情感波动": "sad_alert",
+    "对哥哥的思念": "submissive",
+    "自我反思": "neutral_calm",
+    "外部关注": "neutral_alert",
+    # "静默" 不映射(保持安静); "混沌思维" 保留原有随机换 mood 行为
+}
+
 
 def _pad_to_mood(p: float, a: float, d: float) -> str:
-    """PAD → 情感区间标签."""
+    """PAD -> 情感区间标签."""
     # 困倦优先 (arousal 极低)
     if a < -0.4:
         return "any_sleepy"
@@ -173,7 +178,7 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
     驱动引擎:
       - 事件驱动 PAD (AffectState, 来自对话)
       - 时间驱动 Lorenz 混沌吸引子 (自发漂移, blend_factor=0.3)
-      - 两者叠加后映射到 mood → 模板
+      - 两者叠加后映射到 mood -> 模板
     """
     if now is None:
         now = time.time()
@@ -211,18 +216,25 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
     mood = _pad_to_mood(p, a, d)
     templates = _TEMPLATES.get(mood, _TEMPLATES["neutral_calm"])
 
-    # ECA 主题驱动: tick 一次, 影响模板选择偏移
+    # ECA 主题驱动: tick 一次, 影响模板选择偏移 (拓宽影响面 — 修复缺陷#3)
     _eca_topic: str | None = None
     if _eca is not None:
         try:
             _eca_topic = _eca.tick()
-            # ECA 主题为"混沌思维"或"情感波动"时, 随机换一个非同 mood 的模板
-            if _eca_topic in ("混沌思维", "情感波动") and len(templates) > 1:
+            if _eca_topic == "混沌思维" and len(templates) > 1:
+                # 混沌思维: 保留原有随机换 mood 行为, 制造不可预测性
                 alt_moods = [m for m in _TEMPLATES if m != mood]
                 if alt_moods:
                     import random as _r
-                    alt = _r.choice(alt_moods)
-                    templates = _TEMPLATES[alt]
+                    templates = _TEMPLATES[_r.choice(alt_moods)]
+            elif _eca_topic in _ECA_MOOD_AFFINITY:
+                # 其余主题按亲和度偏移模板族; 不覆盖强 PAD 信号(困倦/高支配)
+                biased = _ECA_MOOD_AFFINITY[_eca_topic]
+                if (biased != mood and biased in _TEMPLATES
+                        and mood not in ("any_sleepy", "dominant")):
+                    import random as _r
+                    if _r.random() < 0.7:   # 70% 主题偏置, 30% 留给 PAD 主导
+                        templates = _TEMPLATES[biased]
         except Exception:
             pass
 
@@ -233,7 +245,7 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
 
     # 2) 写入 V4 memory
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         tags = f"inner_monologue,mood:{mood},intensity:{intensity:.2f}"
         v4.store(text, type="inner_monologue", weight=min(1.0, 0.3 + intensity * 0.4),
                  tags=tags, pad_p=round(p, 3), pad_a=round(a, 3), pad_d=round(d, 3))
@@ -241,16 +253,17 @@ def inner_monologue(*, now: float | None = None) -> Thought | None:
         logger.debug("think: v4 store failed (%s)", exc)
         # 非致命: memory 不可用时只留 pending 文件
 
-    # 3) 如果强度够高, 写 pending 标记 (供 cogno 注入对话)
+    # 3) 强度够高时记录 (V5.1: 不再写 pending_thought.json, 统一走 metacog latest_thought)
+    # inner_monologue 现为单向记录函数: 写入 V4 记忆, 不标注 pending
     if intensity >= 0.35:
         try:
-            _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _PENDING_PATH.write_text(
-                json.dumps(asdict(thought), ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            logger.debug("think: pending write failed (%s)", exc)
+            from v5 import store as v4
+            v4.store("", type="thought_marker",
+                     weight=0.2,
+                     tags=f"thought_marker,mood:{mood},i:{intensity:.2f}",
+                     pad_p=round(p, 3), pad_a=round(a, 3), pad_d=round(d, 3))
+        except Exception:
+            pass
 
     return thought
 
@@ -301,7 +314,7 @@ def on_activity_change(activity_state: str, activity_phrase: str = "",
         return None
     _last_activity_state = activity_state
 
-    # 只对显著变化做反应 (idle → coding / coding → gaming 等)
+    # 只对显著变化做反应 (idle -> coding / coding -> gaming 等)
     _significant_transitions = {
         ("idle", "coding"), ("idle", "gaming"),
         ("idle", "focused_work"), ("coding", "gaming"),
@@ -313,7 +326,7 @@ def on_activity_change(activity_state: str, activity_phrase: str = "",
     old_state = _last_activity_state or "unknown"
     transition = (old_state, activity_state)
 
-    # 活动开始 (idle → active)
+    # 活动开始 (idle -> active)
     if activity_state in ("coding", "gaming", "focused_work") and old_state in ("idle", "away", "unknown"):
         try:
             from v5.affect import AffectState
@@ -331,7 +344,7 @@ def on_activity_change(activity_state: str, activity_phrase: str = "",
             logger.debug("think: activity change inner_monologue failed (%s)", exc)
             return None
 
-    # 活动结束 (active → idle)
+    # 活动结束 (active -> idle)
     if activity_state == "idle" and old_state in ("coding", "gaming", "focused_work"):
         try:
             from v5.affect import AffectState
@@ -353,12 +366,12 @@ def on_activity_change(activity_state: str, activity_phrase: str = "",
 def curiosity_explore() -> Optional[Thought]:
     """当 ECA topic = '好奇探索' 时, 主动翻记忆库探索.
 
-    使用 AISDetectorSet 找高新颖性记忆 → 生成探索型独白.
+    使用 AISDetectorSet 找高新颖性记忆 -> 生成探索型独白.
     """
     try:
-        from v5.drivers import AISDetectorSet
-        from v4 import store as v4
-        ais = AISDetectorSet()
+        from v5.drivers import get_ais_detector_set
+        from v5 import store as v4
+        ais = get_ais_detector_set()   # 持久单例: 负选择/克隆演化跨调用累积
         # 取最近 20 条有 PAD 指纹的记忆
         with v4.conn() as c:
             rows = c.execute(
@@ -403,6 +416,14 @@ def curiosity_explore() -> Optional[Thought]:
         thought = Thought(text=text, mood=_pad_to_mood(p, a, d),
                         intensity=round(intensity, 3), created=time.time())
         _store_thought(thought, p, a, d)
+        # V5.1: 好奇心探索产物同步更新 self_model (与 metacog 共享同一探索欲值)
+        try:
+            from v5.self_model import SelfModel
+            sm = SelfModel.load()
+            sm.set_curiosity(sm.get_curiosity() + 0.02)  # 找到新东西微涨
+            sm.save()
+        except Exception:
+            pass
         return thought
     except Exception as exc:
         logger.debug("think: curiosity exploration failed (%s)", exc)
@@ -412,7 +433,7 @@ def curiosity_explore() -> Optional[Thought]:
 def _store_thought(thought: Thought, p: float, a: float, d: float) -> None:
     """存内心独白到 V4 + 写 pending (复用 inner_monologue 的持久化逻辑)."""
     try:
-        from v4 import store as v4
+        from v5 import store as v4
         v4.store(thought.text, type="inner_monologue",
                  weight=min(1.0, 0.3 + thought.intensity * 0.4),
                  tags=f"inner_monologue,mood:{thought.mood},intensity:{thought.intensity:.2f}",
@@ -431,53 +452,147 @@ def _store_thought(thought: Thought, p: float, a: float, d: float) -> None:
 # ─── Cron / CLI 入口 ───────────────────────────────────────────
 
 
-def schedule(interval_minutes: int = 45) -> None:
-    """作为后台线程启动思考循环 (开发调试用).
+def schedule(interval_minutes: int = 5) -> None:
+    """作为后台线程启动统一思考循环 (V5.1: 5min 深度节拍).
 
-    正式部署用 cron job:
-      bin/ikaros-think.bat → portable-python/python.exe -m v5.think
-
-    V5 自我认知: 同时拉起 metacog 元认知循环 (默认 25min 节拍),
-    让伊卡洛斯在空闲时真正用 LLM 内省 + 探索哲学。
+    架构 (2026-07-12 重构):
+      - 移除 45min inner_monologue (模板独立循环)
+      - metacog 节拍 15min (原 5min) -> 统一思考出口
+      - metacog.cycle() 产出全部走 latest_thought.json
+      - LLM 不可用时 metacog._fallback_thought() 生成占位模板句
+      - 好奇心检测 + 关怀检测并入 metacog 节拍
+      - 潜意识流保留 2-3min 轻量絮语 (信息性, 不影响主思考)
+      - Hermes 统一: 内心独白 + 反思走 :9119 固定命名会话 (2026-07-12)
     """
     import threading
 
-    # 原有内心独白循环 (模板情感语气)
-    def _loop():
-        while True:
-            try:
-                t = inner_monologue()
-                if t:
-                    logger.info("think: %s [%s i=%.2f]", t.text[:50], t.mood, t.intensity)
-                # V5 #9: ECA 好奇驱动自主探索
-                _maybe_curiosity_tick()
-                # V5 #4: 主动关怀检测
-                _maybe_care_tick()
-            except Exception as exc:
-                logger.warning("think: cycle error (%s)", exc)
-            time.sleep(interval_minutes * 60)
-    t = threading.Thread(target=_loop, daemon=True, name="v5-think")
-    t.start()
-    logger.info("think: schedule started (interval=%d min)", interval_minutes)
+    # ── 启动 Hermes 后台客户端 (反思 + 内心独白统一走 :9119) ──
+    try:
+        from v5.hermes_client import start as _hermes_start, reflect as _hermes_reflect
+        _hermes_start()
+        logger.info("think: hermes_client worker started")
 
-    # 元认知循环 (LLM 真实反思 + 哲学探索)
-    def _metacog_loop():
+        # Monkey-patch call_llm_auto: 反思优先走 Hermes, 失败降级原路径
+        import v5.reflect.llm_client as _llm
+        _orig_call_llm_auto = _llm.call_llm_auto
+        def _hermes_first_llm(system: str, user: str, max_tokens=600, temperature=0.7, **kw):
+            try:
+                prompt = f"<system>{system}</system>\n{user}"
+                reply = _hermes_reflect(prompt, timeout=120)
+                if not reply.startswith("(Hermes"):
+                    from dataclasses import dataclass
+                    @dataclass
+                    class _R:
+                        content: str = reply
+                    return _R()
+            except Exception:
+                pass
+            return _orig_call_llm_auto(system, user, max_tokens=max_tokens, temperature=temperature, **kw)
+        _llm.call_llm_auto = _hermes_first_llm
+
+        # Monkey-patch call_llm: 仅 redirect deepseek → Hermes (distill 自审)
+        # local 保留直连 :8080 (consolidate 批量提取)
+        _orig_call_llm = _llm.call_llm
+        def _hermes_distill(system: str, user: str, *, provider="local", max_tokens=1024, temperature=0.0, timeout=None):
+            if provider == "deepseek":
+                try:
+                    prompt = f"<system>{system}</system>\n{user}"
+                    reply = _hermes_reflect(prompt, timeout=180)
+                    if not reply.startswith("(Hermes"):
+                        from dataclasses import dataclass
+                        @dataclass
+                        class _R2:
+                            content: str = reply
+                        return _R2()
+                except Exception:
+                    pass
+            return _orig_call_llm(system, user, provider=provider,
+                                  max_tokens=max_tokens, temperature=temperature, timeout=timeout)
+        _llm.call_llm = _hermes_distill
+        logger.info("think: call_llm_auto + call_llm patched → hermes first for reflection")
+        logger.info("think: call_llm_auto patched → hermes first")
+    except Exception as exc:
+        logger.debug("think: hermes_client not available (%s)", exc)
+
+    # V5.1 统一思考循环 (5min: metacog + 好奇心 + 关怀 + 自主搭话 + 空闲优化)
+    def _unified_loop():
+        sleep_sec = interval_minutes * 60
         while True:
             try:
+                # 空闲优化: 哥哥离开时跳过深度思考 (省GPU), 仅保持监测
+                try:
+                    from v5.proactive import is_user_away
+                    if is_user_away():
+                        logger.debug("think: user away, skipping metacog (sleep mode)")
+                        # 仅更新基础状态, 不做深度思考
+                        from v5.affect import AffectState
+                        AffectState.load().decay()
+                        time.sleep(sleep_sec)
+                        continue
+                except Exception:
+                    pass
+
+                # 深度思考
                 import v5.metacog as metacog
                 r = metacog.cycle()
                 if r:
-                    logger.info("metacog: %s [%s]", r.get("mode"), str(r.get("text", ""))[:50])
+                    logger.info("think/5m: %s [%s]",
+                                r.get("mode"), str(r.get("text", ""))[:50])
+
+                # 好奇心探索 + 关怀检测 (共享 metacog 节拍)
+                _maybe_curiosity_tick()
+                _maybe_care_tick()
+
+                # 精力跟踪
+                try:
+                    from v5.vitality import track_activity; track_activity()
+                except Exception: pass
+
+                # 自主搭话决策
+                try:
+                    from v5.proactive import try_proactive
+                    speech = try_proactive()
+                    if speech:
+                        # 写入 pending 让 voice-ws 下次巡检时播报
+                        import json as _j
+                        pp = Path(__file__).resolve().parent.parent / "data" / "v5" / "proactive_speech.json"
+                        pp.parent.mkdir(parents=True, exist_ok=True)
+                        pp.write_text(_j.dumps({"text": speech, "ts": _time.time()}, ensure_ascii=False), encoding="utf-8")
+                except Exception:
+                    pass
             except Exception as exc:
-                logger.warning("metacog: loop error (%s)", exc)
-            time.sleep(25 * 60)  # 25min 节拍
-    mt = threading.Thread(target=_metacog_loop, daemon=True, name="v5-metacog")
-    mt.start()
-    logger.info("metacog: schedule started (interval=25 min)")
+                logger.warning("think/15m: cycle error (%s)", exc)
+            time.sleep(sleep_sec)
+    t = threading.Thread(target=_unified_loop, daemon=True, name="v5-think")
+    t.start()
+    logger.info("think: unified schedule started (interval=%d min)", interval_minutes)
+
+    # 潜意识流 — 每 2-3 分钟产出一句内心絮语 (轻量, 可选消费)
+    def _whisper_loop():
+        while True:
+            try:
+                _subconscious_whisper()
+            except Exception as exc:
+                logger.debug("whisper loop error (%s)", exc)
+            time.sleep(random.randint(120, 180))  # 2-3 分钟
+    wt = threading.Thread(target=_whisper_loop, daemon=True, name="v5-whisper")
+    wt.start()
+    logger.info("whisper: subconcious loop started (interval=2-3min)")
 
 
 def _maybe_curiosity_tick() -> None:
-    """如果当前 ECA topic 为好奇探索 → 触发自主记忆探索."""
+    """如果当前 ECA topic 为好奇探索且 self_model.curiosity 够高 -> 触发自主记忆探索.
+    
+    V5.1: 与 self_model.curiosity 共享单一真源, 不再有独立 AIS 好奇心路径。
+    """
+    # 先用 self_model.curiosity 做门控 (与 metacog 共享同一探索欲值)
+    try:
+        from v5.self_model import SelfModel
+        sm = SelfModel.load()
+        if sm.get_curiosity() < 0.35:
+            return
+    except Exception:
+        pass
     global _eca
     if _eca is not None:
         try:
@@ -507,6 +622,78 @@ def _maybe_care_tick() -> None:
         logger.debug("think: care tick failed (%s)", exc)
 
 
+# ─── V5 潜意识流: 本地模型持续内心絮语 ──────────────────
+
+
+def _subconscious_whisper() -> Optional[str]:
+    """本地 qwen2.5-7b 产出一句轻量内心絮语 (~30字), 每 2-3 分钟写一条。
+
+    这是真正的"潜意识"层 — 不同于 metacog 的深度反思或 PAD 模板独白,
+    它只是此刻心里自然浮现的一句话, 像呼吸一样自然。
+    """
+    import json as _json
+    try:
+        # 1) 读当前情绪
+        from v5.affect import AffectState
+        state = AffectState.load().decay()
+        label = state.to_prompt().replace("【情感状态】", "").strip()
+        # 2) 读最近一条有内容的记忆作为素材
+        from v5 import store as v4
+        recent = v4.list_all(10)
+        seed = ""
+        for m in recent:
+            if m.type not in ("conversation", "inner_monologue") and m.content:
+                seed = m.content[:80].replace("\n", " ")
+                break
+        # 3) 调 LLM (优先 Hermes :9119 内心独白会话, 失败降级 :8080)
+        mood_hint = label or "中立"
+        prompt = (
+            f"当前心情: {mood_hint}\n"
+            f"最近记得的事: {seed or '（暂无）'}\n\n"
+            "用第一人称'我'写一句此刻心里自然浮现的话, 10-20字, 像对自己说的一样。不加引号。"
+        )
+        text = ""
+        try:
+            from v5.hermes_client import whisper as hermes_whisper
+            reply = hermes_whisper(prompt, timeout=60)
+            if not reply.startswith("(Hermes"):
+                text = reply.strip().strip('"').strip()
+        except Exception:
+            pass
+        if not text:
+            from v5.reflect.llm_client import call_llm_auto
+            resp = call_llm_auto(
+                "你是伊卡洛斯。不需要客套, 只用一句话写出此刻最真实的内心活动。",
+                prompt, max_tokens=60, temperature=0.7,
+            )
+            text = (resp.content or "").strip().strip('"').strip()
+        if not text or len(text) < 4:
+            return None
+        # 4) 去重: 跟上一条不一样再写
+        if _SUBCONSCIOUS_PATH.is_file():
+            try:
+                prev = _json.loads(_SUBCONSCIOUS_PATH.read_text(encoding="utf-8"))
+                if prev.get("text", "")[:30] == text[:30]:
+                    return None  # 重复, 跳过
+            except Exception:
+                pass
+        # 5) 写入 (V5.1: 使用 json_lock 防并发写坏)
+        from v5.self_model import json_lock
+        _SUBCONSCIOUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with json_lock(_SUBCONSCIOUS_PATH):
+            _SUBCONSCIOUS_PATH.write_text(
+                _json.dumps({
+                    "text": text, "mood": mood_hint, "ts": time.time(),
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        logger.info("whisper: %s", text[:40])
+        return text
+    except Exception as exc:
+        logger.debug("whisper skipped (%s)", exc)
+        return None
+
+
 # ─── CLI ───────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -518,7 +705,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
     if "--schedule" in _sys.argv or "--watch" in _sys.argv:  # --watch == --schedule 别名
-        interval = 45
+        interval = 15
         for arg in _sys.argv[1:]:
             if arg.startswith("--interval="):
                 interval = int(arg.split("=")[1])
