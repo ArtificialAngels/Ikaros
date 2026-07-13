@@ -1,165 +1,142 @@
 @echo off
 REM ============================================================
-REM  Ikaros - Desktop Pet Launcher (no-bridge 2026-07-03)
+REM  Ikaros - Full Stack Launcher
+REM  Steps: env -> verify -> sleep -> memory -> voice -> think -> pet -> dashboard
+REM  Pure ASCII. No setlocal. No timeout (use ping -n). No init.bat inside sleep.bat.
 REM ============================================================
-REM  No-bridge: no bridge / supervisor / webui.
-REM ============================================================
-REM -- Why NO setlocal -----------------------------------------------
-REM  Windows 25H2: child processes created by start within setlocal
-REM  inherit the original unmodified env block, not the setlocal one.
-REM  hermes-desktop.bat relies on env vars PATH / HERMES_HOME /
-REM  HERMES_DESKTOP_HERMES_ROOT passed to Electron subprocess.
-REM  Without setlocal, all set writes to current process env,
-REM  and start reliably inherits them.
-REM -------------------------------------------------------------------
 
-REM ---- Load Ikaros environment (via init.bat single entry) ----
+REM ---- 0. Load environment ----
 call "%~dp0..\Ikaros-environment\init.bat"
 if errorlevel 1 (
-    echo [FATAL] Ikaros-environment\init.bat failed.
+    echo [FATAL] init.bat failed
     pause
     exit /b 1
 )
 
-REM ---- Step 0: Quick self-check (suite green for recent changes) ----
+REM ---- 0b. Quick self-check ----
 call "%IKAROS_BIN%\ikaros-verify.bat" --quick
 if errorlevel 1 (
-    echo [FATAL] Self-check failed. Fix before continuing.
+    echo [FATAL] verify.bat failed
     pause
     exit /b 1
 )
-echo.
+
 echo ============================================================
-echo   Ikaros - No-Bridge Launcher
+echo   Ikaros
 echo.
 echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
-echo   Frontend:  Hermes Desktop         (Electron)
-echo.
-echo   Memory:    Embedding :8587 + LLM :8080 (V5.1 unified)
-echo   LLM:       cloud (DeepSeek) + local :8080 (qwen3-8b)
 echo   Dashboard: http://127.0.0.1:9119
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
-echo   Think:     V5.1 5min deep cycle (metacog + proactive)
+echo   Memory:    :8587 embedding + :8080 qwen3-8b
+echo   Think:     V5.1 metacog cycle
 echo   Logs:      %IKAROS_LOGS%\
 echo   Stop:      bin\ikaros-sleep.bat
 echo ============================================================
-echo.
 
-REM ---- Step 1: Stop stale instances ----
+REM ---- 1. Stop stale instances ----
 echo [1] Stopping old instances...
-call "%IKAROS_BIN%\ikaros-sleep.bat" >nul 2>&1
-timeout /t 2 /nobreak >nul
-echo       done
+call "%IKAROS_BIN%\ikaros-sleep.bat"
+echo       [1] done
 
-REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM) ----
+REM ---- 2. Memory watchdog ----
 echo.
 echo [2] Starting Memory Services...
 echo       Embedding :8587 (nomic-embed-text)
 if /I "%~1"=="--no-llm" (
     set "IKAROS_SKIP_LLM=1"
-    echo       LLM       :8080 (qwen3-8b) SKIPPED --no-llm
+    echo       LLM :8080 SKIPPED --no-llm
 ) else (
-    echo       LLM       :8080 (qwen3-8b, watchdog managed)
+    echo       LLM :8080 (qwen3-8b)
 )
-echo.
-start "MemoryWatchdog" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --detach >nul 2>&1
-REM Wait for endpoints file (max 40s)
-set "WAIT=0"
-:wait_endpoints
-if exist "%IKAROS_MEMORY_DATA%\endpoints.json" goto :endpoints_ready
-timeout /t 2 /nobreak >nul
-set /a WAIT+=2
-if %WAIT% lss 40 goto :wait_endpoints
-echo       [WARN] Memory services may not be fully ready (timeout)
-goto :after_memory
-:endpoints_ready
-echo       Memory endpoints ready:
-type "%IKAROS_MEMORY_DATA%\endpoints.json" 2>nul
-echo.
-:after_memory
+wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_PYTHON%"" ""%IKAROS_BIN%\ikaros-memory-watchdog.py"" --detach"
+set "W=0"
+:mem_wait
+if exist "%IKAROS_MEMORY_DATA%\endpoints.json" goto :mem_ok
+ping -n 3 127.0.0.1 >nul
+set /a W+=2
+if %W% lss 40 goto :mem_wait
+echo       [WARN] Memory timeout
+goto :after_mem
+:mem_ok
+echo       Memory endpoints ready
+:after_mem
 
-REM ---- Step 2b: Launch Voice WS (:7870) for Tauri Pet ----
+REM ---- 2b. Voice WS ----
 echo [2b] Launching Voice WS (:7870)...
-echo       Tauri Pet speech link (cogno_5d + cloud_chat + edge-tts)
-echo.
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_PYTHON%"" ""%IKAROS_BIN%\ikaros-voice-ws.py"" > ""%IKAROS_LOGS%\voice-ws.log"" 2>&1"
-REM Wait for :7870 (max 20s)
-set "WAIT=0"
-:wait_voice
+set "W=0"
+:voice_wait
 "%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',7870));s.close();exit(0 if r==0 else 1)" >nul 2>&1
-if not errorlevel 1 goto :voice_ready
-timeout /t 2 /nobreak >nul
-set /a WAIT+=2
-if %WAIT% lss 20 goto :wait_voice
-echo       [WARN] Voice WS may not be ready (timeout)
+if not errorlevel 1 goto :voice_ok
+ping -n 3 127.0.0.1 >nul
+set /a W+=2
+if %W% lss 20 goto :voice_wait
+echo       [WARN] Voice WS timeout
 goto :after_voice
-:voice_ready
-echo       Voice WS: ws://127.0.0.1:7870/v1/voice/ws
-echo.
+:voice_ok
+echo       Voice WS ready
 :after_voice
 
-REM ---- Step 2c: Launch V5.1 unified self-think loop ----
-echo.
+REM ---- 2c. Think loop ----
 echo [2c] Launching V5.1 self-think loop...
-echo       5min deep cycle (metacog: LLM introspection + philosophy)
-echo       Output: data/v5/latest_thought.json
-echo       + subconscious whisper (2-3min ambient consciousness)
-echo.
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_BIN%\ikaros-think.bat"" --watch >nul 2>&1"
 
-REM ---- Step 3: Launch Desktop Pet v2 (Tauri) ----
-echo.
-echo [3] Launching Desktop Pet v2 (Tauri)...
-set "PET_EXE=%IKAROS_ROOT%\Ikaros-Live2D\src-tauri\target\release\ikaros-desktop-pet.exe"
-if not exist "%PET_EXE%" (
-    echo       [WARN] %PET_EXE% not found. Skipping pet.
+REM ---- 2d. Soul sync (V5 -> Hermes SOUL.md) ----
+echo [2d] Syncing V5 soul to Hermes...
+"%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-soul-sync.py" --once >nul 2>&1
+if not errorlevel 1 (
+    echo       SOUL.md synced
+) else (
+    echo       [WARN] soul-sync failed (non-fatal)
+)
+
+REM ---- 3. Desktop Pet ----
+echo [3] Launching Desktop Pet (Tauri)...
+set "PET=%IKAROS_ROOT%\Ikaros-Live2D\src-tauri\target\release\ikaros-desktop-pet.exe"
+if not exist "%PET%" (
+    echo       [WARN] pet exe not found, skipping
     goto :after_pet
 )
-start "" "%PET_EXE%"
-echo       Pet started (Tauri v2 release)
+start "" "%PET%"
+echo       Pet started
 :after_pet
 
-REM ---- Step 4: Launch Hermes Dashboard (web UI :9119) ----
-echo.
-echo [4] Starting Hermes Dashboard...
+REM ---- 4. Dashboard ----
+echo [4] Starting Hermes Dashboard (:9119)...
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe"" dashboard --port 9119 --no-open --skip-build >nul 2>&1"
-REM Wait for Dashboard port (max 30s)
-set "WAIT=0"
-:wait_dashboard
+set "W=0"
+:dash_wait
 "%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',9119));s.close();exit(0 if r==0 else 1)" >nul 2>&1
-if not errorlevel 1 goto :dashboard_ready
-timeout /t 2 /nobreak >nul
-set /a WAIT+=2
-if %WAIT% lss 30 goto :wait_dashboard
-echo       [WARN] Dashboard may not be fully ready (timeout)
-goto :after_dashboard
-:dashboard_ready
+if not errorlevel 1 goto :dash_ok
+ping -n 3 127.0.0.1 >nul
+set /a W+=2
+if %W% lss 30 goto :dash_wait
+echo       [WARN] Dashboard timeout
+goto :after_dash
+:dash_ok
 echo       Dashboard: http://127.0.0.1:9119
-echo.
-:after_dashboard
+:after_dash
 
-REM ---- Step 5: Launch Hermes Desktop ----
+REM ---- 5. Desktop (interactive) ----
 echo.
+set /p "OPEN_DESKTOP=Launch Hermes Desktop? [y/N]: "
+if /i "%OPEN_DESKTOP%"=="y" goto :do_desktop
+if /i "%OPEN_DESKTOP%"=="yes" goto :do_desktop
+goto :skip_desktop
+:do_desktop
 echo [5] Launching Hermes Desktop...
 call "%IKAROS_BIN%\hermes-desktop.bat"
-echo.
+:skip_desktop
 
 REM ---- Done ----
 echo ============================================================
 echo   Ikaros is ready!
 echo.
 echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
-echo   Frontend:  Hermes Desktop         (Electron)
 echo   Dashboard: http://127.0.0.1:9119
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
-echo   Think:     V5.1 self-think loop (5min deep cycle)
-echo   Self:      self_model + metacog + narrative
-echo   Memory:    Embedding :8587 + LLM :8080 (V5.1 unified)
-echo   LLM:       cloud (DeepSeek) + local :8080 (qwen3-8b)
+echo   Memory:    :8587 + :8080
 echo.
-echo   Endpoints: %IKAROS_MEMORY_DATA%\endpoints.json
 echo   Stop:      bin\ikaros-sleep.bat
 echo ============================================================
-echo.
-
 exit /b 0
