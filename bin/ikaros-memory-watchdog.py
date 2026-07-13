@@ -3,7 +3,7 @@
 
 管理记忆服务 (统一架构):
   1. Embedding (:8587) — nomic-embed-text, 供 v4 记忆库语义搜索
-  2. LLM (:8080) — qwen2.5-7b, 供 v4 记忆提取 (extract / 反思)
+  2. LLM (:8080) — qwen3-8b, 供 v4 记忆提取 (extract / 反思)
 
 启动后:
   - 启动 embedding + LLM 服务
@@ -42,11 +42,18 @@ LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
     str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text.gguf")))
 LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
-    str(ROOT / "Ikaros-memory" / "models" / "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf")))
+    str(ROOT / "Ikaros-memory" / "models" / "qwen3-8b.gguf")))
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # qwen2.5-7b for v4 memory extraction
+LLM_PORT = 8080  # qwen3-8b for v4 memory extraction
+
+# Skip LLM (qwen3-8b @ :8080) this run if env var set.
+# Used for "lighter" launches (e.g. ikaros-start.bat --no-llm).
+# Any of: "1" / "true" / "yes" / "on" enables skip; empty / "0" / "false"
+# does NOT skip.
+SKIP_LLM = os.environ.get("IKAROS_SKIP_LLM", "").strip().lower() in (
+    "1", "true", "yes", "on")
 
 CHECK_INTERVAL = 10  # patrol interval (seconds)
 PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
@@ -164,7 +171,7 @@ class MemoryWatchdog:
         return ok
 
     def _start_llm(self) -> bool:
-        """启动/检测 llama-server (:8080) — qwen2.5-7b for v4 memory extraction (extract / 反思)."""
+        """启动/检测 llama-server (:8080) — qwen3-8b for v4 memory extraction (extract / 反思)."""
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
@@ -184,7 +191,7 @@ class MemoryWatchdog:
                 "--port", str(LLM_PORT),
                 "-c", "4096",
                 "-ngl", "99",
-                "--alias", "qwen2.5-7b",
+                "--alias", "qwen3-8b",
                 "--cont-batching",
             ],
             stdout=subprocess.DEVNULL,
@@ -216,7 +223,11 @@ class MemoryWatchdog:
                         why="memory watchdog init/restart") as _a:
             _log("=== Starting memory services (unified architecture) ===")
             ok_embed = self._start_embed()
-            ok_llm = self._start_llm()
+            if SKIP_LLM:
+                _log("[llm] SKIP_LLM set — not starting :8080 qwen3-8b this run")
+                ok_llm = False
+            else:
+                ok_llm = self._start_llm()
             self._write_endpoints(ok_embed, ok_llm)
             all_ok = ok_embed  # LLM 不强制要求 (embed 必须)
             if ok_embed and ok_llm:
@@ -235,7 +246,7 @@ class MemoryWatchdog:
     def _maybe_reflect(self) -> None:
         """Periodically trigger memory reflection cycle (self-evolution).
 
-        Runs every REFLECT_INTERVAL seconds. Imports v4.reflect.registry and
+        Runs every REFLECT_INTERVAL seconds. Imports v5.reflect.registry and
         runs the V4 reflection scheduler (consolidate/dedup/promote/distill/
         reflect/cleanup). continue_on_error=True: one failing op (e.g. missing
         DeepSeek key for the 7d reflect) does not block the rest.
@@ -247,7 +258,8 @@ class MemoryWatchdog:
         try:
             sys.path.insert(0, str(ROOT / "Ikaros-memory"))
             import importlib
-            vr = importlib.import_module("v4.reflect.registry")
+            # V5.1:
+            vr = importlib.import_module("v5.reflect.registry")
             sched = vr.make_default_scheduler()
             results = sched.run_all(continue_on_error=True)
             _log("[reflect] v4 cycle complete: %s", results)
@@ -261,8 +273,6 @@ class MemoryWatchdog:
         避免僵尸监听器 (端口绑了但服务崩) 被误报 OK.
         """
         embed_alive = self._service_ok(EMBED_PORT)
-        llm_alive = self._service_ok(LLM_PORT)
-
         if not embed_alive:
             _log("[heartbeat] embed :8587 DEAD (port/health), restarting...")
             self._start_embed()
@@ -270,12 +280,18 @@ class MemoryWatchdog:
         else:
             _log("[heartbeat] embed :8587 OK (port+health)")
 
-        if not llm_alive:
-            _log("[heartbeat] llm :8080 DEAD (port/health), restarting...")
-            self._start_llm()
-            llm_alive = self._service_ok(LLM_PORT)
+        if SKIP_LLM:
+            # 不加载 qwen3 模式: 仅反映 :8080 当前状态, 绝不重启 LLM
+            llm_alive = self._port_alive(LLM_PORT)
+            _log("[heartbeat] llm :8080 SKIP (SKIP_LLM set) — not restarting")
         else:
-            _log("[heartbeat] llm :8080 OK (port+health)")
+            llm_alive = self._service_ok(LLM_PORT)
+            if not llm_alive:
+                _log("[heartbeat] llm :8080 DEAD (port/health), restarting...")
+                self._start_llm()
+                llm_alive = self._service_ok(LLM_PORT)
+            else:
+                _log("[heartbeat] llm :8080 OK (port+health)")
 
         self._write_endpoints(embed_alive, llm_alive)
         self._emit_heartbeat(embed_alive, llm_alive)
@@ -335,7 +351,7 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",
                     "port": LLM_PORT,
                     "alive": llm_ok,
-                    "model": "qwen2.5-7b",
+                    "model": "qwen3-8b",
                     "note": "Managed by memory watchdog for v4 extraction",
                 },
                 "updated_at": time.time(),
@@ -467,7 +483,7 @@ def cmd_status():
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
-    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen2.5-7b)")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-8b)")
 
     if PID_FILE.exists():
         pid_str = PID_FILE.read_text(encoding="utf-8").strip()

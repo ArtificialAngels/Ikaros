@@ -3,9 +3,6 @@ REM ============================================================
 REM  Ikaros - Desktop Pet Launcher (no-bridge 2026-07-03)
 REM ============================================================
 REM  No-bridge: no bridge / supervisor / webui.
-REM  2026-07-05 哥哥装了 hermes-web-ui 后又卸了, :8648 已释放给
-REM  Ikaros-Live2D Tauri webview.  Hermes Desktop launches as
-REM  standalone app.  Desktop Pet stays in system tray.
 REM ============================================================
 REM -- Why NO setlocal -----------------------------------------------
 REM  Windows 25H2: child processes created by start within setlocal
@@ -14,7 +11,6 @@ REM  hermes-desktop.bat relies on env vars PATH / HERMES_HOME /
 REM  HERMES_DESKTOP_HERMES_ROOT passed to Electron subprocess.
 REM  Without setlocal, all set writes to current process env,
 REM  and start reliably inherits them.
-REM  (wait loop uses goto to re-resolve %WAIT%, no delayedexpansion)
 REM -------------------------------------------------------------------
 
 REM ---- Load Ikaros environment (via init.bat single entry) ----
@@ -36,15 +32,14 @@ echo.
 echo ============================================================
 echo   Ikaros - No-Bridge Launcher
 echo.
-echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D, click-through)
-echo   Frontend:  Hermes Desktop       (Electron)
+echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
+echo   Frontend:  Hermes Desktop         (Electron)
 echo.
-echo   Memory:    Embedding :8587 + LLM :8080 (Hermes Agent unified)
-echo   LLM:       cloud (DeepSeek V4 / minimax) + local :8080
-echo   Dashboard: http://127.0.0.1:9119  (hermes dashboard)
-echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws (Tauri Pet speech)
-echo   5D Cog:    cogno + soul injected by cloud_chat.py
-echo   Memory:    ikaros-memory-watchdog auto-check + restart
+echo   Memory:    Embedding :8587 + LLM :8080 (V5.1 unified)
+echo   LLM:       cloud (DeepSeek) + local :8080 (qwen3-8b)
+echo   Dashboard: http://127.0.0.1:9119
+echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
+echo   Think:     V5.1 5min deep cycle (metacog + proactive)
 echo   Logs:      %IKAROS_LOGS%\
 echo   Stop:      bin\ikaros-sleep.bat
 echo ============================================================
@@ -60,7 +55,12 @@ REM ---- Step 2: Start Memory Services (watchdog manages embedding + LLM) ----
 echo.
 echo [2] Starting Memory Services...
 echo       Embedding :8587 (nomic-embed-text)
-echo       LLM       :8080 (qwen2.5-7b, watchdog managed)
+if /I "%~1"=="--no-llm" (
+    set "IKAROS_SKIP_LLM=1"
+    echo       LLM       :8080 (qwen3-8b) SKIPPED --no-llm
+) else (
+    echo       LLM       :8080 (qwen3-8b, watchdog managed)
+)
 echo.
 start "MemoryWatchdog" /MIN "%IKAROS_PYTHON%" "%IKAROS_BIN%\ikaros-memory-watchdog.py" --detach >nul 2>&1
 REM Wait for endpoints file (max 40s)
@@ -79,11 +79,9 @@ echo.
 :after_memory
 
 REM ---- Step 2b: Launch Voice WS (:7870) for Tauri Pet ----
-REM ---- Step 2b: Launch Voice WS (:7870) ----
 echo [2b] Launching Voice WS (:7870)...
 echo       Tauri Pet speech link (cogno_5d + cloud_chat + edge-tts)
 echo.
-REM Launch completely hidden via launch-hidden.vbs (no CMD flash)
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_PYTHON%"" ""%IKAROS_BIN%\ikaros-voice-ws.py"" > ""%IKAROS_LOGS%\voice-ws.log"" 2>&1"
 REM Wait for :7870 (max 20s)
 set "WAIT=0"
@@ -100,16 +98,13 @@ echo       Voice WS: ws://127.0.0.1:7870/v1/voice/ws
 echo.
 :after_voice
 
-REM ---- Step 2c: Launch V5 idle self-think loop (Inner Monologue) ----
+REM ---- Step 2c: Launch V5.1 unified self-think loop ----
 echo.
-echo [2c] Launching V5 idle self-think loop...
-echo       Inner monologue every 45 min (writes data/v5/pending_thought.json)
-echo       Consumed by cloud_chat._build_v5_affect_block on next chat turn
-echo       + metacog thread: self-cognition / reflective loop (25min beat),
-echo         real LLM introspection + philosophy of love/human/robot/self,
-echo         writes data/v5/self_model.json + latest_thought.json
+echo [2c] Launching V5.1 self-think loop...
+echo       5min deep cycle (metacog: LLM introspection + philosophy)
+echo       Output: data/v5/latest_thought.json
+echo       + subconscious whisper (2-3min ambient consciousness)
 echo.
-REM Launch completely hidden via launch-hidden.vbs
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_BIN%\ikaros-think.bat"" --watch >nul 2>&1"
 
 REM ---- Step 3: Launch Desktop Pet v2 (Tauri) ----
@@ -127,7 +122,6 @@ echo       Pet started (Tauri v2 release)
 REM ---- Step 4: Launch Hermes Dashboard (web UI :9119) ----
 echo.
 echo [4] Starting Hermes Dashboard...
-REM Use launch-hidden.vbs to start completely windowless (no CMD flash)
 wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe"" dashboard --port 9119 --no-open --skip-build >nul 2>&1"
 REM Wait for Dashboard port (max 30s)
 set "WAIT=0"
@@ -155,13 +149,13 @@ echo ============================================================
 echo   Ikaros is ready!
 echo.
 echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
-echo   Frontend:  Hermes Desktop       (Electron)
+echo   Frontend:  Hermes Desktop         (Electron)
 echo   Dashboard: http://127.0.0.1:9119
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
-echo   Think:     V5 idle self-think loop (45min, pending_thought.json)
-echo   Metacog:   self-cognition thread (25min) - introspection + philosophy
-echo   Memory:    Embedding :8587 + LLM :8080 (unified)
-echo   LLM:       cloud (DeepSeek V4) + local :8080
+echo   Think:     V5.1 self-think loop (5min deep cycle)
+echo   Self:      self_model + metacog + narrative
+echo   Memory:    Embedding :8587 + LLM :8080 (V5.1 unified)
+echo   LLM:       cloud (DeepSeek) + local :8080 (qwen3-8b)
 echo.
 echo   Endpoints: %IKAROS_MEMORY_DATA%\endpoints.json
 echo   Stop:      bin\ikaros-sleep.bat
