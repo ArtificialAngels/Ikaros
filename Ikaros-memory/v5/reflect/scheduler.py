@@ -23,7 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping
 
-logger = logging.getLogger("ikaros.memory.v4.scheduler")
+logger = logging.getLogger("ikaros.memory.v5.scheduler")
 
 
 # ─── V3 间隔对照 (V3 memory_reflect.py:67-70) ─────────────────────

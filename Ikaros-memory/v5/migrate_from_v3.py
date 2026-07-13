@@ -34,7 +34,7 @@ from pathlib import Path
 V4_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(V4_ROOT.parent))
 
-logger = logging.getLogger("ikaros.memory.v4.migrate")
+logger = logging.getLogger("ikaros.memory.v5.migrate")
 
 # V3 db 与 V4 db 同在 E:\Ikaros\Ikaros-memory\data\ 下
 # V4_ROOT = E:\Ikaros\Ikaros-memory\  (parent of v4/ dir)

@@ -264,14 +264,14 @@ def _compress_context(text: str) -> str:
     return c.compress_context(text) if c else text[:40]
 
 
-# ─── v4 记忆存储模块加载 (Ikaros-memory/v4/store.py, Phase 4 cutover) ───
+# ─── v5 记忆存储模块加载 (Ikaros-memory/v5/store.py, code migrated v4→v5 2026-07-12) ───
 
 _V4_STORE_LOCK = threading.Lock()
 _V4_STORE_ALIAS = "_ikaros_memory_v4_store"
 
 
 def _get_v4_store():
-    """动态加载 Ikaros-memory/v4/store.py 包 (V4 记忆存储). 带 cache. 线程安全.
+    """动态加载 Ikaros-memory/v5/store.py 包 (V5 记忆存储). 带 cache. 线程安全.
 
     V4 cutover (2026-07-07): 实时对话/事实落库改走 v4.store (写入 v4.db),
     不再写 v3.db. v4.store API 与 V3 兼容 (store/search/...), 但失败显式抛
@@ -287,7 +287,7 @@ def _get_v4_store():
             mem = str(_HERMES_ROOT / "Ikaros-memory")
             if mem not in sys.path:
                 sys.path.insert(0, mem)
-            import v4.store as v4s
+            from v5 import store as v4s
             sys.modules[_V4_STORE_ALIAS] = v4s
             return v4s
         except Exception as e:
@@ -296,7 +296,7 @@ def _get_v4_store():
 
 
 def _get_v4_search():
-    """动态加载 Ikaros-memory/v4/search.py 包 (V4 语义搜索, ChromaDB).
+    """动态加载 Ikaros-memory/v5/search.py 包 (V5 语义搜索, ChromaDB).
 
     Returns: v4.search module object, 或 None (导入失败 / chromadb 缺失).
     """
@@ -304,7 +304,7 @@ def _get_v4_search():
         mem = str(_HERMES_ROOT / "Ikaros-memory")
         if mem not in sys.path:
             sys.path.insert(0, mem)
-        import v4.search as v4search
+        from v5 import search as v4search
         return v4search
     except Exception as e:
         log.warning("load v4.search failed: %s", e)
@@ -987,7 +987,7 @@ async def cloud_chat(
                 m["content"][:60] for m in _old if m.get("content")
             )
             try:
-                from v4.reflect.llm_client import call_llm as _cl
+                from v5.reflect.llm_client import call_llm as _cl
                 _resp = _cl(
                     "压缩这段对话历史为 20 字以内一句话摘要, 只输出摘要",
                     _summary_text, provider="local", max_tokens=60, timeout=30)

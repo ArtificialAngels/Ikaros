@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger("ikaros.memory.v4.distill")
+logger = logging.getLogger("ikaros.memory.v5.distill")
 
 V4_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(V4_ROOT.parent))

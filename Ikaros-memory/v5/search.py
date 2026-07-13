@@ -1,5 +1,5 @@
 """
-v4.search — V4 语义搜索层 (ChromaDB)
+v5.search — V5 语义搜索层 (ChromaDB) (代码于 2026-07-12 由 v4/ 迁入 v5/)
 
 设计目标:
   - API 与 V3 vector_search.py 兼容
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger("ikaros.memory.v4.search")
+logger = logging.getLogger("ikaros.memory.v5.search")
 
 V4_ROOT = Path(__file__).resolve().parent.parent
 V4_DATA_DIR = V4_ROOT / "data" / "v4"

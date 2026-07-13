@@ -1,5 +1,5 @@
 """
-v4.store — V4 记忆存储层
+v5.store — V5 记忆存储层 (代码于 2026-07-12 由 v4/ 迁入 v5/, 数据目录仍为 data/v4/)
 
 设计目标:
   - API 与 V3 store() 兼容 (Phase 4 切换期平滑过渡)
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-logger = logging.getLogger("ikaros.memory.v4.store")
+logger = logging.getLogger("ikaros.memory.v5.store")
 
 # V4 状态文件: Ikaros-memory/data/v4/v4.db (与 V3 v3.db 并列)
 # 注意: scheduler.py 用的是 data/v4/reflect_state.json, 这里用 v4.db

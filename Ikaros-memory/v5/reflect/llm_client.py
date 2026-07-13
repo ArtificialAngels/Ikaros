@@ -30,7 +30,7 @@ import httpx
 # Hermes Agent .env 在 E:\Ikaros\data\hermes-agent\.env (HERMES_HOME env)
 # 优先 HERMES_HOME 路径, 然后 Ikaros 默认, 最后 V4 自己的 .env (允许覆盖)
 
-logger = logging.getLogger("ikaros.memory.v4.llm")
+logger = logging.getLogger("ikaros.memory.v5.llm")
 
 # ─── 路径配置 (与 v4 其他模块一致) ──────────────────────────────
 
