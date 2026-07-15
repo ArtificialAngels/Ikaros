@@ -45,5 +45,15 @@ echo [6] Stopping Download Accelerator (gopeed :9999)...
 taskkill /F /IM "gopeed-web.exe" /T >nul 2>&1
 echo       done
 
+echo [7] Stopping Hermes Studio (:8647/:8648/:8649)...
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8647" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8648" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8649" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+echo       done
+
+echo [8] Stopping Hermes Dashboard (:9119, manual backup)...
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":9119" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+echo       done
+
 echo [sleep] Done.
 exit /b 0

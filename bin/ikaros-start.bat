@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM  Ikaros - Full Stack Launcher
-REM  Steps: token -> env -> verify -> sleep -> memory -> voice -> think -> pet -> dashboard
+REM  Steps: token -> env -> verify -> sleep -> memory -> voice -> think -> pet -> studio (dashboard/desktop = manual backup)
 REM  Pure ASCII. No setlocal. No timeout (use ping -n). No init.bat inside sleep.bat.
 REM ============================================================
 
@@ -29,7 +29,8 @@ echo ============================================================
 echo   Ikaros
 echo.
 echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
-echo   Dashboard: http://127.0.0.1:9119
+echo   Studio:    http://127.0.0.1:8649   (auto - default Web UI + Agent)
+echo   Dashboard: http://127.0.0.1:9119   (manual: bin\hermes-dashboard.bat)
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
 echo   Memory:    :8587 embedding + :8080 qwen3-8b
 echo   Think:     V5.1 metacog cycle
@@ -105,21 +106,47 @@ start "" "%PET%"
 echo       Pet started
 :after_pet
 
-REM ---- 4. Dashboard ----
-echo [4] Starting Hermes Dashboard (:9119)...
-wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c ""%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe"" dashboard --port 9119 --no-open --skip-build >nul 2>&1"
+REM ---- Hermes Dashboard (MANUAL backup, NOT auto-started) ----
+REM  Intentionally NOT auto-started: running it alongside Studio's
+REM  bridge would spawn a 2nd Hermes Agent writing the same
+REM  data/hermes-agent (session split + db contention).
+REM  Launch on demand:  bin\hermes-dashboard.bat
+REM  (Avoid running both Studio and Dashboard at once.)
+
+REM ---- 4. Hermes Studio (hermes-web-ui, dev mode) ----
+REM  Dev mode: npm run dev -> concurrently dev:server (Koa :8647) + dev:client
+REM  (Vite :8649). Open http://127.0.0.1:8649. This is the earliest working
+REM  variant (rolled back per request). NODE_PATH cleared to avoid managed
+REM  runtime pollution.
+echo [4] Starting Hermes Studio (:8649)...
+set "STUDIO=%IKAROS_STUDIO%"
+set "STUDIO_LOGS=%IKAROS_LOGS%\hermes-studio"
+if not exist "%STUDIO_LOGS%" mkdir "%STUDIO_LOGS%"
+cd /d "%STUDIO%"
+if not exist "%STUDIO%\node_modules" (
+    echo       [install] node_modules missing - running npm install...
+    set "PATH=C:\Program Files\nodejs;%PATH%"
+    call npm install
+    if errorlevel 1 (
+        echo       [WARN] npm install failed - skipping Hermes Studio
+        goto :after_studio
+    )
+) else (
+    echo       [skip] node_modules present
+)
+wscript.exe "%IKAROS_BIN%\launch-hidden.vbs" "cmd /c set ""HERMES_WEB_UI_HOME=%IKAROS_DATA%\hermes-studio"" && set ""NODE_PATH="" && set ""PATH=C:\Program Files\nodejs;%PATH%"" && cd /d ""%STUDIO%"" && npm run dev > ""%STUDIO_LOGS%\hermes-studio.log"" 2>&1"
 set "W=0"
-:dash_wait
-"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',9119));s.close();exit(0 if r==0 else 1)" >nul 2>&1
-if not errorlevel 1 goto :dash_ok
+:studio_wait
+"%IKAROS_PYTHON%" -c "import socket;s=socket.socket();s.settimeout(1);r=s.connect_ex(('127.0.0.1',8649));s.close();exit(0 if r==0 else 1)" >nul 2>&1
+if not errorlevel 1 goto :studio_ok
 ping -n 3 127.0.0.1 >nul
 set /a W+=2
-if %W% lss 30 goto :dash_wait
-echo       [WARN] Dashboard timeout
-goto :after_dash
-:dash_ok
-echo       Dashboard: http://127.0.0.1:9119
-:after_dash
+if %W% lss 90 goto :studio_wait
+echo       [WARN] Hermes Studio timeout on :8649
+goto :after_studio
+:studio_ok
+echo       Hermes Studio: http://127.0.0.1:8649
+:after_studio
 
 REM ---- 5. Desktop (interactive) ----
 echo.
@@ -137,7 +164,8 @@ echo ============================================================
 echo   Ikaros is ready!
 echo.
 echo   Pet:       Ikaros Desktop Pet v2  (Tauri v2, Live2D)
-echo   Dashboard: http://127.0.0.1:9119
+echo   Studio:    http://127.0.0.1:8649   (default Web UI + Agent)
+echo   Dashboard: http://127.0.0.1:9119   (manual: bin\hermes-dashboard.bat)
 echo   Voice WS:  ws://127.0.0.1:7870/v1/voice/ws
 echo   Memory:    :8587 + :8080
 echo.
