@@ -242,3 +242,18 @@ network:
   pypi_mirror: aliyun
   hf_mirror: hf-mirror
   git_mirror: gh-proxy
+
+# ============================================================
+# Ikaros V5 MCP server (2026-07-15 agent-ization)
+# ============================================================
+# Register V5's 24 v5_* MCP tools; Hermes Agent auto-spawns this subprocess
+# and discovers the tools. For Hermes Studio / external SSE clients, instead run:
+#   E:\Ikaros\portable-python\python.exe E:\Ikaros\Ikaros-memory\v5\mcp_server.py sse
+# and connect to http://127.0.0.1:9877/sse
+mcp_servers:
+  ikaros-v5:
+    command: E:\Ikaros\portable-python\python.exe
+    args:
+      - E:\Ikaros\Ikaros-memory\v5\mcp_server.py
+    env:
+      IKAROS_ROOT: E:\Ikaros
