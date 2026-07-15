@@ -168,6 +168,15 @@ def _build_soul_md() -> str:
             parts.append(f"- [{mtype}][w={weight:.2f}] {content}")
         parts.append("")
 
+    # 6. Capabilities (常驻能力清单, 伊卡洛斯会用的工具)
+    caps_path = IKAROS_ROOT / "ikaros-identity" / "capabilities.md"
+    if caps_path.is_file():
+        caps = caps_path.read_text(encoding="utf-8").strip()
+        if caps:
+            parts.append("## 我的能力\n")
+            parts.append(caps)
+            parts.append("")
+
     return "\n".join(parts).strip() + "\n"
 
 

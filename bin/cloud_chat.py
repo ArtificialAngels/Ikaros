@@ -61,6 +61,7 @@ def get_monitor_log(limit: int = 100) -> list[dict]:
 _HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
 _ENV_PATH = _HERMES_ROOT / "data" / "hermes-agent" / ".env"
 _AXIOM_PATH = _HERMES_ROOT / "ikaros-identity" / "axiom.md"
+_CAPABILITIES_PATH = _HERMES_ROOT / "ikaros-identity" / "capabilities.md"
 _LOCAL_LLM_URL = os.environ.get(
     "IKAROS_LLM_URL",
     os.environ.get("HERMES_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1"),
@@ -84,6 +85,7 @@ _last_activity_phrase = ""
 # ─── 缓存 ───
 
 _axiom_cache: Optional[str] = None
+_capabilities_cache: Optional[str] = None
 _env_cache: Optional[dict[str, str]] = None
 
 # ─── Hermes 会话复用 ───
@@ -103,14 +105,44 @@ _DASH_WS_TOKEN: str | None = None
 
 
 async def _dash_scrape_token() -> str:
-    """从 Dashboard HTML 抓取 session token."""
+    """从 Dashboard 源抓取 WS session token.
+
+    优先级:
+      1. Dashboard SPA 页面 (实时注入 __HERMES_SESSION_TOKEN__)
+      2. Dashboard 登录页面 (回退)
+      3. Web dist index.html 文件 (文件系统兜底, 含 __HERMES_SESSION_TOKEN__ 模板占位符)
+      4. .dash_token 文件 (手动写入, 供 --skip-build 无 SPA 场景)
+    """
     import urllib.request
-    resp = urllib.request.urlopen("http://127.0.0.1:9119/", timeout=5)
-    html = resp.read().decode("utf-8")
-    m = _re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
-    if m:
-        return m.group(1)
-    raise RuntimeError("cannot find token in Dashboard HTML")
+    # 方式 1-2: 从 HTTP 页面提取
+    for path in ("/", "/login"):
+        try:
+            resp = urllib.request.urlopen(
+                f"http://127.0.0.1:9119{path}", timeout=5)
+            raw = resp.read()
+            # 转码: 某些响应可能是 gzip 压缩的
+            try:
+                html = raw.decode("utf-8")
+            except Exception:
+                html = raw.decode("gbk", errors="replace")
+            m = _re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
+            if m:
+                return m.group(1)
+        except Exception:
+            continue
+    # 方式 3: 从服务器进程的 _SESSION_TOKEN 文件读取 (跨进程 IPC)
+    # 写一个临时脚本通过 server 的 debug 接口暴露 token
+    # 暂无, fall through.
+    # 方式 4: 读取 .dash_token 文件
+    _token_file = _HERMES_ROOT / ".dash_token"
+    if _token_file.is_file():
+        try:
+            t = _token_file.read_text(encoding="utf-8").strip()
+            if t:
+                return t
+        except Exception:
+            pass
+    raise RuntimeError("cannot find token from Dashboard")
 
 
 async def _dash_connect() -> Any:
@@ -311,6 +343,104 @@ def _get_v4_search():
         return None
 
 
+# ─── 时间指代解析（中文 → Unix 时间戳范围） ───
+
+# CNSeq2TimeSpan: 30KB 轻量正则解析器，覆盖 昨天/前天/上周/三天前/上个月 等
+# 2019 年停更但核心正则稳定；已知 bug: 3 处 "Asia/shanghai" 需 patch 为 "Asia/Shanghai"
+_TEMPORAL_PARSER = None
+
+
+def _get_temporal_parser():
+    """懒加载 CNSeq2TimeSpan（仅在首次用到时间指代解析时 import）."""
+    global _TEMPORAL_PARSER
+    if _TEMPORAL_PARSER is not None:
+        return _TEMPORAL_PARSER
+    try:
+        from CNSeq2TimeSpan.TimeNormalizer import TimeNormalizer
+        _TEMPORAL_PARSER = TimeNormalizer()
+        log.info("temporal parser (CNSeq2TimeSpan) loaded")
+    except Exception as e:
+        log.warning("temporal parser unavailable: %s", e)
+        _TEMPORAL_PARSER = False
+    return _TEMPORAL_PARSER
+
+
+# 可被解析的时间指代模式（用于从查询中剥离已解析的时间短语）
+_TEMPORAL_PATTERNS = [
+    "大前天", "前天", "昨天", "今天", "明天", "后天", "大后天",
+    "上周", "这周", "下周", "上星期", "这星期", "下星期",
+    "上个月", "这个月", "下个月", "去年", "今年", "明年",
+    "前几天", "这几天", "最近", "前阵子",
+    "三天前", "两天前", "一天前", "几天前",
+]
+
+
+def _resolve_temporal_filter(query: str) -> tuple[str, float | None, float | None]:
+    """从用户输入中提取时间指代，返回 (清洗后查询, start_ts, end_ts)。
+
+    无时间指代时返回 (query, None, None)。
+    时间戳为 Unix epoch float，end_ts 是 inclusive 的上界。
+    """
+    tp = _get_temporal_parser()
+    if tp is False or tp is None:
+        return query, None, None
+
+    try:
+        res = tp.parse(target=query)
+    except Exception as e:
+        log.debug("temporal parse failed: %s", e)
+        return query, None, None
+
+    if res.get("type") != "timespan":
+        return query, None, None
+
+    tsp = res.get("timespan")
+    if not tsp or not tsp[0] or len(tsp[0]) < 2:
+        return query, None, None
+
+    start_str, end_str = tsp[0][0], tsp[0][1]
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+        start_ts = start_dt.timestamp()
+        end_ts = end_dt.timestamp()
+    except ValueError:
+        return query, None, None
+
+    # 从查询文本中剥离已解析的时间短语，留下纯语义部分
+    cleaned = query
+    for pat in sorted(_TEMPORAL_PATTERNS, key=len, reverse=True):
+        if pat in cleaned:
+            cleaned = cleaned.replace(pat, "").strip()
+            break
+
+    # 去掉残留的占位符/无意义词
+    import re as _re
+    cleaned = _re.sub(r"的?(事儿|事|吗|呢|啊|呀|么|嘛|哈|哦)", "", cleaned)
+    cleaned = cleaned.strip()
+
+    if not cleaned or len(cleaned) < 2:
+        cleaned = query  # 回退到原始查询
+
+    log.info("temporal resolved: '%s' → cleaned='%s' range=[%s, %s]",
+             query[:40], cleaned[:30], start_str, end_str)
+    return cleaned, start_ts, end_ts
+
+
+# 记忆/时间类查询关键词（触发 "I don't know" 信号）
+_MEMORY_QUERY_PATTERNS = [
+    "记得", "还记得", "想起", "回忆", "昨天", "前天", "上周", "上次",
+    "之前", "以前", "过去", "说过", "聊过", "提过", "讨论过",
+    "那天", "那天", "当时", "那时候",
+]
+
+
+def _looks_like_memory_query(text: str) -> bool:
+    """用户输入是否像在问记忆/过去的事（用于检索为空时的防捏造信号）."""
+    t = text.lower()
+    return any(p in t for p in _MEMORY_QUERY_PATTERNS)
+
+
 # ─── v4 记忆检索 ───
 
 
@@ -324,7 +454,12 @@ _SKIP_MEMORY_PATTERNS = {
 
 
 def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
-    """从 V4 记忆库检索相关记忆 (FTS5 + 向量融合).
+    """从 V4 记忆库检索相关记忆 (FTS5 + 向量融合 + 时间指代解析).
+
+    管线:
+      1. 时间指代解析: "昨天" → date range 过滤
+      2. FTS5 + ChromaDB 融合搜索 (关键词 + 语义)
+      3. 时间范围过滤 (若已解析)
 
     V4 融合搜索 (v4.search.fused_search):
       - FTS5: 精确关键词匹配 (权重 0.3)
@@ -337,40 +472,31 @@ def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
     if not q or q in _SKIP_MEMORY_PATTERNS or len(q) < 4:
         return []
 
-    # 截断长查询
-    search_query = q[:30] if len(q) > 30 else q
+    # ── 时间指代解析 ──
+    cleaned_q, start_ts, end_ts = _resolve_temporal_filter(q)
+    has_time_filter = start_ts is not None and end_ts is not None
 
+    # ── 三路融合检索 (FTS5 + 向量 + 时间范围) → 委托 v5.memory_retrieval (R3) ──
+    search_query = cleaned_q[:30] if len(cleaned_q) > 30 else cleaned_q
+    time_range = (start_ts, end_ts) if has_time_filter else None
     try:
-        # 尝试融合搜索 (FTS5 + 向量)
-        vs = _get_v4_search()
-        if vs is None:
-            return []
-        rows = vs.fused_search(search_query, top_k=top_k)
-        # Exclude conversation type, filter low weight
-        return [{"id": r.get("id", ""), "content": r["content"], "type": r.get("type"),
-                 "weight": r.get("weight", 0.5), "tags": r.get("tags", ""),
-                 "score": r.get("score", 0),
-                 "pad_p": r.get("pad_p", 0.0), "pad_a": r.get("pad_a", 0.0)}
-                for r in rows
-                if r.get("type") != "conversation" and r.get("weight", 0) >= 0.6]
-    except ImportError:
-        # vector_search 不可用, 回退到纯 FTS5
-        log.debug("v4 search not available, falling back to FTS5")
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.memory_retrieval import retrieve
+        # exclude 用户原话, 避免把刚说的话当记忆回注 (spec R3: 不重复注入已知信息)
+        mems = retrieve(search_query, top_k=max(top_k, 5),
+                        time_range=time_range, exclude=[query])
+        merged = [
+            {"id": m["id"], "content": m["content"], "type": m["type"],
+             "weight": m["weight"], "tags": m.get("tags", ""),
+             "score": m["score"], "pad_p": m.get("pad_p", 0.0),
+             "pad_a": m.get("pad_a", 0.0), "created": m.get("created", 0)}
+            for m in mems
+        ]
+        return merged[:top_k]
     except Exception as e:
-        log.warning("v4 fused search failed, falling back to FTS5: %s", e)
-
-    # Fallback: 纯 FTS5 (v4.store.search)
-    v4s = _get_v4_store()
-    if v4s is None:
-        return []
-    try:
-        mems = v4s.search(search_query, top_k=top_k, min_weight=0.6)
-        return [{"id": str(m.id), "content": m.content, "type": m.type, "weight": m.weight,
-                 "tags": m.tags, "score": 0.5,
-                 "pad_p": getattr(m, "pad_p", 0.0), "pad_a": getattr(m, "pad_a", 0.0)}
-                for m in mems if m.type != "conversation"]
-    except Exception as e:
-        log.warning("v4.store search failed: %s", e)
+        log.warning("memory_retrieval.retrieve failed: %s", e)
         return []
 
 
@@ -466,10 +592,92 @@ def _load_axiom() -> str:
     return _axiom_cache
 
 
+def _load_capabilities() -> str:
+    """加载 capabilities.md (伊卡洛斯能力清单, 缓存, 重启后重新加载)"""
+    global _capabilities_cache
+    if _capabilities_cache is not None:
+        return _capabilities_cache
+
+    if _CAPABILITIES_PATH.exists():
+        _capabilities_cache = _CAPABILITIES_PATH.read_text(encoding="utf-8").strip()
+        log.info("capabilities.md loaded (%d bytes)", len(_capabilities_cache))
+    else:
+        _capabilities_cache = ""
+        log.warning("capabilities.md not found at %s", _CAPABILITIES_PATH)
+
+    return _capabilities_cache
+
+
 # ─── 核心 API ───
 
+_RULES_PATH = _HERMES_ROOT / "docs" / "agent-rules.yaml"
+_RULES_CACHE: list[dict] | None = None
+_RULES_YAML_MTIME = 0.0
 
-def build_system_prompt(user_text: str) -> str:
+
+def _load_rules() -> list[dict]:
+    """加载规则库 (带 mtime 缓存)."""
+    global _RULES_CACHE, _RULES_YAML_MTIME
+    try:
+        mtime = _RULES_PATH.stat().st_mtime
+        if _RULES_CACHE is not None and mtime <= _RULES_YAML_MTIME:
+            return _RULES_CACHE
+        import yaml
+        with open(str(_RULES_PATH), encoding="utf-8") as f:
+            _RULES_CACHE = yaml.safe_load(f).get("rules", [])
+        _RULES_YAML_MTIME = mtime
+    except Exception:
+        _RULES_CACHE = []
+    return _RULES_CACHE or []
+
+
+def _select_relevant_rules(user_text: str) -> str:
+    """本地模型按当前上下文压缩选取相关规则.
+
+
+    调 :8080 qwen3-8b 从规则库中选出最相关的 1-2 条并压缩为 1-2 句。
+    失败时返回空字符串 (不阻塞系统 prompt 构建).
+    """
+    rules = _load_rules()
+    if not rules:
+        return ""
+    # 检测是否为简单寒暄/无需规则的场景
+    q = user_text.strip().lower()
+    if not q or len(q) < 8 or q in {
+        "嗯", "哦", "好", "好的", "行", "ok", "是", "对",
+        "继续", "然后", "谢谢", "感谢", "收到",
+    }:
+        return ""
+    try:
+        import json, http.client
+        rule_list = "\n".join(f"{r['id']}: {r['text']}" for r in rules)
+        prompt = (
+            f"从以下规则中选出与当前任务最相关的 1-2 条。"
+            f"只输出规则 ID 和一句话理由。\n"
+            f"当前任务: {user_text[:150]}\n规则:\n{rule_list}"
+        )
+        body = json.dumps({
+            "model": "qwen3-8b", "messages": [
+                {"role": "system", "content": "选最相关的1-2条规则，输出格式: R1-DRY: 理由"},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 80, "temperature": 0.1, "stream": False,
+        }).encode()
+        conn = http.client.HTTPConnection("127.0.0.1", 8080, timeout=8)
+        conn.request("POST", "/v1/chat/completions", body=body,
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        if resp.status == 200:
+            d = json.loads(resp.read())
+            selected = (d["choices"][0]["message"].get("content") or "").strip()
+            if selected:
+                return "\n## 操作提示\n" + selected
+    except Exception:
+        pass
+    return ""
+
+
+def build_system_prompt(user_text: str, history: Optional[list] = None) -> str:
     """构建带 soul + cogno 5D + 记忆检索的 system prompt"""
     global _LAST_USER_TEXT
     _LAST_USER_TEXT = user_text
@@ -482,6 +690,17 @@ def build_system_prompt(user_text: str) -> str:
     else:
         # fallback: 简单时间注入
         cogno = f"当前时间: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+
+    # R2 节奏感知: 结构化节奏数据 (距上轮 + 时段), 云端据之生成语气
+    rhythm_block = _build_rhythm_block()
+
+    # R4 历史摘要 (需 history)
+    summary_block = _build_summary_block(history)
+    # R5 用户画像 (负面偏好优先)
+    profile_block = _build_profile_block()
+    # R6 情感对比 + 情感记忆召回
+    emotion_diff_block = _build_emotion_diff_block()
+    emotion_recall_block = _build_emotion_recall_block(user_text)
 
     v5_lines = _build_v5_affect_block()
     # PAD 加权记忆折叠 (情感加权, 只取 top 2)
@@ -500,8 +719,63 @@ def build_system_prompt(user_text: str) -> str:
     self_status = _maybe_self_status()
     task_note = _maybe_task_note()
     activity_note = _maybe_activity_note()
-    return (f"{axiom}{identity_refresh}\n{cogno}{v5_block}"
-            f"{thought_note}{auto_thought}{self_status}{task_note}{activity_note}")
+    # 规则注入: 本地模型按上下文压缩选取
+    rules_block = _select_relevant_rules(user_text)
+    capabilities = _load_capabilities()
+
+    # 基础块 (永不被裁剪)
+    base = f"{axiom}{identity_refresh}\n{cogno}"
+    # 状态类附注归一组
+    status_notes = thought_note + auto_thought + self_status + task_note + activity_note
+    cap_block = (f"\n### 我的能力\n{capabilities}\n" if capabilities else "")
+
+    # 优先级块 (spec 4.3): 节奏(1)>记忆(2)>状态(3)>规则(4)>关系(5)>摘要(6)>情感(7)
+    # 超过 token 预算时从高优先级数字(最低优先)开始裁剪
+    ordered_blocks = [
+        (1, rhythm_block),
+        (2, v5_block),
+        (3, status_notes),
+        (4, rules_block),
+        (5, profile_block),
+        (6, summary_block),
+        (7, emotion_diff_block + emotion_recall_block),
+    ]
+    return _enforce_token_budget(base, ordered_blocks, cap_block)
+
+
+def _enforce_token_budget(base: str, ordered_blocks: list, cap_block: str) -> str:
+    """spec 4.3: 上下文块总预算 800-1200 token, 超预算按优先级裁剪.
+
+    估算: 中文 ~1 token/字, 其他 ~0.5 token/字符 (char_x 作安全系数, 默认 1.0).
+    base 与 cap_block 永不裁剪. 正常中文 prompt 不会被误伤.
+    """
+    try:
+        from v5.preprocess_config import get
+        char_x = float(get("token_budget", "char_x", default=1.0))
+        max_tokens = int(get("token_budget", "max", default=1200))
+    except Exception:
+        char_x, max_tokens = 1.0, 1200
+
+    def _est(s: str) -> int:
+        cjk = sum(1 for ch in s if "一" <= ch <= "鿿")
+        other = len(s) - cjk
+        return int((cjk + other * 0.5) * char_x)
+
+    def _total(dropped: set) -> int:
+        return (_est(base) + _est(cap_block)
+                + sum(_est(t) for p, t in ordered_blocks if t and p not in dropped))
+
+    dropped: set = set()
+    total = _total(dropped)
+    while total > max_tokens:
+        cands = [p for p, t in ordered_blocks if t and p not in dropped]
+        if not cands:
+            break
+        dropped.add(max(cands))
+        total = _total(dropped)
+    return (base
+            + "".join(t for p, t in ordered_blocks if t and p not in dropped)
+            + cap_block)
 
 
 def _is_asking_thinking(text: str) -> bool:
@@ -664,6 +938,147 @@ def _maybe_inject_identity_refresh() -> str:
     return ""
 
 
+def _build_rhythm_block() -> str:
+    """R2 节奏感知: 注入距上轮间隔 + 时段 (结构化数据, 云端据之生成语气).
+
+    失败静默返回空字符串, 不阻塞 system prompt 构建.
+    """
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.rhythm import build_rhythm_block
+        return build_rhythm_block()
+    except Exception:
+        return ""
+
+
+def _build_summary_block(history) -> str:
+    """R4 历史摘要: 旧轮压缩为密度块 (非阻塞变体, 失败静默).
+
+    用 build_summary_block_nb: 本次立即返回上次缓存摘要,
+    陈旧时后台异步重算写回缓存, 绝不拖慢首 token (spec 4.1).
+    """
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.summary import build_summary_block_nb
+        return build_summary_block_nb(history)
+    except Exception:
+        return ""
+
+
+def _build_profile_block() -> str:
+    """R5 用户画像: 负面偏好优先注入一句 (非阻塞, 失败静默)."""
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.profile import build_profile_block
+        return build_profile_block()
+    except Exception:
+        return ""
+
+
+def _build_emotion_diff_block() -> str:
+    """R6 情感对比注入: 当前 vs 上次差异大时注一句 (非阻塞, 失败静默)."""
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.emotional_memory import build_emotion_diff_block
+        return build_emotion_diff_block()
+    except Exception:
+        return ""
+
+
+def _build_emotion_recall_block(user_text: str) -> str:
+    """R6 情感记忆检索: 用户显式提到情绪时拉一条旧记忆 (非阻塞, 失败静默)."""
+    try:
+        _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
+        if _v5p not in sys.path:
+            sys.path.insert(0, _v5p)
+        from v5.emotional_memory import build_emotion_recall_block
+        return build_emotion_recall_block(user_text)
+    except Exception:
+        return ""
+
+
+async def _clock_out(user_text: str, assistant_reply: str) -> None:
+    """R7 Clock Out — 对话结束前的轻量状态快照 (spec 2.7).
+
+    必须 fire-and-forget: 调用方用 asyncio.create_task 不 await.
+    任何一步失败都静默, 不影响主流程.
+    """
+    try:
+        # 1. task_pending.json: 若有未交付结果, 标记本次已检查
+        try:
+            from v5.task_runner import check_result
+            if check_result():
+                _pp = _V5_DATA_DIR / "task_pending.json"
+                if _pp.is_file():
+                    import json as _json
+                    try:
+                        _d = _json.loads(_pp.read_text(encoding="utf-8"))
+                    except Exception:
+                        _d = {}
+                    if not isinstance(_d, dict):
+                        _d = {}
+                    _d["last_clockout_seen"] = time_module.time()
+                    try:
+                        _pp.write_text(_json.dumps(_d, ensure_ascii=False), encoding="utf-8")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 2. self_model.json: 更新 last_active
+        try:
+            if _SELF_MODEL_PATH.is_file():
+                import json as _json
+                _sm = _json.loads(_SELF_MODEL_PATH.read_text(encoding="utf-8"))
+                if not isinstance(_sm, dict):
+                    _sm = {}
+                _sm["last_active"] = time_module.time()
+                _SELF_MODEL_PATH.write_text(_json.dumps(_sm, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+        # 3. latest_thought.json: 重要决策/新认识 → 追加一句 (不覆盖 metacog 输出)
+        try:
+            _kw = ("决定", "方案", "结论", "想通", "明白", "懂了", "发现", "原来",
+                   "决定了", "定下来", "搞清楚")
+            if any(k in (user_text or "") for k in _kw):
+                import json as _json
+                _lt: dict = {}
+                if _LATEST_THOUGHT_PATH.is_file():
+                    try:
+                        _lt = _json.loads(_LATEST_THOUGHT_PATH.read_text(encoding="utf-8"))
+                    except Exception:
+                        _lt = {}
+                if not isinstance(_lt, dict):
+                    _lt = {}
+                _decs = _lt.get("decisions")
+                if not isinstance(_decs, list):
+                    _decs = []
+                _snippet = (user_text or "")[:80].replace("\n", " ")
+                _decs.append({"at": time_module.time(), "text": _snippet})
+                _lt["decisions"] = _decs[-20:]
+                _LATEST_THOUGHT_PATH.write_text(_json.dumps(_lt, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+        # 4. relationship.json: 互动计数
+        try:
+            from v5.relationship import track_interaction
+            track_interaction(0.3)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def _build_v5_affect_block() -> list[str]:
     """V5 情感状态 + 内联内心独白 + 活力 + 关系 (对话时即时生成, 不依赖 cron)."""
     lines: list[str] = []
@@ -734,6 +1149,10 @@ def _build_memory_line(user_text: str) -> str:
     try:
         memories = _search_v4_memories(user_text)
         if not memories:
+            # 记忆召回为空时，检查用户是否在问时间/记忆类问题
+            # 若是，注入信号防止模型基于训练数据捏造记忆
+            if _looks_like_memory_query(user_text):
+                return "记忆: （检索无匹配——若被问及过去，诚实告知不记得，不要编造）"
             return ""
 
         # AIS novelty detector (module-level singleton)
@@ -831,6 +1250,22 @@ async def cloud_chat(
             old_pad = (old_state.pleasure, old_state.arousal, old_state.dominance)
             new_pad = (new_state.pleasure, new_state.arousal, new_state.dominance)
             maybe_record_emotion(old_pad, new_pad, text)
+    except Exception:
+        pass
+
+    # V5.2 R6: 情感标签自动打标 (fire-and-forget, 本地 1.7b, 不阻塞回复)
+    try:
+        import threading as _th
+        from v5.emotional_memory import maybe_label_emotion
+        if old_state is not None and new_state is not None:
+            _op = (old_state.pleasure, old_state.arousal, old_state.dominance)
+            _np = (new_state.pleasure, new_state.arousal, new_state.dominance)
+            def _bg_label():
+                try:
+                    maybe_label_emotion(_op, _np, text)
+                except Exception:
+                    pass
+            _th.Thread(target=_bg_label, daemon=True).start()
     except Exception:
         pass
 
@@ -963,7 +1398,7 @@ async def cloud_chat(
         _reminder_note = ""
 
     # 构建 system prompt (soul + cogno + 记忆 + V5 情感 + 提醒)
-    system_prompt = build_system_prompt(text) + _reminder_note
+    system_prompt = build_system_prompt(text, history=history) + _reminder_note
 
     # V5 Emotion → Response length: PAD 低时短回复
     _pad_length_hint = ""
@@ -1119,6 +1554,13 @@ async def cloud_chat(
     if reply:
         _push_monitor("assistant_msg", text=reply[:500], session_id=session_id)
 
+    # R7 Clock Out: 轻量状态快照 (fire-and-forget, 不 await, 不阻塞回复)
+    try:
+        import asyncio as _asyncio
+        _asyncio.create_task(_clock_out(text, reply if reply else ""))
+    except Exception:
+        pass
+
     return reply
 
 
@@ -1232,7 +1674,7 @@ async def _call_local_llm(
     """
     url = f"{_LOCAL_LLM_URL.rstrip('/')}/chat/completions"
     body = {
-        "model": "qwen3-8b",
+        "model": "qwen3-1.7b",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,

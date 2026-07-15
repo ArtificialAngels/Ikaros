@@ -3,8 +3,8 @@
 > **Read this first** when picking up the project after a break.
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
->
-> **Last revised:** 2026-07-07b (V3 memory fully removed; PyQt6 pet removed; oldcode deleted; cloud_chat.py relocated). Prev: 2026-07-04b (ikaros-start.bat crash fix).
+
+> **Last revised:** 2026-07-13 (harness rules moved to local LLM router in cloud_chat). Prev: 2026-07-07b (V3 memory fully removed; PyQt6 pet removed; oldcode deleted; cloud_chat.py relocated).
 > Two bugs killed the startup chain:
 > 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
 >    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.

@@ -44,11 +44,55 @@ for p in (os.path.join(_ROOT, "Ikaros-memory"),
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# CUDA 13.3 运行时 DLL 路径注入 (CUDA Toolkit v13.0 + nvidia-cu13 pip 包 + sherpa_onnx/lib)
+# onnxruntime-gpu 1.27 的 CUDAExecutionProvider 按 CUDA 13 编译, 需要
+# cudart64_13 / cublas64_13 / cudnn64_9 (cuDNN 9.24 cu13) 等.
+# 关键坑: cuDNN 9 是 frontend(cudnn64_9.dll) + 多后端(cudnn_*64_9.dll) 分离架构,
+# frontend 内部 LoadLibrary 后端时不会自动搜索 add_dll_directory 加入的路径,
+# 必须先把全部 cuDNN 9 后端 DLL 预加载进进程, 否则 cudnnCreate 报
+# "Cannot load symbol" / "Could not locate cudnn_ops64_9.dll". 已实测:
+# 预加载后端后 CUDA 13.3 + cuDNN 9.24 的 Whisper GPU 推理完全正常.
+def _inject_cuda13_dll_path():
+    """把 CUDA 13 运行时 / cuDNN 9 后端加入 DLL 搜索路径, 并预加载 cuDNN 9 后端."""
+    import glob as _glob
+    site = os.path.join(os.path.dirname(sys.executable), "Lib", "site-packages")
+    added = []
+    # nvidia-* pip 包 (nvidia-cudnn-cu13 等) 的 bin/
+    for npkg in _glob.glob(os.path.join(site, "nvidia", "*")):
+        bin_dir = os.path.join(npkg, "bin")
+        if os.path.isdir(bin_dir):
+            try:
+                os.add_dll_directory(bin_dir)
+                added.append(bin_dir)
+            except Exception:
+                pass
+    # sherpa_onnx/lib: CUDA 13 运行时 + cuDNN 9 前端/后端均共址在此
+    so_lib = os.path.join(site, "sherpa_onnx", "lib")
+    if os.path.isdir(so_lib):
+        try:
+            os.add_dll_directory(so_lib)
+            added.append(so_lib)
+        except Exception:
+            pass
+        # 预加载全部 cuDNN 9 后端 (frontend 依赖它们, 且不会自动搜 add_dll_directory)
+        import ctypes as _ctypes
+        for _b in sorted(_glob.glob(os.path.join(so_lib, "cudnn_*64_9.dll"))):
+            try:
+                _ctypes.CDLL(_b)
+            except Exception:
+                pass  # 后端缺失会在 ORT 初始化时暴露, 此处静默
+    return added
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(message)s",
 )
+
+# 在 log 定义后再调用, 确保能打到日志
 log = logging.getLogger("ikaros.voice-ws")
+_cuda13_dll_paths = _inject_cuda13_dll_path()
+if _cuda13_dll_paths:
+    log.debug("CUDA13 DLL 路径已注入: %s", _cuda13_dll_paths)
 
 # 诊断用独立文件处理器: 每条立即 flush, 绕过 PowerShell 重定向的 stderr 缓冲
 try:
@@ -316,13 +360,22 @@ def _load_cogno_5d():
 
 
 def _load_cloud_chat():
-    """cloud_chat 真物 (bin/cloud_chat.py)."""
+    """cloud_chat 函数 (bin/cloud_chat.py)."""
     try:
         from cloud_chat import cloud_chat as _cc
         log.info("cloud_chat loaded")
         return _cc
     except Exception as e:
         log.warning("cloud_chat not available: %s", e)
+        return None
+
+
+def _load_cloud_chat_mod():
+    """cloud_chat 模块 (用于 build_system_prompt 等工具函数)."""
+    try:
+        import cloud_chat as _mod
+        return _mod
+    except Exception:
         return None
 
 
@@ -547,24 +600,48 @@ async def _tts_sentence_stream(reply: str, ws) -> int:
 
 async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
                     history=None) -> str:
-    """本地 :8080 优先 (直连, 无 Hermes WS 依赖), cloud_chat 兜底。
+    """统一 LLM 路由: 云端 API 优先 (对话任务), 本地 :8080 兜底 (节 token).
 
-    on_delta: 流式回调 (逐 token). 传了就启用 cloud_chat 流式首字上屏.
-    history: 本连接的历史消息 (含伊卡洛斯主动开口), 传给 cloud_chat 拼进上下文,
-             使多轮连贯且能意识到自己主动说过的话。
+    on_delta: 流式回调 (逐 token).
+    history: 本连接的历史消息.
+    cogno_prefix: 已弃用 (cloud_chat 内部调 build_system_prompt), 保留参数兼容.
     """
     import json, http.client
 
-    # 优先直连本地 :8080 — 绕过 Hermes WS session.new 不稳定问题
+    # ── A1: 云端 API 优先 (DeepSeek / Minimax, 对话主路径) ──
+    cc_fn = _load_cloud_chat()
+    if cc_fn is not None:
+        try:
+            res = cc_fn(prompt, history=history, session_id="ikaros_live2d_ws",
+                     on_delta=on_delta)
+            if asyncio.iscoroutine(res):
+                res = await res
+            if isinstance(res, dict):
+                return res.get("reply") or res.get("content") or str(res)
+            return str(res)
+        except Exception as e:
+            log.warning("cloud_chat failed (%s), falling back to local :8080", e)
+
+    # ── A2: 本地 :8080 兜底 (qwen3-1.7b, 云端不可用时降级) ──
+    cc_mod = _load_cloud_chat_mod()
+    if cc_mod is not None:
+        try:
+            system_prompt = cc_mod.build_system_prompt(prompt)
+        except Exception as e:
+            log.warning("build_system_prompt failed: %s, using cogno_prefix", e)
+            system_prompt = cogno_prefix
+    else:
+        system_prompt = cogno_prefix
+
     try:
         _msgs = [
-            {"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
+            {"role": "system", "content": system_prompt},
         ]
         if history:
             _msgs.extend(history[-20:])
-        _msgs.append({"role": "user", "content": cogno_prefix + "\n\n" + prompt})
+        _msgs.append({"role": "user", "content": prompt})
         body = json.dumps({
-            "model": "qwen3-8b",
+            "model": "qwen3-1.7b",
             "messages": _msgs,
             "max_tokens": 600,
             "temperature": 0.7,
@@ -583,23 +660,9 @@ async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
             conn.close()
             return d["choices"][0]["message"].get("content") or ""
         conn.close()
-        log.debug("local :8080 returned HTTP %s, trying cloud_chat", resp.status)
     except Exception as e:
-        log.debug("local :8080 unavailable (%s), trying cloud_chat", e)
+        log.debug("local :8080 unavailable (%s)", e)
 
-    # Fallback: cloud_chat via Hermes WS (support on_delta streaming)
-    cc = _load_cloud_chat()
-    if cc is not None:
-        try:
-            res = cc(prompt, history=history, session_id="ikaros_live2d_ws",
-                     on_delta=on_delta)
-            if asyncio.iscoroutine(res):
-                res = await res
-            if isinstance(res, dict):
-                return res.get("reply") or res.get("content") or str(res)
-            return str(res)
-        except Exception as e:
-            log.warning("cloud_chat call failed: %s", e)
     return "(LLM unavailable)"
 
 
@@ -976,20 +1039,34 @@ def _get_whisper():
         log.debug("Whisper model incomplete in %s (跳过)", model_dir)
         _WHISPER = False
         return None
-    try:
-        _WHISPER = sherpa_onnx.OfflineRecognizer.from_whisper(
-            encoder=enc,
-            decoder=dec,
-            tokens=tokens,
-            language="zh",
-            num_threads=max(1, (os.cpu_count() or 2) - 1),
-        )
-        log.info("Whisper loaded: %s", model_dir)
-    except Exception as e:
-        log.warning("Whisper load failed: %s", e)
-        _WHISPER = False
-        return None
-    return _WHISPER
+    # CUDA 13.3 + cuDNN 9.24 实测可用(前端/后端已共址 + 预加载, cudnnCreate 成功).
+    # 默认优先 CUDA, 失败优雅回退 CPU; 设 IKAROS_WHISPER_GPU=0 可强制仅 CPU.
+    force_cpu = os.environ.get("IKAROS_WHISPER_GPU", "1") == "0"
+    providers = ["cpu"] if force_cpu else ["cuda", "cpu"]
+    last_err = None
+    for prov in providers:
+        try:
+            _WHISPER = sherpa_onnx.OfflineRecognizer.from_whisper(
+                encoder=enc,
+                decoder=dec,
+                tokens=tokens,
+                language="zh",
+                provider=prov,
+                num_threads=max(1, (os.cpu_count() or 2) - 1),
+            )
+            if prov == "cuda":
+                log.info("Whisper loaded on CUDA: %s", model_dir)
+            else:
+                log.info("Whisper loaded on CPU: %s", model_dir)
+            return _WHISPER
+        except Exception as e:
+            last_err = e
+            if prov == "cuda":
+                log.warning("Whisper CUDA 初始化失败, 回退 CPU: %s", e)
+            continue
+    log.warning("Whisper load failed (cpu+cuda): %s", last_err)
+    _WHISPER = False
+    return None
 
 
 def _whisper_recognize(pcm: bytes) -> str:
@@ -1013,9 +1090,9 @@ def _whisper_recognize(pcm: bytes) -> str:
 async def _serve(ws, path=None):
     """单 ws 真物 handler (App.vue ws.onmessage 抽).
 
-    音频链路: 前端 getUserMedia → 16k mono Int16 PCM → 二进制帧 → 本函数
-    用本地 vosk 流式识别 → {type:partial} 实时回显 → 前端 VAD 发
-    {action:end_utterance} → 取 final → 走 _handle_text (LLM+TTS)。
+    音频链路: 前端 getUserMedia → 16k mono Int16 PCM → 二进制帧。
+    PCM 累积 → 用户停声后 {action:end_utterance}
+    → Whisper 终句识别 → 走 _handle_text (LLM+TTS)。
     """
     enrich, enrich_reply, reset_context = _load_cogno_5d()
     reset_context()
@@ -1030,10 +1107,8 @@ async def _serve(ws, path=None):
     log.info("client connected: %s", peer)
     _CLIENTS.add(ws)
 
-    # 每连接状态: vosk 流式识别器 + 原始 PCM 缓冲(SenseVoice 终句精修) +
-    # utterance id (barge-in 过期判定) + inflight (当前在生成/播放的 utt id)
+    # 每连接状态: 原始 PCM 缓冲 + utterance id (barge-in 过期判定)
     st = {
-        "rec": None,            # 当前会话的 vosk KaldiRecognizer
         "pcm": bytearray(),     # 累积的 16k mono Int16 PCM
         "utt_id": 0,
         "inflight": None,
@@ -1050,27 +1125,8 @@ async def _serve(ws, path=None):
     try:
         async for raw in ws:
             if isinstance(raw, bytes):
-                # 二进制帧 = 前端采集的 16k mono Int16 PCM (STT 在 server 本地做)
-                # A2 修复丢分③: 音频预处理(去DC+RMS归一+噪声门)只用于 vosk 流式
-                # partial 回声; SenseVoice 终句识别用【原始 PCM】, 避免预处理把词间
-                # 静音放大/噪声门泄漏/短帧不连续等畸变带入最终识别信号.
-                prep = _get_audio_prep()
-                processed = prep.process(raw) if prep else raw
-                model = _get_vosk_model()
-                if model is not None:
-                    if st["rec"] is None:
-                        from vosk import KaldiRecognizer
-                        st["rec"] = KaldiRecognizer(model, 16000)
-                    # 同步调用: KaldiRecognizer 非线程安全, 音频帧小(≈256ms)不阻塞循环
-                    try:
-                        st["rec"].AcceptWaveform(processed)
-                        partial = json.loads(st["rec"].PartialResult()).get("partial", "")
-                    except Exception as e:
-                        log.debug("AcceptWaveform failed: %s", e)
-                        partial = ""
-                    if partial:
-                        await ws.send(json.dumps({"type": "partial", "text": partial}))
-                # 累积【原始】PCM, 供 SenseVoice 终句高精度精修 (不经预处理)
+                # 二进制帧 = 前端采集的 16k mono Int16 PCM
+                # 累积原始 PCM → end_utterance 时 Whisper 终句识别
                 st["pcm"].extend(raw)
                 continue
 
@@ -1095,31 +1151,18 @@ async def _serve(ws, path=None):
                         await ws.send(json.dumps(_activity_payload(snap)))
                 except Exception:
                     pass
-                sv = _get_sensevoice()
                 wh = _get_whisper()
-                if _get_vosk_model() is None and sv is None and wh is None:
+                if wh is None:
                     await ws.send(json.dumps({
                         "type": "stt_status",
                         "status": "unavailable",
-                        "message": "本地语音识别未就绪",
-                    }))
-                elif wh is not None:
-                    await ws.send(json.dumps({
-                        "type": "stt_status",
-                        "status": "ready",
-                        "message": "高精度语音识别已就绪 (Whisper)",
-                    }))
-                elif sv is not None:
-                    await ws.send(json.dumps({
-                        "type": "stt_status",
-                        "status": "ready",
-                        "message": "高精度语音识别已就绪 (SenseVoice)",
+                        "message": "本地语音识别未就绪 (Whisper 模型未找到)",
                     }))
                 else:
                     await ws.send(json.dumps({
                         "type": "stt_status",
                         "status": "ready",
-                        "message": "本地语音识别已就绪 (vosk)",
+                        "message": "语音识别已就绪 (Whisper)",
                     }))
             elif action in ("text", "transcript"):
                 # 纯文本 / 备用: STT 已在 client 上做
@@ -1138,39 +1181,18 @@ async def _serve(ws, path=None):
                     state=st, my_id=my_id,
                 )
             elif action == "end_utterance":
-                # 前端 VAD 判定一句话结束 → 高精度 final 识别 + 情绪/事件标签
-                # 重置音频预处理器噪声门状态 (每句语音结束后)
+                # 前端 VAD 判定一句话结束 → Whisper 终句高精度识别
                 _ap = _get_audio_prep()
                 if _ap:
                     _ap.reset()
                 my_id = _new_utt()
-                vosk_final = ""
-                if st["rec"] is not None:
-                    try:
-                        vosk_final = json.loads(
-                            st["rec"].FinalResult()
-                        ).get("text", "").strip()
-                    except Exception:
-                        vosk_final = ""
-                    st["rec"] = None
-                # C2: 优先级 Whisper > SenseVoice > vosk final
-                text, emotion, event = "", "", ""
-                wh_text = _whisper_recognize(bytes(st["pcm"]))
-                if wh_text:
-                    text = wh_text
-                else:
-                    text, emotion, event = _sensevoice_recognize(bytes(st["pcm"]))
+                final_text = _whisper_recognize(bytes(st["pcm"]))
                 st["pcm"] = bytearray()
-                final_text = text if text else vosk_final
                 if not final_text:
                     continue
-                if emotion or event:
-                    await ws.send(json.dumps({
-                        "type": "emotion", "emotion": emotion, "event": event,
-                    }))
                 await _handle_text(
                     ws, {"text": final_text}, enrich, enrich_reply, history,
-                    state=st, my_id=my_id, emotion=emotion, event=event,
+                    state=st, my_id=my_id,
                 )
             else:
                 await ws.send(json.dumps({
@@ -1216,27 +1238,23 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     # 主动搭话循环: 任务计时器(作息/记忆) + 混沌/生命游戏门 → pet 主动开口
     asyncio.ensure_future(_proactive_loop())
 
-    # 预热: 后台加载 SenseVoice + Vosk 模型 + Hermes 主 session
+    # 预热: 后台加载 Whisper 模型 + 记忆检索 (避免首次对话冷启动)
     def _warm_all():
-        # STT 预热
         t0 = time.time()
-        sv = _get_sensevoice()
-        if sv is not None:
-            # 预创建 stream + 跑一次空推理预热 sherpa-onnx 内部图
-            try:
-                import numpy as np
-                dummy = np.zeros(16000, dtype=np.float32)  # 1s 静音
-                stream = sv.create_stream()
-                stream.accept_waveform(16000, dummy)
-                sv.decode_stream(stream)
-                log.info("SenseVoice warmed up (%.1fs)", time.time() - t0)
-            except Exception:
-                log.info("SenseVoice initialized (%.1fs)", time.time() - t0)
-        vosk_m = _get_vosk_model()
-        if vosk_m is not None:
-            log.info("Vosk model ready")
+        wh = _get_whisper()
+        if wh is not None:
+            log.info("Whisper loaded (%.1fs)", time.time() - t0)
+        # 预热记忆检索 (ChromaDB 首次 init 需 15-30s)
+        try:
+            t1 = time.time()
+            cc_mod = _load_cloud_chat_mod()
+            if cc_mod:
+                cc_mod.build_system_prompt("预热")
+                log.info("memory search warmed up (%.1fs)", time.time() - t1)
+        except Exception as e:
+            log.debug("memory warmup skipped: %s", e)
     import threading
-    threading.Thread(target=_warm_all, daemon=True, name="stt-warm").start()
+    threading.Thread(target=_warm_all, daemon=True, name="warmup").start()
 
     # Hermes 热启动: 预创建主 session (避免首次对话冷启动 ~500ms)
     try:
@@ -1244,6 +1262,74 @@ async def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         asyncio.ensure_future(warm_hermes_session())
     except Exception:
         pass
+
+    # ── HTTP 桥 (给 ChatDock 文字聊天用, 统一走 cloud_chat 管道) ──
+    _HTTP_PORT = int(os.environ.get("IKAROS_CHAT_HTTP_PORT", "7871"))
+
+    async def _http_chat_handler(reader, writer):
+        """最简 HTTP POST /v1/chat → cloud_chat.cloud_chat() → JSON 返回."""
+        try:
+            raw = await asyncio.wait_for(reader.read(65536), timeout=120)
+        except asyncio.TimeoutError:
+            writer.close()
+            return
+        raw_text = raw.decode("utf-8", errors="replace")
+        lines = raw_text.split("\r\n")
+        if not lines or "POST /v1/chat" not in lines[0]:
+            writer.write(b"HTTP/1.1 404 Not Found\r\n\r\nnot found")
+            await writer.drain()
+            writer.close()
+            return
+        # 找到 JSON body
+        body_start = raw_text.find("\r\n\r\n")
+        if body_start < 0:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\nno body")
+            await writer.drain()
+            writer.close()
+            return
+        body = raw_text[body_start + 4:].strip()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\ninvalid json")
+            await writer.drain()
+            writer.close()
+            return
+        text = data.get("text", "")
+        if not text:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\nempty text")
+            await writer.drain()
+            writer.close()
+            return
+        # 调 cloud_chat 统一管道
+        cc = _load_cloud_chat()
+        if cc is None:
+            writer.write(b"HTTP/1.1 503 Unavailable\r\n\r\ncloud_chat not loaded")
+            await writer.drain()
+            writer.close()
+            return
+        try:
+            reply = cc(text, session_id="ikaros_chatdock_http")
+            if asyncio.iscoroutine(reply):
+                reply = await reply
+            if isinstance(reply, dict):
+                reply = reply.get("reply") or reply.get("content") or str(reply)
+            reply = str(reply)
+        except Exception as e:
+            log.warning("chatdock http: cloud_chat failed: %s", e)
+            writer.write(b"HTTP/1.1 500 Error\r\n\r\nllm error")
+            await writer.drain()
+            writer.close()
+            return
+        resp = json.dumps({"reply": reply}, ensure_ascii=False)
+        resp_bytes = resp.encode("utf-8")
+        header = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(resp_bytes)}\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+        writer.write(header.encode() + resp_bytes)
+        await writer.drain()
+        writer.close()
+
+    _http_server = await asyncio.start_server(_http_chat_handler, host, _HTTP_PORT)
+    log.info("chat HTTP bridge on http://%s:%d/v1/chat", host, _HTTP_PORT)
 
     log.info("starting voice-ws on ws://%s:%d/v1/voice/ws", host, port)
     # 2026-07-11 修复: 关掉 server 主动 ping (ping_interval=None)。

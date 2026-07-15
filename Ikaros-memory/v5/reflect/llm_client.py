@@ -61,7 +61,7 @@ LOCAL_LLM_URL = os.environ.get(
     "HERMES_LOCAL_LLM_URL",
     "http://127.0.0.1:8080/v1",
 ).rstrip("/") + "/chat/completions"
-LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "qwen2.5-7b")
+LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "qwen3-1.7b")
 LOCAL_LLM_TIMEOUT = int(os.environ.get("HERMES_LOCAL_LLM_TIMEOUT", "60"))
 
 # ─── 大模型 (DeepSeek) ────────────────────────────────
@@ -106,6 +106,7 @@ def call_llm(
     max_tokens: int = 1024,
     temperature: float = 0.0,
     timeout: int | None = None,
+    extra: dict | None = None,
 ) -> LLMResponse:
     """统一 LLM 调用入口 (带重试 + 退避, 缓解偶发 404/5xx/抖动).
 
@@ -116,6 +117,7 @@ def call_llm(
         max_tokens: 最大输出 token
         temperature: 0 = 确定性, 1 = 创造性
         timeout: 超时秒数, None 用 provider 默认
+        extra: 合并进请求体的额外字段 (如 {"enable_thinking": False} 关闭思考链)
 
     Raises:
         RuntimeError: 重试耗尽后仍失败 / API key 缺失 / 解析失败 (显式, 不静默)
@@ -125,9 +127,9 @@ def call_llm(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             if provider == "local":
-                resp = _call_local(system, user, max_tokens, temperature, timeout or LOCAL_LLM_TIMEOUT)
+                resp = _call_local(system, user, max_tokens, temperature, timeout or LOCAL_LLM_TIMEOUT, extra)
             elif provider == "deepseek":
-                resp = _call_deepseek(system, user, max_tokens, temperature, timeout or DEEPSEEK_TIMEOUT)
+                resp = _call_deepseek(system, user, max_tokens, temperature, timeout or DEEPSEEK_TIMEOUT, extra)
             else:
                 raise ValueError(f"unknown provider: {provider!r}")
             elapsed = time.time() - t0
@@ -176,7 +178,8 @@ def call_llm_auto(
 # ─── 本地 (Qwen2.5-7B) ─────────────────────────────────────────
 
 def _call_local(system: str, user: str, max_tokens: int,
-                temperature: float, timeout: int) -> LLMResponse:
+                temperature: float, timeout: int,
+                extra: dict | None = None) -> LLMResponse:
     """调本地 llama-server (OpenAI-compatible)."""
     body = {
         "model": LOCAL_LLM_MODEL,
@@ -187,6 +190,8 @@ def _call_local(system: str, user: str, max_tokens: int,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if extra:
+        body.update(extra)
     try:
         with httpx.Client(transport=httpx.HTTPTransport(retries=0), timeout=timeout) as client:
             r = client.post(LOCAL_LLM_URL, json=body)
@@ -214,7 +219,8 @@ def _call_local(system: str, user: str, max_tokens: int,
 # ─── DeepSeek ───────────────────────────────────────
 
 def _call_deepseek(system: str, user: str, max_tokens: int,
-                   temperature: float, timeout: int) -> LLMResponse:
+                   temperature: float, timeout: int,
+                   extra: dict | None = None) -> LLMResponse:
     """调 DeepSeek API.
 
     哥哥 (2026-07-05) 验证:
@@ -242,6 +248,8 @@ def _call_deepseek(system: str, user: str, max_tokens: int,
         "temperature": temperature,
         "stream": False,
     }
+    if extra:
+        body.update(extra)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",

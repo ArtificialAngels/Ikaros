@@ -68,5 +68,25 @@
     "communication",
     "im",
     "微信"
+  ],
+  "photos.exe": [
+    "entertainment",
+    "image_viewer",
+    "Microsoft Photos"
+  ],
+  "nanazip.universal.windows.exe": [
+    "work",
+    "compression",
+    "NanaZip"
+  ],
+  "dock_64.exe": [
+    "work",
+    "virtualization",
+    "Docker Desktop"
+  ],
+  "cuda_12.4.0_551.61_windows.exe": [
+    "work",
+    "development",
+    "NVIDIA CUDA 工具包"
   ]
 }

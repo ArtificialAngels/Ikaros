@@ -3,7 +3,7 @@
 
 管理记忆服务 (统一架构):
   1. Embedding (:8587) — nomic-embed-text, 供 v4 记忆库语义搜索
-  2. LLM (:8080) — qwen3-8b, 供 v4 记忆提取 (extract / 反思)
+  2. LLM (:8080) — Qwen3-1.7B, 供 V5 后台节 token 任务 (reflect/compress/think)
 
 启动后:
   - 启动 embedding + LLM 服务
@@ -28,6 +28,9 @@ import sys
 import time
 from pathlib import Path
 
+# Windows: DETACHED_PROCESS 脱离父控制台 (避免父死子随).
+_SUBPROC_DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0)
+
 ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
 PID_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.pid"
 LOG_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.log"
@@ -36,19 +39,19 @@ HEARTBEAT_FILE = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
 
 # llama-server binary (from env var or default)
 LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
-    str(ROOT / "runtime" / "llama" / "b9867" / "llama-server.exe")))
+    str(ROOT / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe")))
 
 # Model paths (from env vars or defaults)
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
-    str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text.gguf")))
+    str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text-v2-moe.f32.gguf")))
 LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
-    str(ROOT / "Ikaros-memory" / "models" / "qwen3-8b.gguf")))
+    str(ROOT / "Ikaros-memory" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")))
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # qwen3-8b for v4 memory extraction
+LLM_PORT = 8080  # Qwen3-1.7B for V5 background tasks
 
-# Skip LLM (qwen3-8b @ :8080) this run if env var set.
+# Skip LLM (:8080) this run if env var set.
 # Used for "lighter" launches (e.g. ikaros-start.bat --no-llm).
 # Any of: "1" / "true" / "yes" / "on" enables skip; empty / "0" / "false"
 # does NOT skip.
@@ -57,7 +60,7 @@ SKIP_LLM = os.environ.get("IKAROS_SKIP_LLM", "").strip().lower() in (
 
 CHECK_INTERVAL = 10  # patrol interval (seconds)
 PORT_TIMEOUT = 30    # wait for port ready timeout (seconds)
-REFLECT_INTERVAL = 3600  # 1h between memory reflection cycles
+REFLECT_INTERVAL = 1800  # 30min between memory reflection cycles
 
 log = print  # 启动阶段用 print; watchdog 循环用 _log
 
@@ -71,7 +74,9 @@ class MemoryWatchdog:
             "llm": None,
         }
         self._running = False
-        self._last_reflect = 0.0  # last memory reflection timestamp
+        self._last_reflect = time.time()  # last memory reflection timestamp
+        # (init to now so the first reflect doesn't fire until REFLECT_INTERVAL later,
+        #  avoiding resource-storm-on-cold-start that crashes the watchdog.)
 
     # ─── 端口工具 ────────────────────────────────────
 
@@ -99,22 +104,23 @@ class MemoryWatchdog:
     def _health_ok(port: int, timeout: int = 3) -> bool:
         """llama-server /health 返回 200 才代表模型已加载、可服务.
 
-        仅查端口会漏掉'端口绑了但服务崩了'的僵尸监听器
-        (gpu-reset 那次就是端口在、/embedding 返 404, 被误报 OK).
+        用 http.client 直连 (不走 urllib opener / proxy 链),
+        避免 watchdog 在 launch-hidden.vbs / --detach 环境下
+        urllib.request.urlopen 误判超时或被代理拦截.
         404 = 该 build 无 /health 端点 → 退化为仅查端口, 不误杀.
         503/500/连接错 = 未就绪或已坏 → 返 False (触发重启/等待).
         """
-        import urllib.error
-        import urllib.request
-        url = f"http://127.0.0.1:{port}/health"
+        import http.client
         try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status == 200
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+            conn.request("GET", "/health")
+            resp = conn.getresponse()
+            status = resp.status
+            resp.read()
+            conn.close()
+            if status == 404:
                 return True  # 无 /health 端点, 退化为仅查端口
-            return False
+            return status == 200
         except Exception:
             return False
 
@@ -155,23 +161,23 @@ class MemoryWatchdog:
                 "-m", str(EMBED_MODEL),
                 "--host", "127.0.0.1",
                 "--port", str(EMBED_PORT),
-                "-c", "2048",
+                "-c", "4096",
                 "-ngl", "99",
                 "--embeddings",
                 "--pooling", "mean",
-                "--alias", "nomic-embed-text-v1.5-q4",
+                "--alias", "nomic-embed-text-v2-moe",
                 "--cont-batching",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.DETACHED_PROCESS,
+            creationflags=_SUBPROC_DETACHED,
         )
         ok = self._wait_health(EMBED_PORT)
         _log("[embed] %s (%s)", "OK" if ok else "FAIL", EMBED_PORT)
         return ok
 
     def _start_llm(self) -> bool:
-        """启动/检测 llama-server (:8080) — qwen3-8b for v4 memory extraction (extract / 反思)."""
+        """启动/检测 llama-server (:8080) — Qwen3-1.7B for V5 background tasks."""
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
@@ -191,12 +197,12 @@ class MemoryWatchdog:
                 "--port", str(LLM_PORT),
                 "-c", "4096",
                 "-ngl", "99",
-                "--alias", "qwen3-8b",
+                "--alias", "qwen3-1.7b",
                 "--cont-batching",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.DETACHED_PROCESS,
+            creationflags=_SUBPROC_DETACHED,
         )
         ok = self._wait_health(LLM_PORT, timeout=120)
         _log("[llm] %s (%s)", "OK" if ok else "FAIL", LLM_PORT)
@@ -224,7 +230,7 @@ class MemoryWatchdog:
             _log("=== Starting memory services (unified architecture) ===")
             ok_embed = self._start_embed()
             if SKIP_LLM:
-                _log("[llm] SKIP_LLM set — not starting :8080 qwen3-8b this run")
+                _log("[llm] SKIP_LLM set — not starting :8080 this run")
                 ok_llm = False
             else:
                 ok_llm = self._start_llm()
@@ -243,16 +249,20 @@ class MemoryWatchdog:
 
     # ─── 巡检 ────────────────────────────────────────
 
-    def _maybe_reflect(self) -> None:
+    def _maybe_reflect(self, *, force: bool = False) -> None:
         """Periodically trigger memory reflection cycle (self-evolution).
 
         Runs every REFLECT_INTERVAL seconds. Imports v5.reflect.registry and
         runs the V4 reflection scheduler (consolidate/dedup/promote/distill/
         reflect/cleanup). continue_on_error=True: one failing op (e.g. missing
         DeepSeek key for the 7d reflect) does not block the rest.
+
+        force=True: skip interval check and run ALL ops immediately
+        (used on startup so reflection fires once before the timer begins,
+        avoiding the cold-start gap where ops sit idle for REFLECT_INTERVAL).
         """
         now = time.time()
-        if (now - self._last_reflect) < REFLECT_INTERVAL:
+        if not force and (now - self._last_reflect) < REFLECT_INTERVAL:
             return
         self._last_reflect = now
         try:
@@ -261,8 +271,8 @@ class MemoryWatchdog:
             # V5.1:
             vr = importlib.import_module("v5.reflect.registry")
             sched = vr.make_default_scheduler()
-            results = sched.run_all(continue_on_error=True)
-            _log("[reflect] v4 cycle complete: %s", results)
+            results = sched.run_all(force=force, continue_on_error=True)
+            _log("[reflect] v4 cycle complete (force=%s): %s", force, results)
         except Exception as e:
             _log("[reflect] v4 cycle failed (non-fatal): %s", e)
 
@@ -351,8 +361,8 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",
                     "port": LLM_PORT,
                     "alive": llm_ok,
-                    "model": "qwen3-8b",
-                    "note": "Managed by memory watchdog for v4 extraction",
+                    "model": "qwen3-1.7b",
+                    "note": "Managed by memory watchdog for V5 background tasks",
                 },
                 "updated_at": time.time(),
             }
@@ -433,6 +443,13 @@ def cmd_start():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
+    # startup: run ALL reflection ops once immediately (force=True),
+    # so the system doesn't sit idle for REFLECT_INTERVAL on cold start.
+    _log("[reflect] startup: running initial full reflection cycle...")
+    wd._maybe_reflect(force=True)
+    _log("[reflect] startup: initial cycle done, beginning %ds timer",
+         REFLECT_INTERVAL)
+
     try:
         wd.run_loop()
     except KeyboardInterrupt:
@@ -455,7 +472,7 @@ def cmd_stop():
         print("  watchdog PID file not found (may already be stopped)")
 
     # 清扫残留的 llama-server (ikaros-sleep 也会做, 但这里确保)
-    for name in ("llama-server.exe", "llama-server-cuda-12.4.exe"):
+    for name in ("llama-server.exe", "llama-server-cuda-13.3.exe"):
         subprocess.run(
             ["taskkill", "/F", "/IM", name, "/T"],
             capture_output=True,
@@ -483,7 +500,7 @@ def cmd_status():
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
-    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-8b)")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-1.7b)")
 
     if PID_FILE.exists():
         pid_str = PID_FILE.read_text(encoding="utf-8").strip()
@@ -544,8 +561,10 @@ def main():
                 stdin=subprocess.DEVNULL,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
-                             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                creationflags=(
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                ),
                 close_fds=True,
             )
             print(f"[watchdog] Detached PID: {proc.pid}")

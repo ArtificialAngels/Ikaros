@@ -360,3 +360,22 @@ tmp/**
 .workbuddy/
 .codebuddy/
 nul
+
+# === 2026-07-15: hermes-studio (hermes-web-ui) frontend ===
+# Source in hermes-studio/ is committed. Its nested .gitignore already
+# drops node_modules/dist, but we lock it down at root too so the large
+# npm tree + build output never enter the repo. Runtime state is redirected
+# to data/hermes-studio/ (covered by data/**) and logs to data/logs/.
+hermes-studio/node_modules/
+hermes-studio/dist/
+hermes-studio/packages/server/dist/
+hermes-studio/packages/desktop/dist/
+hermes-studio/packages/desktop/release/
+hermes-studio/packages/desktop/resources/
+hermes-studio/packages/*/node_modules/
+hermes-studio/.hermes-web-ui/
+hermes-studio/logs/
+
+# === secrets & stray output (never commit) ===
+.dash_token
+output/

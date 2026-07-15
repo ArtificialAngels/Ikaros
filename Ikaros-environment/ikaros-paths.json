@@ -35,14 +35,14 @@
     "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\chromadb"
   },
   "llama": {
-    "version": "b9867",
-    "dir": "E:\\Ikaros\\runtime\\llama\\b9867",
-    "server": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-server.exe",
-    "cli": "E:\\Ikaros\\runtime\\llama\\b9867\\llama-cli.exe"
+    "version": "b10000-cuda",
+    "dir": "E:\\Ikaros\\runtime\\llama\\b10000-cuda",
+    "server": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-server.exe",
+    "cli": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-cli.exe"
   },
   "models": {
-    "embedding": "E:\\Ikaros\\Ikaros-memory\\models\\nomic-embed-text.gguf",
-    "llm": "E:\\Ikaros\\Ikaros-memory\\models\\qwen3-8b.gguf"
+    "embedding": "E:\\Ikaros\\Ikaros-memory\\models\\nomic-embed-text-v2-moe.f32.gguf",
+    "llm": "E:\\Ikaros\\Ikaros-memory\\models\\Qwen_Qwen3-1.7B-Q4_K_M.gguf"
   },
   "live2d": {
     "root": "E:\\Ikaros\\Ikaros-Live2D",
@@ -100,5 +100,15 @@
     "bridge": 7860,
     "live2d_webview": 8648,
     "live2d_webview_internal": 8649
+  },
+  "studio": {
+    "root": "E:\\Ikaros\\hermes-studio",
+    "client": "E:\\Ikaros\\hermes-studio\\packages\\client",
+    "server": "E:\\Ikaros\\hermes-studio\\packages\\server",
+    "dist": "E:\\Ikaros\\hermes-studio\\dist",
+    "data": "E:\\Ikaros\\data\\hermes-studio",
+    "logs": "E:\\Ikaros\\data\\logs\\hermes-studio",
+    "mcp_bin": "E:\\Ikaros\\hermes-studio\\bin\\hermes-studio-mcp.mjs",
+    "node": "C:\\Program Files\\nodejs\\node.exe"
   }
 }

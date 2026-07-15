@@ -1,9 +1,13 @@
 @echo off
 REM ============================================================
 REM  Ikaros - Full Stack Launcher
-REM  Steps: env -> verify -> sleep -> memory -> voice -> think -> pet -> dashboard
+REM  Steps: token -> env -> verify -> sleep -> memory -> voice -> think -> pet -> dashboard
 REM  Pure ASCII. No setlocal. No timeout (use ping -n). No init.bat inside sleep.bat.
 REM ============================================================
+
+REM ---- 0a. Dashboard WS Token ----
+set HERMES_DASHBOARD_SESSION_TOKEN=ikaros-fixed-token-20260715
+echo ikaros-fixed-token-20260715 > "%~dp0..\.dash_token"
 
 REM ---- 0. Load environment ----
 call "%~dp0..\Ikaros-environment\init.bat"

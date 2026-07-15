@@ -969,6 +969,7 @@ onMounted(async () => {
             }
             break
           case 'settings':     settingsVisible.value = !settingsVisible.value; break
+          case 'open_desktop': showBubble('🖥️ 正在打开 Desktop…', 2000); break
           case 'restart':      doRestart(); break
           case 'float_ball':   toggleFloatBall(); break
           case 'always_on_top': toggleAlwaysOnTop(); break

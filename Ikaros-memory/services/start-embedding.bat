@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM Ikaros Memory - Embedding Service
-REM Model: nomic-embed-text-v1.5 (768 dimensions)
+REM Model: nomic-embed-text-v2-moe (768 dimensions, MoE)
 REM Port:  :8587
 REM ============================================================
 
@@ -31,5 +31,5 @@ if not exist "%MODEL%" (
 )
 
 echo [Ikaros Memory] Starting embedding service on %HOST%:%PORT%
-echo [Ikaros Memory] Model: nomic-embed-text.gguf
+echo [Ikaros Memory] Model: nomic-embed-text-v2-moe.f32.gguf
 "%LLAMA%" -m "%MODEL%" --host %HOST% --port %PORT% -ngl auto --embedding --pooling mean

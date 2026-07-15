@@ -130,7 +130,7 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     ))
     checks.append(PathCheck(
         "llama-server",
-        str(root / "runtime" / "cuda" / "12.4" / "b9867" / "llama-server.exe"),
+        str(root / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe"),
         critical=True, must_be_file=True,
         description="本地 LLM 服务"
     ))
@@ -175,12 +175,12 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     ))
     checks.append(PathCheck(
         "Embedding 模型",
-        str(root / "Ikaros-memory" / "models" / "nomic-embed-text.gguf"),
+        str(root / "Ikaros-memory" / "models" / "nomic-embed-text-v2-moe.f32.gguf"),
         critical=True, must_be_file=True
     ))
     checks.append(PathCheck(
         "LLM 模型",
-        str(root / "Ikaros-memory" / "models" / "qwen3-8b.gguf"),
+        str(root / "Ikaros-memory" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf"),
         critical=True, must_be_file=True
     ))
 

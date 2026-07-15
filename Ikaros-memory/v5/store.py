@@ -341,6 +341,24 @@ def list_all(limit: int = 50, type_filter: str | None = None) -> list[Memory]:
     return [Memory.from_row(r) for r in rows]
 
 
+def search_by_time_range(start_ts: float, end_ts: float,
+                         limit: int = 10) -> list[Memory]:
+    """按时间范围检索记忆（支持 cloud_chat 时间指代解析）。
+
+    created 列存的是 Unix epoch (strftime('%s','now'))。
+    start_ts / end_ts 同为 Unix epoch float。
+    """
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM memory "
+            "WHERE created >= ? AND created <= ? "
+            "ORDER BY weight DESC, last_accessed DESC "
+            "LIMIT ?",
+            (start_ts, end_ts, limit),
+        ).fetchall()
+    return [Memory.from_row(r) for r in rows]
+
+
 def delete(memory_id: int) -> bool:
     """删一条. 返 True/False."""
     with conn() as c:

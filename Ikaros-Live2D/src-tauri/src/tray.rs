@@ -35,6 +35,7 @@ pub mod event_id {
     pub const SCREENSHOT: &str = "screenshot";
     pub const HIT_FRAMES: &str = "hit_frames";
     pub const MONITOR: &str = "monitor";
+    pub const OPEN_DESKTOP: &str = "open_desktop";
     pub const SETTINGS: &str = "settings";
     pub const RESTART: &str = "restart";
 
@@ -257,6 +258,7 @@ fn build_menu(app: &AppHandle, state: &TrayMenuState) -> Result<Menu<tauri::Wry>
 
     // ── Panels ──
     let monitor = MenuItem::with_id(app, MONITOR, "📊 监控面板", true, None::<&str>)?;
+    let open_desktop = MenuItem::with_id(app, OPEN_DESKTOP, "🖥️ 打开 Desktop", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, SETTINGS, "⚙️ 设置", true, None::<&str>)?;
     let sep4 = PredefinedMenuItem::separator(app)?;
 
@@ -285,6 +287,7 @@ fn build_menu(app: &AppHandle, state: &TrayMenuState) -> Result<Menu<tauri::Wry>
         &llm_submenu,
         &sep3,
         &monitor,
+        &open_desktop,
         &settings,
         &sep4,
         &restart,
@@ -347,6 +350,9 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                OPEN_DESKTOP => {
+                    open_hermes_desktop();
+                }
                 QUIT => {
                     std::process::exit(0);
                 }
@@ -374,6 +380,39 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .build(app)?;
 
     Ok(())
+}
+
+/// Launch the Hermes Desktop application from the tray menu.
+///
+/// The pet exe lives at `<IKAROS_ROOT>/Ikaros-Live2D/src-tauri/target/release/`,
+/// so the launcher `bin/hermes-desktop.bat` is four directory levels up. We
+/// resolve it relative to the running executable so it keeps working no matter
+/// where `IKAROS_ROOT` is mounted (drive letter etc.). The `.bat` sets up its
+/// own environment (calls `init.bat`) and spawns the Electron app hidden.
+fn open_hermes_desktop() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[tray] open_desktop: cannot resolve exe path: {e}");
+            return;
+        }
+    };
+    let Some(exe_dir) = exe.parent() else {
+        eprintln!("[tray] open_desktop: exe has no parent directory");
+        return;
+    };
+    let bat = exe_dir
+        .join("..").join("..").join("..").join("..")
+        .join("bin").join("hermes-desktop.bat");
+    if !bat.exists() {
+        eprintln!("[tray] open_desktop: launcher not found: {}", bat.display());
+        return;
+    }
+    let bat_str = bat.to_string_lossy().to_string();
+    match std::process::Command::new("cmd").arg("/c").arg(&bat_str).spawn() {
+        Ok(_) => println!("[tray] open_desktop: launched Hermes Desktop"),
+        Err(e) => eprintln!("[tray] open_desktop: failed to launch: {e}"),
+    }
 }
 
 /// Tauri command: sync tray menu checkmarks from frontend state.

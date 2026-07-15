@@ -23,7 +23,7 @@ export class ChatApi {
   private _antiRep: AntiRepetition
   private _emotion: Emotion = 'neutral'
 
-  constructor(baseUrl = 'http://127.0.0.1:8080') {
+  constructor(baseUrl = 'http://127.0.0.1:7871') {
     this._baseUrl = baseUrl
     this._antiRep = new AntiRepetition()
     this._rebuildSystem()
@@ -75,17 +75,10 @@ export class ChatApi {
     this._history.push({ role: 'user', content: userMessage })
 
     try {
-      const model = llmManager.currentModel
-      const resp = await fetch(`${this._baseUrl}/v1/chat/completions`, {
+      const resp = await fetch(`${this._baseUrl}/v1/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: this._history,
-          max_tokens: 200,
-          temperature: 0.8,
-          stream: false,
-        }),
+        body: JSON.stringify({ text: userMessage }),
         signal: AbortSignal.timeout(30000),
       })
 
@@ -94,7 +87,7 @@ export class ChatApi {
       }
 
       const data = await resp.json()
-      const reply = data.choices?.[0]?.message?.content?.trim() || '...'
+      const reply = data.reply?.trim() || '...'
 
       this._history.push({ role: 'assistant', content: reply })
 
@@ -105,46 +98,9 @@ export class ChatApi {
 
       return reply
     } catch (e) {
-      // If local LLM fails, try cloud fallback
-      try {
-        return await this._cloudFallback(userMessage)
-      } catch {
-        const errMsg = '（连接失败，请检查LLM服务是否启动）'
-        this._history.push({ role: 'assistant', content: errMsg })
-        return errMsg
-      }
+      const errMsg = '（连接失败，请检查 Ikaros 服务是否启动）'
+      this._history.push({ role: 'assistant', content: errMsg })
+      return errMsg
     }
-  }
-
-  private async _cloudFallback(userMessage: string): Promise<string> {
-    // Try known cloud models
-    const cloudModels = ['MiniMax-M3', 'gpt-4o-mini']
-    for (const model of cloudModels) {
-      try {
-        const resp = await fetch(`${this._baseUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model,
-            messages: this._history,
-            max_tokens: 200,
-            temperature: 0.8,
-            stream: false,
-          }),
-          signal: AbortSignal.timeout(15000),
-        })
-        if (resp.ok) {
-          const data = await resp.json()
-          const reply = data.choices?.[0]?.message?.content?.trim()
-          if (reply) {
-            this._history.push({ role: 'assistant', content: reply })
-            return reply
-          }
-        }
-      } catch {
-        continue
-      }
-    }
-    throw new Error('All models failed')
   }
 }

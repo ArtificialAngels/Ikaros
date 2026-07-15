@@ -105,7 +105,7 @@ def _call_llm(prompt: str, enrich_prefix: str) -> str:
     import json
     import urllib.request
     body = json.dumps({
-        "model": "qwen3-8b",
+        "model": "qwen3-1.7b",
         "messages": [{"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
                      {"role": "user", "content": enrich_prefix + "\n\n" + prompt}],
         "max_tokens": 600,

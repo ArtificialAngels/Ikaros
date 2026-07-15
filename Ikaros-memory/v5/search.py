@@ -18,10 +18,38 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("ikaros.memory.v5.search")
+
+# ── 运行时内存缓存 (性能优化, 哥哥优化项) ──
+# 1) Embedding LRU: (task+text) -> vector, 进程级, 削 :8587 忙时尖峰 + 冷启动
+# 2) VectorIndex 单例: 复用 chroma 客户端, 不再每轮重开 (冷启动 850ms); 周期刷新拾取外部新增记忆
+_EMBED_LOCK = threading.Lock()
+_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_EMBED_CACHE_MAX = 512
+
+_VI_LOCK = threading.Lock()
+_VI: dict = {"instance": None, "dir": None, "ts": 0.0}
+
+
+def _cache_cfg() -> dict:
+    try:
+        from v5 import preprocess_config as pc
+        return pc.cfg().get("cache", {})
+    except Exception:
+        return {}
+
+
+def _cache_enabled() -> bool:
+    try:
+        return bool(_cache_cfg().get("embedding_enabled", True))
+    except Exception:
+        return True
 
 V4_ROOT = Path(__file__).resolve().parent.parent
 V4_DATA_DIR = V4_ROOT / "data" / "v4"
@@ -30,23 +58,30 @@ CHROMA_DIR = V4_DATA_DIR / "chroma"
 # Embedding 服务: 同 V3, 走 :8587 nomic-embed-text
 # V3 注释 (vector_search.py:36-43) 2026-07-05 fix: 用 /embedding singular path
 EMBED_URL = os.environ.get("IKAROS_EMBED_URL", "http://127.0.0.1:8587/embedding")
-EMBED_MODEL = os.environ.get("IKAROS_EMBED_MODEL", "nomic-embed-text-v1.5-q4")
+EMBED_MODEL = os.environ.get("IKAROS_EMBED_MODEL", "nomic-embed-text-v2-moe")
 EMBED_TIMEOUT = 10
 USER_AGENT = "ikaros-vector-search-v4/1.0 (curl-compatible)"
 
 
-def _get_embedding(text: str) -> Optional[list[float]]:
-    """调 :8587 embedding 服务.
+def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
+    """调 :8587 embedding 服务 (网络实现, 无缓存).
 
     V3 → V4 改进:
       - 走相对路径 (urllib 走 absolute URI 触发 404, V3 注释记录)
       - 显式 User-Agent (V3 注释记录 urllib UA 被拒)
       - 失败时显式 log + 返 None, 不 swallow
+
+    nomic-embed-text-v2-moe 任务前缀 (2026-07-14):
+      - task="query"    (语义搜索)  -> "search_query: "
+      - task="document" (入库/重嵌) -> "search_document: "
+      不加前缀会落到默认任务, 导致 query/document 向量空间不一致、召回失真.
     """
     import http.client
     from urllib.parse import urlparse
 
-    body = json.dumps({"content": text[:500]}).encode("utf-8")
+    prefix = "search_document: " if task == "document" else "search_query: "
+    payload = (prefix + text)[:2000]
+    body = json.dumps({"content": payload}).encode("utf-8")
     try:
         u = urlparse(EMBED_URL)
         conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
@@ -66,6 +101,31 @@ def _get_embedding(text: str) -> Optional[list[float]]:
     except Exception as e:
         logger.warning("embedding failed: %s", e)
         return None
+
+
+def _get_embedding(text: str, task: str = "query") -> Optional[list[float]]:
+    """带进程级 LRU 缓存的 embedding 入口 (key = task+text[:2000]).
+
+    命中缓存 => 跳过 :8587 网络调用 (闲时省 ~60ms, 忙时省 ~1s, 冷启动省更多).
+    缓存跨 session 共享 (watchdog 进程长驻); 容量上限防内存膨胀.
+    """
+    if not _cache_enabled():
+        return _fetch_embedding(text, task)
+    prefix = "search_document: " if task == "document" else "search_query: "
+    key = (prefix + text)[:2000]
+    with _EMBED_LOCK:
+        if key in _EMBED_CACHE:
+            _EMBED_CACHE.move_to_end(key)
+            return _EMBED_CACHE[key]
+    vec = _fetch_embedding(text, task)
+    if vec is not None:
+        cap = int(_cache_cfg().get("embedding_max", 512))
+        with _EMBED_LOCK:
+            _EMBED_CACHE[key] = vec
+            _EMBED_CACHE.move_to_end(key)
+            while len(_EMBED_CACHE) > cap:
+                _EMBED_CACHE.popitem(last=False)
+    return vec
 
 
 def _extract_vector(data) -> Optional[list[float]]:
@@ -139,7 +199,7 @@ class VectorIndex:
     def add(self, memory_id: int, content: str, *,
             type: str = "fact", tags: str = "", weight: float = 0.6) -> bool:
         """添加/更新一条记忆向量."""
-        embedding = _get_embedding(content)
+        embedding = _get_embedding(content, task="document")
         if embedding is None:
             return False
         try:
@@ -157,7 +217,7 @@ class VectorIndex:
     def search(self, query: str, top_k: int = 5,
                min_weight: float = 0.0) -> list[dict]:
         """语义搜索, 返 [{id, content, type, weight, score}]."""
-        embedding = _get_embedding(query)
+        embedding = _get_embedding(query, task="query")
         if embedding is None:
             logger.warning("search: embedding failed for '%s...'", query[:30])
             return []
@@ -202,6 +262,37 @@ class VectorIndex:
         }
 
 
+def get_vector_index(persist_dir: Path | None = None, *, refresh: bool = False):
+    """返回缓存的 VectorIndex 单例 (性能优化, 哥哥优化项).
+
+    - 进程内复用同一个 chroma 客户端, 避免每轮 `VectorIndex()` 重开 (冷启动 850ms, 暖后 ~15ms).
+    - "每轮覆写"语义: 每隔 vector_refresh_seconds 自动重开一次, 拾取反思循环等
+      **其他进程**新增的记忆 (同进程内的 add 经同一客户端立即可见, 无需重开).
+    - 配置 cache.vector_index_singleton=false 时退化为每次新建 (原行为).
+    """
+    cfg = _cache_cfg()
+    if not cfg.get("vector_index_singleton", True):
+        return VectorIndex(persist_dir)
+    pdir = str(persist_dir or CHROMA_DIR)
+    refresh_s = float(cfg.get("vector_refresh_seconds", 30))
+    now = time.time()
+    with _VI_LOCK:
+        inst = _VI["instance"]
+        if (inst is None or _VI["dir"] != pdir or refresh
+                or (now - _VI["ts"]) > refresh_s):
+            try:
+                inst = VectorIndex(persist_dir)
+                _VI["instance"] = inst
+                _VI["dir"] = pdir
+                _VI["ts"] = now
+            except Exception:
+                # 创建失败: 清空缓存, 交给调用方静默处理 (不缓存坏实例)
+                _VI["instance"] = None
+                _VI["dir"] = None
+                raise
+        return _VI["instance"]
+
+
 def fused_search(query: str, top_k: int = 5) -> list[dict]:
     """双路融合: FTS5 (关键词) + ChromaDB (语义) → 合并去重.
 
@@ -222,7 +313,7 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     # 2. 向量语义搜索
     vec_results: list[dict] = []
     try:
-        idx = VectorIndex()
+        idx = get_vector_index()
         vec_results = idx.search(query, top_k=top_k)
         for r in vec_results:
             r["score"] = 0.7 * r.get("score", 0)

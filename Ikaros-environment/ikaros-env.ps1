@@ -56,14 +56,14 @@ $env:IKAROS_RUST         = "$env:IKAROS_RUNTIME\rust"
 
 # ---- Step 5: llama-server 路径 ----
 # b9867 是 llama.cpp 构建版本号，位于 runtime\llama\ 下
-if (-not $env:IKAROS_LLAMA_VERSION) { $env:IKAROS_LLAMA_VERSION = "b9867" }
+if (-not $env:IKAROS_LLAMA_VERSION) { $env:IKAROS_LLAMA_VERSION = "b10000-cuda" }
 $env:IKAROS_LLAMA_DIR     = "$env:IKAROS_RUNTIME\llama\$env:IKAROS_LLAMA_VERSION"
 $env:IKAROS_LLAMA_SERVER  = "$env:IKAROS_LLAMA_DIR\llama-server.exe"
 $env:IKAROS_LLAMA_CLI     = "$env:IKAROS_LLAMA_DIR\llama-cli.exe"
 
 # ---- Step 6: 模型路径 ----
-$env:IKAROS_MODEL_EMBEDDING = "$env:IKAROS_MEMORY_MODELS\nomic-embed-text.gguf"
-$env:IKAROS_MODEL_LLM       = "$env:IKAROS_MEMORY_MODELS\qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf"
+$env:IKAROS_MODEL_EMBEDDING = "$env:IKAROS_MEMORY_MODELS\nomic-embed-text-v2-moe.f32.gguf"
+# IKAROS_MODEL_LLM intentionally NOT set — let watchdog default to Qwen3-1.7B
 
 # ---- Step 7: 服务端口 ----
 $env:IKAROS_PORT_EMBEDDING      = "8587"
