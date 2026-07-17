@@ -325,6 +325,8 @@ Ikaros-memory/services/launchd/
 Ikaros-environment/detect-root/target/
 Ikaros-environment/detect-root/Cargo.lock
 Ikaros-environment/scripts/detect-root.exe
+Ikaros-environment/ikaros-cli/target/
+Ikaros-environment/ikaros-cli/Cargo.lock
 
 # bin/ikaros-monitor.exe is the Rust monitor binary rebuilt from
 # bin/ikaros-desktop-pet/agent/.  Skip the binary; commit the source
