@@ -1,17 +1,4 @@
-"""
-v5.summary — 历史摘要 (R4, P0)
-
-对话历史累积超过阈值 (默认 20 轮) 时, 用本地 qwen3-1.7b 把旧轮压缩为 2-3 句密度块,
-注入 system prompt, 近期轮保留完整。
-
-特性 (spec 2.4):
-  - 触发: len(history) > trigger_rounds
-  - 频率: reuse_rounds 轮内复用上次摘要, 不每轮生成
-  - 丢弃: 摘要超过 max_age_rounds 轮旧则丢弃不注入
-  - 禁止元描述: 压缩 prompt 强制"不要出现'用户说/助手说'"
-  - 隔离: 任何失败静默返空字符串, 不阻塞主流程
-  - LLM: 仅本地 :8080 qwen3-1.7b (经 v5.reflect.llm_client.call_llm)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/summary.md
 from __future__ import annotations
 
 import json
@@ -35,7 +22,7 @@ _COMPRESS_SYSTEM = (
 
 def _defaults() -> dict:
     return {"trigger_rounds": 20, "reuse_rounds": 10, "max_age_rounds": 30,
-            "model": "qwen3-1.7b", "max_sentences": 3, "timeout_s": 5}
+            "model": "local-llm", "max_sentences": 3, "timeout_s": 5}
 
 
 def _cfg() -> dict:
@@ -147,15 +134,7 @@ def build_summary_block(history: list[dict] | None = None,
     return ""
 
 
-# ─────────────────────────────────────────────────────────────
-# 非阻塞变体 (spec 4.1: 不阻塞回复)
-#
-# cloud_chat 的 build_system_prompt 在「首 token 前」同步执行,
-# 若在此同步调 LLM 会拖慢整轮回复 (尤其 :8080 忙时重试可达数秒).
-# 故提供 _nb 变体: 本次立即返回上次缓存的摘要(无则空),
-# 仅在缓存陈旧且达阈值时于后台 daemon 线程异步重算并写回缓存,
-# 下轮即生效. 这样每 ~reuse 轮才在后台付一次 LLM 成本, 永不拖慢当前回复.
-# ─────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/v5/summary.md（见“内联注释摘录”）
 
 # 后台重算 inflight 锁 (非阻塞 try-acquire, 避免并发重算)
 _SUMMARY_REGEN_LOCK = threading.Lock()

@@ -1,9 +1,5 @@
 @echo off
-REM ============================================================
-REM Ikaros Memory - Embedding Service
-REM Model: nomic-embed-text-v2-moe (768 dimensions, MoE)
-REM Port:  :8587
-REM ============================================================
+REM See docs/scripts/Ikaros-memory/services/start-embedding.md
 
 REM Load Ikaros environment
 call "%~dp0..\..\Ikaros-environment\ikaros-env.bat"

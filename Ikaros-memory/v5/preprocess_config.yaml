@@ -21,7 +21,7 @@ summary:
   trigger_rounds: 20      # 历史轮次超过此值才压缩旧轮
   reuse_rounds: 10        # N 轮内复用上次摘要
   max_age_rounds: 30      # 摘要超过此轮数旧则丢弃
-  model: qwen3-1.7b
+  model: local-llm
   max_sentences: 3
   timeout_s: 5
 
@@ -30,7 +30,7 @@ relationship:
   inject_on_signal: true
 
 emotion:
-  label_model: qwen3-1.7b
+  label_model: local-llm
   max_tags: 2
   diff_inject: true
   diff_threshold: 0.3      # |ΔP|+|ΔA|+|ΔD| 超过才注差异句

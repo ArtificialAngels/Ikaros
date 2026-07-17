@@ -1,13 +1,4 @@
-"""v5.tools.utils — shared helpers for the V5 MCP tool layer.
-
-Design rules (from the V5 agent-ization plan):
-  - Every tool has a fallback.  No tool may raise an unhandled exception.
-  - All tool functions return a JSON *string* (so they serialize cleanly
-    over MCP stdio / SSE and can be parsed by Hermes Studio).
-  - Heavy v5 submodules (affect / store / psutil-backed vitality ...) are
-    imported *lazily inside* each tool function, never at module top, so
-    `from v5.tools import *` stays importable even in a minimal env.
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/utils.md
 
 from __future__ import annotations
 
@@ -17,6 +8,7 @@ import json
 import logging
 import socket
 import sys
+import time
 from pathlib import Path
 
 logger = logging.getLogger("ikaros.v5.tools")
@@ -26,7 +18,11 @@ V5_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(V5_ROOT) not in sys.path:
     sys.path.insert(0, str(V5_ROOT))
 
-# Local LLM (qwen3-8b) listens on :8080.  Used only as a *best-effort*
+# Shared data dir for the v5 tool layer (latest_thought.json, subconscious.json, ...).
+# Centralized here so self_tool / __init__ / other submodules import one canonical path.
+V5_DATA = V5_ROOT / "data" / "v5"
+
+# Local LLM listens on :8080.  Used only as a *best-effort*
 # availability indicator so tools can report which code path they took.
 _LOCAL_LLM_HOST = "127.0.0.1"
 _LOCAL_LLM_PORT = 8080
@@ -42,24 +38,36 @@ def require_module(module_path: str):
 
 
 def safe_tool(fn):
-    """Decorator: wrap a tool call in try/except.
+    """Decorator: wrap a tool call in try/except + audit logging.
 
     On success the decorated function's own return value is passed through
     (typically a JSON string).  On any unexpected exception we return a
     structured error JSON string instead of letting the exception escape
     (which would crash the MCP server / agent loop).
+
+    Every call is timed and logged so a slow or failing tool is visible to
+    the operator (e.g. v5_self_reflect when :8080 is down).  Success logs at
+    INFO, failures at ERROR — with the host logger at WARNING (the MCP
+    server default) only failures surface unless the level is lowered.
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        t0 = time.time()
+        fn_name = getattr(fn, "__name__", "?")
+        logger.info("tool call: %s", fn_name)
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+            elapsed = time.time() - t0
+            logger.info("tool ok: %s (%.2fs)", fn_name, elapsed)
+            return result
         except Exception as exc:  # noqa: BLE001
-            logger.warning("tool %s failed: %s", getattr(fn, "__name__", "?"), exc)
+            elapsed = time.time() - t0
+            logger.error("tool failed: %s (%.2fs) -- %s", fn_name, elapsed, exc)
             return json.dumps(
                 {
                     "ok": False,
                     "error": str(exc),
-                    "tool": getattr(fn, "__name__", None),
+                    "tool": fn_name,
                 },
                 ensure_ascii=False,
             )

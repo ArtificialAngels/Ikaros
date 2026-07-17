@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-validate-paths.py - 验证 Ikaros 所有关键路径是否有效。
-
-用法:
-    python E:\\Ikaros\\Ikaros-environment\\scripts\\validate-paths.py
-    python E:\\Ikaros\\Ikaros-environment\\scripts\\validate-paths.py --json
-
-退出码:
-    0 - 所有关键路径有效
-    1 - 有关键路径缺失
-    2 - 配置文件不可读
-"""
+# 详细说明见 docs/scripts/Ikaros-environment/scripts/validate-paths.md
 from __future__ import annotations
 
 import json
@@ -86,13 +75,13 @@ def resolve_root() -> Optional[Path]:
     script_dir = Path(__file__).resolve().parent
     env_dir = script_dir.parent  # Ikaros-environment
     candidate = env_dir.parent   # Ikaros
-    if (candidate / "portable-python" / "python.exe").exists():
+    if (candidate / "runtime" / "portable-python" / "python.exe").exists():
         return candidate
 
     # 4. 从当前工作目录向上查找
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents):
-        if (parent / "portable-python" / "python.exe").exists() and \
+        if (parent / "runtime" / "portable-python" / "python.exe").exists() and \
            (parent / "Ikaros-environment").exists():
             return parent
 
@@ -118,13 +107,13 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     # ---- 核心组件 ----
     checks.append(PathCheck(
         "Python 解释器",
-        str(root / "portable-python" / "python.exe"),
+        str(root / "runtime" / "portable-python" / "python.exe"),
         critical=True, must_be_file=True,
         description="嵌入式 Python"
     ))
     checks.append(PathCheck(
         "Node.js",
-        str(root / "runtime" / "node23" / "node.exe"),
+        str(root / "runtime" / "node" / "node.exe"),
         critical=True, must_be_file=True,
         description="嵌入式 Node.js"
     ))

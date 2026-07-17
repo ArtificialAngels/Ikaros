@@ -1,10 +1,4 @@
-"""v5.tools.extra_tool — P1/P2 tools (narrative, dissonance, proactive,
-self-discovery, reflect-op).
-
-These wrap the heavier / less critical subsystems.  All are wrapped with
-@safe_tool and have graceful fallbacks when :8080 / ChromaDB / Hermes are
-unavailable.
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/extra_tool.md
 
 from __future__ import annotations
 
@@ -78,7 +72,7 @@ def v5_reflect_run_op(op_name: str = "", force: bool = False) -> str:
     force = bool(force)
 
     if op_name:
-        op = next((o for o in sched._ops if o.name == op_name), None)
+        op = sched.get_op(op_name)
         if op is None:
             return dumps({"ok": False, "error": f"unknown op: {op_name}"}, ensure_ascii=False)
         n = sched.run_one(op, force=force)

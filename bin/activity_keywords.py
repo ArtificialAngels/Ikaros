@@ -1,18 +1,4 @@
-"""activity_keywords.py — Ikaros 应用分类词库 (精简版)
-
-移植自 N.E.K.O 的 config/activity_keywords.py（3089 行全量词库），
-按需裁剪为 Ikaros 常用集合。职责：把 (process_name, window_title, url)
-映射成结构化类别，供状态机推出 activity_state。
-
-匹配语义：
-* 进程名精确小写匹配 (PROCESS_MAP)。
-* 浏览器进程走域名匹配 (BROWSER_DOMAIN)，否则标题匹配 (TITLE_MAP)。
-* 隐私黑名单 (PRIVATE_*) 命中即 category='private'。
-* 全部大小写不敏感；CJK 关键词直接子串匹配。
-
-category 优先级（高→低）：gaming > work > communication > entertainment
-（与 N.E.K.O 一致：游戏最强免打扰信号；工作压过后台 IM/视频）。
-"""
+# 详细说明见 docs/scripts/bin/activity_keywords.md
 
 from __future__ import annotations
 

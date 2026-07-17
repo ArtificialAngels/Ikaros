@@ -1,10 +1,4 @@
-"""
-v5.hermes_client — Sync Hermes WS client for think.py on :9119.
-
-Provides fixed-name sessions for 反思 and 内心独白.
-Runs a background asyncio event loop sharing one WS connection.
-All public functions are synchronous and thread-safe.
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/hermes_client.md
 from __future__ import annotations
 
 import json

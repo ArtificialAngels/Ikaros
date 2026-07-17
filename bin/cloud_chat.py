@@ -1,18 +1,4 @@
-"""
-🪶 cloud_chat.py — 桌宠直调 cloud LLM（替代 bridge /v1/chat/completions）
-
-去桥架构核心模块。每次对话自动注入：
-  [soul] axiom.md 中的伊卡洛斯身份公理
-  [cogno 5D] 时间 / 设备 / 地理 / 情绪推断 / 上下文压缩
-
-用法:
-  from cloud_chat import cloud_chat
-  reply = await cloud_chat("哥哥说的话", session_id="...")
-
-依赖:
-  - httpx (推荐) 或 urllib (回退)
-  - 环境变量: DEEPSEEK_API_KEY 或 MINIMAX_CN_API_KEY
-"""
+# 详细说明见 docs/scripts/bin/cloud_chat.md
 
 from __future__ import annotations
 
@@ -635,7 +621,7 @@ def _select_relevant_rules(user_text: str) -> str:
     """本地模型按当前上下文压缩选取相关规则.
 
 
-    调 :8080 qwen3-8b 从规则库中选出最相关的 1-2 条并压缩为 1-2 句。
+    调 :8080 本地 LLM 从规则库中选出最相关的 1-2 条并压缩为 1-2 句。
     失败时返回空字符串 (不阻塞系统 prompt 构建).
     """
     rules = _load_rules()
@@ -657,7 +643,7 @@ def _select_relevant_rules(user_text: str) -> str:
             f"当前任务: {user_text[:150]}\n规则:\n{rule_list}"
         )
         body = json.dumps({
-            "model": "qwen3-8b", "messages": [
+            "model": "local-llm", "messages": [
                 {"role": "system", "content": "选最相关的1-2条规则，输出格式: R1-DRY: 理由"},
                 {"role": "user", "content": prompt},
             ],
@@ -1656,7 +1642,7 @@ async def _call_local_llm(
     temperature: float = 0.1,
     on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str | None:
-    """调本地 Qwen3-8B (:8080/v1/chat/completions).
+    """调本地 LLM (:8080/v1/chat/completions).
 
     用于 self-review / consolidate, 不阻塞主对话流程.
     连接失败 / 超时 / 模型未加载时返回 None, caller 自行 fallback.
@@ -1674,7 +1660,7 @@ async def _call_local_llm(
     """
     url = f"{_LOCAL_LLM_URL.rstrip('/')}/chat/completions"
     body = {
-        "model": "qwen3-1.7b",
+        "model": "local-llm",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -1842,7 +1828,7 @@ async def _self_review(
         except Exception:
             pass
 
-    # 2) 本地 Qwen3-8B (:8080 回退, 断网/无 key 时兜底)
+    # 2) 本地 LLM (:8080 回退, 断网/无 key 时兜底)
     if not text:
         text = await _call_local_llm(msgs, max_tokens=512, temperature=0.1)
 

@@ -1,20 +1,5 @@
 #!/usr/bin/env python
-"""Ikaros V5 -> Hermes SOUL.md sync (external, no hermes-agent modification).
-
-Replaces the V3 Memory Plugin's AUTO-SYNCED mechanism that broke on 2026-07-05.
-Reads V5 self_model.json + axiom.md + v4.db lessons, generates SOUL.md,
-writes to data/hermes-agent/SOUL.md.
-
-Usage:
-    python ikaros-soul-sync.py [--once | --watch N]
-
-    --once     Sync once and exit (default)
-    --watch N  Sync every N seconds (daemon mode)
-
-Called from:
-    - ikaros-start.bat (Step 2c, after memory watchdog starts)
-    - V5 metacog cycle (optional, via reflect scheduler)
-"""
+# 详细说明见 docs/scripts/bin/ikaros-soul-sync.md
 
 from __future__ import annotations
 

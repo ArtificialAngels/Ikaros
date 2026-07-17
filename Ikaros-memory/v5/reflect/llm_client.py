@@ -1,17 +1,4 @@
-"""
-v5.reflect.llm_client — V5.1 LLM client (DeepSeek + 本地 Qwen2.5-7B)
-
-设计目标:
-  - 双轨: 本地小模型 (Qwen2.5-7B :8080) + cloud 大模型 (DeepSeek)
-  - 统一接口: 一处定义, 两处实现, 调用方不感知
-  - 密钥零接触: API key 只从 os.environ / .env 读, 不写进代码, 不进 git
-  - 显式错误: 失败时抛, 不静默
-
-V3 vs V4:
-  - V3 memory_reflect.py 风格的本地小模型调用 (现本地模型为 Qwen2.5-7B)
-  - V4 新增大模型反思 (哥哥 id 158 长线目标), 用 DeepSeek
-  - 小模型仍然在 (consolidate 提取用, 因为便宜/快)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/reflect/llm_client.md
 
 from __future__ import annotations
 
@@ -25,10 +12,7 @@ from typing import Literal
 
 import httpx
 
-# ─── 启动时自动从 .env 读 DEEPSEEK_API_KEY ─────────────────────
-# 哥哥 (2026-07-05) K1b 决策: 用 python-dotenv 自动加载
-# Hermes Agent .env 在 E:\Ikaros\data\hermes-agent\.env (HERMES_HOME env)
-# 优先 HERMES_HOME 路径, 然后 Ikaros 默认, 最后 V4 自己的 .env (允许覆盖)
+# 内联说明见 docs/scripts/Ikaros-memory/v5/reflect/llm_client.md（见“内联注释摘录”）
 
 logger = logging.getLogger("ikaros.memory.v5.llm")
 
@@ -40,9 +24,11 @@ V4_DATA_DIR = V4_ROOT / "data" / "v4"
 # 在路径定义完之后做 dotenv 加载 (按 HERMES_HOME → Ikaros 默认 → V4 顺序)
 try:
     from dotenv import load_dotenv
+    _ikaros_root = os.environ.get("IKAROS_ROOT", r"E:\Ikaros")
+    _hermes_home_default = Path(_ikaros_root) / "data" / "hermes-agent"
     _env_candidates = [
-        Path(os.environ.get("HERMES_HOME", r"E:\Ikaros\data\hermes-agent")) / ".env",
-        Path(r"E:\Ikaros\data\hermes-agent") / ".env",
+        Path(os.environ.get("HERMES_HOME", _hermes_home_default)) / ".env",
+        _hermes_home_default / ".env",
     ]
     for _env in _env_candidates:
         if _env.exists():
@@ -61,7 +47,7 @@ LOCAL_LLM_URL = os.environ.get(
     "HERMES_LOCAL_LLM_URL",
     "http://127.0.0.1:8080/v1",
 ).rstrip("/") + "/chat/completions"
-LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "qwen3-1.7b")
+LOCAL_LLM_MODEL = os.environ.get("HERMES_LOCAL_LLM_MODEL", "local-llm")
 LOCAL_LLM_TIMEOUT = int(os.environ.get("HERMES_LOCAL_LLM_TIMEOUT", "60"))
 
 # ─── 大模型 (DeepSeek) ────────────────────────────────
@@ -272,9 +258,7 @@ def _call_deepseek(system: str, user: str, max_tokens: int,
     try:
         msg = data["choices"][0]["message"]
         content = msg.get("content", "") or ""
-        # 思考模型 (deepseek-v4-flash / reasoner) 可能把答案放在 reasoning_content,
-        # content 为空 → 兜底取 reasoning_content, 与 _call_local 行为保持一致,
-        # 否则本地小模型挂掉时云端兜底会误报 "empty content" 而整体失败
+# 内联说明见 docs/scripts/Ikaros-memory/v5/reflect/llm_client.md（见“内联注释摘录”）
         if not content.strip() and msg.get("reasoning_content"):
             content = msg.get("reasoning_content", "") or ""
     except (KeyError, IndexError) as e:

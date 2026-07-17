@@ -1,28 +1,4 @@
-"""
-bin/qwen_realtime.py — Qwen Realtime API 客户端 (超低延时一体式 STT+LLM+TTS)
-
-基于 OpenAI Realtime 协议, 通过 WebSocket 连接阿里云 DashScope。
-内置 ASR + LLM + 可选 native TTS, 端到端延迟目标 <500ms。
-
-用法:
-    from bin.qwen_realtime import QwenRealtimeClient
-    client = QwenRealtimeClient(api_key="...")
-    
-    # 流式音频输入
-    await client.stream_audio(pcm_bytes)
-    await client.commit_audio()
-    
-    # 获取回复 (生成器)
-    async for event in client.receive():
-        if event["type"] == "text":
-            print(event["text"])
-        elif event["type"] == "audio":
-            play(event["audio_bytes"])  # raw PCM
-
-环境变量:
-    DASHSCOPE_API_KEY — 阿里云 API key (必须)
-    IKAROS_REALTIME_MODEL — 模型名 (默认 qwen3-omni-flash-realtime-2025-09-04)
-"""
+# 详细说明见 docs/scripts/bin/qwen_realtime.md
 
 from __future__ import annotations
 

@@ -1,14 +1,4 @@
-"""
-bin/audio_preprocessor.py — 轻量音频预处理 (移植自 N.E.K.O 思路)
-
-处理链: DC偏移去除 → RMS归一化 → 简单噪声门 → 软限幅
-纯 numpy/scipy 实现, 无 C 编译依赖, <1ms 延迟。
-
-用法:
-    from bin.audio_preprocessor import AudioPreprocessor
-    ap = AudioPreprocessor(sample_rate=16000)
-    clean_pcm = ap.process(raw_pcm_int16)
-"""
+# 详细说明见 docs/scripts/bin/audio_preprocessor.md
 
 from __future__ import annotations
 

@@ -1,9 +1,4 @@
-# ============================================================
-# detect-root.ps1 - Auto-detect IKAROS_ROOT
-# ============================================================
-#  Try multiple sources to resolve Ikaros project root.
-#  Output: resolved root path, or throw error.
-# ============================================================
+# See docs/scripts/Ikaros-environment/scripts/detect-root.md
 
 $ErrorActionPreference = "Stop"
 
@@ -11,7 +6,7 @@ function Find-IkarosRoot {
     # Priority 1: IKAROS_ROOT env var
     if ($env:IKAROS_ROOT -and (Test-Path $env:IKAROS_ROOT)) {
         $root = (Resolve-Path $env:IKAROS_ROOT).Path
-        if (Test-Path "$root\portable-python\python.exe") {
+        if (Test-Path "$root\runtime\portable-python\python.exe") {
             return $root
         }
     }
@@ -19,7 +14,7 @@ function Find-IkarosRoot {
     # Priority 2: HERMES_ROOT env var (legacy compat)
     if ($env:HERMES_ROOT -and (Test-Path $env:HERMES_ROOT)) {
         $root = (Resolve-Path $env:HERMES_ROOT).Path
-        if (Test-Path "$root\portable-python\python.exe") {
+        if (Test-Path "$root\runtime\portable-python\python.exe") {
             return $root
         }
     }
@@ -29,14 +24,14 @@ function Find-IkarosRoot {
     $scriptDir = $PSScriptRoot
     $envDir = Split-Path $scriptDir -Parent
     $candidate = Split-Path $envDir -Parent
-    if (Test-Path "$candidate\portable-python\python.exe") {
+    if (Test-Path "$candidate\runtime\portable-python\python.exe") {
         return (Resolve-Path $candidate).Path
     }
 
     # Priority 4: Walk up from current working directory
     $dir = Get-Location
     while ($dir -ne $null) {
-        $hasPython = Test-Path "$dir\portable-python\python.exe"
+        $hasPython = Test-Path "$dir\runtime\portable-python\python.exe"
         $hasHermes = Test-Path "$dir\hermes-agent"
         $hasEnv = Test-Path "$dir\Ikaros-environment"
         if ($hasPython -and $hasHermes -and $hasEnv) {
@@ -49,7 +44,7 @@ function Find-IkarosRoot {
     $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null }
     foreach ($drive in $drives) {
         $candidate = Join-Path $drive.Root "Ikaros"
-        if (Test-Path "$candidate\portable-python\python.exe") {
+        if (Test-Path "$candidate\runtime\portable-python\python.exe") {
             return (Resolve-Path $candidate).Path
         }
     }

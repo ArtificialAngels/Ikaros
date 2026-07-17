@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Marker file that must exist in the Ikaros root to confirm detection.
-const MARKER: &str = r"portable-python\python.exe";
+const MARKER: &str = r"runtime\portable-python\python.exe";
 
 fn is_valid_root(path: &Path) -> bool {
     path.join(MARKER).is_file()
@@ -100,7 +100,7 @@ fn main() {
             println!("{}", clean);
         }
         None => {
-            eprintln!("IKAROS_ROOT not found. Set IKAROS_ROOT env var or ensure portable-python\\python.exe exists.");
+            eprintln!("IKAROS_ROOT not found. Set IKAROS_ROOT env var or ensure runtime\\portable-python\\python.exe exists.");
             std::process::exit(1);
         }
     }

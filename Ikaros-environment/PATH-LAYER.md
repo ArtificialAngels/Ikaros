@@ -55,7 +55,7 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 | **`sys.path`** (Python `import` 时的搜索 list) | `PYTHONPATH` + site-packages 自动 | `PYTHONPATH` 注: portable-python 用 `_pth` 文件机制,`PYTHONPATH` 可能被屏蔽 | portable-python 自己处理 |
 | **`%HOME%` / `%USERPROFILE%`** — 用户目录 | 系统自带 | **`IKAROS_ROOT`** (项目根, 跨机器可变) | `ikaros-env.bat` Step 1 |
 | **`PYTHONHOME`** — Python 安装根 | `C:\PythonXX\` 等 | **故意清空** `set PYTHONHOME=` (Step 10) 避免误用系统 Python | 同上 |
-| **`NODE_PATH`** — Node 模块搜索 | 由 npm 自动 | `set NODE_PATH=%IKAROS_RUNTIME%\node23\node_modules` (Step 10) | 同上 |
+| **`NODE_PATH`** — Node 模块搜索 | 由 npm 自动 | `set NODE_PATH=%IKAROS_RUNTIME%\node\node_modules` (Step 10) | 同上 |
 | **`NPM_CONFIG_PREFIX`** — npm 全局包根 | 通常 `%AppData%\npm` | **故意清空** 强制项目级 npm (Step 10) | 同上 |
 
 ---
@@ -84,11 +84,11 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 
 | Key | 值 | Windows 等效 |
 |---|---|---|
-| `core.python` | `%IKAROS_ROOT%\portable-python\python.exe` | `where python.exe` 应该命中这条 |
+| `core.python` | `%IKAROS_ROOT%\runtime\portable-python\python.exe` | `where python.exe` 应该命中这条 |
 | `core.runtime` | `%IKAROS_ROOT%\runtime` | 工具根 |
-| `core.node` | `%IKAROS_ROOT%\runtime\node23\node.exe` | `where node.exe` 应该命中这条 |
-| `core.npm` | `%IKAROS_ROOT%\runtime\node23\npm.cmd` | npm 入口 |
-| `core.node_modules` | `%IKAROS_ROOT%\runtime\node23\node_modules` | `NODE_PATH` 注入 |
+| `core.node` | `%IKAROS_ROOT%\runtime\node\node.exe` | `where node.exe` 应该命中这条 |
+| `core.npm` | `%IKAROS_ROOT%\runtime\node\npm.cmd` | npm 入口 |
+| `core.node_modules` | `%IKAROS_ROOT%\runtime\node\node_modules` | `NODE_PATH` 注入 |
 | `core.bin` | `%IKAROS_ROOT%\bin` | `bin/` 脚本(已 prepend 到 PATH) |
 | `core.runtime.node_mod_path` (ps1) | 同上 node_modules | = `NODE_PATH` |
 
@@ -173,7 +173,7 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 |---|---|---|
 | Python | `PYTHONPATH` (`IKAROS_ROOT` + `IKAROS_HERMES_AGENT`) | `python -c "import sys; print(sys.path)"` |
 | Python (portable) | `portable-python/python312._pth` 内部机制 | 这玩意 `PYTHONPATH` **可能被屏蔽** |
-| Node.js | `NODE_PATH` (= `IKAROS_RUNTIME\node23\node_modules`) | `node -e "console.log(require('module').globalPaths)"` |
+| Node.js | `NODE_PATH` (= `IKAROS_RUNTIME\node\node_modules`) | `node -e "console.log(require('module').globalPaths)"` |
 | npm | `NPM_CONFIG_PREFIX` (空) | `npm config get prefix` 应指向项目 |
 
 ### 不同 agent 怎么知道要看这里
@@ -206,7 +206,7 @@ diff <(grep '^set "IKAROS_' ikaros-env.bat) \
 ### 场景 1: 用户报告 "`python` 不对版本"
 
 - 确认用户已经从 `cmd`/`powershell` 跑了 `call ikaros-env.bat` 或 `. ikaros-env.ps1`
-- 跑 `where python` —— 应该命中 `%IKAROS_ROOT%\portable-python\python.exe`
+- 跑 `where python` —— 应该命中 `%IKAROS_ROOT%\runtime\portable-python\python.exe`
 - 如果指向 `%LOCALAPPDATA%\Programs\Python\Python3XX\` —— **bootstrap 没生效**
 
 ### 场景 2: 用户报告 "`import hermes` ImportError"
@@ -232,7 +232,7 @@ diff <(grep '^set "IKAROS_' ikaros-env.bat) \
 
 ```bat
 REM ikaros-env.bat Step 10
-set "NODE_PATH=%IKAROS_RUNTIME%\node23\node_modules"
+set "NODE_PATH=%IKAROS_RUNTIME%\node\node_modules"
 set "NPM_CONFIG_PREFIX="
 set "PYTHONHOME="
 ```
@@ -241,7 +241,7 @@ set "PYTHONHOME="
 
 - **`NPM_CONFIG_PREFIX=`**: 强清空后, npm 的全局命令都不再被系统污染, `--prefix` 必须显式指项目
 - **`PYTHONHOME=`**: 强清空后, `portable-python` 是 self-contained, 不读 `C:\PythonXX\python311._pth` 之类的
-- **`NODE_PATH=...`**: 显式指向项目 `runtime/node23/node_modules`, npm install 装的东西都在那
+- **`NODE_PATH=...`**: 显式指向项目 `runtime/node/node_modules`, npm install 装的东西都在那
 
 **如果你的项目经常因为 PATH / Python / Node 的环境变量打架而异常, 先看 Step 10 这一组。**
 

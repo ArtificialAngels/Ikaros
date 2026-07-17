@@ -1,31 +1,11 @@
-"""v5.orchestrator — V5 Agent runtime (companion delegation + agent loop).
-
-This module is the *only* new entry point that sits "above" the existing
-``bin/cloud_chat.py`` pipeline.  It implements the V5 agent-ization plan
-(Step 3) without ever modifying ``cloud_chat.py``.
-
-Two runtime modes, selected by the ``V5_AGENT_MODE`` environment variable:
-
-  * ``companion`` (default) — delegate straight to ``cloud_chat.cloud_chat``.
-    The full emotion / task / 4-injection pipeline stays 100% unchanged.
-  * ``agent``  (new)          — run a think -> tool_call -> observe loop.
-    The local LLM decides which ``v5_*`` tool to call; the tool result is
-    fed back to the LLM to synthesize a natural reply.
-
-Hard guarantees (from the plan):
-  * cloud_chat.py is NEVER modified.
-  * Every failure degrades gracefully:
-      - agent loop thinks with no LLM        -> fall back to companion
-      - agent loop picks an unknown tool      -> fall back to companion
-      - agent loop can't synthesize a reply   -> fall back to companion
-      - companion pipeline errors             -> return a safe string
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/orchestrator.md
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import socket
 import re
 import sys
 import urllib.request
@@ -39,7 +19,7 @@ V5_ROOT = Path(__file__).resolve().parent.parent
 if str(V5_ROOT) not in sys.path:
     sys.path.insert(0, str(V5_ROOT))
 
-# IKAROS_ROOT = E:/Ikaros  -> bin/ (home of cloud_chat.py)
+# IKAROS_ROOT (set by Ikaros-environment) -> bin/ (home of cloud_chat.py)
 IKAROS_ROOT = V5_ROOT.parent
 _BIN_DIR = IKAROS_ROOT / "bin"
 if str(_BIN_DIR) not in sys.path:
@@ -67,6 +47,18 @@ class OrchestratorState:
 
 
 state = OrchestratorState()
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count: CJK chars ~1 token, ASCII words ~1.3 tokens.
+
+    Used to cap how much of a tool result we feed back into the observe
+    step, so a huge JSON blob can't blow the LLM context window (the old
+    ``context_budget`` was a raw char count and wildly off for CJK text).
+    """
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    ascii_words = len(text.encode("ascii", "ignore").split())
+    return int(cjk + ascii_words * 1.3)
 
 
 # ── Mode resolution ──────────────────────────────────────────────────────────
@@ -125,7 +117,7 @@ def local_llm_chat(
     *,
     max_tokens: int = 512,
     temperature: float = 0.2,
-    timeout: float = 30,
+    timeout: float = 3,
 ) -> str | None:
     """Best-effort chat completion against the local :8080 server.
 
@@ -133,6 +125,13 @@ def local_llm_chat(
     timeout, bad payload).  Never raises.
     """
     try:
+        # TCP pre-flight: if :8080 isn't even listening, fail fast instead of
+        # blocking urllib for the full timeout (MCP stdio expects sub-second replies).
+        try:
+            _probe = socket.create_connection(("127.0.0.1", 8080), timeout=0.5)
+            _probe.close()
+        except Exception:
+            return None
         payload = {
             "model": "local",
             "messages": [
@@ -208,7 +207,13 @@ def _observe(user_text: str, tool_result: str, *, max_tokens: int = 200) -> str 
     """Synthesize a natural reply from the user message + tool result."""
     if not tool_result:
         return None
-    capped = tool_result[: state.context_budget]
+    # Token-aware truncation: keep the most useful slice under ~1500 tokens
+    # (CJK-aware) instead of a raw char budget.  Halve until under the limit.
+    TOKEN_LIMIT = 1500
+    full = tool_result
+    while estimate_tokens(full) > TOKEN_LIMIT and len(full) > 100:
+        full = full[: len(full) // 2]
+    capped = full
     system = (
         "You are Ikaros, a warm companion AI. Given the user's message and a "
         "tool result (JSON), write a concise, natural-language reply that "

@@ -1,28 +1,4 @@
-"""action_log.py — 伊卡洛斯工具函数统一审计日志
-
-所有 subprocess / file.write / terminal 调用过此包装,
-审计日志写到 data/ikaros-coordination/action_log/{YYYY-MM-DD}.jsonl
-
-用法:
-  from action_log import log_subprocess, log_file_write, log_terminal
-
-  # 替代裸 subprocess.Popen
-  proc = log_subprocess(["ffmpeg", ...], label="tts_decode")
-
-  # 替代裸 subprocess.run
-  result = log_subprocess_run(["tasklist", ...], label="check_pid")
-
-  # 替代裸 open().write()
-  nbytes = log_file_write(path, content, label="screenshot")
-
-  # 替代裸 os.system / subprocess shell
-  result = log_terminal("dir E:\\Ikaros", label="list_files")
-
-设计:
-  - 每次调用记一条 JSONL: {ts, action, label, cmd/path, status, duration_ms, error?}
-  - 失败不阻塞: 包装器内部异常静默传播, 但审计记录一定写
-  - 日志按天分文件, 自动创建目录
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/action_log.md
 
 from __future__ import annotations
 
@@ -39,7 +15,7 @@ logger = logging.getLogger("ikaros.action_log")
 
 # ─── 路径 ───
 
-_HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", r"E:\Ikaros"))
+_HERMES_ROOT = Path(os.environ.get("HERMES_ROOT") or os.environ.get("IKAROS_ROOT", r"E:\Ikaros"))
 _LOG_DIR = _HERMES_ROOT / "data" / "ikaros-coordination" / "action_log"
 
 # ─── 统计 (进程生命周期内) ───
@@ -290,7 +266,7 @@ if __name__ == "__main__":
     print(f"  subprocess.run: {r.stdout.strip()}")
 
     # 2. file.write
-    test_path = Path(r"E:\Ikaros\.tmp\action_log_test.txt")
+    test_path = Path(os.environ.get("IKAROS_ROOT", r"E:\Ikaros")) / ".tmp" / "action_log_test.txt"
     n = log_file_write(test_path, "test content", label="test_write")
     print(f"  file.write: {n} bytes → {test_path}")
 

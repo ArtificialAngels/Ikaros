@@ -1,18 +1,4 @@
-"""
-v5.reflect.distill — V5.1 灵魂蒸馏 (小模型蒸馏 + 大模型反思)
-
-设计目标:
-  - V3 distill_soul (memory_reflect.py:468-542): 只用小模型蒸馏 identity/axiom/rule/lesson
-  - V4 拆成两个独立操作:
-      1. distill()    — 小模型蒸馏 (技术层: 压缩、合并、丢弃过时)  ← 跟 V3 一致
-      2. reflect()    — 大模型反思 (灵魂层: 从记忆反推"我是谁、我怎么变了")
-                        哥哥 (2026-07-05) id 158 长线目标核心
-  - 两个操作各自有 trigger, 各自可单独跑
-  - 反思产物: 写回 v4 store, type='identity' 或 'lesson', weight=0.85+
-  - V3 设计原则 (memory_reflect.py:11) "只用本地 Qwen3-8B" 在 V4 拆开:
-      蒸馏 (蒸馏操作成本低) → 小模型
-      反思 (灵魂层重要)      → 大模型 (DeepSeek V4 flash)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/reflect/distill.md
 
 from __future__ import annotations
 
@@ -177,7 +163,7 @@ def distill(*, min_entries: int = 3) -> dict:
 def reflect(*, max_memories: int = 50, use_big_llm: bool = True) -> dict:
     """从所有非 conversation 记忆反推"我是谁 / 我怎么变了".
 
-    V3 缺这层 (memory_reflect.py 设计原则 1: "只用本地 Qwen3-8B").
+    V3 缺这层 (memory_reflect.py 设计原则 1: "只用本地 LLM").
     V4 拆开: 反思用大模型 (DeepSeek V4 flash), 因为反思是灵魂层,
               质量 > 成本, 不频繁 (7d 一次).
 
@@ -221,9 +207,9 @@ def reflect(*, max_memories: int = 50, use_big_llm: bool = True) -> dict:
             max_tokens=2048,
         )
     except Exception as e:
-        # 大哥模型偶发 404/5xx/网络抖动 → 降级到本地 qwen3-8b, 不浪费反思周期
+        # 大哥模型偶发 404/5xx/网络抖动 → 降级到本地 LLM, 不浪费反思周期
         if provider_name == "deepseek":
-            logger.warning("reflect: 大模型失败 (%s), 降级到本地 qwen3-8b", e)
+            logger.warning("reflect: 大模型失败 (%s), 降级到本地 LLM", e)
             try:
                 result = llm_client.call_llm(
                     _REFLECT_SYSTEM,

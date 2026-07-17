@@ -43,6 +43,30 @@ def test_get_delete_stats():
     assert isinstance(api.stats(), dict)
 
 
+def test_combined_filters():
+    """domain + key + type combined must narrow to exactly the matching row."""
+    api = V5MemoryAPI()
+    m1 = api.store(f"{_MARK} a", domain="cf_d1", key="cf_k1",
+                   memory_type="fact", tags=["cf_t1"])
+    m2 = api.store(f"{_MARK} b", domain="cf_d1", key="cf_k2",
+                   memory_type="fact", tags=["cf_t2"])
+    m3 = api.store(f"{_MARK} c", domain="cf_d2", key="cf_k1",
+                   memory_type="preference", tags=["cf_t1"])
+    try:
+        r = api.search(domain="cf_d1", type="fact")
+        assert len(r) == 2, f"d1+fact expected 2, got {len(r)}"
+        r = api.search(key="cf_k1")
+        assert len(r) == 2, f"key cf_k1 expected 2, got {len(r)}"
+        r = api.search(domain="cf_d1", key="cf_k1", type="fact")
+        assert len(r) == 1, f"d1+k1+fact expected 1, got {len(r)}"
+    finally:
+        for mid in (m1, m2, m3):
+            try:
+                api.delete(mid)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 if __name__ == "__main__":
     import pytest
 

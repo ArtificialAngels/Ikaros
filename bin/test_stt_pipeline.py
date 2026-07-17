@@ -1,7 +1,4 @@
-"""端到端验证 STT 链路: edge-tts 合成中文 -> 16k mono PCM -> ws 二进制帧 -> vosk 识别 -> LLM/TTS。
-
-不依赖桌宠 UI, 直接连 :7870 验证后端音频处理能力。
-"""
+# 详细说明见 docs/scripts/bin/test_stt_pipeline.md
 import asyncio
 import io
 import json

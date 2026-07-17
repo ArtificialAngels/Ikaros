@@ -1,16 +1,4 @@
-# ============================================================
-# init.ps1 - Ikaros Environment Single Entry Point (PowerShell)
-# ============================================================
-#  Single 入口: 让任何 ps1 脚本第一行 dot-source 此文件
-#  就自动获得 $env:IKAROS_* 环境变量与 PATH/PYTHONPATH 等效层。
-#
-#  用法 (从任意位置):
-#    . "E:\Ikaros\Ikaros-environment\init.ps1"
-#  它会:
-#    1) Detect IKAROS_ROOT (5 优先级, see scripts/detect-root.ps1)
-#    2) dot-source ikaros-env.ps1 (核心 11 步, 见 PATH-LAYER.md)
-#    3) Echo 自检 (告诉 caller "init OK", 失败抛错)
-# ============================================================
+# See docs/scripts/Ikaros-environment/init-ps1.md
 
 # `return` 在 script-scope 是 no-op (只会 break 当前语句)。
 # wrap whole logic in function so `return` 真的能从外层调用 short-circuit。

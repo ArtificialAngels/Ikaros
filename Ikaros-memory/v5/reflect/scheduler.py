@@ -1,18 +1,4 @@
-"""
-v5.reflect.scheduler — V5.1 反思周期调度器
-
-V3 痛点 (已查, 757 行 memory_reflect.py):
-  - trigger 与 logic 混在 reflect_cycle() (line 594-678)
-  - 主控 try/except 全包 + 返 -1 = 沉默失败 6 处
-  - _DEFAULT_DEDUP_INTERVAL 被复用到 cleanup (line 649, V3 小 bug)
-  - 反思后 import chromadb 死 (line 669, V3 沉默失败)
-
-V4 修复:
-  - trigger 与 logic 分离: 调度器只回答 "该跑吗", 不回答 "怎么跑"
-  - 错误显式: 让异常上抛, 不吞
-  - 每个操作独立 interval 常量, 不复用
-  - 不在调度器里 import 重依赖 (chromadb 留给 vector 模块)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/reflect/scheduler.md
 
 from __future__ import annotations
 
@@ -142,9 +128,7 @@ def next_run_time(state: ScheduleState, key: str, interval: int,
 
 # ─── 状态持久化 (复用 V3 路径, 但走 V4 子目录) ───────────────────
 
-# V4 反思状态持久化到 Ikaros-memory/data/v4/ (与 V3 data/ 并列, 不污染)
-# 注意: Path 是 v4/reflect/scheduler.py, parent=v4/reflect, parent.parent=v4/,
-# parent.parent.parent=Ikaros-memory/, + "data/v4" → Ikaros-memory/data/v4/
+# 内联说明见 docs/scripts/Ikaros-memory/v5/reflect/scheduler.md（见“内联注释摘录”）
 _V4_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "v4"
 _STATE_FILE = _V4_DATA_DIR / "reflect_state.json"
 
@@ -202,6 +186,17 @@ class ReflectScheduler:
         """注册反思操作. 重复注册同名 op 会覆盖 (设计选择)."""
         self._ops = [o for o in self._ops if o.name != op.name]
         self._ops.append(op)
+
+    def get_op(self, name: str) -> "ReflectOp | None":
+        """Look up a registered op by name. Returns None if not found.
+
+        Public accessor for ``self._ops`` so callers (e.g. v5.tools.extra_tool)
+        don't reach into private state and silently break on refactors.
+        """
+        for op in self._ops:
+            if op.name == name:
+                return op
+        return None
 
     @property
     def state(self) -> ScheduleState:

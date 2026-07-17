@@ -1,27 +1,4 @@
-"""ikaros-repl.py -- 真物 chat loop 直接对接 cogno 5D + cloud_chat 引擎.
-
-哥哥 7-5 说"实时聊天"= 我不重发明(不重写云聊, 不重写cogno_5d), 只
-造 thin wrapper 把现成 pipeline 暴露为 STDIN/STDOUT loop. v3 [0.95]
-不重复发明真物.
-
-用法:
-    E:\Ikaros\portable-python\python.exe bin\ikaros-repl.py
-    > 哥哥说: 今天天气好
-    伊卡洛斯: ...
-    > 哥哥说: 你在做什么
-    伊卡洛斯: ...
-
-设计原则:
-- 直接 import cloud_chat.cloud_chat (650 行 真物)
-- 走 cogno_5d.enrich(user_text) (cogno 5 维 Phase 5 已 commit)
-- enrich_reply 返 dict (Phase 5 已 commit, v3 0.6 真物)
-- 失败静默 (cogno 任何维失败 -> [未知])
-- 1 次输入 = 1 次回答 (CLI loop, 不阻塞)
-
-This is the "live chat" wrapper the 哥哥 always wanted:
-7-5 21:10 7-4 commit b16c8f8 + f40d838 + 3f921e5 + 7-5 cogno-extensions
-真存在的 pipeline 接出了真人类聊.
-"""
+# 详细说明见 docs/scripts/bin/ikaros-repl.md
 from __future__ import annotations
 
 import logging
@@ -105,7 +82,7 @@ def _call_llm(prompt: str, enrich_prefix: str) -> str:
     import json
     import urllib.request
     body = json.dumps({
-        "model": "qwen3-1.7b",
+        "model": "local-llm",
         "messages": [{"role": "system", "content": "You are Ikaros (人造天使). Reply briefly, 80-120 chars, Chinese."},
                      {"role": "user", "content": enrich_prefix + "\n\n" + prompt}],
         "max_tokens": 600,

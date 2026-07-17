@@ -3,11 +3,11 @@
   "_version": "1.0",
   "ikaros_root": "E:\\Ikaros",
   "core": {
-    "python": "E:\\Ikaros\\portable-python\\python.exe",
+    "python": "E:\\Ikaros\\runtime\\portable-python\\python.exe",
     "runtime": "E:\\Ikaros\\runtime",
-    "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
-    "npm": "E:\\Ikaros\\runtime\\node23\\npm.cmd",
-    "node_modules": "E:\\Ikaros\\runtime\\node23\\node_modules",
+    "node": "E:\\Ikaros\\runtime\\node\\node.exe",
+    "npm": "E:\\Ikaros\\runtime\\node\\npm.cmd",
+    "node_modules": "E:\\Ikaros\\runtime\\node\\node_modules",
     "aria2": "E:\\Ikaros\\runtime\\aria2",
     "gopeed": "E:\\Ikaros\\runtime\\gopeed",
     "rpc_server": "E:\\Ikaros\\runtime\\rpc-server",
@@ -61,7 +61,7 @@
     "root": "E:\\Ikaros\\runtime\\MCPServe",
     "gitnexus": {
       "dist": "E:\\Ikaros\\runtime\\MCPServe\\gitnexus\\gitnexus\\dist\\cli\\index.js",
-      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "node": "E:\\Ikaros\\runtime\\node\\node.exe",
       "version": "1.7.0",
       "command_arg": "mcp"
     },
@@ -69,7 +69,7 @@
       "pkg": "@upstash/context7-mcp",
       "version": "3.2.2",
       "dist": "E:\\Ikaros\\runtime\\MCPServe\\context7\\package\\dist\\index.js",
-      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "node": "E:\\Ikaros\\runtime\\node\\node.exe",
       "command_arg": "",
       "requires_key": false
     },
@@ -77,7 +77,7 @@
       "pkg": "@playwright/mcp",
       "version": "0.0.77",
       "dist": "E:\\Ikaros\\runtime\\MCPServe\\playwright\\package\\cli.js",
-      "node": "E:\\Ikaros\\runtime\\node23\\node.exe",
+      "node": "E:\\Ikaros\\runtime\\node\\node.exe",
       "command_arg": "",
       "requires_key": false
     },
@@ -85,7 +85,7 @@
       "pkg": "codebase-memory-mcp",
       "version": "0.8.1",
       "dist": "E:\\Ikaros\runtime\\MCPServe\\codebase-memory\\package\bin\\codebase-memory-mcp.exe",
-      "node": "E:\\Ikaros\runtime\node23\node.exe",
+      "node": "E:\\Ikaros\runtime\node\node.exe",
       "shim": "E:\\Ikaros\runtime\\MCPServe\\codebase-memory\\package\bin.js",
       "command_arg": "",
       "requires_key": false,
@@ -109,6 +109,6 @@
     "data": "E:\\Ikaros\\data\\hermes-studio",
     "logs": "E:\\Ikaros\\data\\logs\\hermes-studio",
     "mcp_bin": "E:\\Ikaros\\hermes-studio\\bin\\hermes-studio-mcp.mjs",
-    "node": "C:\\Program Files\\nodejs\\node.exe"
+    "node": "E:\\Ikaros\\runtime\\node\\node.exe"
   }
 }

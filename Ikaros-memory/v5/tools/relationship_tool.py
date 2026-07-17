@@ -1,8 +1,4 @@
-"""v5.tools.relationship_tool — 2 relationship tools.
-
-  v5_relationship()        -> depth / warmth / stage / closeness / days_known
-  v5_relationship_tick()   -> record one interaction, return updated state
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/relationship_tool.md
 
 from __future__ import annotations
 

@@ -1,13 +1,4 @@
-"""v5.self_discovery — 伊卡洛斯主动了解自身架构。
-
-每 24h 被 v4.reflect.registry 调度执行:
-  1. 读取项目关键文件 (AGENTS.md / self_model.json / 架构文档)
-  2. 调 Hermes Agent 分析"我是什么"
-  3. 产出发现写入 v4 memory (type=self_discovery)
-  4. 下次 metacog 反思时会引用这些发现
-
-这样她对自己的认知来自真实项目结构, 而非被写死的描述。
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/self_discovery.md
 from __future__ import annotations
 
 import json
@@ -21,7 +12,7 @@ from typing import Optional
 logger = logging.getLogger("ikaros.v5.self_discovery")
 
 # 项目根
-IKAROS_ROOT = Path(__file__).resolve().parent.parent.parent  # Ikaros-memory/ → E:\Ikaros
+IKAROS_ROOT = Path(__file__).resolve().parent.parent.parent  # resolves to Ikaros repo root
 sys.path.insert(0, str(IKAROS_ROOT / "Ikaros-memory"))
 HERMES_EXE = IKAROS_ROOT / "hermes-agent" / "venv" / "Scripts" / "hermes.exe"
 

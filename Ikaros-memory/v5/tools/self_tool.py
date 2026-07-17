@@ -1,21 +1,11 @@
-"""v5.tools.self_tool — 5 self-cognition tools.
-
-  v5_self_model()        -> identity / capabilities / beliefs / questions
-  v5_self_reflect(mode)  -> one metacog cycle (reflect | philosophy | cycle)
-  v5_latest_thought()    -> most recent inner thought (data/v5/latest_thought.json)
-  v5_curiosity_check()   -> curiosity level + idle + pending question
-  v5_subconscious()      -> latest subconscious whisper (data/v5/subconscious.json)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/self_tool.md
 
 from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 
-from v5.tools.utils import safe_tool, dumps
-
-_V5_DATA = Path(__file__).resolve().parent.parent.parent / "data" / "v5"
+from v5.tools.utils import safe_tool, dumps, V5_DATA
 
 
 @safe_tool
@@ -57,7 +47,7 @@ def v5_self_reflect(mode: str = "reflect") -> str:
 @safe_tool
 def v5_latest_thought() -> str:
     """Return Ikaros's most recent inner thought / monologue."""
-    p = _V5_DATA / "latest_thought.json"
+    p = V5_DATA / "latest_thought.json"
     if not p.is_file():
         return dumps({"text": None, "note": "no thought yet"}, ensure_ascii=False)
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -93,7 +83,7 @@ def v5_curiosity_check() -> str:
 @safe_tool
 def v5_subconscious() -> str:
     """Return the latest subconscious whisper."""
-    p = _V5_DATA / "subconscious.json"
+    p = V5_DATA / "subconscious.json"
     if not p.is_file():
         return dumps({"text": None, "note": "no subconscious yet"}, ensure_ascii=False)
     data = json.loads(p.read_text(encoding="utf-8"))

@@ -1,11 +1,6 @@
 @echo off
-REM ============================================================
-REM Ikaros Environment - Unified Path Configuration
-REM
-REM  Sets all IKAROS_* + HERMES_* env vars for portable use.
-REM  Called by init.bat — do NOT call directly.
-REM  No setlocal: all vars exported to caller.
-REM ============================================================
+REM See docs/scripts/Ikaros-environment/ikaros-env.md
+REM No setlocal: all vars exported to caller.
 
 REM ---- IKAROS_ROOT: auto-detect from script location ----
 if defined IKAROS_ROOT goto :root_ok
@@ -16,9 +11,9 @@ for %%I in ("%IKAROS_ENV_DIR%\..") do set "IKAROS_ROOT=%%~fI"
 if "%IKAROS_ROOT:~-1%"=="\" set "IKAROS_ROOT=%IKAROS_ROOT:~0,-1%"
 
 REM ---- Core paths ----
-set "IKAROS_PYTHON=%IKAROS_ROOT%\portable-python\python.exe"
+set "IKAROS_PYTHON=%IKAROS_ROOT%\runtime\portable-python\python.exe"
 set "IKAROS_RUNTIME=%IKAROS_ROOT%\runtime"
-set "IKAROS_NODE=%IKAROS_ROOT%\runtime\node23\node.exe"
+set "IKAROS_NODE=%IKAROS_ROOT%\runtime\node\node.exe"
 set "IKAROS_DATA=%IKAROS_ROOT%\data"
 set "IKAROS_BIN=%IKAROS_ROOT%\bin"
 set "IKAROS_CONFIG=%IKAROS_ROOT%\config"
@@ -37,7 +32,7 @@ REM Point the web UI's Hermes Agent service dependencies at our environment.
 set "HERMES_BIN=%IKAROS_HERMES_AGENT%\venv\Scripts\hermes.exe"
 set "HERMES_AGENT_CLI_PYTHON=%IKAROS_HERMES_AGENT%\venv\Scripts\python.exe"
 set "HERMES_AGENT_BRIDGE_PYTHON=%IKAROS_HERMES_AGENT%\venv\Scripts\python.exe"
-set "HERMES_AGENT_NODE=C:\Program Files\nodejs\node.exe"
+set "HERMES_AGENT_NODE=%IKAROS_RUNTIME%\node\node.exe"
 
 REM ---- Ikaros Memory paths ----
 set "IKAROS_MEMORY=%IKAROS_ROOT%\Ikaros-memory"
@@ -47,7 +42,7 @@ set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\v4\store.py"
 
 REM ---- Ikaros Live2D (Tauri pet) ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"
-set "IKAROS_NODE_MODULES=%IKAROS_RUNTIME%\node23\node_modules"
+set "IKAROS_NODE_MODULES=%IKAROS_RUNTIME%\node\node_modules"
 
 REM ---- Pet node_modules junction (portable) ----
 set "IKAROS_LIVE2D_NM=%IKAROS_LIVE2D%\node_modules"
@@ -69,18 +64,22 @@ set "IKAROS_LLAMA_SERVER=%IKAROS_LLAMA_DIR%\llama-server.exe"
 
 REM ---- Model paths ----
 set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\nomic-embed-text-v2-moe.f32.gguf"
-REM IKAROS_MODEL_LLM intentionally NOT set here — let watchdog default to Qwen3-1.7B
+REM IKAROS_MODEL_LLM intentionally NOT set here - watchdog picks the default local LLM via resolver
 
 REM ---- Service ports ----
 set "IKAROS_PORT_EMBEDDING=8587"
+set "IKAROS_PORT_LLM=8080"
+set "IKAROS_PORT_BRIDGE=7860"
+set "IKAROS_PORT_LIVE2D_WEBVIEW=8648"
+set "IKAROS_PORT_LIVE2D_WEBVIEW_INTERNAL=8649"
 set "IKAROS_PORT_LLAMA=8080"
 
 REM ---- Python / PATH ----
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 set "PYTHONPATH=%IKAROS_ROOT%;%IKAROS_HERMES_AGENT%"
-set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node23;%IKAROS_ROOT%\portable-python\Scripts;%IKAROS_ROOT%\portable-python;%PATH%"
-set "NODE_PATH=%IKAROS_RUNTIME%\node23\node_modules"
+set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node;%IKAROS_ROOT%\runtime\portable-python\Scripts;%IKAROS_ROOT%\runtime\portable-python;%PATH%"
+set "NODE_PATH=%IKAROS_RUNTIME%\node\node_modules"
 set "PYTHONHOME="
 
 REM ---- HERMES_* compat vars (for legacy scripts) ----

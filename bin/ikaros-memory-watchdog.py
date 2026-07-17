@@ -1,23 +1,5 @@
 #!/usr/bin/env python3
-"""🪶 ikaros-memory-watchdog.py — 记忆服务看门狗 (2026-07-04)
-
-管理记忆服务 (统一架构):
-  1. Embedding (:8587) — nomic-embed-text, 供 v4 记忆库语义搜索
-  2. LLM (:8080) — Qwen3-1.7B, 供 V5 后台节 token 任务 (reflect/compress/think)
-
-启动后:
-  - 启动 embedding + LLM 服务
-  - 每 10 秒巡检端口, 死则重启
-  - 写 PID 文件, 支持 --stop 安全停止
-
-用法:
-  python bin/ikaros-memory-watchdog.py          # 启动 (后台: start /B)
-  python bin/ikaros-memory-watchdog.py --stop   # 停止
-  python bin/ikaros-memory-watchdog.py --status # 状态查询
-
-端点播报 (写入 JSON, 供其他组件读取):
-  data/icarus-memory/endpoints.json
-"""
+# 详细说明见 docs/scripts/bin/ikaros-memory-watchdog.md
 from __future__ import annotations
 
 import json
@@ -41,15 +23,40 @@ HEARTBEAT_FILE = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
 LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
     str(ROOT / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe")))
 
-# Model paths (from env vars or defaults)
+# Embedding model (dedicated; never auto-scanned as a chat LLM)
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
     str(ROOT / "Ikaros-memory" / "models" / "nomic-embed-text-v2-moe.f32.gguf")))
+
+
+def _load_model_cfg() -> dict:
+    """加载本地 LLM 加载配置 (Ikaros-memory/models/model_config.json)。
+
+    首次运行若配置缺失，model_config 会扫描模型目录、自动选定初始模型并落盘。
+    详见 Ikaros-memory/models/model_config.py（参数对应 llama.cpp 官方 flag）。
+    """
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "model_config",
+            str(ROOT / "Ikaros-memory" / "models" / "model_config.py"))
+        _mc = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mc)
+        return _mc.resolve_model_config()
+    except Exception as e:  # 解析失败不致命，回退内置默认
+        print(f"[llm] model_config load failed ({e}); using built-in defaults")
+        return {"initial_model": "Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+                "alias": "local-llm", "host": "127.0.0.1",
+                "ctx_size": 8192, "gpu_layers": "auto", "flash_attn": "auto"}
+
+
+# Local LLM 配置：动态解析（IKAROS_MODEL_LLM 环境变量可覆盖配置文件中的选择）
+_LLM_CFG = _load_model_cfg()
 LLM_MODEL = Path(os.environ.get("IKAROS_MODEL_LLM",
-    str(ROOT / "Ikaros-memory" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")))
+    str(ROOT / "Ikaros-memory" / "models" / _LLM_CFG["initial_model"])))
 
 # Ports
 EMBED_PORT = 8587
-LLM_PORT = 8080  # Qwen3-1.7B for V5 background tasks
+LLM_PORT = 8080  # 本地 LLM，供 V5 后台任务使用
 
 # Skip LLM (:8080) this run if env var set.
 # Used for "lighter" launches (e.g. ikaros-start.bat --no-llm).
@@ -177,7 +184,7 @@ class MemoryWatchdog:
         return ok
 
     def _start_llm(self) -> bool:
-        """启动/检测 llama-server (:8080) — Qwen3-1.7B for V5 background tasks."""
+        """启动/检测 llama-server (:8080) — 本地 LLM，供 V5 后台任务使用。"""
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
@@ -193,12 +200,14 @@ class MemoryWatchdog:
             [
                 str(LLAMA_BIN),
                 "-m", str(LLM_MODEL),
-                "--host", "127.0.0.1",
+                "--host", _LLM_CFG.get("host", "127.0.0.1"),
                 "--port", str(LLM_PORT),
-                "-c", "4096",
-                "-ngl", "99",
-                "--alias", "qwen3-1.7b",
+                "-c", str(_LLM_CFG.get("ctx_size", 8192)),
+                "-ngl", str(_LLM_CFG.get("gpu_layers", "auto")),
+                "--flash-attn", _LLM_CFG.get("flash_attn", "auto"),
+                "--alias", _LLM_CFG.get("alias", "local-llm"),
                 "--cont-batching",
+                "--jinja",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -291,7 +300,7 @@ class MemoryWatchdog:
             _log("[heartbeat] embed :8587 OK (port+health)")
 
         if SKIP_LLM:
-            # 不加载 qwen3 模式: 仅反映 :8080 当前状态, 绝不重启 LLM
+            # 不加载本地 LLM 模式: 仅反映 :8080 当前状态, 绝不重启 LLM
             llm_alive = self._port_alive(LLM_PORT)
             _log("[heartbeat] llm :8080 SKIP (SKIP_LLM set) — not restarting")
         else:
@@ -361,7 +370,7 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",
                     "port": LLM_PORT,
                     "alive": llm_ok,
-                    "model": "qwen3-1.7b",
+                    "model": _LLM_CFG.get("alias", "local-llm"),
                     "note": "Managed by memory watchdog for V5 background tasks",
                 },
                 "updated_at": time.time(),
@@ -500,7 +509,7 @@ def cmd_status():
 
     print("=== Memory Services Status (Unified Architecture) ===")
     print(f"  Embedding (:8587): {_check(EMBED_PORT)}")
-    print(f"  LLM       (:8080): {_check(LLM_PORT)} (qwen3-1.7b)")
+    print(f"  LLM       (:8080): {_check(LLM_PORT)} (local-llm)")
 
     if PID_FILE.exists():
         pid_str = PID_FILE.read_text(encoding="utf-8").strip()

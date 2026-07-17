@@ -1,22 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-ikaros-fastdl.py — Ikaros 高速下载器
-====================================
-用项目内置的 gopeed-web (多线) 做主力下载引擎，aria2c 做兜底，
-可选镜像重写 (HF -> hf-mirror.com)，吃满带宽，下载落点由你指定。
-
-为什么不用 WorkBuddy / 系统默认下载器？
-- 默认下载器通常是单线程 + 固定目录 (如 C:\\Users\\xxx\\Downloads)，慢且乱。
-- gopeed 每文件 32 线程、最多 8 并发，单文件即可打满 300Mbps；
-  镜像 (hf-mirror.com) 解决 HuggingFace 在国内被墙/慢的问题。
-
-用法:
-  python ikaros-fastdl.py <URL> [-o 输出路径] [--mirror hf] [--engine gopeed|aria2]
-  python ikaros-fastdl.py URL1 URL2 -d 输出目录
-
-依赖: 仅 Python 标准库 (urllib / subprocess / json)。
-"""
+# 详细说明见 docs/scripts/bin/ikaros-fastdl.md
 import sys, os, json, time, shutil, subprocess, urllib.request, urllib.error, argparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

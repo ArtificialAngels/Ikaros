@@ -62,9 +62,9 @@ llama_server = config["llama"]["server"]
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `IKAROS_ROOT` | 项目根目录 | `E:\Ikaros` |
-| `IKAROS_PYTHON` | Python 解释器 | `%IKAROS_ROOT%\portable-python\python.exe` |
+| `IKAROS_PYTHON` | Python 解释器 | `%IKAROS_ROOT%\runtime\portable-python\python.exe` |
 | `IKAROS_RUNTIME` | 运行时目录 | `%IKAROS_ROOT%\runtime` |
-| `IKAROS_NODE` | Node.js 可执行文件 | `%IKAROS_ROOT%\runtime\node23\node.exe` |
+| `IKAROS_NODE` | Node.js 可执行文件 | `%IKAROS_ROOT%\runtime\node\node.exe` |
 | `IKAROS_DATA` | 数据目录 | `%IKAROS_ROOT%\data` |
 | `IKAROS_BIN` | 脚本目录 | `%IKAROS_ROOT%\bin` |
 | `IKAROS_CONFIG` | 配置目录 | `%IKAROS_ROOT%\config` |

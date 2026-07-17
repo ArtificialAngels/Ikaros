@@ -14,7 +14,7 @@
 
 ## 🎯 一句话
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-start.bat`,**桌宠 + 记忆 + 前端** 自动启动,即可开始对话。云端 LLM(DeepSeek / MiniMax)为主,本地 GGUF 模型(qwen3-8b + nomic-embed-text)备用,记忆系统(V4:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-start.bat`,**桌宠 + 记忆 + 前端** 自动启动,即可开始对话。云端 LLM(DeepSeek / MiniMax)为主,本地 GGUF 模型(由 resolver 动态选择, 默认 Qwen3-1.7B + nomic-embed-text)备用,记忆系统(V4:SQLite + FTS5 + Chroma 向量)全链路本地运行。
 
 ---
 
@@ -44,7 +44,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
               ┌─────────────────┼────────────────────┐
               ▼                 ▼                    ▼
    ┌──────────────────┐ ┌──────────────┐ ┌───────────────────────┐
-   │  nomic-embed     │ │ qwen3-8b     │ │ Cloud LLM              │
+   │  nomic-embed     │ │ 本地 LLM      │ │ Cloud LLM              │
    │  (:8587)         │ │   (:8080)    │ │ DeepSeek / MiniMax     │
    │  embedding 768dim│ │ 本地推理+记忆 │ │ Pet chat 主通道        │
    └──────────────────┘ └──────────────┘ └───────────────────────┘
@@ -63,7 +63,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 |------|------|------|------|
 | **7870** | ikaros-voice-ws.py | Live2D 语音服务 (ws://127.0.0.1:7870/v1/voice/ws) | ✅ 随启动拉起 |
 | **8587** | llama-server (nomic-embed-text) | embedding 专用 (768 dim), V4 记忆写入/召回 | ✅ 常驻 |
-| **8080** | llama-server (qwen3-8b) | 本地 LLM 推理 + V4 记忆 extract/reflect | ✅ 常驻 |
+| **8080** | llama-server (本地 LLM, resolver 选择) | 本地 LLM 推理 + V4 记忆 extract/reflect | ✅ 常驻 |
 | **9119** | hermes.exe dashboard | Hermes Dashboard Web UI | ✅ 常驻 |
 | **(无)** | — | ~~`:7860` Rust bridge~~ 已删除 (de-bridge 架构) | ❌ 已移除 |
 
@@ -71,10 +71,10 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 ## ✨ 特性
 
-- **零系统依赖** — 自带便携 Python 3.12.10(`portable-python/`)、llama.cpp Windows 二进制 + DLL(`runtime/`)、Tauri/Rust 桌宠(`Ikaros-Live2D`)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
+- **零系统依赖** — 自带便携 Python 3.12.10(`runtime\portable-python/`)、llama.cpp Windows 二进制 + DLL(`runtime/`)、Tauri/Rust 桌宠(`Ikaros-Live2D`)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
 - **U 盘即插即用** — 项目根路径由 `bin\hermes-root.py` 自动解析(`E:\` / `F:\` / `G:\` 自适应),写盘符硬编码立刻挂掉。
 - **Tauri 桌宠 (Ikaros-Live2D)** — Tauri v2 + Vue 3 + Live2D,透明穿透窗口、系统托盘右键菜单(显示/隐藏、切换形象、表情、比例、截图、模式、Neuro、LLM 模型、监控、设置、重启、退出)、悬浮球、独立监控面板。
-- **无桥架构 (no-bridge)** — 桌宠 webview 直接经 `:7870` voice-ws 对话,不依赖已删除的 `:7860` bridge。云 LLM(DeepSeek / MiniMax)为主,本地 qwen3-8b 兜底。
+- **无桥架构 (no-bridge)** — 桌宠 webview 直接经 `:7870` voice-ws 对话,不依赖已删除的 `:7860` bridge。云 LLM(DeepSeek / MiniMax)为主,本地 LLM 兜底。
 - **本地记忆系统 (V4)** — SQLite(FTS5 关键词)+ Chroma(向量语义)双索引,`store()` 实时写入、`fused_search()` 融合召回、watchdog 周期反思(consolidate/dedup/promote/distill/reflect/cleanup)。无 Qdrant 依赖。
 - **5D 认知注入** — `cogno_5d.py` 在每轮对话注入时间/设备/地理/情绪/上下文锚点。
 - **云端 LLM 优先** — Pet chat 走 DeepSeek / MiniMax cloud,本地模型备用。fallback 链自动切换。
@@ -100,8 +100,8 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 ```
 1. git clone https://github.com/ArtificialAngels/hermes-agent-portable.git
 2. cd "hermes-agent-portable"
-3. bin\setup-portable.bat          ← 下载 portable-python + runtime
-4. bin\ikaros-start.bat            ← 桌宠 + 记忆 + 前端 自动启动
+3. bin\setup-portable.bat          ← 下载 runtime\portable-python + runtime
+4. bin\ikaros start                ← 桌宠 + 记忆 + 前端 自动启动 (统一启动器)
 ```
 
 ---
@@ -110,7 +110,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 | 目录 | 大小 | 来源 | 用途 |
 |------|------|------|------|
-| `portable-python/` | ~230 MB | `setup-portable.bat` 下载 | 嵌入式 Python 3.12.10 + pip 包 |
+| `runtime\portable-python/` | ~230 MB | `setup-portable.bat` 下载 | 嵌入式 Python 3.12.10 + pip 包(位于 runtime\ 下) |
 | `runtime/` | ~700 MB | `setup-portable.bat` 下载 | llama.cpp Windows 二进制 + DLL |
 | `runtime/cuda/12.4/` | ~700 MB | `setup-portable.bat` 下载 | CUDA 12.4 运行时(默认) |
 | `runtime/cuda/11.8/` | ~400 MB | 按需 | 老 NVIDIA 驱动回退 |
@@ -126,7 +126,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 | 模型 | 用途 | 端口 | 大小 |
 |------|------|------|------|
 | nomic-embed-text (v1.5-q4 / v2-moe-q8) | embedding (768 dim) | :8587 | 80 MB / 488 MB |
-| qwen3-8b (Q4) | 本地 LLM 推理 + V4 记忆 extract/reflect | :8080 | ~5 GB |
+| 本地 LLM (resolver 选择, 默认 Qwen3-1.7B Q4) | 本地 LLM 推理 + V4 记忆 extract/reflect | :8080 | ~5 GB |
 
 ---
 
@@ -151,13 +151,32 @@ MINIMAX_API_KEY=...
 
 | 用途 | 命令 |
 |------|------|
-| 一键启动 | `bin\ikaros-start.bat` |
-| 停止全部 | `bin\ikaros-sleep.bat` |
+| 一键启动 | `bin\ikaros start` |
+| 停止全部 | `bin\ikaros sleep` |
 | 记忆服务状态 | `bin\ikaros-memory-watchdog.py --status` |
 | 语音服务状态 | `netstat -ano \| findstr :7870` |
 | 下载便携运行时 | `bin\setup-portable.bat` |
-| CRLF 归一化 | `portable-python\python.exe bin\fix-eol.py --all` |
+| CRLF 归一化 | `runtime\portable-python\python.exe bin\fix-eol.py --all` |
 | HERMES_ROOT 路径解析 | `bin\hermes-root.bat resolve` |
+
+### 统一启动器 `ikaros`
+
+`bin\ikaros.cmd`(薄壳,调用 `bin\ikaros.exe`)把原先十几个 `.bat` 整合为一个 Rust 二进制,按 order 分发:
+
+```
+bin\ikaros start          # 拉起后端(记忆/语音/思考/灵魂同步/桌宠),再弹菜单选前端
+bin\ikaros sleep          # 停止全部服务
+bin\ikaros studio         # Hermes Studio (:8649)
+bin\ikaros dashboard      # Hermes Dashboard (:9119)
+bin\ikaros desktop        # Hermes Desktop 应用
+bin\ikaros mem <args>     # 记忆 store CLI
+bin\ikaros think <args>   # V5.1 自我思考
+bin\ikaros verify --quick # V5.1 测试
+bin\ikaros ws-restart     # 重启语音 WS (:7870)
+bin\ikaros live2d status  # 桌宠状态
+```
+
+> 旧的 `.bat` 全部保留在 `bin\legacy\` 作为回滚,不再参与主链路。
 
 ---
 
@@ -165,7 +184,7 @@ MINIMAX_API_KEY=...
 
 ```
 Ikaros\
-├── bin\                  ← 启动器 + 工具脚本 (ikaros-start/sleep, watchdog, voice-ws, cloud_chat)
+├── bin\                  ← 统一启动器 ikaros.exe/ikaros.cmd + 工具脚本 (watchdog, voice-ws, cloud_chat, screen-activity-monitor.ps1)
 ├── Ikaros-Live2D\        ← ★ Tauri v2 + Vue 3 + Live2D 桌宠 (src-tauri/src/tray.rs = 托盘菜单)
 ├── Ikaros-memory\        ← V4 记忆 (store/search/reflect/cogno_5d) + v4.db
 ├── Ikaros-environment\   ← 环境单一入口 (init.bat 设 IKAROS_* + PATH)
@@ -173,7 +192,7 @@ Ikaros\
 ├── docs\                 ← 用户文档
 ├── config\               ← hermes.yaml / models.yaml
 ├── data\                 ← ★ 运行时数据 (全部 git ignored)
-├── portable-python\      ← Python 3.12.10 (git ignored)
+├── runtime\portable-python\ ← Python 3.12.10 (git ignored, 已并入 runtime\)
 ├── runtime\              ← llama.cpp + DLL + CUDA (git ignored)
 ├── exProject\            ← 只读参考克隆 (Live2DPet / MewCo-AI, git ignored)
 ├── tests\                ← 集成测试

@@ -1,16 +1,4 @@
-# ============================================================
-# Ikaros Environment - Unified Path Configuration (PowerShell)
-# ============================================================
-#  所有 Ikaros 组件的路径集中管理。
-#  被其他脚本 . 导入后，设置 $env:IKAROS_* 环境变量。
-#
-#  用法:
-#    . "$PSScriptRoot\ikaros-env.ps1"
-#    或
-#    . "E:\Ikaros\Ikaros-environment\ikaros-env.ps1"
-#
-#  自动检测: 如果 IKAROS_ROOT 未设置，从脚本位置推导。
-# ============================================================
+# See docs/scripts/Ikaros-environment/ikaros-env-ps1.md
 
 # ---- Step 1: 检测 IKAROS_ROOT ----
 if (-not $env:IKAROS_ROOT) {
@@ -22,9 +10,9 @@ if (-not $env:IKAROS_ROOT) {
 $env:IKAROS_ROOT = $env:IKAROS_ROOT.TrimEnd('\')
 
 # ---- Step 2: 核心路径 ----
-$env:IKAROS_PYTHON       = "$env:IKAROS_ROOT\portable-python\python.exe"
+$env:IKAROS_PYTHON       = "$env:IKAROS_ROOT\runtime\portable-python\python.exe"
 $env:IKAROS_RUNTIME      = "$env:IKAROS_ROOT\runtime"
-$env:IKAROS_NODE         = "$env:IKAROS_ROOT\runtime\node23\node.exe"
+$env:IKAROS_NODE         = "$env:IKAROS_ROOT\runtime\node\node.exe"
 $env:IKAROS_DATA         = "$env:IKAROS_ROOT\data"
 $env:IKAROS_BIN          = "$env:IKAROS_ROOT\bin"
 $env:IKAROS_CONFIG       = "$env:IKAROS_ROOT\config"
@@ -48,7 +36,7 @@ $env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\v4\store.py"
 
 # ---- Step 4b: Ikaros-Live2D 桌宠路径 ----
 $env:IKAROS_LIVE2D       = "$env:IKAROS_ROOT\Ikaros-Live2D"
-$env:IKAROS_NODE_MODULES = "$env:IKAROS_RUNTIME\node23\node_modules"
+$env:IKAROS_NODE_MODULES = "$env:IKAROS_RUNTIME\node\node_modules"
 
 # ---- Step 4c: Portable Rust toolchain (standalone rustc + cargo) ----
 # No rustup needed - just bin/ on PATH. Truly portable, zero registry deps.
@@ -63,11 +51,11 @@ $env:IKAROS_LLAMA_CLI     = "$env:IKAROS_LLAMA_DIR\llama-cli.exe"
 
 # ---- Step 6: 模型路径 ----
 $env:IKAROS_MODEL_EMBEDDING = "$env:IKAROS_MEMORY_MODELS\nomic-embed-text-v2-moe.f32.gguf"
-# IKAROS_MODEL_LLM intentionally NOT set — let watchdog default to Qwen3-1.7B
+# IKAROS_MODEL_LLM intentionally NOT set — watchdog picks the default local LLM via resolver
 
 # ---- Step 7: 服务端口 ----
 $env:IKAROS_PORT_EMBEDDING      = "8587"
-$env:IKAROS_PORT_LLM            = "8589"
+$env:IKAROS_PORT_LLM            = "8080"
 $env:IKAROS_PORT_BRIDGE         = "7860"
 # 2026-07-05: hermes-web-ui 卸了 (哥哥).  :8648 让给 Ikaros-Live2D Tauri webview.
 $env:IKAROS_PORT_LIVE2D_WEBVIEW          = "8648"
@@ -85,17 +73,17 @@ $pathParts = @(
     "$env:IKAROS_RUST\bin",
     $env:IKAROS_LLAMA_DIR,
     $env:IKAROS_RUNTIME,
-    "$env:IKAROS_RUNTIME\node23",
+    "$env:IKAROS_RUNTIME\node",
     "$env:IKAROS_RUNTIME\aria2",
     "$env:IKAROS_RUNTIME\gopeed",
     "$env:IKAROS_RUNTIME\rpc-server",
-    "$env:IKAROS_ROOT\portable-python\Scripts",
-    "$env:IKAROS_ROOT\portable-python"
+    "$env:IKAROS_ROOT\runtime\portable-python\Scripts",
+    "$env:IKAROS_ROOT\runtime\portable-python"
 )
 $env:PATH = ($pathParts -join ';') + ';' + $env:PATH
 
 # ---- Step 10: 防干扰措施 ----
-$env:NODE_PATH         = "$env:IKAROS_RUNTIME\node23\node_modules"
+$env:NODE_PATH         = "$env:IKAROS_RUNTIME\node\node_modules"
 $env:NPM_CONFIG_PREFIX = $null
 $env:PYTHONHOME        = $null
 

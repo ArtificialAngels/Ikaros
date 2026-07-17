@@ -1,0 +1,8 @@
+# __init__.py
+
+> 源文件：`Ikaros-memory/v5/reflect/__init__.py`
+
+v5.reflect — V5.1 反思子系统 (原 v4.reflect → V5.1 unified)
+
+这是 V5.1 记忆反思引擎: 从 v4 对话记忆库中提取、整合、蒸馏，
+形成长期自我认知与灵魂叙事。

@@ -153,7 +153,7 @@ llm:
       fast: ${LOCAL_MODEL_NAME:-auto}
     enabled_if: ${HERMES_LOCAL_LLM_AVAILABLE:-true}
     # 模型热切换 — 通过 POST /v1/models/load 动态切换
-    # 命令：portable-python\python.exe bin\hermes-models.py switch <name>
+    # 命令：runtime\portable-python\python.exe bin\hermes-models.py switch <name>
     hot_swap: true
 
 # ============================================================
@@ -248,12 +248,14 @@ network:
 # ============================================================
 # Register V5's 24 v5_* MCP tools; Hermes Agent auto-spawns this subprocess
 # and discovers the tools. For Hermes Studio / external SSE clients, instead run:
-#   E:\Ikaros\portable-python\python.exe E:\Ikaros\Ikaros-memory\v5\mcp_server.py sse
+#   E:\Ikaros\runtime\portable-python\python.exe E:\Ikaros\Ikaros-memory\v5\mcp_server.py sse
 # and connect to http://127.0.0.1:9877/sse
 mcp_servers:
   ikaros-v5:
-    command: E:\Ikaros\portable-python\python.exe
+    command: ${IKAROS_PYTHON}
     args:
-      - E:\Ikaros\Ikaros-memory\v5\mcp_server.py
+      - ${IKAROS_MEMORY}/v5/mcp_server.py
     env:
-      IKAROS_ROOT: E:\Ikaros
+      IKAROS_ROOT: ${IKAROS_ROOT}
+      HERMES_ROOT: ${IKAROS_ROOT}
+      HERMES_HOME: ${IKAROS_HERMES_HOME}

@@ -1,25 +1,4 @@
-<#
-.SYNOPSIS
-  屏幕活动监控 — 追踪当前活动窗口变化，使用纯 Windows 内置 API
-.DESCRIPTION
-  通过 user32.dll 的 GetForegroundWindow 轮询，记录活跃窗口标题、
-  进程名、窗口类。仅依赖 .NET Framework / PowerShell，无需第三方软件。
-  支持后台守护模式 + 历史报表。
-.PARAMETER Command
-  start    启动后台监控（PID 保存到 pid 文件）
-  stop     停止后台监控
-  status   显示监控是否在运行
-  report   打印今日活动摘要
-  log      打印原始日志（最近 200 条）
-  clear    清空日志
-.PARAMETER Interval
-  轮询间隔（秒），默认 2
-.PARAMETER LogPath
-  日志文件路径，默认 %USERPROFILE%\.screen-activity-monitor\log.csv
-.EXAMPLE
-  .\screen-activity-monitor.ps1 start -Interval 1
-  .\screen-activity-monitor.ps1 report
-#>
+# See docs/scripts/bin/screen-activity-monitor.md
 
 param(
     [ValidateSet('start','stop','status','report','log','clear')]

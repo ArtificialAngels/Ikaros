@@ -7,7 +7,7 @@ Verifies that after running deps/hermes-env.bat:
   4. deps/ has NO directory junctions (i.e. nothing in deps/ is a
      reparse point — the old layout used `mklink /J` and broke when
      the project moved to a new drive letter)
-  5. The PATH augmentation contains the canonical node23 + cuda bins
+  5. The PATH augmentation contains the canonical node + cuda bins
 
 Run:
     portable-python\python.exe tests\smoke_hermes_env.py
@@ -73,7 +73,7 @@ def main() -> int:
         ("llama-server.exe (CPU)",       runtime / "llama-server.exe"),
         ("llama-server-cuda-12.4.exe",   runtime / "cuda" / "12.4" / "llama-server-cuda-12.4.exe"),
         ("cudart64_12.dll",              runtime / "cuda" / "12.4" / "cudart64_12.dll"),
-        ("node.exe",                     runtime / "node23" / "node.exe"),
+        ("node.exe",                     runtime / "node" / "node.exe"),
         ("aria2c.exe",                   runtime / "aria2c.exe"),
     ]
     for label, p in assets:

@@ -1,0 +1,15 @@
+[package]
+name = "ikaros-cli"
+version = "1.0.0"
+edition = "2021"
+description = "Ikaros unified launcher - replaces the bin/*.bat soup with a single order-dispatched Rust binary"
+license = "MIT"
+
+[[bin]]
+name = "ikaros"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+lto = false
+panic = "abort"

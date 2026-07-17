@@ -1,14 +1,4 @@
-"""
-v5.router — 对话/任务分类 + 任务指令优化
-
-目标:
-  把哥哥的输入分为"对话"和"任务"两类。
-  - 对话 → 走现有 V5 情感链, 直达 cloud LLM
-  - 任务 → 本地 qwen3-8b 预处理: 检索 V4 记忆 + 结构化为
-    有上下文/目标/约束的 prompt, 再送 cloud LLM
-    
-  省 token: 模糊的任务描述 → 精炼的任务 prompt
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/router.md
 
 from __future__ import annotations
 
@@ -94,9 +84,9 @@ def classify(text: str) -> str:
 
 
 def optimize_task(text: str) -> Optional[str]:
-    """用本地 qwen3-8b 把模糊任务指令优化为结构化指令.
+    """用本地 LLM 把模糊任务指令优化为结构化指令.
 
-    qwen3-8b 强制思考模式, 输出是内部推理而非 JSON.
+    本地 LLM 强制思考模式, 输出是内部推理而非 JSON.
     策略: 把推理内容里最后 3 句行动指南提取为优化指令.
     """
     memory_context = _search_relevant(text)
@@ -138,7 +128,7 @@ def _search_relevant(text: str) -> str:
 
 
 def _call_task_refiner(text: str, memory_context: str) -> Optional[str]:
-    """调本地 qwen3-8b 优化任务指令. 强制输出 JSON."""
+    """调本地 LLM 优化任务指令. 强制输出 JSON."""
     system = (
         "你是一个任务指令优化器。输出严格 JSON, 不要多余话, 不要推理过程:\n"
         "{\n"

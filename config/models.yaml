@@ -2,7 +2,7 @@
 # Hermes Agent — 多模型配置（客户可定制）
 # ============================================================
 # 支持 llama.cpp router 模式热切换，无需重启服务。
-# 切换命令：portable-python\python.exe bin\hermes-models.py switch <name>
+# 切换命令：runtime\portable-python\python.exe bin\hermes-models.py switch <name>
 #
 # Profile 命名约定（能力从低到高）：
 #   tiny     ~0.5-3B   极速、低 VRAM

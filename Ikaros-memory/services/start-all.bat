@@ -1,10 +1,5 @@
 @echo off
-REM ============================================================
-REM Ikaros Memory - Start All Services (unified architecture)
-REM ============================================================
-REM  Embedding: :8587 (nomic-embed-text, auto-started)
-REM  LLM:       :8080 (shared with Hermes Agent llama-server)
-REM ============================================================
+REM See docs/scripts/Ikaros-memory/services/start-all.md
 
 REM Load Ikaros environment
 call "%~dp0..\..\Ikaros-environment\ikaros-env.bat"

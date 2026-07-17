@@ -1,11 +1,4 @@
-"""v5.tools.emotion_tool — 3 emotion tools.
-
-  v5_analyze_emotion(text)   -> apply a PAD event + optional causal record
-  v5_emotion_status()        -> current PAD state (no external dependency)
-  v5_emotion_label(text)     -> 1-2 emotion tags (LLM, falls back to rule)
-
-All return JSON strings; all are wrapped with @safe_tool so they never raise.
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/emotion_tool.md
 
 from __future__ import annotations
 
@@ -77,7 +70,7 @@ def v5_emotion_status() -> str:
 def v5_emotion_label(text: str) -> str:
     """Return 1-2 emotion tags for the text.
 
-    Call chain: emotional_memory.label_emotion() (local qwen3-1.7b, falls
+    Call chain: emotional_memory.label_emotion() (local LLM, falls
     back to a PAD->tag rule internally).  `method` reports which path ran.
     Fallback: :8080 down => rule-based tags.
     """

@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""hermes_tts.py — 复用 Hermes Agent 内置的 TTS 服务。
-
-设计: 本脚本在 hermes-agent 的 venv 下运行, 直接复用
-``hermes-agent/tools/tts_tool._generate_edge_tts`` —— 即 Hermes Agent
-内置的 TTS 生成逻辑 (edge-tts 后端)。voice-ws 通过 subprocess 调用
-本脚本, 把文本合成 mp3 后再取回二进制帧下发给桌宠。
-
-为什么绕一层而不是直接在 voice-ws 里 import hermes-agent:
-hermes-agent 依赖其自有 venv 的包; 在 voice-ws 的 portable-python
-进程里硬 import 会缺依赖。subprocess 到 hermes venv 既隔离又复用
-"Hermes Agent 内置的 TTS 服务"。
-
-用法 (均由 voice-ws 调用):
-    hermes_tts.py <textfile> <outfile>
-    <textfile> : UTF-8 文本文件路径 (避免命令行引号/编码问题)
-    <outfile>  : 输出 mp3 路径
-成功打印 outfile 绝对路径; 失败打印 {"error": "..."} 到 stdout 并退出码非 0。
-
-voice 解析: 优先用 Hermes 配置 tts.edge.voice; 若该值是无效占位
-(如 "cn-"), 回退到 zh-CN-XiaoxiaoNeural, 保证一定能合成。
-"""
+# 详细说明见 docs/scripts/bin/hermes_tts.md
 from __future__ import annotations
 
 import asyncio

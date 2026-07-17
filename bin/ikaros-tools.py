@@ -1,29 +1,5 @@
 #!/usr/bin/env python3
-"""ikaros-tools.py — 集中包装的「带动作日志」工具函数 (Rule 11 / 2026-07-03 升级).
-
-目的: 所有 process / file / terminal 动作都通过这里, 自动写 5 维 action log.
-每个动作都带 start + end + completion_pct, 异常 → 写 fail.
-
-用法 (Python):
-    from bin.ikaros_tools import ik_kill, ik_start, ik_run, ik_write
-    ik_kill(pid=1234, why="停 llama-server :8587")
-    ik_start("llama-server.exe", args=["-m", "..."], why="重启 :8587")
-    ik_run(["cmd.exe", "/c", "echo hi"], why="test")
-    ik_write("E:/Ikaros/data/foo.txt", "hi", why="记一下")
-
-用法 (CLI):
-    python bin/ikaros-tools.py kill --pid 1234 --why "..."
-    python bin/ikaros-tools.py start --bin llama-server.exe --args "-m ... --port 8587" --why "..."
-    python bin/ikaros-tools.py run --cmd "ls -la" --why "..."
-
-设计:
-- 不阻塞 caller (kill / run / write 都立刻返)
-- 失败 / 卡死 → log warning + 写 fail
-- 5 维: who=伊卡洛斯/Ikaros (5 维: who/what/when/where/why)
-- portable: 走 E:/Ikaros 内部路径
-
-签: ɑ, 2026-07-03 19:50
-"""
+# 详细说明见 docs/scripts/bin/ikaros-tools.md
 from __future__ import annotations
 import os
 import subprocess

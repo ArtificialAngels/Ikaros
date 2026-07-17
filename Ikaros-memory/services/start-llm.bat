@@ -1,11 +1,7 @@
 @echo off
-REM ============================================================
-REM Ikaros Memory - LLM Service (for memory extract)
-REM Model: Qwen3-8B (reasoning model, use temperature=0 for direct output)
-REM Port:  :8589
-REM ============================================================
+REM See docs/scripts/Ikaros-memory/services/start-llm.md
 
-REM Load Ikaros environment
+REM Load Ikaros environment (sets IKAROS_PYTHON / IKAROS_LLAMA_SERVER / IKAROS_MEMORY ...)
 call "%~dp0..\..\Ikaros-environment\ikaros-env.bat"
 if errorlevel 1 (
     echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
@@ -13,26 +9,24 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "MODEL=%IKAROS_MODEL_LLM%"
-set "LLAMA=%IKAROS_LLAMA_SERVER%"
-set "PORT=%IKAROS_PORT_LLM%"
-set "HOST=127.0.0.1"
-set "CTX=8192"
-set "GPU_LAYERS=auto"
-set "ALIAS=Qwen3-8B"
-
-if not exist "%LLAMA%" (
-    echo [FATAL] llama-server not found: %LLAMA%
+REM Resolve the local LLM launch command dynamically from models/model_config.json.
+REM First run scans the model dir and persists the choice; no model name is hardcoded here.
+set "RESOLVER=%IKAROS_MEMORY%\models\model_config.py"
+if not exist "%RESOLVER%" (
+    echo [FATAL] model resolver not found: %RESOLVER%
     pause
     exit /b 1
 )
 
-if not exist "%MODEL%" (
-    echo [FATAL] Model not found: %MODEL%
+"%IKAROS_PYTHON%" "%RESOLVER%" --emit-bat > "%TEMP%\ikaros_llm_launch.tmp.bat"
+if errorlevel 1 (
+    echo [FATAL] model resolver failed to emit launch command.
     pause
     exit /b 1
 )
 
-echo [Ikaros Memory] Starting LLM service on %HOST%:%PORT%
-echo [Ikaros Memory] Model: qwen3-8b.gguf (context: %CTX%)
-"%LLAMA%" -m "%MODEL%" --host %HOST% --port %PORT% -c %CTX% -ngl %GPU_LAYERS% --jinja --alias %ALIAS% --flash-attn auto --cont-batching
+echo [Ikaros Memory] Launching local LLM via models/model_config.json ...
+call "%TEMP%\ikaros_llm_launch.tmp.bat"
+set "LAUNCH_RC=%errorlevel%"
+del /q "%TEMP%\ikaros_llm_launch.tmp.bat" >nul 2>&1
+exit /b %LAUNCH_RC%

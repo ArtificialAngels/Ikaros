@@ -1,23 +1,4 @@
-"""v5.memory_api — unified memory interface for V5.
-
-Wraps store.py + search.py + data/v5/*.json into one interface that supports
-TWO addressing modes:
-
-  1. V5-native free-form memory
-        api.store("哥哥喜欢简洁", memory_type="preference")
-        api.search("哥哥 喜欢")                 # semantic fuse
-
-  2. Ekko-style structured (exact) addressing
-        api.store("...", domain="project_x", key="deadline")
-        api.search(domain="project_x")         # exact tag match
-        api.search(key="deadline")             # exact tag match
-
-Structured fields are encoded into tags:
-    v5_domain:<domain>   v5_cat:<category_path>   v5_key:<key>
-
-So a single store() call serves both a semantic vector index AND an
-exact-match knowledge base — no separate tables required.
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/memory_api.md
 
 from __future__ import annotations
 
@@ -169,11 +150,14 @@ class V5MemoryAPI:
             try:
                 from v5.memory_retrieval import retrieve
                 tr = tuple(time_range) if time_range else None
-                return retrieve(query, top_k=top_k, time_range=tr, min_weight=0.0)
+                fused = retrieve(query, top_k=top_k, time_range=tr, min_weight=0.0)
+# 内联说明见 docs/scripts/Ikaros-memory/v5/memory_api.md（见“内联注释摘录”）
+                if fused:
+                    return fused
             except Exception:  # noqa: BLE001
                 pass
 
-        # 3) FTS5 fallback
+        # 3) FTS5 fallback (reachable both when fusion raises AND when it returns [])
         if query:
             try:
                 return [_row_to_dict(m) for m in _store.search(query, top_k=top_k)]

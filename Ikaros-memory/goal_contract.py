@@ -1,25 +1,4 @@
-"""goal_contract.py — 把自然语言目标扩写成结构化完成合同。
-
-借自 Hermes Agent 的 `hermes_cli/goals.py` 的 `draft_contract` 函数 + `GoalContract`
-dataclass（继承上游 MIT 协议）。只借"零件"，不接 Hermes 的 Ralph loop / judge /
-GoalManager —— Ikaros 自己的代理任务调度走 cogno_5d 的 5 维状态机，不上 Ralph loop。
-
-合同五字段（直接复用上游语义）：
-- outcome: 完成时的单一终态
-- verification: 证明 outcome 已达的具体可验证手段（命令 / 测试 / 工件）
-- constraints: 不能动 / 不能回归的内容
-- boundaries: 范围内允许的文件 / 目录 / 工具
-- stop_when: 应当停下并向哥哥请求输入的条件
-
-入口:
-    from goal_contract import draft_contract, GoalContract
-    contract = draft_contract("写一个自动整理下载文件夹的脚本")
-    # contract.outcome / verification / ... 或 None (调不通时退化)
-
-依赖:
-    - httpx (推荐) 或 urllib (回退) — 与 bin/cloud_chat.py 走同一套路
-    - 环境变量: DEEPSEEK_API_KEY 或 MINIMAX_CN_API_KEY (与 V4 一致)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/goal_contract.md
 
 from __future__ import annotations
 
@@ -33,9 +12,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("ikaros.goal_contract")
 
-# ──────────────────────────────────────────────────────────────────────
-# Constants — 抄自 hermes-agent/hermes_cli/goals.py
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 _CONTRACT_FIELDS = ("outcome", "verification", "constraints", "boundaries", "stop_when")
 
@@ -68,9 +45,7 @@ DRAFT_CONTRACT_SYSTEM_PROMPT = (
 )
 
 
-# ──────────────────────────────────────────────────────────────────────
-# GoalContract — 抄自 hermes-agent/hermes_cli/goals.py:293
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 @dataclass
 class GoalContract:
@@ -110,9 +85,7 @@ class GoalContract:
         return "\n".join(lines)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# API key resolution — 与 bin/cloud_chat.py 一致
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 def _load_env_file(env_path: Path) -> Dict[str, str]:
     """最小化的 .env 读取, 不依赖 python-dotenv。"""
@@ -135,12 +108,12 @@ def _load_env_file(env_path: Path) -> Dict[str, str]:
 
 
 def _get_api_key_and_base() -> tuple[str, str, str]:
-    """返回 (api_key, base_url, model) — 优先 DeepSeek, fallback 到本地 qwen3-8b。
+    """返回 (api_key, base_url, model) — 优先 DeepSeek, fallback 到本地 LLM。
 
-    DeepSeek 擅长结构化 JSON, 比 qwen3-8b 小模型更适合做 contract draft 这种
-    一次性辅助调用。本地 qwen3 走 :8080, fallback 时模型名对齐。
+    DeepSeek 擅长结构化 JSON, 比本地小模型更适合做 contract draft 这种
+    一次性辅助调用。本地 LLM 走 :8080, fallback 时用与 server --alias 一致的标签。
     """
-    hermes_root = Path(os.environ.get("HERMES_ROOT", r"E:\Ikaros"))
+    hermes_root = Path(os.environ.get("HERMES_ROOT") or os.environ.get("IKAROS_ROOT", r"E:\Ikaros"))
     env_map = _load_env_file(hermes_root / "data" / "hermes-agent" / ".env")
     env_map.update({k: v for k, v in os.environ.items() if k.startswith(("DEEPSEEK_", "MINIMAX_", "OPENAI_"))})
 
@@ -156,13 +129,11 @@ def _get_api_key_and_base() -> tuple[str, str, str]:
         model = env_map.get("MINIMAX_CN_MODEL", "MiniMax-M3")
         return minimax_key, base, model
 
-    # fallback: 本地 qwen3-8b (已在 :8080)
-    return "", "http://127.0.0.1:8080/v1", env_map.get("HERMES_LOCAL_LLM_MODEL", "qwen3-8b")
+    # fallback: 本地 LLM (已在 :8080)；model 标签与 server --alias 对齐 (默认 local-llm)
+    return "", "http://127.0.0.1:8080/v1", env_map.get("HERMES_LOCAL_LLM_MODEL", "local-llm")
 
 
-# ──────────────────────────────────────────────────────────────────────
-# JSON extraction — 抄自 hermes-agent/hermes_cli/goals.py:1045
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 _JSON_OBJ_RE = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}")
 
@@ -187,9 +158,7 @@ def _extract_json_object(raw: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-# ──────────────────────────────────────────────────────────────────────
-# HTTP call — 走 httpx 或 urllib, 与 cloud_chat.py 同款
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 def _call_llm_sync(messages: list[dict], *, base_url: str, api_key: str, model: str, max_tokens: int, timeout: float) -> str:
     url = f"{base_url.rstrip('/')}/chat/completions"
@@ -233,9 +202,7 @@ def _call_llm_sync(messages: list[dict], *, base_url: str, api_key: str, model: 
         return ""
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Main API
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 def draft_contract(objective: str, *, timeout: float = 30.0, max_tokens: int = 1024) -> Optional[GoalContract]:
     """把自然语言目标扩写成结构化合同。
@@ -270,9 +237,7 @@ def draft_contract(objective: str, *, timeout: float = 30.0, max_tokens: int = 1
     return None if contract.is_empty() else contract
 
 
-# ──────────────────────────────────────────────────────────────────────
-# CLI — 哥哥手动试一下用
-# ──────────────────────────────────────────────────────────────────────
+# 内联说明见 docs/scripts/Ikaros-memory/goal_contract.md（见“内联注释摘录”）
 
 if __name__ == "__main__":
     import sys

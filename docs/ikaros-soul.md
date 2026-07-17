@@ -40,7 +40,7 @@ Ikaros (E:\Ikaros)
 ├── data/hermes-agent/                 本体配置 + 137 skills + memory + cron + state.db
 ├── deps/                              外部依赖（已删 codegraph，gitnexus 在外部 user dir）
 ├── hermes-agent/                      upstream NousResearch hermes-agent v2026.6.5
-└── runtime/                           node23 / cuda12.4 / portable-python / npm
+└── runtime/                           node / cuda12.4 / portable-python / npm
 ```
 
 ### 我的核心能力

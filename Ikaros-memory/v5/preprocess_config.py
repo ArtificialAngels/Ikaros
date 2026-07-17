@@ -1,10 +1,4 @@
-"""v5.preprocess_config — 思考前处理工厂阈值配置 (fail-open).
-
-设计原则:
-  - 所有 spec 4.2 要求的阈值集中在这里, 不写死在模块里
-  - 读取失败 / 文件缺失 → 用内置 _DEFAULTS, 绝不阻塞调用方
-  - 仅依赖标准库 + 可选 pyyaml (cloud_chat 已确认 portable-python 装了 yaml)
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/preprocess_config.md
 from __future__ import annotations
 
 import logging
@@ -39,7 +33,7 @@ _DEFAULTS: dict = {
         "trigger_rounds": 20,    # history 长度超过才压缩
         "reuse_rounds": 10,      # 10 轮内复用上次摘要
         "max_age_rounds": 30,    # 超过 30 轮旧摘要丢弃
-        "model": "qwen3-1.7b",
+        "model": "local-llm",
         "max_sentences": 3,
         "timeout_s": 5,
     },
@@ -50,7 +44,7 @@ _DEFAULTS: dict = {
     },
     # R6 情感引擎增强
     "emotion": {
-        "label_model": "qwen3-1.7b",
+        "label_model": "local-llm",
         "max_tags": 2,
         "diff_inject": True,
         "diff_threshold": 0.3,   # |ΔP|+|ΔA|+|ΔD| 超过才注差异句

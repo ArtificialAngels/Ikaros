@@ -4,7 +4,7 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 
-> **Last revised:** 2026-07-13 (harness rules moved to local LLM router in cloud_chat). Prev: 2026-07-07b (V3 memory fully removed; PyQt6 pet removed; oldcode deleted; cloud_chat.py relocated).
+> **Last revised:** 2026-07-16 (bin/*.bat consolidated into Rust `ikaros` launcher; portable-python moved under runtime). Prev: 2026-07-13 (harness rules moved to local LLM router in cloud_chat).
 > Two bugs killed the startup chain:
 > 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
 >    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.
@@ -12,7 +12,20 @@
 > 2. `ikaros-desktop-pet/main.py` imported `from modules.model_manager.llm_manager import LLMManager`
 >    but the module didn't exist → `ModuleNotFoundError`. Fix: created
 >    `modules/model_manager/llm_manager.py` stub (scans local GGUFs + queries :8080 + cloud models).
-> Also: memory watchdog now manages both :8587 (embedding) AND :8080 (qwen3-8b LLM for v3 extraction).
+> Also: memory watchdog now manages both :8587 (embedding) AND :8080 (local LLM for v3 extraction).
+
+Previous: 2026-07-16 (bin/*.bat → Rust `ikaros` launcher + portable-python under runtime).
+- **bin/*.bat 整合为 Rust 启动器 `bin/ikaros.exe` (+ `bin/ikaros.cmd` 薄壳)**: 12 个 .bat
+  (ikaros-start/sleep, hermes-studio/dashboard/desktop, ikaros-mem/think/verify/live2d,
+  ika-ws-restart, ikaros-dash-fixed, screen-monitor) + launch-hidden.vbs 全部移入 `bin/legacy/` 作回滚;
+  新 `ikaros` 二进制按 order 分发 (start/sleep/studio/dashboard/desktop/think/mem/live2d/verify/soul-sync/ws-restart/screen-monitor),
+  `start` 无 flag、拉起后端后弹菜单选前端。`CREATE_NO_WINDOW` 替代 launch-hidden.vbs。
+  源码: `Ikaros-environment/ikaros-cli/` (零依赖 std-only Rust)。
+- **portable-python 迁入 runtime/**: 原 `E:\Ikaros\portable-python` 经 robocopy 复制到
+  `E:\Ikaros\runtime\portable-python` (旧目录因 Defender 锁成孤儿待清理)。`python312._pth` 去掉失效的多级
+  `..`,改由 `sitecustomize.py` 用 `__file__` 注入项目根 (5 层 parent)。环境变量源头 (ikaros-env.bat/ps1、
+  ikaros-paths.json、hermes-desktop.bat)、detect-root (rust+ps1)、validate-paths.py、各文档同步改为
+  `runtime\portable-python`。
 
 Previous: 2026-07-04 (push-to-github cleanup + Ikaros v4 ship).
 删去 265 个旧文件 (`bin/*.bat` / `bin/*.ps1` / `modules/*` / `bridge-rs/` / `bin/ikaros-desktop-pet-tauri/`)，
@@ -112,7 +125,7 @@ Live2D 页面新增 WebSocket 连接 `ws://127.0.0.1:7860/v1/voice/ws`，自定�
      queries `:8080/v1/models`, knows cloud model names, supports async fetch + cache + persist.
   3. Memory watchdog (`bin/ikaros-memory-watchdog.py`) now **manages** :8080 LLM (was detect-only).
      Embedding :8587 + LLM :8080 both auto-started and auto-restarted by watchdog.
-     qwen3-8b runs on :8080 for v3 memory extraction (saves cloud tokens).
+     local LLM runs on :8080 for v3 memory extraction (saves cloud tokens).
 - **2026-06-27 (Quest handoff)** - 灵感挖掘 + 桥问题交接。Ikaros 不写代码改自己, 把 OpenDesktop-Pet 6 大特性写到
   `data/ikaros-coordination/handshake.2026-06-27.odp-inspiration.json` (7415B): P0 三层记忆 / P1 主动互动循环 / P1 截屏视觉 / P2 TTS 多引擎 / P3 身体分区点击。
   桥 uvicorn 应用层卡死问题写到 `handshake.2026-06-27.bridge-uvicorn-unresponsive.json` (7519B): 7 修复建议 + 测试命令。
@@ -402,7 +415,7 @@ $ python tests/smoke_webui_proxy.py
 memory, and voice. **No-bridge architecture** since 2026-07-07: there is no
 `:7860` bridge and no PyQt6 pet. The pet is a **Tauri v2 + Vue 3 + Live2D**
 app; memory is a local **V4** SQLite+FTS5+Chroma system; the LLM path is cloud
-(DeepSeek V4 / MiniMax) with a local `:8080` qwen3-8b fallback.
+(DeepSeek V4 / MiniMax) with a local `:8080` local LLM fallback.
 
 **One-click UX:** `bin\ikaros-start.bat` -> Tauri pet in system tray + Hermes
 Dashboard at `http://localhost:9119/`. Stop with `bin\ikaros-sleep.bat`.
@@ -415,7 +428,7 @@ Dashboard at `http://localhost:9119/`. Stop with `bin\ikaros-sleep.bat`.
 |-------|----------------------------------------|------------------------------------------------------------|
 | :7870 | **voice-ws** (`bin/ikaros-voice-ws.py`)| Tauri pet speech link (ws -> cloud_chat + cogno_5d + edge_tts) |
 | :8587 | **nomic-embed-text** (llama-server)    | V4 embeddings / semantic search                            |
-| :8080 | **qwen3-8b** (llama-server)            | V4 memory extraction + reflection; cloud LLM fallback      |
+| :8080 | **local LLM** (llama-server)            | V4 memory extraction + reflection; cloud LLM fallback      |
 | :9119 | **Hermes Dashboard** (`hermes.exe dashboard`) | Web UI                                              |
 | --    | `:7860` bridge / `:8648` hermes-web-ui | **REMOVED 2026-07-07** (no-bridge refactor)               |
 
@@ -426,7 +439,7 @@ Tauri Pet (Ikaros-Live2D) --ws :7870--> ikaros-voice-ws.py
         |                                            v
         |                                      cloud_chat.py
         |                                        |- cloud: DeepSeek V4 / MiniMax
-        |                                        |- local :8080 qwen3-8b (fallback)
+        |                                        |- local :8080 local LLM (fallback)
         |                                                 |
         |                                          cogno_5d.py (5D anchor)
         v                                                 |
@@ -1214,7 +1227,7 @@ For every script reached from `hermes-all.bat`:
 4. For Python: any module that uses `Path('E:\Hermes Agent')` literal
    instead of `Path(__file__).resolve().parents[N]`
 5. Spot-check fallback (portable-python: runs in any cwd ✓; Node:
-   bundled in `runtime/node23/`)
+   bundled in `runtime/node/`)
 
 ### Fixes applied this session
 
@@ -1244,7 +1257,7 @@ For every script reached from `hermes-all.bat`:
 | (removed) | `hermes/doctor.py` was deleted in an earlier cleanup phase; no portable rewrite needed. |
 | `data/webui-new/app/bin/hermes-web-ui.mjs` L109 | `process.env.SystemRoot || 'C:\\Windows'` — env-var fallback, doesn't fire in practice. |
 | `hermes-agent-source/scripts/install.ps1` L210 | User-facing hint about `setx NODE_EXTRA_CA_CERTS "C:\path\to\corp-ca.pem"` — placeholder text in a help message. |
-| `data/webui-new/app/portable/*.bat`, `runtime/node23/install_tools.bat`, etc. | Third-party (Node 23 build scripts). Not touched. |
+| `data/webui-new/app/portable/*.bat`, `runtime/node/install_tools.bat`, etc. | Third-party (Node build scripts). Not touched. |
 
 ### Portability checklist (recurring)
 

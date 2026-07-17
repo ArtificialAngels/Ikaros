@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_tts_pipeline.py — 验证 voice-ws 的 TTS 链路 (Hermes 内置 TTS)。
-
-连 ws://127.0.0.1:7870/v1/voice/ws, 发 {action:text} 触发 LLM+TTS,
-捕获回传的二进制音频帧并落盘, 校验格式/大小。
-
-用法: portable-python -u bin/test_tts_pipeline.py
-"""
+# 详细说明见 docs/scripts/bin/test_tts_pipeline.md
 import asyncio
 import json
 import sys

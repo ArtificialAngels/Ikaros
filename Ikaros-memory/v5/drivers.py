@@ -1,24 +1,4 @@
-"""
-v5.drivers — 三种算法驱动内核 (Chaos PAD / ECA / AIS)
-
-每个驱动是一个独立 @dataclass + tick() 方法 (<50 行).
-可以直接替换 think.py 的 random.choice(templates) 逻辑.
-
-用法:
-    from v5.drivers import LorenzPAD, ECAGrid, AISDetectorSet
-    pad = LorenzPAD()
-    eca = ECAGrid()
-    ais = AISDetectorSet()
-
-    step = 0
-    while True:
-        p, a, d = pad.tick()               # Lorenz → PAD
-        pattern = eca.tick()                # ECA → thinking pattern
-        novelty = ais.tick(memory_batch)    # AIS → memory scores
-
-        # 三层叠加 → 决策
-        step += 1
-"""
+# 详细说明见 docs/scripts/Ikaros-memory/v5/drivers.md
 from __future__ import annotations
 
 import json
@@ -33,9 +13,7 @@ from typing import Callable
 _V5_ROOT = Path(__file__).resolve().parent.parent  # Ikaros-memory/
 _AIS_PATH = _V5_ROOT / "data" / "v5" / "ais_detectors.json"
 
-# ═══════════════════════════════════════════════════════════════
-# 1) CHAOS PAD — Lorenz 吸引子驱动情绪漂移
-# ═══════════════════════════════════════════════════════════════
+# 内联说明见 docs/scripts/Ikaros-memory/v5/drivers.md（见“内联注释摘录”）
 
 _LORENZ_INIT = (1.0, 1.0, 1.0)
 _SIGMA, _RHO, _BETA = 10.0, 28.0, 8.0 / 3.0
@@ -88,9 +66,7 @@ class LorenzPAD:
         )
 
 
-# ═══════════════════════════════════════════════════════════════
-# 2) ECA — 1D 元胞自动机驱动思考主题
-# ═══════════════════════════════════════════════════════════════
+# 内联说明见 docs/scripts/Ikaros-memory/v5/drivers.md（见“内联注释摘录”）
 
 # 8 种 3-cell pattern → 思考主题
 _PATTERN_TOPICS = {
@@ -173,9 +149,7 @@ class ECAGrid:
         return "001011" in s or "110100" in s
 
 
-# ═══════════════════════════════════════════════════════════════
-# 3) AIS — 负选择检测器用于记忆新颖性
-# ═══════════════════════════════════════════════════════════════
+# 内联说明见 docs/scripts/Ikaros-memory/v5/drivers.md（见“内联注释摘录”）
 
 @dataclass
 class Detector:
@@ -340,9 +314,7 @@ class AISDetectorSet:
         return results
 
 
-# ═══════════════════════════════════════════════════════════════
-# 模块级单例访问器 — 让演化跨调用累积 (修复"每次新建→永远相同"缺陷)
-# ═══════════════════════════════════════════════════════════════
+# 内联说明见 docs/scripts/Ikaros-memory/v5/drivers.md（见“内联注释摘录”）
 
 _ais_singleton: "AISDetectorSet | None" = None
 

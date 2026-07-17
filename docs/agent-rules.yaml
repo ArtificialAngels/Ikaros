@@ -1,5 +1,5 @@
 # Agent 操作规则 - 结构化规则库
-# Ikaros 通过本地 qwen3-8b 按上下文动态选取注入
+# Ikaros 通过本地 LLM 按上下文动态选取注入
 
 rules:
   - id: R0-OUTPUT

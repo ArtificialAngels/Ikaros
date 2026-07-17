@@ -1,27 +1,4 @@
-"""ikaros-voice-ws.py — Live2D voice service on :7870/v1/voice/ws.
-
-2026-07-05 (哥哥下指令): bridge :7860 已删 (commit b16c8f8),
-:8080 给 Hermes Agent LLM + 记忆 extract 占用. Live2D voice
-service 走新端口 :7870 接 cogno_5D + cloud_chat 真物 — 不重复发明.
-
-消息协议 (从 App.vue:onmessage 抽):
-  client → server:
-    {"action":"start","session_id":"..."}        # 进 session
-    {"action":"transcript","text":"哥哥说的话"}    # STT 真物 (client 上已做)
-    {"action":"text","text":"..."}                # 纯文本输入
-    {"action":"look"}                              # 让 pet 看屏幕 (Layer3: 截图+视觉LLM, 配置门控)
-  server → client:
-    {"type":"status","message":"thinking"}        # 状态提示
-    {"type":"transcription","text":"..."}         # 复述输入
-    {"type":"thinking"}                            # 进入思考
-    {"type":"done","text":"reply"}                  # LLM reply 真物
-    {"type":"activity","state":...,"phrase":...}   # 前台活动变化推送 (N.E.K.O 主动搭话触发)
-    {"type":"screen","desc":"..."}                 # look 动作: 屏幕视觉描述 (未配置视觉模型时 desc=null)
-    {"type":"error","message":"..."}               # 失败静默
-    binary frame: TTS audio bytes                  # Hermes Agent 内置 TTS (mp3) 或 edge-tts 兜底
-
-KISS: 单 ws.server 真物, 不抽 cogno_engine, 不抽 chat_engine.
-"""
+# 详细说明见 docs/scripts/bin/ikaros-voice-ws.md
 from __future__ import annotations
 
 import asyncio
@@ -44,14 +21,7 @@ for p in (os.path.join(_ROOT, "Ikaros-memory"),
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# CUDA 13.3 运行时 DLL 路径注入 (CUDA Toolkit v13.0 + nvidia-cu13 pip 包 + sherpa_onnx/lib)
-# onnxruntime-gpu 1.27 的 CUDAExecutionProvider 按 CUDA 13 编译, 需要
-# cudart64_13 / cublas64_13 / cudnn64_9 (cuDNN 9.24 cu13) 等.
-# 关键坑: cuDNN 9 是 frontend(cudnn64_9.dll) + 多后端(cudnn_*64_9.dll) 分离架构,
-# frontend 内部 LoadLibrary 后端时不会自动搜索 add_dll_directory 加入的路径,
-# 必须先把全部 cuDNN 9 后端 DLL 预加载进进程, 否则 cudnnCreate 报
-# "Cannot load symbol" / "Could not locate cudnn_ops64_9.dll". 已实测:
-# 预加载后端后 CUDA 13.3 + cuDNN 9.24 的 Whisper GPU 推理完全正常.
+# CUDA 13.3 运行时 DLL 路径注入说明见 docs/scripts/bin/ikaros-voice-ws.md
 def _inject_cuda13_dll_path():
     """把 CUDA 13 运行时 / cuDNN 9 后端加入 DLL 搜索路径, 并预加载 cuDNN 9 后端."""
     import glob as _glob
@@ -105,7 +75,7 @@ except Exception:
 
 # 7860 端口 (FastAPI bridge) 在 7-04 quest "去桥架构" 删掉, 由
 # bin/ikaros-voice-ws.py 接 cogno_5d + cloud_chat 真物 (commit b16c8f8).
-# 8080 = Hermes Agent qwen3-8b (LLM / 记忆 extract 复用).
+# 8080 = 本地 LLM (记忆 extract / 对话兜底复用).
 # 8587 = nomic-embed-text (记忆 独占).
 # 8648 = EKKOLearnAI/hermes-web-ui 7-5 被哥哥卸了, 现让给 Ikaros-Live2D webview (本服务暂不 bind, 占着等 Live2D Tauri 用).
 DEFAULT_HOST = "127.0.0.1"
@@ -622,7 +592,7 @@ async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
         except Exception as e:
             log.warning("cloud_chat failed (%s), falling back to local :8080", e)
 
-    # ── A2: 本地 :8080 兜底 (qwen3-1.7b, 云端不可用时降级) ──
+    # ── A2: 本地 :8080 兜底 (云端不可用时降级) ──
     cc_mod = _load_cloud_chat_mod()
     if cc_mod is not None:
         try:
@@ -641,7 +611,7 @@ async def _call_llm(prompt: str, cogno_prefix: str, on_delta=None,
             _msgs.extend(history[-20:])
         _msgs.append({"role": "user", "content": prompt})
         body = json.dumps({
-            "model": "qwen3-1.7b",
+            "model": "local-llm",
             "messages": _msgs,
             "max_tokens": 600,
             "temperature": 0.7,

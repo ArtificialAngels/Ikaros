@@ -14,13 +14,13 @@ Write-Host "  LLAMACPP_BIN = $LLAMACPP_BIN"
 Write-Host "  NODE_BIN_DIR = $NODE_BIN_DIR"
 Write-Host "  NODE         = $NODE"
 
-# These are the critical assertions: NODE must resolve to runtime/node23/node.exe
+# These are the critical assertions: NODE must resolve to runtime/node/node.exe
 # (NOT deps/node/node.exe, which would be a stale junction path).
 $expected = @{
     "PYTHON"       = "E:\Hermes Agent\portable-python\python.exe"
     "LLAMACPP_BIN" = "E:\Hermes Agent\runtime"
-    "NODE_BIN_DIR" = "E:\Hermes Agent\runtime\node23"
-    "NODE"         = "E:\Hermes Agent\runtime\node23\node.exe"
+    "NODE_BIN_DIR" = "E:\Hermes Agent\runtime\node"
+    "NODE"         = "E:\Hermes Agent\runtime\node\node.exe"
 }
 
 $fail = $false

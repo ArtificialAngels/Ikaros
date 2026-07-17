@@ -1,13 +1,6 @@
 @echo off
-REM ============================================================
-REM Ikaros Environment - Single Entry Point
-REM
-REM  Sets IKAROS_ROOT and calls ikaros-env.bat.
-REM  Call from any .bat:
-REM    call "E:\Ikaros\Ikaros-environment\init.bat"
-REM  No setlocal: vars pass through to caller.
-REM  Idempotent: safe to call multiple times (re-sets same vars).
-REM ============================================================
+REM See docs/scripts/Ikaros-environment/init.md
+REM No setlocal: vars pass through to caller.
 
 REM ---- Detect IKAROS_ROOT ----
 if not defined IKAROS_ROOT (

@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Temporary embedding server replacing llama-server :8587.
-
-Uses chromadb DefaultEmbeddingFunction (ONNX MiniLM L6 v2, 384-dim).
-Provides the same /embedding API as llama-server for Ikaros memory search.
-
-NOTE: 384-dim vs nomic-embed-text 768-dim — existing chroma vectors
-are incompatible. FTS5 search still works; vector search needs rebuild
-after switching back to llama-server.
-"""
+# 详细说明见 docs/scripts/bin/ikaros-embed-server.md
 import json
 import sys
 import os
