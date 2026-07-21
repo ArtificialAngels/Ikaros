@@ -15,6 +15,8 @@
 //   soul-sync       V5 soul -> Hermes SOUL.md
 //   ws-restart      Restart Voice WS (:7870)
 //   screen-monitor [args]  Screen activity monitor
+//   component <name> <act>  Granular start/stop/restart of one component
+//   control         Launch the web control panel (:9100)
 
 use std::collections::HashMap;
 use std::env;
@@ -454,55 +456,17 @@ fn order_start(root: &Path, env: &HashMap<String, String>) {
     order_sleep_impl(root, &env2);
     println!("      [1] done");
 
-    // 2. Memory watchdog
-    println!("[2] Starting Memory Services...");
-    println!("      Embedding :8587 (nomic-embed-text)");
-    println!("      LLM :8080 (local LLM)");
-    let wd = py(root);
-    let wd_script = bin_dir(root).join("ikaros-memory-watchdog.py");
-    let _ = spawn_hidden(
-        &wd,
-        &[wd_script.to_string_lossy().into_owned(), "--detach".into()],
-        &env2,
-        None,
-        Some(&logs_dir(root).join("memory-watchdog.log")),
-    );
-    let ep = root.join("Ikaros-memory").join("data").join("endpoints.json");
-    if wait_for_file(&ep, 80) {
-        println!("      Memory endpoints ready");
-    } else {
-        println!("      [WARN] Memory timeout");
-    }
-
-    // 2b. Voice WS
+    // 2. Memory watchdog + Voice WS + Think loop (reuse granular helpers)
+    println!("[2] Starting Memory Services (Embedding :8587 + LLM :8080)...");
+    start_component_memory(root, &env2, true);
     println!("[2b] Launching Voice WS (:7870)...");
-    let vw = bin_dir(root).join("ikaros-voice-ws.py");
-    let _ = spawn_hidden(
-        &wd,
-        &[vw.to_string_lossy().into_owned()],
-        &env2,
-        None,
-        Some(&logs_dir(root).join("voice-ws.log")),
-    );
-    if wait_for_port(7870, 40) {
-        println!("      Voice WS ready");
-    } else {
-        println!("      [WARN] Voice WS timeout");
-    }
-
-    // 2c. Think loop
+    start_component_voice(root, &env2, true);
     println!("[2c] Launching V5.1 self-think loop...");
-    let think = root.join("Ikaros-memory").join("v5").join("think.py");
-    let _ = spawn_hidden(
-        &wd,
-        &[think.to_string_lossy().into_owned(), "--watch".into()],
-        &env2,
-        None,
-        Some(&logs_dir(root).join("think.log")),
-    );
+    start_component_think(root, &env2, false);
 
     // 2d. Soul sync
     println!("[2d] Syncing V5 soul to Hermes...");
+    let wd = py(root);
     let soul = bin_dir(root).join("ikaros-soul-sync.py");
     let rc = run_child(
         &wd,
@@ -517,23 +481,9 @@ fn order_start(root: &Path, env: &HashMap<String, String>) {
         println!("      [WARN] soul-sync failed (non-fatal)");
     }
 
-    // 3. Desktop Pet
+    // 3. Desktop Pet (reuse granular helper)
     println!("[3] Launching Desktop Pet (Tauri)...");
-    ensure_pet_junction(root);
-    let pet = root
-        .join("Ikaros-Live2D")
-        .join("src-tauri")
-        .join("target")
-        .join("release")
-        .join("ikaros-desktop-pet.exe");
-    if pet.exists() {
-        let mut c = Command::new(&pet);
-        c.envs(env2.iter().map(|(k, v)| (k.clone(), v.clone())));
-        let _ = c.spawn();
-        println!("      Pet started");
-    } else {
-        println!("      [WARN] pet exe not found, skipping");
-    }
+    start_component_pet(root, &env2, false);
 
     // 5. Interactive frontend menu
     println!();
@@ -824,16 +774,11 @@ fn order_soul_sync(root: &Path, env: &HashMap<String, String>) {
 }
 
 fn order_ws_restart(root: &Path, env: &HashMap<String, String>) {
-    println!("[ws-restart] Stopping Voice WS (:7870)...");
-    kill_port(7870);
+    println!("[ws-restart] Restarting Voice WS (:7870)...");
+    stop_component_voice(root, env);
     thread::sleep(Duration::from_secs(2));
-    println!("[ws-restart] Voice WS stopped.");
-    println!("[ws-restart] Starting Voice WS...");
-    let wd = py(root);
-    let vw = bin_dir(root).join("ikaros-voice-ws.py");
-    let log = logs_dir(root).join("voice-ws.log");
-    let _ = spawn_hidden(&wd, &[vw.to_string_lossy().into_owned()], env, None, Some(&log));
-    if wait_for_port(7870, 40) {
+    start_component_voice(root, env, true);
+    if tcp_connect(7870) {
         println!("[ws-restart] Voice WS ready: ws://127.0.0.1:7870/v1/voice/ws");
     } else {
         println!("[ws-restart] WARNING: Voice WS may not be ready");
@@ -841,16 +786,8 @@ fn order_ws_restart(root: &Path, env: &HashMap<String, String>) {
 }
 
 fn order_live2d(root: &Path, env: &HashMap<String, String>, mode: &str) {
-    let wd = py(root);
     match mode {
-        "stop" => {
-            if pet_running() {
-                kill_image("ikaros-desktop-pet.exe");
-                println!("[ikaros] OK Stopped.");
-            } else {
-                println!("[ikaros] Pet was not running.");
-            }
-        }
+        "stop" => stop_component_pet(root, env),
         "status" => {
             if pet_running() {
                 println!("  Running (ikaros-desktop-pet.exe)");
@@ -858,46 +795,7 @@ fn order_live2d(root: &Path, env: &HashMap<String, String>, mode: &str) {
                 println!("  Not running");
             }
         }
-        _ => {
-            if !tcp_connect(7870) {
-                println!("[ikaros] Starting Voice WS (:7870) for speech...");
-                let vw = bin_dir(root).join("ikaros-voice-ws.py");
-                let log = logs_dir(root).join("voice-ws.log");
-                let _ = spawn_hidden(&wd, &[vw.to_string_lossy().into_owned()], env, None, Some(&log));
-                if wait_for_port(7870, 40) {
-                    println!("[ikaros] Voice WS ready");
-                } else {
-                    println!("[ikaros] WARNING: Voice WS not ready (timeout)");
-                }
-            }
-            if pet_running() {
-                println!("[ikaros] Pet already running.");
-                return;
-            }
-            ensure_pet_junction(root);
-            let pet = root
-                .join("Ikaros-Live2D")
-                .join("src-tauri")
-                .join("target")
-                .join("release")
-                .join("ikaros-desktop-pet.exe");
-            if !pet.exists() {
-                println!("[ikaros] ERROR: {} not found.", pet.to_string_lossy());
-                println!("[ikaros] Build: cd Ikaros-Live2D && npx tauri build");
-                return;
-            }
-            kill_image("ikaros-desktop-pet.exe");
-            println!("[ikaros] Launching pet...");
-            let mut c = Command::new(&pet);
-            c.envs(env.iter().map(|(k, v)| (k.clone(), v.clone())));
-            let _ = c.spawn();
-            thread::sleep(Duration::from_secs(3));
-            if pet_running() {
-                println!("[ikaros] OK Pet started.");
-            } else {
-                println!("[ikaros] WARNING: pet may not have started.");
-            }
-        }
+        _ => start_component_pet(root, env, false),
     }
 }
 
@@ -918,6 +816,319 @@ fn order_screen_monitor(root: &Path, env: &HashMap<String, String>, args: &[Stri
         }
     }
     run_child("powershell", &a, env, None, true);
+}
+
+// ---------------------------------------------------------------------------
+// Granular component control
+// These helpers are the single source of truth for starting/stopping one
+// Ikaros component. They are reused by `order_start`, `order_live2d`,
+// `order_ws_restart`, and the `component` / `control` orders so process
+// lifecycle (env, hidden windows, kill logic) lives in exactly one place.
+// ---------------------------------------------------------------------------
+
+fn start_component_memory(root: &Path, env: &HashMap<String, String>, wait: bool) {
+    println!("[memory] starting watchdog (Embedding :8587 + LLM :8080)...");
+    let wd = py(root);
+    let wds = bin_dir(root).join("ikaros-memory-watchdog.py");
+    let _ = spawn_hidden(
+        &wd,
+        &[wds.to_string_lossy().into_owned(), "--detach".into()],
+        env,
+        None,
+        Some(&logs_dir(root).join("memory-watchdog.log")),
+    );
+    if wait {
+        let ep = root.join("Ikaros-memory").join("data").join("endpoints.json");
+        if wait_for_file(&ep, 80) {
+            println!("[memory] endpoints ready");
+        } else {
+            println!("[memory][WARN] timeout waiting for endpoints.json");
+        }
+    }
+}
+
+fn stop_component_memory(root: &Path, env: &HashMap<String, String>) {
+    println!("[memory] stopping watchdog...");
+    let wd = py(root);
+    let wds = bin_dir(root).join("ikaros-memory-watchdog.py");
+    let _ = run_child(&wd, &[wds.to_string_lossy().into_owned(), "--stop".into()], env, None, false);
+    kill_port(8587);
+    kill_port(8080);
+    kill_by_cmdline("ikaros-memory-watchdog.py");
+}
+
+fn start_component_voice(root: &Path, env: &HashMap<String, String>, wait: bool) {
+    println!("[voice] starting Voice WS (:7870)...");
+    let wd = py(root);
+    let vw = bin_dir(root).join("ikaros-voice-ws.py");
+    let _ = spawn_hidden(
+        &wd,
+        &[vw.to_string_lossy().into_owned()],
+        env,
+        None,
+        Some(&logs_dir(root).join("voice-ws.log")),
+    );
+    if wait {
+        if wait_for_port(7870, 40) {
+            println!("[voice] ready");
+        } else {
+            println!("[voice][WARN] timeout waiting for :7870");
+        }
+    }
+}
+
+fn stop_component_voice(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[voice] stopping (:7870)...");
+    kill_port(7870);
+}
+
+fn start_component_think(root: &Path, env: &HashMap<String, String>, _wait: bool) {
+    println!("[think] starting V5 self-think loop...");
+    let wd = py(root);
+    let think = root.join("Ikaros-memory").join("v5").join("think.py");
+    let _ = spawn_hidden(
+        &wd,
+        &[think.to_string_lossy().into_owned(), "--watch".into()],
+        env,
+        None,
+        Some(&logs_dir(root).join("think.log")),
+    );
+}
+
+fn stop_component_think(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[think] stopping...");
+    kill_by_cmdline("think.py");
+}
+
+fn start_component_pet(root: &Path, env: &HashMap<String, String>, _wait: bool) {
+    if !tcp_connect(7870) {
+        println!("[pet] Voice WS not up, starting it first...");
+        start_component_voice(root, env, true);
+    }
+    ensure_pet_junction(root);
+    let pet = root
+        .join("Ikaros-Live2D")
+        .join("src-tauri")
+        .join("target")
+        .join("release")
+        .join("ikaros-desktop-pet.exe");
+    if !pet.exists() {
+        println!(
+            "[pet][ERROR] {} not found. Build: cd Ikaros-Live2D && npx tauri build",
+            pet.to_string_lossy()
+        );
+        return;
+    }
+    kill_image("ikaros-desktop-pet.exe");
+    let mut c = Command::new(&pet);
+    c.envs(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let _ = c.spawn();
+    thread::sleep(Duration::from_secs(2));
+    if pet_running() {
+        println!("[pet] started");
+    } else {
+        println!("[pet][WARN] may not have started");
+    }
+}
+
+fn stop_component_pet(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[pet] stopping...");
+    kill_image("ikaros-desktop-pet.exe");
+}
+
+fn start_component_dashboard(root: &Path, env: &HashMap<String, String>) {
+    order_dashboard_impl(root, env);
+}
+
+fn stop_component_dashboard(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[dashboard] stopping (:9119)...");
+    kill_port(9119);
+}
+
+fn start_component_studio(root: &Path, env: &HashMap<String, String>) {
+    order_studio_impl(root, env);
+}
+
+fn stop_component_studio(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[studio] stopping (:8647/:8648/:8649)...");
+    kill_port(8647);
+    kill_port(8648);
+    kill_port(8649);
+    kill_image("node.exe");
+}
+
+fn start_component_desktop(root: &Path, env: &HashMap<String, String>) {
+    order_desktop_impl(root, env);
+}
+
+fn stop_component_desktop(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[desktop] stopping...");
+    kill_image("Hermes.exe");
+}
+
+fn start_component_screen(root: &Path, env: &HashMap<String, String>) {
+    println!("[screen] starting screen activity monitor...");
+    let script = bin_dir(root).join("screen-activity-monitor.ps1");
+    let a: Vec<String> = vec![
+        "-NoProfile".into(),
+        "-ExecutionPolicy".into(),
+        "Bypass".into(),
+        "-File".into(),
+        script.to_string_lossy().into_owned(),
+        "start".into(),
+    ];
+    let _ = run_child("powershell", &a, env, None, false);
+}
+
+fn stop_component_screen(_root: &Path, _env: &HashMap<String, String>) {
+    println!("[screen] stopping...");
+    kill_by_cmdline("screen-activity-monitor.ps1");
+}
+
+fn start_component_soul(root: &Path, env: &HashMap<String, String>) {
+    order_soul_sync(root, env);
+}
+
+fn stop_component_soul(_root: &Path, _env: &HashMap<String, String>) {
+    // soul-sync is a one-shot sync; nothing persistent to stop.
+}
+
+fn component_start(root: &Path, env: &HashMap<String, String>, name: &str, wait: bool) {
+    match name {
+        "memory" => start_component_memory(root, env, wait),
+        "voice" => start_component_voice(root, env, wait),
+        "think" => start_component_think(root, env, wait),
+        "pet" => start_component_pet(root, env, wait),
+        "dashboard" => start_component_dashboard(root, env),
+        "studio" => start_component_studio(root, env),
+        "desktop" => start_component_desktop(root, env),
+        "screen" => start_component_screen(root, env),
+        "soul" => start_component_soul(root, env),
+        "all" => {
+            // Idempotent: skip components that are already up so repeated
+            // "全部启动" never spawns duplicate watchdogs / llama-servers.
+            if comp_running("memory") {
+                println!("[memory] already running, skip");
+            } else {
+                start_component_memory(root, env, wait);
+            }
+            if comp_running("voice") {
+                println!("[voice] already running, skip");
+            } else {
+                start_component_voice(root, env, wait);
+            }
+            start_component_think(root, env, wait);
+            if comp_running("pet") {
+                println!("[pet] already running, skip");
+            } else {
+                start_component_pet(root, env, wait);
+            }
+        }
+        _ => println!("[component] unknown component: {}", name),
+    }
+}
+
+/// Lightweight "is this component already running?" probe used to make
+/// `component all start` idempotent. Covers the components that have an
+/// unambiguous port or process signature.
+fn comp_running(name: &str) -> bool {
+    match name {
+        "memory" => tcp_connect(8587) || tcp_connect(8080),
+        "voice" => tcp_connect(7870),
+        "pet" => pet_running(),
+        _ => false,
+    }
+}
+
+fn component_stop(root: &Path, env: &HashMap<String, String>, name: &str) {
+    match name {
+        "memory" => stop_component_memory(root, env),
+        "voice" => stop_component_voice(root, env),
+        "think" => stop_component_think(root, env),
+        "pet" => stop_component_pet(root, env),
+        "dashboard" => stop_component_dashboard(root, env),
+        "studio" => stop_component_studio(root, env),
+        "desktop" => stop_component_desktop(root, env),
+        "screen" => stop_component_screen(root, env),
+        "soul" => stop_component_soul(root, env),
+        "all" => {
+            // stop frontends first, then backends
+            stop_component_dashboard(root, env);
+            stop_component_studio(root, env);
+            stop_component_desktop(root, env);
+            stop_component_screen(root, env);
+            stop_component_pet(root, env);
+            stop_component_think(root, env);
+            stop_component_voice(root, env);
+            stop_component_memory(root, env);
+        }
+        _ => println!("[component] unknown component: {}", name),
+    }
+}
+
+fn order_component(root: &Path, env: &HashMap<String, String>, rest: &[String]) {
+    let name = rest.first().map(|s| s.as_str()).unwrap_or("");
+    let action = rest.get(1).map(|s| s.to_lowercase()).unwrap_or_else(|| "status".into());
+    if name.is_empty() {
+        println!("usage: ikaros component <name> <start|stop|restart|status>");
+        println!("components: memory voice think pet dashboard studio desktop screen soul all");
+        return;
+    }
+    match action.as_str() {
+        "start" => component_start(root, env, name, false),
+        "stop" => component_stop(root, env, name),
+        "restart" => {
+            component_stop(root, env, name);
+            thread::sleep(Duration::from_secs(2));
+            component_start(root, env, name, false);
+        }
+        "status" => match name {
+            "pet" => println!("{}", if pet_running() { "running" } else { "stopped" }),
+            "all" => println!("use the control panel for full status"),
+            _ => println!("[component] status for '{}' — use the control panel (ikaros control)", name),
+        },
+        _ => println!("[component] unknown action: {}", action),
+    }
+}
+
+fn order_control_impl(root: &Path, env: &HashMap<String, String>) {
+    // Singleton web control panel on :9100. Kill any previous instance first
+    // so re-launching the panel always lands on a known port.
+    println!("[control] Stopping any previous control panel on :9100...");
+    kill_port(9100);
+    thread::sleep(Duration::from_secs(1));
+
+    let server_py = root.join("tools").join("ikaros-dashboard").join("server.py");
+    if !server_py.exists() {
+        eprintln!(
+            "[control] control panel server not found: {}",
+            server_py.to_string_lossy()
+        );
+        return;
+    }
+    let ikaros_exe_s = root.join("bin").join("ikaros.exe").to_string_lossy().into_owned();
+    let cenv = child_env(
+        env,
+        &[
+            ("IKAROS_CONTROL_PORT", "9100"),
+            ("IKAROS_EXE", ikaros_exe_s.as_str()),
+        ],
+    );
+    let log = logs_dir(root).join("control-panel.log");
+    println!("[control] Starting control panel server...");
+    let _ = spawn_hidden(
+        &py(root),
+        &[server_py.to_string_lossy().into_owned()],
+        &cenv,
+        None,
+        Some(&log),
+    );
+    if wait_for_port(9100, 15) {
+        println!("[control] Control panel ready: http://127.0.0.1:9100");
+    } else {
+        println!("[control][WARN] control panel did not respond within timeout (may still be starting)");
+    }
+    open_browser("http://127.0.0.1:9100");
 }
 
 // ---------------------------------------------------------------------------
@@ -942,12 +1153,18 @@ fn print_help() {
     println!("  soul-sync                Sync V5 soul -> Hermes SOUL.md");
     println!("  ws-restart               Restart Voice WS (:7870)");
     println!("  screen-monitor [args]    Screen activity monitor");
+    println!("  component <name> <act>   Granular control: memory|voice|think|pet|dashboard|");
+    println!("                           studio|desktop|screen|soul|all  + start|stop|restart|status");
+    println!("  control                  Launch the web control panel (:9100) - monitor & toggle");
     println!("  help                     Show this help");
     println!();
     println!("Examples:");
     println!("  ikaros start");
     println!("  ikaros studio");
     println!("  ikaros mem stats");
+    println!("  ikaros component memory start");
+    println!("  ikaros component pet stop");
+    println!("  ikaros control");
 }
 
 fn main() {
@@ -1009,6 +1226,8 @@ fn main() {
         "soul-sync" | "soulsync" => order_soul_sync(&root, &env),
         "ws-restart" => order_ws_restart(&root, &env),
         "screen-monitor" | "screenmonitor" => order_screen_monitor(&root, &env, &rest),
+        "component" => order_component(&root, &env, &rest),
+        "control" | "panel" | "console" => order_control_impl(&root, &env),
         _ => {
             eprintln!("[ikaros] Unknown order: {}", order);
             print_help();

@@ -17,7 +17,7 @@ logger = logging.getLogger("ikaros.memory.v5.migrate")
 
 # 内联说明见 docs/scripts/Ikaros-memory/v5/migrate_from_v3.md（见“内联注释摘录”）
 V3_DB_PATH = V4_ROOT / "data" / "v3.db"
-V4_DB_PATH = V4_ROOT / "data" / "v4" / "v4.db"
+V5_DB_PATH = V4_ROOT / "data" / "v5" / "v5.db"
 
 # 哥哥 (2026-07-05) 拍 C: 跳过低 weight
 WEIGHT_THRESHOLD = 0.5
@@ -81,8 +81,8 @@ def _insert_v4(v4_path: Path, rows: list[sqlite3.Row], dry_run: bool) -> int:
         v4_path.parent.mkdir(parents=True, exist_ok=True)
         # 用 v4.store 的 conn() 创建 schema
         from v5 import store as v5_store
-        v5_store.V4_DATA_DIR = v4_path.parent
-        v5_store.V4_DB_PATH = v4_path
+        v5_store.V5_DATA_DIR = v4_path.parent
+        v5_store.V5_DB_PATH = v4_path
         v5_store.close()  # 清掉旧 thread-local
         with v5_store.conn() as c:
             pass  # conn() 内 lazy init schema
@@ -118,7 +118,7 @@ def _insert_v4(v4_path: Path, rows: list[sqlite3.Row], dry_run: bool) -> int:
 
 def migrate(
     v3_path: Path = V3_DB_PATH,
-    v4_path: Path = V4_DB_PATH,
+    v4_path: Path = V5_DB_PATH,
     threshold: float = WEIGHT_THRESHOLD,
     dry_run: bool = False,
 ) -> dict:
@@ -167,7 +167,7 @@ def main():
     )
     parser = argparse.ArgumentParser(description="V3 → V4 memory migration")
     parser.add_argument("--src", help=f"V3 db path (default: {V3_DB_PATH})")
-    parser.add_argument("--dst", help=f"V4 db path (default: {V4_DB_PATH})")
+    parser.add_argument("--dst", help=f"V5 db path (default: {V5_DB_PATH})")
     parser.add_argument("--threshold", type=float, default=WEIGHT_THRESHOLD,
                         help=f"weight threshold (default: {WEIGHT_THRESHOLD})")
     parser.add_argument("--dry-run", action="store_true",
@@ -175,7 +175,7 @@ def main():
     args = parser.parse_args()
 
     src = Path(args.src) if args.src else V3_DB_PATH
-    dst = Path(args.dst) if args.dst else V4_DB_PATH
+    dst = Path(args.dst) if args.dst else V5_DB_PATH
 
     result = migrate(
         v3_path=src, v4_path=dst,

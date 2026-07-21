@@ -129,12 +129,12 @@ def next_run_time(state: ScheduleState, key: str, interval: int,
 # ─── 状态持久化 (复用 V3 路径, 但走 V4 子目录) ───────────────────
 
 # 内联说明见 docs/scripts/Ikaros-memory/v5/reflect/scheduler.md（见“内联注释摘录”）
-_V4_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "v4"
-_STATE_FILE = _V4_DATA_DIR / "reflect_state.json"
+_V5_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "v5"
+_STATE_FILE = _V5_DATA_DIR / "reflect_state.json"
 
 
 def load_state(path: Path | None = None) -> ScheduleState:
-    """加载反思状态. V4 子目录, 不污染 V3 state."""
+    """加载反思状态. V5 子目录, 不污染 V3 state."""
     p = path or _STATE_FILE
     if p.exists():
         try:

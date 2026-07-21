@@ -15,6 +15,14 @@ logger = logging.getLogger("ikaros.memory.v5.hermes")
 _HERMES_URL = "http://127.0.0.1:9119"
 _WS_URL = "ws://127.0.0.1:9119/api/ws"
 
+# 在模块加载时（主线程）预先 import websockets C 扩展。
+# 此扩展在 portable-python 下若首次在 daemon 线程里导入会触发 0xC0000005；
+# 预加载使其入口在主线程完成，daemon 线程复用时命中 sys.modules 缓存。
+try:
+    import websockets as _preload_ws  # noqa: F401
+except Exception:
+    pass
+
 _sessions: dict[str, str] = {}  # {session_name: session_id}
 _requests: "queue.Queue[_HermesRequest] | None" = None
 _started = False

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import signal
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -19,6 +20,10 @@ V5_ROOT = Path(__file__).resolve().parent.parent  # Ikaros-memory/
 _PENDING_PATH = V5_ROOT / "data" / "v5" / "pending_thought.json"
 # 潜意识流 — 本地模型每 2-3 分钟产出的轻量内心絮语
 _SUBCONSCIOUS_PATH = V5_ROOT / "data" / "v5" / "subconscious.json"
+
+# ─── 持续运行监督 (模块级状态, 供 SIGTERM 优雅停止 + 情感快照) ──
+_stop_event: "threading.Event | None" = None
+_last_pad: dict = {}  # 上次 PAD 快照, 用于意图驱动的情感变化检测
 
 # ─── Lorenz 混沌驱动 (模块级单例, 懒加载) ─────────────────────
 
@@ -450,6 +455,16 @@ def schedule(interval_minutes: int = 5) -> None:
       - Hermes 统一: 内心独白 + 反思走 :9119 固定命名会话 (2026-07-12)
     """
     import threading
+    # ── 主线程信号注册 + 模块作用域监督状态 (供 _unified_loop 闭包使用) ──
+    global _stop_event
+    _stop_event = threading.Event()
+    try:
+        signal.signal(signal.SIGTERM, lambda *a: _stop_event.set())
+        signal.signal(signal.SIGINT, lambda *a: _stop_event.set())
+    except (ValueError, AttributeError):
+        pass  # 非主线程无法注册信号, 优雅停止降级为进程级 kill
+    from v5 import supervisor_persist as sp
+    poll_sec = max(30, min(120, interval_minutes * 60 // 15))  # 短轮询: 默认 ~60s
 
     # ── 启动 Hermes 后台客户端 (反思 + 内心独白统一走 :9119) ──
     try:
@@ -499,58 +514,158 @@ def schedule(interval_minutes: int = 5) -> None:
     except Exception as exc:
         logger.debug("think: hermes_client not available (%s)", exc)
 
-    # V5.1 统一思考循环 (5min: metacog + 好奇心 + 关怀 + 自主搭话 + 空闲优化)
-    def _unified_loop():
-        sleep_sec = interval_minutes * 60
-        while True:
+    # ── 运行锁 (防超时后后台 metacog.cycle 重叠) ───────────────
+    _deep = {"future": None}   # 当前后台运行的 deep-think future (超时后仍跑时持有)
+    _SKIP = object()           # _deep_think_once 重叠跳过哨兵
+
+    # ── 意图驱动决策 (Reverie 潜意识意图 + proactive 门控) ──────
+    def _should_deep_think(state, now):
+        from v5 import supervisor_persist as sp
+        since = now - (state.last_deep_think_ts or 0)
+        if since >= sp.SOFT_CAP_SEC:
+            return True, f"超过软上限 {since:.0f}s (防饿死)"
+        score = 0.0
+        # 1) 新记忆
+        try:
+            from v5 import store as v4
+            mems = v4.list_all(1)
+            if mems and float(mems[0].created) > (state.last_deep_think_ts or 0):
+                score += 0.4
+        except Exception:
+            pass
+        # 2) 情感显著变化
+        try:
+            from v5.affect import AffectState
+            st = AffectState.load().decay(now=now)
+            p, a, d = st.pleasure, st.arousal, st.dominance
+            lp = _last_pad.get("p"); la = _last_pad.get("a"); ld = _last_pad.get("d")
+            if lp is not None:
+                dp = abs(p - lp) + abs(a - la) + abs(d - ld)
+                if dp > 0.5:
+                    score += 0.3
+            _last_pad["p"], _last_pad["a"], _last_pad["d"] = p, a, d
+        except Exception:
+            pass
+        # 3) 好奇心高
+        try:
+            from v5.self_model import SelfModel
+            if SelfModel.load().get_curiosity() > 0.6:
+                score += 0.2
+        except Exception:
+            pass
+        # 4) 待办到期
+        try:
+            from v5.proactive import get_scheduler
+            for it in getattr(get_scheduler(), "_items", []):
+                if it.get("due_ts", 0) and it["due_ts"] <= now:
+                    score += 0.3
+                    break
+        except Exception:
+            pass
+        state.last_intent_score = score
+        if score >= 0.5:
+            return True, f"意图分 {score:.2f}"
+        return False, f"意图分 {score:.2f} 不足"
+
+    # ── 带硬超时 + 运行锁的单次深度思考 (strict-agent-loop 式) ──
+    def _deep_think_once(state, now, timeout=120):
+        import concurrent.futures
+        import v5.metacog as metacog
+        prev = _deep["future"]
+        if prev is not None and not prev.done():
+            logger.debug("deep think 上次仍后台运行, 跳过以避免重叠")
+            return _SKIP
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(metacog.cycle)
+            _deep["future"] = fut
             try:
-                # 空闲优化: 哥哥离开时跳过深度思考 (省GPU), 仅保持监测
-                try:
-                    from v5.proactive import is_user_away
-                    if is_user_away():
-                        logger.debug("think: user away, skipping metacog (sleep mode)")
-                        # 仅更新基础状态, 不做深度思考
+                r = fut.result(timeout=timeout)
+                state.last_deep_think_ts = now
+                state.total_cycles += 1
+                return r
+            except concurrent.futures.TimeoutError:
+                # 后台 metacog.cycle 仍在跑, 保留 _deep["future"] 直到其真正完成;
+                # 下次循环检测到 done()==False 会跳过, 杜绝重叠
+                logger.warning("deep think 超时 %ds (后台继续, 锁定至完成)", timeout)
+                raise
+            finally:
+                if fut.done():
+                    _deep["future"] = None
+
+    # V5.2 意图驱动统一思考循环 (取代固定 15min)
+    def _unified_loop():
+        # 信号已在 schedule() 主线程注册; sp/poll_sec/_stop_event 为 schedule 作用域闭包变量
+        state = sp.load_state()
+        sp.ensure_mission()
+        while not _stop_event.is_set():
+            now = time.time()
+            # 用户 away -> 休眠 (PAUSED), 不烧 GPU
+            try:
+                from v5.proactive import is_user_away
+                if is_user_away():
+                    state.phase = sp.PHASE_PAUSED
+                    try:
                         from v5.affect import AffectState
                         AffectState.load().decay()
-                        time.sleep(sleep_sec)
-                        continue
-                except Exception:
-                    pass
-
-                # 深度思考
-                import v5.metacog as metacog
-                r = metacog.cycle()
-                if r:
-                    logger.info("think/5m: %s [%s]",
-                                r.get("mode"), str(r.get("text", ""))[:50])
-
-                # 好奇心探索 + 关怀检测 (共享 metacog 节拍)
-                _maybe_curiosity_tick()
-                _maybe_care_tick()
-
-                # 精力跟踪
+                    except Exception:
+                        pass
+                    sp.write_heartbeat(state, note="user away, idle")
+                    time.sleep(60)
+                    continue
+            except Exception:
+                pass
+            # 断路器熔断 -> 停止深度思考, 等外部重置 state.json
+            if state.circuit_tripped:
+                logger.error("supervisor 已熔断, 停写 LLM 直到重置")
+                sp.write_heartbeat(state, note="CIRCUIT TRIPPED")
+                time.sleep(120)
+                state = sp.load_state()  # 可能已被外部 reset
+                continue
+            # 意图驱动决策
+            do_think, reason = _should_deep_think(state, now)
+            state.phase = sp.PHASE_RUNNING if do_think else sp.PHASE_IDLE
+            if do_think:
                 try:
-                    from v5.vitality import track_activity; track_activity()
-                except Exception: pass
-
-                # 自主搭话决策
-                try:
-                    from v5.proactive import try_proactive
-                    speech = try_proactive()
-                    if speech:
-                        # 写入 pending 让 voice-ws 下次巡检时播报
-                        import json as _j
-                        pp = Path(__file__).resolve().parent.parent / "data" / "v5" / "proactive_speech.json"
-                        pp.parent.mkdir(parents=True, exist_ok=True)
-                        pp.write_text(_j.dumps({"text": speech, "ts": _time.time()}, ensure_ascii=False), encoding="utf-8")
-                except Exception:
-                    pass
-            except Exception as exc:
-                logger.warning("think/15m: cycle error (%s)", exc)
-            time.sleep(sleep_sec)
+                    r = _deep_think_once(state, now, timeout=120)
+                    if r is _SKIP:
+                        # 运行锁触发: 上一次超时任务仍在后台, 本周期不记成功/失败
+                        logger.debug("deep think 跳过 (重叠保护)")
+                    else:
+                        state = sp.record_success(state)
+                        if r:
+                            logger.info("think/deep: %s [%s]", r.get("mode"), str(r.get("text", ""))[:50])
+                        # 好奇心/关怀/精力/自主搭话 (保持原行为)
+                        _maybe_curiosity_tick()
+                        _maybe_care_tick()
+                        try:
+                            from v5.vitality import track_activity
+                            track_activity()
+                        except Exception:
+                            pass
+                        try:
+                            from v5.proactive import try_proactive
+                            speech = try_proactive()
+                            if speech:
+                                pp = Path(__file__).resolve().parent.parent / "data" / "v5" / "proactive_speech.json"
+                                pp.parent.mkdir(parents=True, exist_ok=True)
+                                pp.write_text(json.dumps({"text": speech, "ts": time.time()}, ensure_ascii=False), encoding="utf-8")
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    state = sp.record_failure(state, exc)
+                    logger.warning("deep think 失败: %s", exc)
+            # 心跳广播 (strict-agent-loop 式)
+            sp.write_heartbeat(state, intent_score=state.last_intent_score, note=reason)
+            time.sleep(poll_sec)
+        # 优雅退出 (SIGTERM/SIGINT): 写 STOPPED 心跳, 状态已落盘可续跑
+        try:
+            state.phase = sp.PHASE_STOPPED
+            sp.write_heartbeat(state, note="graceful stop")
+        except Exception:
+            pass
     t = threading.Thread(target=_unified_loop, daemon=True, name="v5-think")
     t.start()
-    logger.info("think: unified schedule started (interval=%d min)", interval_minutes)
+    logger.info("think: intent-driven schedule started (poll=%ds, soft_cap=%ds)", poll_sec, sp.SOFT_CAP_SEC)
 
     # 潜意识流 — 每 2-3 分钟产出一句内心絮语 (轻量, 可选消费)
     def _whisper_loop():

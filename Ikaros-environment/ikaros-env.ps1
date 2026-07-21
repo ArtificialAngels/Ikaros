@@ -15,6 +15,8 @@ $env:IKAROS_RUNTIME      = "$env:IKAROS_ROOT\runtime"
 $env:IKAROS_NODE         = "$env:IKAROS_ROOT\runtime\node\node.exe"
 $env:IKAROS_DATA         = "$env:IKAROS_ROOT\data"
 $env:IKAROS_BIN          = "$env:IKAROS_ROOT\bin"
+# ---- ThirdSpace Vault（外部知识库层，thirdspace-bridge skill 用）----
+$env:THIRDSPACE_VAULT  = "$env:IKAROS_ROOT\data\thirdspace-vault"
 $env:IKAROS_CONFIG       = "$env:IKAROS_ROOT\config"
 $env:IKAROS_MODULES      = "$env:IKAROS_ROOT\modules"
 $env:IKAROS_DEPS         = "$env:IKAROS_ROOT\deps"
@@ -32,7 +34,7 @@ $env:IKAROS_MEMORY          = "$env:IKAROS_ROOT\Ikaros-memory"
 $env:IKAROS_MEMORY_DATA     = "$env:IKAROS_MEMORY\data"
 $env:IKAROS_MEMORY_MODELS   = "$env:IKAROS_MEMORY\models"
 $env:IKAROS_MEMORY_SERVICES = "$env:IKAROS_MEMORY\services"
-$env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\v4\store.py"
+$env:IKAROS_MEMORY_SCRIPT   = "$env:IKAROS_MEMORY\v5\store.py"
 
 # ---- Step 4b: Ikaros-Live2D 桌宠路径 ----
 $env:IKAROS_LIVE2D       = "$env:IKAROS_ROOT\Ikaros-Live2D"

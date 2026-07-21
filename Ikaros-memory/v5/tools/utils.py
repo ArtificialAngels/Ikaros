@@ -85,6 +85,18 @@ def dumps(obj, ensure_ascii: bool = False) -> str:
     return json.dumps(obj, ensure_ascii=ensure_ascii, default=str)
 
 
+def answer(nl_summary: str, data: dict | list) -> str:
+    """Natural-language-first tool output: human text + JSON appendix.
+
+    Args:
+        nl_summary: Concise human-readable summary (Chinese).
+        data: Structured data to append as JSON.
+    Returns:
+        f"{nl_summary}\n{json.dumps(data, ensure_ascii=False, default=str)}"
+    """
+    return f"{nl_summary}\n{json.dumps(data, ensure_ascii=False, default=str)}"
+
+
 def local_llm_available(host: str = _LOCAL_LLM_HOST, port: int = _LOCAL_LLM_PORT,
                         timeout: float = 1.0) -> bool:
     """Best-effort TCP probe: is the local LLM server reachable?

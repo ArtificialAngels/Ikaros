@@ -16,6 +16,8 @@ set "IKAROS_RUNTIME=%IKAROS_ROOT%\runtime"
 set "IKAROS_NODE=%IKAROS_ROOT%\runtime\node\node.exe"
 set "IKAROS_DATA=%IKAROS_ROOT%\data"
 set "IKAROS_BIN=%IKAROS_ROOT%\bin"
+REM ---- ThirdSpace Vault（外部知识库层，thirdspace-bridge skill 用）----
+set "THIRDSPACE_VAULT=%IKAROS_ROOT%\data\thirdspace-vault"
 set "IKAROS_CONFIG=%IKAROS_ROOT%\config"
 set "IKAROS_MODULES=%IKAROS_ROOT%\modules"
 set "IKAROS_LOGS=%IKAROS_ROOT%\data\logs"
@@ -38,7 +40,7 @@ REM ---- Ikaros Memory paths ----
 set "IKAROS_MEMORY=%IKAROS_ROOT%\Ikaros-memory"
 set "IKAROS_MEMORY_DATA=%IKAROS_MEMORY%\data"
 set "IKAROS_MEMORY_MODELS=%IKAROS_MEMORY%\models"
-set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\v4\store.py"
+set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\v5\store.py"
 
 REM ---- Ikaros Live2D (Tauri pet) ----
 set "IKAROS_LIVE2D=%IKAROS_ROOT%\Ikaros-Live2D"

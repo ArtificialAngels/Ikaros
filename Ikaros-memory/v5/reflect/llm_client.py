@@ -19,7 +19,7 @@ logger = logging.getLogger("ikaros.memory.v5.llm")
 # ─── 路径配置 (与 v4 其他模块一致) ──────────────────────────────
 
 V4_ROOT = Path(__file__).resolve().parent.parent
-V4_DATA_DIR = V4_ROOT / "data" / "v4"
+V5_DATA_DIR = V4_ROOT / "data" / "v5"
 
 # 在路径定义完之后做 dotenv 加载 (按 HERMES_HOME → Ikaros 默认 → V4 顺序)
 try:

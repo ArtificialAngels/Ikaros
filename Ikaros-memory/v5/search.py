@@ -37,9 +37,9 @@ def _cache_enabled() -> bool:
     except Exception:
         return True
 
-V4_ROOT = Path(__file__).resolve().parent.parent
-V4_DATA_DIR = V4_ROOT / "data" / "v4"
-CHROMA_DIR = V4_DATA_DIR / "chroma"
+MEM_ROOT = Path(__file__).resolve().parent.parent
+V5_DATA_DIR = MEM_ROOT / "data" / "v5"
+CHROMA_DIR = V5_DATA_DIR / "chroma"
 
 # Embedding 服务: 同 V3, 走 :8587 nomic-embed-text
 # V3 注释 (vector_search.py:36-43) 2026-07-05 fix: 用 /embedding singular path
@@ -176,10 +176,10 @@ class VectorIndex:
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(self._persist_dir))
         self._collection = self._client.get_or_create_collection(
-            name="ikaros_v4",
+            name="ikaros_v5",
             metadata={"hnsw:space": "cosine"},
         )
-        logger.info("VectorIndex V4: %d vectors in %s",
+        logger.info("VectorIndex V5: %d vectors in %s",
                     self._collection.count(), self._persist_dir)
 
     def add(self, memory_id: int, content: str, *,
@@ -285,7 +285,7 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     V3 → V4: FTS5 走 v4.store, 向量走 v4.search.
     """
     # v4 包在 Ikaros-memory/ 下; 插入 Ikaros-memory 而非其父目录
-    sys.path.insert(0, str(V4_ROOT))
+    sys.path.insert(0, str(MEM_ROOT))
     from v5 import store  # noqa: F401
 
     # 1. FTS5 keyword search

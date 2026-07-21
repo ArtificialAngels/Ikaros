@@ -381,3 +381,10 @@ hermes-studio/logs/
 # === secrets & stray output (never commit) ===
 .dash_token
 output/
+
+# ThirdSpace vault 临时文件
+data/thirdspace-vault/.thirdspace/queues/
+data/thirdspace-vault/.thirdspace/reports/
+data/thirdspace-vault/.thirdspace/manifests/
+data/thirdspace-vault/02-日记/
+data/thirdspace-vault/99-归档/

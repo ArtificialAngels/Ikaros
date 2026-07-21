@@ -71,11 +71,8 @@ for _tool_fn in _NEW_V5_TOOLS:
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "sse":
         # Hermes Studio transport: SSE on :9877.
-        try:
-            mcp.settings.host = "127.0.0.1"
-            mcp.settings.port = 9877
-        except Exception:  # noqa: BLE001
-            pass
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = 9877
         logger.info("v5 MCP server starting (sse) on 127.0.0.1:9877 ...")
         mcp.run(transport="sse")
     else:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🪶 Ikaros 仪表盘</title>
+<title>🪶 Ikaros 控制台</title>
 <style>
 /* ── css variables: ikaros warm dark ── */
 :root {
@@ -23,6 +23,7 @@
   --warm-purple-bg: rgba(181, 139, 196, .12);
   --warm-gray: #6b6260;
   --warm-gray-bg: rgba(107, 98, 96, .12);
+  --danger: #c46a6a;
   --scrollbar: #3d3530;
   --scrollbar-hover: #554a44;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
@@ -47,332 +48,190 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 /* ── layout ── */
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
+.app { display: flex; flex-direction: column; height: 100vh; }
 
 /* ── top bar ── */
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: flex; align-items: center; gap: 16px;
   padding: 10px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
-.topbar h1 {
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: .3px;
-}
+.topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: .3px; }
 .topbar h1 span { color: var(--accent); }
+.topbar .spacer { flex: 1; }
 .status-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-muted);
 }
 .conn-dot {
-  display: inline-block;
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: #666;
-  transition: background .3s;
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: #666; transition: background .3s;
 }
 .conn-dot.on  { background: #7da87d; box-shadow: 0 0 6px rgba(125,168,125,.5); }
 .conn-dot.off { background: #c48b5e; }
 
-/* ── main columns ── */
-.main {
-  display: flex;
-  flex: 1;
-  min-height: 0;
+.btn {
+  font: inherit; font-size: 13px;
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text); cursor: pointer; transition: all .15s;
 }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #1a1612; font-weight: 600; }
+.btn.primary:hover { background: var(--accent); color: #1a1612; }
+.btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
 
-/* ── left: conversation stream ── */
-.stream-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+/* ── main columns ── */
+.main { display: flex; flex: 1; min-height: 0; }
+
+/* ── left: component grid ── */
+.grid-col {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
   border-right: 1px solid var(--border);
 }
-.stream-header {
+.grid-header {
+  display: flex; align-items: center; gap: 12px;
   padding: 8px 16px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .8px;
-  color: var(--text-muted);
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .8px; color: var(--text-muted);
+  background: var(--surface); border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.stream {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px;
+.grid-header .summary { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.grid-header .spacer { flex: 1; }
+.grid {
+  flex: 1; overflow-y: auto; padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 12px; align-content: start;
 }
+
+/* component card */
+.comp {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  cursor: grab; transition: border-color .15s, box-shadow .15s, transform .1s;
+  position: relative;
+}
+.comp:hover { border-color: var(--accent-dim); }
+.comp.dragging { opacity: .45; cursor: grabbing; }
+.comp.pending { box-shadow: 0 0 0 1px var(--accent-dim) inset; }
+.comp-head { display: flex; align-items: center; gap: 8px; }
+.comp-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--warm-gray); flex-shrink: 0; transition: background .3s, box-shadow .3s;
+}
+.comp-dot.on  { background: var(--warm-green); box-shadow: 0 0 6px rgba(125,168,125,.55); }
+.comp-dot.off { background: var(--warm-orange); }
+.comp-name { font-size: 14px; font-weight: 600; flex: 1; }
+.comp-cat {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: var(--warm-gray-bg); color: var(--text-muted); flex-shrink: 0;
+}
+.comp-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.comp-ports { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 1px 6px; border-radius: 3px;
+  background: var(--warm-gray-bg); color: var(--text-muted);
+}
+.chip.on  { background: var(--warm-green-bg); color: var(--warm-green); }
+.chip.off { background: var(--warm-orange-bg); color: var(--warm-orange); }
+.comp-detail { font-size: 11px; color: var(--text-muted); min-height: 14px; }
+.comp.pending .comp-detail { color: var(--accent); }
+.comp-actions { display: flex; gap: 6px; margin-top: 2px; }
+.comp-actions .btn { flex: 1; text-align: center; padding: 5px 0; font-size: 12px; }
+.comp-actions .btn:disabled { opacity: .4; cursor: default; }
+.comp-actions .btn.stop:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ── right: monitor stream ── */
+.stream-col {
+  width: 380px; min-width: 300px; flex-shrink: 0;
+  display: flex; flex-direction: column; overflow-y: auto;
+}
+.stream-header {
+  padding: 8px 16px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .8px; color: var(--text-muted);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.stream { flex: 1; overflow-y: auto; padding: 12px 16px; }
 .stream-empty {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 40px 20px;
-  font-size: 13px;
-  line-height: 1.8;
+  text-align: center; color: var(--text-muted); padding: 40px 20px;
+  font-size: 13px; line-height: 1.8;
 }
 .stream-empty .icon { font-size: 32px; display: block; margin-bottom: 8px; }
-
-/* single message */
 .msg {
-  padding: 10px 12px;
-  margin-bottom: 6px;
-  border-radius: var(--radius);
-  font-size: 13px;
-  line-height: 1.6;
-  animation: fadeIn .25s ease;
+  padding: 10px 12px; margin-bottom: 6px; border-radius: var(--radius);
+  font-size: 13px; line-height: 1.6; animation: fadeIn .25s ease;
 }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-
-.msg-user_msg {
-  background: var(--warm-orange-bg);
-  border-left: 3px solid var(--warm-orange);
-}
-.msg-assistant_msg {
-  background: var(--warm-green-bg);
-  border-left: 3px solid var(--warm-green);
-}
-.msg-thought {
-  background: var(--warm-purple-bg);
-  border-left: 3px solid var(--warm-purple);
-  font-style: italic;
-}
-.msg-other {
-  background: var(--warm-gray-bg);
-  border-left: 3px solid var(--warm-gray);
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.msg .head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 4px;
-  gap: 8px;
-}
-.msg .label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .5px;
-}
+.msg-user_msg { background: var(--warm-orange-bg); border-left: 3px solid var(--warm-orange); }
+.msg-assistant_msg { background: var(--warm-green-bg); border-left: 3px solid var(--warm-green); }
+.msg-thought { background: var(--warm-purple-bg); border-left: 3px solid var(--warm-purple); font-style: italic; }
+.msg-other { background: var(--warm-gray-bg); border-left: 3px solid var(--warm-gray); color: var(--text-muted); font-size: 12px; }
+.msg .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; gap: 8px; }
+.msg .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
 .msg-user_msg .label    { color: var(--warm-orange); }
 .msg-assistant_msg .label { color: var(--warm-green); }
 .msg-thought .label     { color: var(--warm-purple); }
-.msg .time {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-.msg .body {
-  word-break: break-word;
-  white-space: pre-wrap;
-}
+.msg .time { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
+.msg .body { word-break: break-word; white-space: pre-wrap; }
 .msg .mood-tag {
-  display: inline-block;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(255,255,255,.06);
-  color: var(--text-muted);
-  margin-top: 4px;
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(255,255,255,.06); color: var(--text-muted); margin-top: 4px;
 }
-
-/* ── right: state panel ── */
-.state-col {
-  width: 340px;
-  min-width: 280px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-.state-header {
-  padding: 8px 16px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .8px;
-  color: var(--text-muted);
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.state-content {
-  padding: 16px;
-  flex: 1;
-}
-
-/* state card */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; margin: 12px 12px 0 12px;
 }
-.card-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .6px;
-  color: var(--text-muted);
-  margin-bottom: 10px;
-}
-
-/* affect bars */
-.affect-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-  gap: 8px;
-}
+.card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); margin-bottom: 10px; }
+.affect-row { display: flex; align-items: center; margin-bottom: 8px; gap: 8px; }
 .affect-row:last-child { margin-bottom: 0; }
-.affect-label {
-  width: 88px;
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.affect-track {
-  flex: 1;
-  height: 16px;
-  background: var(--surface2);
-  border-radius: 8px;
-  overflow: hidden;
-  position: relative;
-}
-.affect-fill {
-  height: 100%;
-  border-radius: 8px;
-  transition: width .6s ease, background .4s;
-}
+.affect-label { width: 88px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.affect-track { flex: 1; height: 16px; background: var(--surface2); border-radius: 8px; overflow: hidden; position: relative; }
+.affect-fill { height: 100%; border-radius: 8px; transition: width .6s ease, background .4s; }
 .affect-fill.P { background: linear-gradient(90deg, #b8895e, #d4a574); }
 .affect-fill.A { background: linear-gradient(90deg, #7da87d, #a8d4a8); }
 .affect-fill.D { background: linear-gradient(90deg, #b58bc4, #d4b0e0); }
-.affect-value {
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--text);
-  width: 44px;
-  text-align: right;
-  flex-shrink: 0;
-}
-.affect-emoji {
-  font-size: 16px;
-  width: 20px;
-  text-align: center;
-  flex-shrink: 0;
-}
+.affect-value { font-size: 12px; font-family: var(--font-mono); color: var(--text); width: 44px; text-align: right; flex-shrink: 0; }
+.affect-emoji { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+.vitality-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.vitality-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.vitality-track { flex: 1; height: 10px; background: var(--surface2); border-radius: 5px; overflow: hidden; }
+.vitality-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .6s ease; }
+.vitality-num { font-size: 12px; font-family: var(--font-mono); color: var(--text); }
+.monologue-text { font-size: 13px; line-height: 1.7; color: var(--warm-purple); font-style: italic; word-break: break-word; }
+.monologue-empty { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.monologue-meta { font-size: 11px; color: var(--text-muted); margin-top: 6px; display: flex; gap: 10px; }
 
-/* vitality */
-.vitality-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-.vitality-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.vitality-track {
-  flex: 1;
-  height: 10px;
-  background: var(--surface2);
-  border-radius: 5px;
-  overflow: hidden;
-}
-.vitality-fill {
-  height: 100%;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
-  transition: width .6s ease;
-}
-.vitality-num {
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--text);
-}
-
-/* monologue */
-.monologue-text {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--warm-purple);
-  font-style: italic;
-  word-break: break-word;
-}
-.monologue-empty {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-style: italic;
-}
-.monologue-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 6px;
-  display: flex;
-  gap: 10px;
-}
-
-/* status/thinking bar */
 .status-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  min-height: 34px;
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  background: var(--surface); border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-muted); flex-shrink: 0; min-height: 34px;
 }
-.status-bar .thinking {
-  display: none;
-  gap: 4px;
-  align-items: center;
-}
+.status-bar .thinking { display: none; gap: 4px; align-items: center; }
 .status-bar .thinking.active { display: flex; }
-.thinking-dot {
-  width: 5px; height: 5px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
-}
+.thinking-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .thinking-dot:nth-child(2) { animation-delay: .2s; }
 .thinking-dot:nth-child(3) { animation-delay: .4s; }
-@keyframes pulse {
-  0%, 80%, 100% { opacity: .3; transform: scale(.8); }
-  40% { opacity: 1; transform: scale(1); }
-}
-.status-bar .event-count {
-  margin-left: auto;
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
+@keyframes pulse { 0%, 80%, 100% { opacity: .3; transform: scale(.8); } 40% { opacity: 1; transform: scale(1); } }
+.status-bar .event-count { margin-left: auto; font-size: 11px; font-family: var(--font-mono); }
+
+.shutdown-msg { padding: 80px 20px; text-align: center; color: var(--text-muted); font-size: 15px; }
 
 /* responsive */
-@media (max-width: 720px) {
+@media (max-width: 980px) {
   .main { flex-direction: column; }
-  .state-col { width: 100%; min-width: 0; max-height: 40vh; }
-  .stream-col { border-right: none; border-bottom: 1px solid var(--border); }
+  .grid-col { border-right: none; border-bottom: 1px solid var(--border); }
+  .stream-col { width: 100%; min-width: 0; max-height: 38vh; }
 }
 </style>
 </head>
@@ -380,57 +239,62 @@ html, body {
 <div class="app">
   <!-- top bar -->
   <div class="topbar">
-    <h1>🪶 <span>Ikaros</span> 仪表盘</h1>
+    <h1>🪶 <span>Ikaros</span> 控制台</h1>
     <div class="status-group">
       <span class="conn-dot" id="connDot"></span>
       <span id="connLabel">连接中…</span>
     </div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="btnStartAll">▶ 全部启动</button>
+    <button class="btn" id="btnStopAll">■ 全部停止</button>
+    <button class="btn small" id="btnReset">重置布局</button>
+    <button class="btn small danger" id="btnShutdown">关闭面板</button>
   </div>
 
   <!-- main columns -->
   <div class="main">
+    <!-- component grid -->
+    <div class="grid-col">
+      <div class="grid-header">
+        🧩 组件
+        <span class="summary" id="summary">—</span>
+        <span class="spacer"></span>
+        <span style="text-transform:none;letter-spacing:0;">拖拽卡片可自定义布局</span>
+      </div>
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <!-- monitor stream -->
     <div class="stream-col">
-      <div class="stream-header">💬 对话流</div>
+      <div class="stream-header">💬 实时事件流</div>
       <div class="stream" id="stream">
         <div class="stream-empty" id="emptyMsg">
           <span class="icon">🪶</span>
           等待伊卡洛斯的消息…
         </div>
       </div>
-    </div>
-    <div class="state-col">
-      <div class="state-header">📊 状态</div>
-      <div class="state-content">
-        <!-- affect -->
-        <div class="card">
-          <div class="card-title">🎭 情感 (PAD)</div>
-          <div id="affectPanel">
-            <div class="affect-row"><span class="affect-label">愉悦</span><span class="affect-emoji">😊</span><div class="affect-track"><div class="affect-fill P" id="barP" style="width:50%"></div></div><span class="affect-value" id="valP">—</span></div>
-            <div class="affect-row"><span class="affect-label">唤醒</span><span class="affect-emoji">⚡</span><div class="affect-track"><div class="affect-fill A" id="barA" style="width:50%"></div></div><span class="affect-value" id="valA">—</span></div>
-            <div class="affect-row"><span class="affect-label">支配</span><span class="affect-emoji">👑</span><div class="affect-track"><div class="affect-fill D" id="barD" style="width:50%"></div></div><span class="affect-value" id="valD">—</span></div>
-          </div>
+      <div class="card">
+        <div class="card-title">🎭 情感 (PAD)</div>
+        <div id="affectPanel">
+          <div class="affect-row"><span class="affect-label">愉悦</span><span class="affect-emoji">😊</span><div class="affect-track"><div class="affect-fill P" id="barP" style="width:50%"></div></div><span class="affect-value" id="valP">—</span></div>
+          <div class="affect-row"><span class="affect-label">唤醒</span><span class="affect-emoji">⚡</span><div class="affect-track"><div class="affect-fill A" id="barA" style="width:50%"></div></div><span class="affect-value" id="valA">—</span></div>
+          <div class="affect-row"><span class="affect-label">支配</span><span class="affect-emoji">👑</span><div class="affect-track"><div class="affect-fill D" id="barD" style="width:50%"></div></div><span class="affect-value" id="valD">—</span></div>
         </div>
-
-        <!-- vitality -->
-        <div class="card">
-          <div class="card-title">✨ 生命活力</div>
-          <div id="vitalityPanel">
-            <div class="vitality-row">
-              <span class="vitality-label">V5 活力</span>
-              <div class="vitality-track"><div class="vitality-fill" id="barV" style="width:0%"></div></div>
-              <span class="vitality-num" id="valV">—</span>
-            </div>
-          </div>
+      </div>
+      <div class="card">
+        <div class="card-title">✨ 生命活力</div>
+        <div class="vitality-row">
+          <span class="vitality-label">V5 活力</span>
+          <div class="vitality-track"><div class="vitality-fill" id="barV" style="width:0%"></div></div>
+          <span class="vitality-num" id="valV">—</span>
         </div>
-
-        <!-- monologue -->
-        <div class="card">
-          <div class="card-title">💭 内心独白</div>
-          <div id="monologuePanel">
-            <div class="monologue-empty" id="monoEmpty">暂无内心独白</div>
-            <div class="monologue-text" id="monoText" style="display:none"></div>
-            <div class="monologue-meta" id="monoMeta" style="display:none"></div>
-          </div>
+      </div>
+      <div class="card">
+        <div class="card-title">💭 内心独白</div>
+        <div id="monologuePanel">
+          <div class="monologue-empty" id="monoEmpty">暂无内心独白</div>
+          <div class="monologue-text" id="monoText" style="display:none"></div>
+          <div class="monologue-meta" id="monoMeta" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -453,65 +317,221 @@ html, body {
 (function() {
 'use strict';
 
-// ── dom refs ──
-const stream       = document.getElementById('stream');
-const emptyMsg     = document.getElementById('emptyMsg');
-const connDot      = document.getElementById('connDot');
-const connLabel    = document.getElementById('connLabel');
-const statusText   = document.getElementById('statusText');
-const thinkingEl   = document.getElementById('thinking');
-const eventCount   = document.getElementById('eventCount');
-
-const barP = document.getElementById('barP');
-const barA = document.getElementById('barA');
-const barD = document.getElementById('barD');
-const valP = document.getElementById('valP');
-const valA = document.getElementById('valA');
-const valD = document.getElementById('valD');
-const barV = document.getElementById('barV');
-const valV = document.getElementById('valV');
-const monoText  = document.getElementById('monoText');
-const monoEmpty = document.getElementById('monoEmpty');
-const monoMeta  = document.getElementById('monoMeta');
-
-// ── state ──
-let msgCount = 0;
-let lastThoughtTs = 0;
-
 // ── helpers ──
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
   return d.toLocaleTimeString('zh-CN', {hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
 }
-
 function fmtAffect(val) {
   if (val == null) return '—';
   return (val >= 0 ? '+' : '') + (val * 100).toFixed(0) + '%';
 }
-
 function affectWidth(val) {
   if (val == null) return 50;
-  // map [-1,1] → [0,100], center at 50%
   return Math.round((val + 1) * 50);
 }
-
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-// ── add message to stream ──
+// ── component grid ──
+const grid = document.getElementById('grid');
+const connDot = document.getElementById('connDot');
+const connLabel = document.getElementById('connLabel');
+const summaryEl = document.getElementById('summary');
+let cardEls = {};      // id -> element
+let busy = new Set();  // ids currently pending an action
+let dragId = null;
+const LS_KEY = 'ikaros-control-layout';
+
+function loadOrder() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch (_) { return []; }
+}
+function saveOrder(order) { localStorage.setItem(LS_KEY, JSON.stringify(order)); }
+
+function connOn()  { connDot.className = 'conn-dot on';  connLabel.textContent = '已连接'; }
+function connOff() { connDot.className = 'conn-dot off'; connLabel.textContent = '重连中…'; }
+
+async function initGrid() {
+  let list;
+  try {
+    list = await fetch('/api/components').then(r => r.json());
+  } catch (_) {
+    connOff();
+    grid.innerHTML = '<div class="stream-empty">无法连接控制面板后端</div>';
+    return;
+  }
+  const meta = {};
+  list.forEach(c => meta[c.id] = c);
+  let order = loadOrder().filter(id => meta[id]);
+  list.forEach(c => { if (!order.includes(c.id)) order.push(c.id); });
+
+  grid.innerHTML = '';
+  cardEls = {};
+  order.forEach(id => {
+    const el = buildCard(meta[id]);
+    cardEls[id] = el;
+    grid.appendChild(el);
+  });
+  refreshStatuses();
+  setInterval(refreshStatuses, 2000);
+}
+
+function buildCard(c) {
+  const el = document.createElement('div');
+  el.className = 'comp';
+  el.id = 'card-' + c.id;
+  el.dataset.id = c.id;
+  el.draggable = true;
+  el.innerHTML =
+    '<div class="comp-head">' +
+      '<span class="comp-dot" id="dot-' + c.id + '"></span>' +
+      '<span class="comp-name">' + esc(c.name) + '</span>' +
+      '<span class="comp-cat">' + esc(c.category) + '</span>' +
+    '</div>' +
+    '<div class="comp-desc">' + esc(c.desc) + '</div>' +
+    '<div class="comp-ports" id="ports-' + c.id + '"></div>' +
+    '<div class="comp-detail" id="detail-' + c.id + '"></div>' +
+    '<div class="comp-actions">' +
+      '<button class="btn start" data-act="start">启动</button>' +
+      '<button class="btn stop" data-act="stop">停止</button>' +
+      '<button class="btn restart" data-act="restart">重启</button>' +
+    '</div>';
+
+  el.querySelectorAll('button[data-act]').forEach(b => {
+    b.addEventListener('click', () => doAction(c.id, b.dataset.act));
+  });
+
+  el.addEventListener('dragstart', e => {
+    dragId = c.id;
+    el.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  el.addEventListener('dragend', () => { el.classList.remove('dragging'); });
+
+  return el;
+}
+
+async function refreshStatuses() {
+  let list;
+  try {
+    list = await fetch('/api/components').then(r => r.json());
+  } catch (_) {
+    connOff();
+    return;
+  }
+  connOn();
+  let running = 0;
+  list.forEach(c => { if (c.running) running++; updateCard(c); });
+  summaryEl.textContent = running + ' / ' + list.length + ' 运行中';
+}
+
+function updateCard(c) {
+  const dot = document.getElementById('dot-' + c.id);
+  if (dot) dot.className = 'comp-dot ' + (c.running ? 'on' : 'off');
+  const detail = document.getElementById('detail-' + c.id);
+  if (detail) detail.textContent = c.detail || '';
+  const ports = document.getElementById('ports-' + c.id);
+  if (ports) {
+    if (c.ports && c.ports.length) {
+      ports.innerHTML = c.ports.map(p =>
+        '<span class="chip ' + (c.ports_up && c.ports_up.includes(p) ? 'on' : 'off') + '">:' + p + '</span>'
+      ).join('');
+    } else {
+      ports.innerHTML = '';
+    }
+  }
+  const card = document.getElementById('card-' + c.id);
+  if (!card) return;
+  const isBusy = busy.has(c.id);
+  card.classList.toggle('pending', isBusy);
+  card.querySelectorAll('button').forEach(b => b.disabled = isBusy);
+}
+
+async function doAction(id, act) {
+  busy.add(id);
+  updateCard({ id: id, running: false, detail: '操作中…', ports: [], ports_up: [] });
+  const card = document.getElementById('card-' + id);
+  if (card) { card.classList.add('pending'); card.querySelectorAll('button').forEach(b => b.disabled = true); }
+  try { await fetch('/api/components/' + id + '/' + act, {method: 'POST'}); } catch (_) {}
+  setTimeout(() => {
+    busy.delete(id);
+    const c2 = document.getElementById('card-' + id);
+    if (c2) { c2.classList.remove('pending'); c2.querySelectorAll('button').forEach(b => b.disabled = false); }
+    refreshStatuses();
+  }, 12000);
+}
+
+async function systemAction(act) {
+  try { await fetch('/api/system/' + act, {method: 'POST'}); } catch (_) {}
+  Object.keys(cardEls).forEach(id => busy.add(id));
+  document.getElementById('summary').textContent = (act === 'start' ? '启动中…' : '停止中…');
+  setTimeout(() => { busy.clear(); refreshStatuses(); }, 12000);
+}
+
+async function shutdownPanel() {
+  if (!confirm('确定关闭控制面板？组件不会被停止，只是关闭此页面。')) return;
+  try { await fetch('/api/shutdown', {method: 'POST'}); } catch (_) {}
+  document.body.innerHTML = '<div class="shutdown-msg">控制面板已关闭。</div>';
+}
+
+function reorder(srcId, tgtId) {
+  const ids = Array.from(grid.children).map(el => el.dataset.id);
+  const from = ids.indexOf(srcId);
+  if (from < 0) return;
+  ids.splice(from, 1);
+  let to = ids.length;
+  if (tgtId && tgtId !== srcId) {
+    const ti = ids.indexOf(tgtId);
+    if (ti >= 0) to = ti;
+  }
+  ids.splice(to, 0, srcId);
+  saveOrder(ids);
+  ids.forEach(id => grid.appendChild(cardEls[id]));
+}
+
+grid.addEventListener('dragover', e => { e.preventDefault(); });
+grid.addEventListener('drop', e => {
+  e.preventDefault();
+  if (!dragId) return;
+  const after = e.target.closest('.comp');
+  reorder(dragId, after ? after.dataset.id : null);
+  dragId = null;
+});
+
+document.getElementById('btnStartAll').addEventListener('click', () => systemAction('start'));
+document.getElementById('btnStopAll').addEventListener('click', () => systemAction('stop'));
+document.getElementById('btnReset').addEventListener('click', () => {
+  localStorage.removeItem(LS_KEY);
+  location.reload();
+});
+document.getElementById('btnShutdown').addEventListener('click', shutdownPanel);
+
+// ── monitor stream (reused from the original dashboard) ──
+const stream     = document.getElementById('stream');
+const emptyMsg   = document.getElementById('emptyMsg');
+const statusText = document.getElementById('statusText');
+const thinkingEl = document.getElementById('thinking');
+const eventCount = document.getElementById('eventCount');
+const barP = document.getElementById('barP'), barA = document.getElementById('barA'), barD = document.getElementById('barD');
+const valP = document.getElementById('valP'), valA = document.getElementById('valA'), valD = document.getElementById('valD');
+const barV = document.getElementById('barV'), valV = document.getElementById('valV');
+const monoText = document.getElementById('monoText'), monoEmpty = document.getElementById('monoEmpty'), monoMeta = document.getElementById('monoMeta');
+
+let msgCount = 0;
+let lastThoughtTs = 0;
+
 function addMessage(entry) {
   const dk = entry.display_kind || entry.kind || 'other';
   const text = entry.text || '';
   const ts = entry.ts || Date.now() / 1000;
   const mood = entry.mood || '';
-  const session = entry.session_id || '';
-
-  // hide empty state
   emptyMsg.style.display = 'none';
-
   const el = document.createElement('div');
   const kindClass = ['user_msg','assistant_msg','thought'].includes(dk) ? dk : 'other';
   el.className = 'msg msg-' + kindClass;
-
   let label = dk;
   if (dk === 'user_msg') label = '👤 用户';
   else if (dk === 'assistant_msg') label = '🪶 伊卡洛斯';
@@ -519,171 +539,70 @@ function addMessage(entry) {
   else if (dk === 'status') label = '📡 状态';
   else if (dk === 'stt') label = '🎤 语音';
   else label = '📋 ' + dk;
-
-  let moodHtml = '';
-  if (mood) moodHtml = `<span class="mood-tag">${mood}</span>`;
-
-  let body = text || '…';
-  // escape HTML
-  body = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-
-  el.innerHTML = `<div class="head"><span class="label">${label}</span><span class="time">${fmtTime(ts)}</span></div><div class="body">${body}${moodHtml}</div>`;
-
+  let moodHtml = mood ? '<span class="mood-tag">' + esc(mood) + '</span>' : '';
+  let body = esc(text || '…');
+  el.innerHTML = '<div class="head"><span class="label">' + label + '</span><span class="time">' + fmtTime(ts) + '</span></div><div class="body">' + body + moodHtml + '</div>';
   stream.appendChild(el);
   stream.scrollTop = stream.scrollHeight;
   msgCount++;
   eventCount.textContent = msgCount + ' 事件';
-
-  // Track thoughts for monologue
-  if (dk === 'thought' && text && ts > lastThoughtTs) {
-    lastThoughtTs = ts;
-    updateMonologue(entry);
-  }
-
-  // Thinking indicator
-  if (dk === 'user_msg') {
-    thinkingEl.classList.add('active');
-    statusText.textContent = '伊卡洛斯思考中…';
-  } else if (dk === 'assistant_msg') {
-    thinkingEl.classList.remove('active');
-    statusText.textContent = '就绪';
-  }
+  if (dk === 'thought' && text && ts > lastThoughtTs) { lastThoughtTs = ts; updateMonologue(entry); }
+  if (dk === 'user_msg') { thinkingEl.classList.add('active'); statusText.textContent = '伊卡洛斯思考中…'; }
+  else if (dk === 'assistant_msg') { thinkingEl.classList.remove('active'); statusText.textContent = '就绪'; }
 }
 
-// ── update affect bars ──
 function updateAffect(state) {
   const a = state && state.affect;
   if (!a) return;
   const p = a.pleasure, ar = a.arousal, d = a.dominance;
-
-  barP.style.width = affectWidth(p) + '%';
-  barA.style.width = affectWidth(ar) + '%';
-  barD.style.width = affectWidth(d) + '%';
-  valP.textContent = fmtAffect(p);
-  valA.textContent = fmtAffect(ar);
-  valD.textContent = fmtAffect(d);
+  barP.style.width = affectWidth(p) + '%'; barA.style.width = affectWidth(ar) + '%'; barD.style.width = affectWidth(d) + '%';
+  valP.textContent = fmtAffect(p); valA.textContent = fmtAffect(ar); valD.textContent = fmtAffect(d);
 }
-
-// ── update vitality ──
 function updateVitality(state) {
-  // V5 vitality might be in thought.vitality or state.affect.vitality
   let v = null;
-  if (state && state.thought && state.thought.vitality != null) {
-    v = state.thought.vitality;
-  } else if (state && state.affect && state.affect.vitality != null) {
-    v = state.affect.vitality;
-  }
-  if (v != null) {
-    const pct = clamp(Math.round(v * 100), 0, 100);
-    barV.style.width = pct + '%';
-    valV.textContent = pct + '%';
-  } else {
-    barV.style.width = '0%';
-    valV.textContent = '—';
-  }
+  if (state && state.thought && state.thought.vitality != null) v = state.thought.vitality;
+  else if (state && state.affect && state.affect.vitality != null) v = state.affect.vitality;
+  if (v != null) { const pct = clamp(Math.round(v * 100), 0, 100); barV.style.width = pct + '%'; valV.textContent = pct + '%'; }
+  else { barV.style.width = '0%'; valV.textContent = '—'; }
 }
-
-// ── update monologue ──
 function updateMonologue(entry) {
   const text = entry.text || '';
   if (!text) return;
-  monoEmpty.style.display = 'none';
-  monoText.style.display = 'block';
-  monoMeta.style.display = 'flex';
-  monoText.textContent = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  monoEmpty.style.display = 'none'; monoText.style.display = 'block'; monoMeta.style.display = 'flex';
+  monoText.textContent = text;
   let metaParts = [];
   if (entry.intensity != null) metaParts.push('强度: ' + entry.intensity.toFixed(2));
   if (entry.mood) metaParts.push('情绪: ' + entry.mood);
   if (entry.ts) metaParts.push(fmtTime(entry.ts));
   monoMeta.innerHTML = metaParts.join(' · ');
 }
-
-// ── load initial state and log ──
 function loadInitial() {
-  // state
-  fetch('/api/state')
-    .then(r => r.json())
-    .then(s => {
-      updateAffect(s);
-      updateVitality(s);
-      if (s.thought && s.thought.text) {
-        updateMonologue({
-          text: s.thought.text,
-          intensity: s.thought.intensity,
-          mood: s.thought.mood,
-          ts: s.thought.created || s.thought.ts,
-        });
-      }
-    })
-    .catch(() => {});
-
-  // log
-  fetch('/api/log')
-    .then(r => r.json())
-    .then(events => {
-      if (events && events.length) {
-        events.forEach(addMessage);
-      }
-    })
-    .catch(() => {});
+  fetch('/api/state').then(r => r.json()).then(s => {
+    updateAffect(s); updateVitality(s);
+    if (s.thought && s.thought.text) updateMonologue({text: s.thought.text, intensity: s.thought.intensity, mood: s.thought.mood, ts: s.thought.created || s.thought.ts});
+  }).catch(() => {});
+  fetch('/api/log').then(r => r.json()).then(events => { if (events && events.length) events.forEach(addMessage); }).catch(() => {});
 }
-
-// ── SSE ──
 function connectSSE() {
   const evtSource = new EventSource('/api/events');
-
-  evtSource.addEventListener('connected', () => {
-    connDot.className = 'conn-dot on';
-    connLabel.textContent = '已连接';
-  });
-
-  evtSource.addEventListener('monitor', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      addMessage(data);
-    } catch (_) {}
-  });
-
-  evtSource.addEventListener('ping', () => {
-    // keepalive — noop
-  });
-
-  evtSource.onerror = () => {
-    connDot.className = 'conn-dot off';
-    connLabel.textContent = '重连中…';
-    evtSource.close();
-    setTimeout(connectSSE, 3000);
-  };
-}
-
-// ── periodic state refresh ──
-function startStatePolling() {
-  setInterval(() => {
-    fetch('/api/state')
-      .then(r => r.json())
-      .then(s => {
-        updateAffect(s);
-        updateVitality(s);
-        if (s.thought && s.thought.text) {
-          const t = s.thought;
-          if ((t.created || t.ts || 0) >= lastThoughtTs) {
-            updateMonologue({
-              text: t.text,
-              intensity: t.intensity,
-              mood: t.mood,
-              ts: t.created || t.ts,
-            });
-          }
-        }
-      })
-      .catch(() => {});
-  }, 3000);
+  evtSource.addEventListener('connected', () => { connDot.className = 'conn-dot on'; connLabel.textContent = '已连接'; });
+  evtSource.addEventListener('monitor', e => { try { addMessage(JSON.parse(e.data)); } catch (_) {} });
+  evtSource.onerror = () => { connDot.className = 'conn-dot off'; connLabel.textContent = '重连中…'; evtSource.close(); setTimeout(connectSSE, 3000); };
 }
 
 // ── go ──
+initGrid();
 loadInitial();
 connectSSE();
-startStatePolling();
+setInterval(() => {
+  fetch('/api/state').then(r => r.json()).then(s => {
+    updateAffect(s); updateVitality(s);
+    if (s.thought && s.thought.text) {
+      const t = s.thought;
+      if ((t.created || t.ts || 0) >= lastThoughtTs) updateMonologue({text: t.text, intensity: t.intensity, mood: t.mood, ts: t.created || t.ts});
+    }
+  }).catch(() => {});
+}, 3000);
 
 })();
 </script>

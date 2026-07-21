@@ -4,7 +4,7 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 
-> **Last revised:** 2026-07-16 (bin/*.bat consolidated into Rust `ikaros` launcher; portable-python moved under runtime). Prev: 2026-07-13 (harness rules moved to local LLM router in cloud_chat).
+> **Last revised:** 2026-07-20 (launcher switched from Rust `ikaros.exe` to control panel `bin/ikaros-control.bat`; b10000-cuda confirmed usable via panel start). Prev: 2026-07-16 (portable-python moved under runtime).
 > Two bugs killed the startup chain:
 > 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
 >    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.
@@ -15,12 +15,11 @@
 > Also: memory watchdog now manages both :8587 (embedding) AND :8080 (local LLM for v3 extraction).
 
 Previous: 2026-07-16 (bin/*.bat → Rust `ikaros` launcher + portable-python under runtime).
-- **bin/*.bat 整合为 Rust 启动器 `bin/ikaros.exe` (+ `bin/ikaros.cmd` 薄壳)**: 12 个 .bat
-  (ikaros-start/sleep, hermes-studio/dashboard/desktop, ikaros-mem/think/verify/live2d,
-  ika-ws-restart, ikaros-dash-fixed, screen-monitor) + launch-hidden.vbs 全部移入 `bin/legacy/` 作回滚;
-  新 `ikaros` 二进制按 order 分发 (start/sleep/studio/dashboard/desktop/think/mem/live2d/verify/soul-sync/ws-restart/screen-monitor),
-  `start` 无 flag、拉起后端后弹菜单选前端。`CREATE_NO_WINDOW` 替代 launch-hidden.vbs。
-  源码: `Ikaros-environment/ikaros-cli/` (零依赖 std-only Rust)。
+- **启动器切换为控制面板 `bin/ikaros-control.bat` (2026-07-20)**: 双击 → 拉起 `tools/ikaros-dashboard/server.py`
+  (Web 面板,打开 http://127.0.0.1:9100),面板内 "start" 按钮拉起后端整栈(含 Memory watchdog + :8587 嵌入 + :8080 LLM),
+  **内置完整 CUDA 环境装配**(前置 `runtime/llama/b10000-cuda` 进 PATH + 注入 `IKAROS_*` 变量)。**不要手动裸跑 `llama-server.exe`**——
+  会缺 CUDA DLL 环境→加载期 SIGSEGV(已实测 f32/f16 均崩)。旧 Rust 启动器 `bin/ikaros.exe` 从未部署(仅源码
+  `Ikaros-environment/ikaros-cli/src/`),正式舍弃。旧 12 个 .bat 仍在 `bin/legacy/`(回滚用)。
 - **portable-python 迁入 runtime/**: 原 `E:\Ikaros\portable-python` 经 robocopy 复制到
   `E:\Ikaros\runtime\portable-python` (旧目录因 Defender 锁成孤儿待清理)。`python312._pth` 去掉失效的多级
   `..`,改由 `sitecustomize.py` 用 `__file__` 注入项目根 (5 层 parent)。环境变量源头 (ikaros-env.bat/ps1、
@@ -445,7 +444,7 @@ Tauri Pet (Ikaros-Live2D) --ws :7870--> ikaros-voice-ws.py
         v                                                 |
    edge_tts (TTS back to pet bubble) <--------------------+
 
-Memory (Ikaros-memory V4): SQLite+FTS5 + Chroma  ->  data/v4/v4.db
+Memory (Ikaros-memory V5): SQLite+FTS5 + Chroma  ->  data/v5/v5.db
    ikaros-memory-watchdog.py manages :8587 + :8080, runs V4 reflection
    (consolidate / dedup / promote / distill / reflect / cleanup).
 ```
@@ -490,9 +489,9 @@ E:\Ikaros\
 │   ├── public\live2d\              # Live2D model assets
 │   └── dist\                       # built frontend (frontendDist)
 ├── Ikaros-memory\                  # * V4 memory system
-│   ├── v4\                         # store.py / search.py / reflect/ (V4)
+│   ├── v5\                         # store.py / search.py / reflect/ (V5)
 │   ├── cogno_5d.py                 # 5D cognition anchoring
-│   └── data\v4\v4.db               # SQLite+FTS5 + Chroma vector store
+│   └── data\v5\v5.db               # SQLite+FTS5 + Chroma vector store
 ├── Ikaros-environment\             # env bootstrap (init.bat -> IKAROS_* vars)
 ├── data\hermes-agent\              # Hermes Desktop (Electron) + skills + sessions
 ├── exProject\                      # sibling OSS clones (Live2DPet, MewCo-AI) - ref only
@@ -814,6 +813,8 @@ calculates ~16 layers on GPU + rest on CPU. Works, but slow.
   $c = Get-Content file.bat -Raw
   [System.IO.File]::WriteAllText(file.bat, $c -replace "`r`n","`n" -replace "`n","`r`n", [System.Text.UTF8Encoding]::new($false))
   ```
+
+- **msys/git-bash paths (`/e/Ikaros`, `/tmp`) passed to NATIVE Windows programs get treated as RELATIVE → spill to `E:\e\...` / `E:\tmp`.** This is the #1 source of phantom root dirs. A native exe (robocopy.exe, the embedded portable-python, node, the Rust launcher) does NOT understand msys path conversion; if its CWD is `E:\`, a literal `/e/Ikaros/...` argument resolves to `E:\e\Ikaros\...`, and `/tmp/foo` resolves to `E:\tmp\foo`. We hit this on 2026-07-15: the portable-python migration (robocopy / `shutil`) was fed `/e/Ikaros/portable-python` + `/e/Ikaros/data` from a git-bash context → created a frozen 279 MB shadow `E:\e\Ikaros` (superseded by live `E:\Ikaros`, safe to delete) and an `E:\tmp` (IDE tasks + vite `studio-*.html`). **IRON RULE:** any script that shells out to a native Windows tool MUST use absolute Windows paths — `E:/Ikaros/...` (forward slash is fine for native tools) or `E:\Ikaros\...` — OR derive the root from the script's own location (`Path(__file__)` / `$PSScriptRoot` / `%~dp0`). NEVER pass `/e/Ikaros/...` or `/tmp` to a non-msys program. The launchers already do this right: `init.bat`/`ikaros-env.bat` resolve `IKAROS_ROOT` via `%~dp0`, and `main.rs` `order_studio_impl` pins the `npm` CWD to `root.join("hermes-studio")`. If you ever see `E:\e\` or `E:\tmp` reappear, grep the last script that ran for `/e/` or `/tmp` literals.
 
 - **`cmd /c "path with space"`** — truncates at the space. Workarounds:
   - `cmd /c "bat.bat" arg` (bat is relative, run from its dir)

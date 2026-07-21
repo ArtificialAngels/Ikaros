@@ -1215,6 +1215,17 @@ async def cloud_chat(
     """
     env_map = _load_env()
 
+    # ── Ikaros 后端选择 (由 Studio 页面配置 或 ekko 解析链注入, 经 v5-agent/manager.ts) ──
+    # provider:
+    #   "local"    直连本地 :8080 (可配置 base_url/model), 永不碰云端
+    #   "deepseek" 直连 OpenAI 兼容接口 (可配置 base_url/api_key/model) — 任意 DeepSeek 端点
+    #   "openai"   复用 ekko 模型解析链注入的远端端点 (glm / openai / 自定义 provider 等)
+    #   "dashboard" (默认) 走原 Dashboard WebSocket -> DeepSeek 路径, 失败再本地兜底
+    backend_provider = (os.environ.get("IKAROS_BACKEND_PROVIDER") or "dashboard").strip().lower()
+    backend_base_url = (os.environ.get("IKAROS_BACKEND_BASE_URL") or "").strip()
+    backend_api_key = os.environ.get("IKAROS_BACKEND_API_KEY") or ""
+    backend_model = (os.environ.get("IKAROS_BACKEND_MODEL") or "").strip()
+
     # V5: 哥哥的输入更新伊卡洛斯情感状态 (PAD)
     try:
         import sys as _sys2
@@ -1434,7 +1445,6 @@ async def cloud_chat(
     # 监控: 用户输入
     _push_monitor("user_msg", text=text[:200], session_id=session_id)
 
-    # ── Dashboard WebSocket JSON-RPC (唯一 API 路径) ──
     _is_task = _optimized is not None
     deepseek_key = _get_api_key(env_map, "DEEPSEEK_API_KEY")
     minimax_key = _get_api_key(env_map, "MINIMAX_CN_API_KEY")
@@ -1445,28 +1455,76 @@ async def cloud_chat(
     if len(_instruction) > 6000:
         _instruction = _instruction[:6000]
 
-    try:
-        if _is_task:
-            result = await _dash_rpc("session.create", {}, timeout=15)
-            _sid = result.get("session_id", "")
-            if not _sid:
-                raise RuntimeError("task session create returned no session_id")
-            log.info("task: created session %s", _sid)
-        else:
-            _sid = _HERMES_SESSION_ID
-            if not _sid:
-                raise RuntimeError("Ikaros main session not available")
+    if backend_provider == "local":
+        # 直连本地 LLM, 跳过 Dashboard / 云端 (永不触发 DeepSeek 429)
+        try:
+            reply = await _call_local_llm(
+                msgs,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                on_delta=on_delta,
+                base_url=backend_base_url or None,
+                model=backend_model or None,
+            )
+        except Exception as e:
+            log.warning("local backend failed: %s", e)
+            errors.append(f"local: {e}")
+            reply = None
 
-        reply = await _dash_prompt(_sid, _instruction, on_delta=on_delta)
-        log.info("%s (%s): %d chars", "task" if _is_task else "chat", _sid, len(reply or ""))
+    elif backend_provider in ("deepseek", "openai"):
+        # 直连 OpenAI 兼容接口 (DeepSeek / GLM / OpenAI / 任意兼容端点),
+        # 使用 ekko 解析链或页面配置的 base_url/key/model
+        try:
+            reply = await _call_openai_compatible(
+                base_url=backend_base_url or "https://api.deepseek.com/v1",
+                api_key=backend_api_key,
+                model=backend_model or "deepseek-chat",
+                messages=msgs,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                label=f"{backend_provider}-backend",
+                on_delta=on_delta,
+            )
+        except Exception as e:
+            log.warning("%s backend failed: %s", backend_provider, e)
+            errors.append(f"{backend_provider}: {e}")
+            reply = None
 
-    except Exception as e:
-        log.warning("dashboard WS failed: %s", e)
-        errors.append(f"dash-ws: {e}")
-        reply = None
+    else:
+        # ── Dashboard WebSocket JSON-RPC (legacy 默认路径) ──
+        try:
+            if _is_task:
+                result = await _dash_rpc("session.create", {}, timeout=15)
+                _sid = result.get("session_id", "")
+                if not _sid:
+                    raise RuntimeError("task session create returned no session_id")
+                log.info("task: created session %s", _sid)
+            else:
+                _sid = _HERMES_SESSION_ID
+                if not _sid:
+                    raise RuntimeError("Ikaros main session not available")
+
+            reply = await _dash_prompt(_sid, _instruction, on_delta=on_delta)
+            log.info("%s (%s): %d chars", "task" if _is_task else "chat", _sid, len(reply or ""))
+
+        except Exception as e:
+            log.warning("dashboard WS failed: %s", e)
+            errors.append(f"dash-ws: {e}")
+            reply = None
 
     if reply is None:
-        err_msg = "; ".join(errors) if errors else "Dashboard WebSocket 不可用"
+        if backend_provider == "dashboard":
+            # 本地兜底: 仅 legacy dashboard 路径, DeepSeek 欠费/断网时用本地 :8080 生成主回复
+            try:
+                local_reply = await _call_local_llm(
+                    msgs, max_tokens=max_tokens, temperature=temperature
+                )
+                if local_reply and local_reply.strip():
+                    log.info("main reply fell back to local :8080 LLM (%d chars)", len(local_reply))
+                    return local_reply.strip()
+            except Exception as e:
+                log.warning("local :8080 fallback for main reply failed: %s", e)
+        err_msg = "; ".join(errors) if errors else "未获取到回复"
         raise RuntimeError(f"所有 provider 调用失败: {err_msg}")
 
     # ── 步骤 3: 自我审查 (fire-and-forget, 不阻塞回复) ──
@@ -1641,6 +1699,8 @@ async def _call_local_llm(
     max_tokens: int = 512,
     temperature: float = 0.1,
     on_delta: Optional[Callable[[str], Any]] = None,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> str | None:
     """调本地 LLM (:8080/v1/chat/completions).
 
@@ -1658,9 +1718,10 @@ async def _call_local_llm(
     - max_tokens 默认从 300 提升到 512, 给思考+回答留够空间
     - timeout 从 15s 提升到 30s (思考模式更慢)
     """
-    url = f"{_LOCAL_LLM_URL.rstrip('/')}/chat/completions"
+    _base = (base_url or _LOCAL_LLM_URL).rstrip('/')
+    url = f"{_base}/chat/completions"
     body = {
-        "model": "local-llm",
+        "model": model or "local-llm",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,

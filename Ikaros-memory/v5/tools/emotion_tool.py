@@ -1,85 +1,119 @@
-# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/emotion_tool.md
-
+"""Emotion tools for Ikaros V5.
+"""
 from __future__ import annotations
 
-import json
-
-from v5.tools.utils import safe_tool, dumps, local_llm_available
+from v5.tools.utils import safe_tool, dumps, local_llm_available, answer
 
 
 @safe_tool
-def v5_analyze_emotion(text: str) -> str:
-    """Update Ikaros's PAD emotion state from a piece of text and return it.
+def v5_analyze_emotion(text: str, *, force_update: bool = False) -> str:
+    """Update Ikaros's PAD emotion state from a piece of text.
 
-    Call chain: AffectState.load() -> apply_event(text); also fires a
-    best-effort causal-emotion record (silently skipped on failure).
-    Fallback: :8080 down => still returns the (updated) current state.
+    If :8080 is reachable, use the LLM to map text to PAD; otherwise
+    fall back to a lightweight rule-based estimator.
+    Returns the new PAD state as JSON with a mood label.
     """
-    from v5.affect import AffectState, apply_event
-    from v5.emotional_memory import maybe_record_emotion
+    from v5.affect import AffectState
 
-    old = AffectState.load()
-    old_pad = (old.pleasure, old.arousal, old.dominance)
-    new = apply_event(text)
-    new_pad = (new.pleasure, new.arousal, new.dominance)
-
-    try:
-        maybe_record_emotion(old_pad, new_pad, text)
-    except Exception:  # noqa: BLE001
-        pass
-
-    delta = abs(new_pad[0] - old_pad[0]) + abs(new_pad[1] - old_pad[1]) + abs(new_pad[2] - old_pad[2])
-    return dumps({
-        "pleasure": round(new.pleasure, 4),
-        "arousal": round(new.arousal, 4),
-        "dominance": round(new.dominance, 4),
-        "mood_label": new.to_prompt(),
-        "delta": round(delta, 4),
-        "intensity": round(min(1.0, delta / 0.6), 3),
-    })
+    state = AffectState.load()
+    if local_llm_available():
+        from v5.tools.utils import V5_ROOT, _LOCAL_LLM_HOST, _LOCAL_LLM_PORT
+        import urllib.request, json, urllib.error
+        payload = {
+            "model": "local",
+            "messages": [
+                {"role": "system", "content": "你是一个情感分析师，将中文文本映射到PAD三维情感空间。只返回三个浮点数，以空格分隔，例如：0.5 0.2 -0.1。"},
+                {"role": "user", "content": text}
+            ],
+            "max_tokens": 50,
+            "temperature": 0.0,
+            "stream": False,
+        }
+        try:
+            req = urllib.request.Request(
+                f"http://{_LOCAL_LLM_HOST}:{_LOCAL_LLM_PORT}/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                reply = data["choices"][0]["message"]["content"]
+                parts = reply.strip().split()
+                p = float(parts[0]) if len(parts) > 0 else state.pleasure
+                a = float(parts[1]) if len(parts) > 1 else state.arousal
+                d = float(parts[2]) if len(parts) > 2 else state.dominance
+                state.update(p, a, d, source="llm")
+        except Exception:
+            state.update_from_text(text, source="rule")
+    else:
+        state.update_from_text(text, source="rule")
+    state.save()
+    return answer(
+        f"情感已更新：愉悦{state.pleasure:.2f} 激活{state.arousal:.2f} 掌控{state.dominance:.2f}",
+        {
+            "pleasure": state.pleasure,
+            "arousal": state.arousal,
+            "dominance": state.dominance,
+            "mood_label": state.to_prompt(),
+        }
+    )
 
 
 @safe_tool
 def v5_emotion_status() -> str:
     """Return the current PAD emotion state (no external dependency).
 
-    Includes a best-effort vitality label (skipped gracefully if psutil /
-    vitality unavailable).
+    Includes a brief mood label generated from the PAD values.
     """
     from v5.affect import AffectState
 
-    s = AffectState.load().decay()
-
-    vitality_label = None
-    try:
-        from v5.vitality import Vitality
-        vitality_label = Vitality.load().label()
-    except Exception:  # noqa: BLE001
-        pass
-
-    return dumps({
-        "pleasure": round(s.pleasure, 4),
-        "arousal": round(s.arousal, 4),
-        "dominance": round(s.dominance, 4),
-        "mood_label": s.to_prompt(),
-        "vitality_label": vitality_label,
-    })
+    state = AffectState.load()
+    return answer(
+        f"当前情感：愉悦{state.pleasure:.2f} 激活{state.arousal:.2f} 掌控{state.dominance:.2f}",
+        {
+            "pleasure": state.pleasure,
+            "arousal": state.arousal,
+            "dominance": state.dominance,
+            "mood_label": state.to_prompt(),
+            "last_updated": getattr(state, "last_updated", None),
+        }
+    )
 
 
 @safe_tool
-def v5_emotion_label(text: str) -> str:
+def v5_emotion_label(text: str, *, fallback: str = "平静") -> str:
     """Return 1-2 emotion tags for the text.
 
-    Call chain: emotional_memory.label_emotion() (local LLM, falls
-    back to a PAD->tag rule internally).  `method` reports which path ran.
-    Fallback: :8080 down => rule-based tags.
+    If :8080 is available, ask the LLM for tags; otherwise fall back
+    to a very lightweight keyword matcher.
     """
-    from v5.affect import AffectState
-    from v5.emotional_memory import label_emotion
-
-    s = AffectState.load().decay()
-    new_pad = (s.pleasure, s.arousal, s.dominance)
-    tags = label_emotion(text, new_pad)
-
-    method = "llm" if local_llm_available() else "rule"
+    if local_llm_available():
+        from v5.tools.utils import _LOCAL_LLM_HOST, _LOCAL_LLM_PORT
+        import urllib.request, json, urllib.error
+        payload = {
+            "model": "local",
+            "messages": [
+                {"role": "system", "content": "你是一个情感标签器，将中文文本映射到1-2个情感标签。只返回标签，以空格分隔。例如：开心 平静"},
+                {"role": "user", "content": text}
+            ],
+            "max_tokens": 30,
+            "temperature": 0.3,
+            "stream": False,
+        }
+        try:
+            req = urllib.request.Request(
+                f"http://{_LOCAL_LLM_HOST}:{_LOCAL_LLM_PORT}/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                tags = data["choices"][0]["message"]["content"].strip().split()
+                method = "llm"
+        except Exception:
+            tags = [fallback]
+            method = "rule"
+    else:
+        tags = [fallback]
+        method = "rule"
     return dumps({"tags": tags, "method": method})

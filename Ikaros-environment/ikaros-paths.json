@@ -30,9 +30,9 @@
     "data": "E:\\Ikaros\\Ikaros-memory\\data",
     "models": "E:\\Ikaros\\Ikaros-memory\\models",
     "services": "E:\\Ikaros\\Ikaros-memory\\services",
-    "script": "E:\\Ikaros\\Ikaros-memory\\v4\\store.py",
-    "db": "E:\\Ikaros\\Ikaros-memory\\data\\v4\\v4.db",
-    "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\chromadb"
+    "script": "E:\\Ikaros\\Ikaros-memory\\v5\\store.py",
+    "db": "E:\\Ikaros\\Ikaros-memory\\data\\v5\\v5.db",
+    "chromadb": "E:\\Ikaros\\Ikaros-memory\\data\\v5\\chroma"
   },
   "llama": {
     "version": "b10000-cuda",

@@ -1,3 +1,10 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║ MODULE: live2d-integration (Live2D 接入模组)                              ║
+# ║ 这是 Ikaros 的「可视化前端桥」: Ikaros-Live2D 桌宠 webview 经 WebSocket    ║
+# ║ :7870 把语音/文本喂给本模块, 本模块调核心 (cloud_chat / agent_loop)        ║
+# ║ 拿回复再回传桌宠。核心(orchestrator/cloud_chat) 不依赖本模块, 可独立运行。  ║
+# ║ 架构分解见 docs/ikaros-architecture-decomposition.md                       ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
 # 详细说明见 docs/scripts/bin/ikaros-voice-ws.md
 from __future__ import annotations
 

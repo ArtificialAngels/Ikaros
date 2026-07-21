@@ -1,10 +1,10 @@
-# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/memory_tool.md
-
 from __future__ import annotations
+
+# 详细说明见 docs/scripts/Ikaros-memory/v5/tools/memory_tool.md
 
 import json
 
-from v5.tools.utils import safe_tool, dumps
+from v5.tools.utils import safe_tool, dumps, answer
 
 
 @safe_tool
@@ -65,7 +65,7 @@ def v5_memory_store(
     except Exception:  # noqa: BLE001
         pass
 
-    return dumps({"id": mid, "ok": True, "dissonance": dissonance})
+    return answer(f"记忆已存储 #{mid}", {"id": mid, "ok": True, "dissonance": dissonance})
 
 
 @safe_tool
@@ -90,7 +90,7 @@ def v5_memory_search(
     # 1. emotion-tag retrieval (kept on its own path — emotional_memory specific)
     if emotion_tag:
         from v5.emotional_memory import search_by_emotion
-        return dumps(search_by_emotion(emotion_tag, top_k=top_k))
+        return answer(f"根据情感标签找到 {len(search_by_emotion(emotion_tag, top_k=top_k))} 条记忆", search_by_emotion(emotion_tag, top_k=top_k))
 
 # 内联说明见 docs/scripts/Ikaros-memory/v5/tools/memory_tool.md（见“内联注释摘录”）
     from v5.memory_api import V5MemoryAPI
@@ -110,7 +110,7 @@ def v5_memory_search(
                 if not any(e in r.get("content", "") for e in exclude_list)
             ]
 
-    return dumps(results)
+    return answer(f"找到 {len(results)} 条记忆", results)
 
 
 @safe_tool
@@ -121,7 +121,7 @@ def v5_memory_get(memory_id: int) -> str:
     m = api.get(int(memory_id))
     if m is None:
         return dumps({"ok": False, "error": "not_found", "id": memory_id})
-    return dumps(m)
+        return dumps({"ok": False, "error": "not_found", "id": memory_id})
 
 
 @safe_tool
@@ -130,11 +130,11 @@ def v5_memory_delete(memory_id: int) -> str:
     from v5.memory_api import V5MemoryAPI
     api = V5MemoryAPI()
     ok = bool(api.delete(int(memory_id)))
-    return dumps({"ok": ok, "id": memory_id})
+    return answer(f"记忆 #{memory_id} 已删除", {"ok": ok, "id": memory_id})
 
 
 @safe_tool
 def v5_memory_stats() -> str:
     """Return storage statistics."""
     from v5 import store as v4
-    return dumps(v4.stats())
+    return answer(f"共 {v4.stats()["total"]} 条记忆", v4.stats())

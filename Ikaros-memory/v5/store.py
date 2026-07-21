@@ -14,9 +14,9 @@ from typing import Iterator
 logger = logging.getLogger("ikaros.memory.v5.store")
 
 # 内联说明见 docs/scripts/Ikaros-memory/v5/store.md（见“内联注释摘录”）
-V4_ROOT = Path(__file__).resolve().parent.parent
-V4_DATA_DIR = V4_ROOT / "data" / "v4"
-V4_DB_PATH = V4_DATA_DIR / "v4.db"
+MEM_ROOT = Path(__file__).resolve().parent.parent
+V5_DATA_DIR = MEM_ROOT / "data" / "v5"
+V5_DB_PATH = V5_DATA_DIR / "v5.db"
 
 # V3 schema 直接复用 (Phase 4 切换期不需要 migrate)
 SCHEMA = """
@@ -92,8 +92,8 @@ def conn() -> Iterator[sqlite3.Connection]:
             pass
         _tls.c = None
 
-    V4_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(V4_DB_PATH))
+    V5_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(V5_DB_PATH))
     c.row_factory = sqlite3.Row
     # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v4.db
     # busy_timeout 让写入方等待而非立刻 "database is locked"
@@ -114,7 +114,7 @@ def conn() -> Iterator[sqlite3.Connection]:
         except (sqlite3.OperationalError, sqlite3.ProgrammingError):
             pass  # 已存在: SQLite 报 duplicate column name
     c.commit()
-    logger.info("V4 store: initialized at %s", V4_DB_PATH)
+    logger.info("V5 store: initialized at %s", V5_DB_PATH)
     try:
         yield c
     finally:
@@ -396,8 +396,8 @@ def stats() -> dict:
         "long_term": long_term,
         "avg_weight": avg_weight,
         "by_type": {r[0]: {"count": r[1], "avg_weight": r[2]} for r in by_type},
-        "db_size_bytes": V4_DB_PATH.stat().st_size if V4_DB_PATH.exists() else 0,
-        "db_path": str(V4_DB_PATH),
+        "db_size_bytes": V5_DB_PATH.stat().st_size if V5_DB_PATH.exists() else 0,
+        "db_path": str(V5_DB_PATH),
     }
 
 
