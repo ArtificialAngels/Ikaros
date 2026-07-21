@@ -233,6 +233,17 @@ html, body {
   .grid-col { border-right: none; border-bottom: 1px solid var(--border); }
   .stream-col { width: 100%; min-width: 0; max-height: 38vh; }
 }
+
+/* studio local update modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.modal-overlay.show { display: flex; }
+.modal { background: #fff; color: #222; width: min(680px, 92vw); max-height: 82vh; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3); display: flex; flex-direction: column; overflow: hidden; }
+.modal-header { padding: 14px 18px; font-weight: 600; border-bottom: 1px solid #e2e2e2; display: flex; align-items: center; gap: 10px; }
+.modal-body { padding: 14px 18px; overflow: auto; }
+.modal-body pre.update-log { background: #0d1117; color: #c9d1d9; padding: 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; max-height: 46vh; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.modal-footer { padding: 12px 18px; border-top: 1px solid #e2e2e2; display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+.update-spin { width: 16px; height: 16px; border: 2px solid #888; border-top-color: #2f81f7; border-radius: 50%; animation: uspin 0.8s linear infinite; }
+@keyframes uspin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -248,6 +259,7 @@ html, body {
     <button class="btn primary" id="btnStartAll">▶ 全部启动</button>
     <button class="btn" id="btnStopAll">■ 全部停止</button>
     <button class="btn small" id="btnReset">重置布局</button>
+    <button class="btn small" id="btnUpdateStudio">🔄 更新 Studio</button>
     <button class="btn small danger" id="btnShutdown">关闭面板</button>
   </div>
 
@@ -312,6 +324,24 @@ html, body {
     <span class="event-count" id="eventCount">0 事件</span>
   </div>
 </div>
+
+  <!-- Studio local update modal -->
+  <div class="modal-overlay" id="updateOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="update-spin" id="updateSpin"></span>
+        <span id="updateTitle">Studio 本地更新</span>
+      </div>
+      <div class="modal-body">
+        <pre class="update-log" id="updateLog">等待开始…</pre>
+      </div>
+      <div class="modal-footer">
+        <span id="updateStatus"></span>
+        <button class="btn primary" id="btnDoUpdate">开始更新</button>
+        <button class="btn" id="btnCloseUpdate">关闭</button>
+      </div>
+    </div>
+  </div>
 
 <script>
 (function() {
@@ -508,6 +538,57 @@ document.getElementById('btnReset').addEventListener('click', () => {
   location.reload();
 });
 document.getElementById('btnShutdown').addEventListener('click', shutdownPanel);
+
+// ── Studio 本地更新（fork-safe：git pull + npm install + reapply 补丁）──
+const updateOverlay  = document.getElementById('updateOverlay');
+const updateLogEl    = document.getElementById('updateLog');
+const updateStatus   = document.getElementById('updateStatus');
+const updateSpin     = document.getElementById('updateSpin');
+const btnDoUpdate    = document.getElementById('btnDoUpdate');
+const btnCloseUpdate = document.getElementById('btnCloseUpdate');
+let updatePollTimer  = null;
+
+function renderUpdateLog(data) {
+  updateLogEl.textContent = (data.lines && data.lines.length) ? data.lines.join('\n') : '等待开始…';
+  updateLogEl.scrollTop = updateLogEl.scrollHeight;
+  if (data.updating) {
+    updateStatus.textContent = '更新中…';
+    updateSpin.style.display = '';
+  } else if (data.lines && data.lines.some(l => l.indexOf('DONE') >= 0)) {
+    updateStatus.textContent = '✓ 更新完成，Studio 已重启';
+    updateSpin.style.display = 'none';
+    if (updatePollTimer) { clearInterval(updatePollTimer); updatePollTimer = null; }
+  } else {
+    updateStatus.textContent = '空闲';
+    updateSpin.style.display = 'none';
+  }
+}
+
+function pollUpdateLog() {
+  fetch('/api/studio/update/log').then(r => r.json()).then(renderUpdateLog).catch(() => {});
+}
+
+function startStudioUpdate() {
+  updateOverlay.classList.add('show');
+  updateStatus.textContent = '启动中…';
+  updateSpin.style.display = '';
+  fetch('/api/studio/update', { method: 'POST' })
+    .then(r => r.json())
+    .then(() => {
+      if (updatePollTimer) clearInterval(updatePollTimer);
+      updatePollTimer = setInterval(pollUpdateLog, 1500);
+      pollUpdateLog();
+    })
+    .catch(() => { updateStatus.textContent = '启动失败'; updateSpin.style.display = 'none'; });
+}
+
+document.getElementById('btnUpdateStudio').addEventListener('click', startStudioUpdate);
+btnDoUpdate.addEventListener('click', startStudioUpdate);
+btnCloseUpdate.addEventListener('click', () => {
+  updateOverlay.classList.remove('show');
+  if (updatePollTimer) { clearInterval(updatePollTimer); updatePollTimer = null; }
+});
+updateOverlay.addEventListener('click', e => { if (e.target === updateOverlay) btnCloseUpdate.click(); });
 
 // ── monitor stream (reused from the original dashboard) ──
 const stream     = document.getElementById('stream');

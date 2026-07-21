@@ -14,7 +14,7 @@ if defined OLDPID (
   ping -n 2 127.0.0.1 >nul
 )
 
-rem 2) Launch the patched dashboard (studio-update + panel.html, untracked)
+rem 2) Launch the patched dashboard (studio-update + panel.html)
 start "" /min "%PYW%" "%IKAROS_ROOT%\bin\ikaros-dashboard-patched.py"
 ping -n 3 127.0.0.1 >nul
 start http://127.0.0.1:%PANEL_PORT%/

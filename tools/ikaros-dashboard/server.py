@@ -101,6 +101,14 @@ ENV: dict = {}
 
 log = logging.getLogger("ikaros-dashboard")
 
+# ── Studio 本地更新（fork-safe：git pull + npm install + reapply 补丁）──
+# 脚本注册在 bin/，相对 HERMES_ROOT 解析，不写死盘符。
+STUDIO_UPDATE_SCRIPT = HERMES_ROOT / "bin" / "studio-local-update.bat"
+studio_update_lock = threading.Lock()      # POST 重入锁
+_studio_update_mlock = threading.Lock()    # 内存状态锁
+_studio_updating = False
+_studio_update_lines: list = []
+
 
 # ── 进程 / 环境辅助（移植自原 Rust 启动器）─────────────────────────────
 
@@ -824,6 +832,83 @@ def _sse_event(wfile, data: dict, event: str | None = None) -> None:
 
 # ── HTTP request handler ───────────────────────────────────────────────
 
+def run_studio_local_update() -> None:
+    """后台线程：跑 bin/studio-local-update.bat，逐行回传进度，结束后重启 Studio。"""
+    global _studio_updating, _studio_update_lines
+    with _studio_update_mlock:
+        _studio_update_lines = []
+        _studio_updating = True
+    try:
+        script = STUDIO_UPDATE_SCRIPT
+        if not script.exists():
+            msg = "update script not found: %s" % script
+            log.error(msg)
+            with _studio_update_mlock:
+                _studio_update_lines.append(msg)
+            return
+        # 注入 node 到 PATH（兜底；bat 内部也会 call Ikaros-environment\init.bat 注册其余路径）
+        cenv = dict(os.environ)
+        node_dir = str(HERMES_ROOT / "runtime" / "node")
+        cenv["PATH"] = node_dir + os.pathsep + cenv.get("PATH", "")
+        log_path = HERMES_ROOT / "data" / "logs" / "studio-update.log"
+        log.info("[studio-update] running %s", script)
+        try:
+            proc = subprocess.Popen(
+                ["cmd", "/c", str(script)],
+                cwd=str(HERMES_ROOT),
+                env=cenv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            msg = "[studio-update] failed to launch script: %s" % e
+            log.error(msg)
+            with _studio_update_mlock:
+                _studio_update_lines.append(msg)
+            return
+        # tail 脚本自己的日志文件（bat 以 > 清空、再以 >> 追加）
+        seen = 0
+        while True:
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as lf:
+                    lines = lf.read().splitlines()
+            except FileNotFoundError:
+                lines = []
+            new_lines = lines[seen:]
+            if new_lines:
+                with _studio_update_mlock:
+                    _studio_update_lines.extend(new_lines)
+                seen += len(new_lines)
+            if proc.poll() is not None:
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as lf:
+                        lines = lf.read().splitlines()
+                except FileNotFoundError:
+                    lines = []
+                tail = lines[seen:]
+                if tail:
+                    with _studio_update_mlock:
+                        _studio_update_lines.extend(tail)
+                break
+            time.sleep(0.5)
+        log.info("[studio-update] script exited code=%s", proc.returncode)
+        # 脚本结束后自动重启 Studio（停 → 等 → 起）
+        try:
+            component_stop("studio", ENV)
+        except Exception as e:
+            log.warning("[studio-update] stop studio failed: %s", e)
+        time.sleep(3)
+        try:
+            component_start("studio", ENV, False)
+        except Exception as e:
+            log.warning("[studio-update] start studio failed: %s", e)
+        with _studio_update_mlock:
+            _studio_update_lines.append("[studio-update] 流程结束，已尝试重启 Studio")
+    finally:
+        with _studio_update_mlock:
+            _studio_updating = False
+
+
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     # silence per-request logs from stdlib
     def log_message(self, fmt, *args):
@@ -902,6 +987,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(state)
         elif path == "/api/events":
             self._handle_sse()
+        elif path == "/api/studio/update" or path == "/api/studio/update/log":
+            with _studio_update_mlock:
+                self._send_json({
+                    "lines": list(_studio_update_lines),
+                    "updating": _studio_updating,
+                })
         else:
             self.send_error(404)
 
@@ -938,6 +1029,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         if len(parts) >= 2 and parts[0] == "api" and parts[1] == "shutdown":
             self._send_json({"ok": True, "msg": "控制面板正在关闭"})
             threading.Thread(target=self.server.shutdown_later, daemon=True).start()
+            return
+
+        # /api/studio/update  → 触发 Studio 本地更新（fork-safe）
+        if len(parts) >= 3 and parts[0] == "api" and parts[1] == "studio" and parts[2] == "update":
+            with studio_update_lock:
+                if _studio_updating:
+                    self._send_json({"ok": False, "msg": "Studio 更新进行中，请稍候"})
+                    return
+            threading.Thread(target=run_studio_local_update, daemon=True).start()
+            self._send_json({"ok": True, "msg": "已启动 Studio 本地更新"})
             return
 
         self.send_error(404)
