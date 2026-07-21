@@ -31,7 +31,7 @@ if errorlevel 1 (
 
 rem 2. Stash local changes in hermes-studio/ only
 echo [2/6] Stash local hermes-studio changes (if any) >> "%LOG%"
-git stash push -- hermes-studio/ -m "studio-local-update-autostash" >> "%LOG%" 2>&1
+git stash push -m "studio-local-update-autostash" -- hermes-studio/ >> "%LOG%" 2>&1
 
 rem 3. Extract upstream files into hermes-studio/ (Python tarfile)
 echo [3/6] Extract studio-upstream into hermes-studio/ >> "%LOG%"
