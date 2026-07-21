@@ -23,7 +23,7 @@ from v5.self_model import SelfModel
 _CURIOSITY_REFLECT_MIN = 0.35   # 探索欲高于此 → 做深度反思
 _REFLECT_MIN_INTERVAL_SEC = 5 * 60   # 两次深度反思最小间隔
 
-# 最近一次思考 (供监控面板"自我/探索欲"卡片读取, 不必查 v4.db)
+# 最近一次思考 (供监控面板"自我/探索欲"卡片读取, 不必查 v5.db)
 _LATEST_PATH = V5_ROOT / "data" / "v5" / "latest_thought.json"
 
 
@@ -32,7 +32,7 @@ def _write_latest(text: str, kind: str, theme: str = "",
     """把最近一次自我反思/哲学思考写到 data/v5/latest_thought.json。
 
     监控面板(Rust read_ikaros_state → Vue)直接读这个 JSON, 让哥哥
-    能实时看到"伊卡洛斯现在在想什么", 而不必去翻 v4.db。
+    能实时看到"伊卡洛斯现在在想什么", 而不必去翻 v5.db。
 
     V5.1: 使用 json_lock 防止多线程并发写坏。
     """
@@ -43,7 +43,7 @@ def _write_latest(text: str, kind: str, theme: str = "",
         tmp = p.parent / (p.name + f".tmp.{os.getpid()}")
         payload = {
             "text": text,
-            "kind": kind,          # "self" | "philosophy"
+            "kind": kind,          # "activity" | "self" | "mood"
             "theme": theme,        # love/human/robot/self
             "curiosity": round(curiosity, 3),
             "ts": time.time(),
@@ -176,7 +176,7 @@ def get_curiosity() -> float:
 # ─── A) 自我反思 ─────────────────────────────────────────────
 
 def reflect_once(provider: str = "auto", now: float | None = None) -> Optional[dict]:
-    """一次深度自我反思 (第一人称内省), 写入 v4.db。
+    """一次深度自我反思 (第一人称内省), 写入 v5.db。
 
     全部走 activity 路线（哲学已移除）。
     """
