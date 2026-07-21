@@ -29,7 +29,7 @@ def _period_label(hour: int) -> str:
 
 
 def last_interaction_ts() -> float:
-    """取 v4.db 最近一条记忆的 created (Unix epoch, UTC).
+    """取 v5.db 最近一条记忆的 created (Unix epoch, UTC).
 
     近似 "上轮对话时间". 失败时返 0.0 (调用方按首轮处理).
     """

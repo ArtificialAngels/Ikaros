@@ -35,7 +35,7 @@ def load_preferences() -> list[str]:
 
 
 def record(kind: str, content: str, weight: float = 0.8) -> Optional[int]:
-    """写一条画像记忆到 v4.db (供 cloud_chat._self_review 调用). 返 memory id."""
+    """写一条画像记忆到 v5.db (供 cloud_chat._self_review 调用). 返 memory id."""
     try:
         from v5 import store
         return store.store(content=content, type=kind, weight=weight, tags="profile")

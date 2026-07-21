@@ -95,7 +95,7 @@ def conn() -> Iterator[sqlite3.Connection]:
     V5_DATA_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(V5_DB_PATH))
     c.row_factory = sqlite3.Row
-    # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v4.db
+    # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v5.db
     # busy_timeout 让写入方等待而非立刻 "database is locked"
     try:
         c.execute("PRAGMA busy_timeout=5000")
@@ -196,7 +196,7 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
     V3 兼容 API: 同样 4 个参数 + 同样返 int.
     V5 新增: pad_p/a/d, keyword-only, 默认 0.0 (不传则不记录情感).
 
-    并发安全: 多进程(看门狗+cloud_chat+Hermes Agent)同时读写 v4.db,
+    并发安全: 多进程(看门狗+cloud_chat+Hermes Agent)同时读写 v5.db,
     WAL 模式下写入者等待 busy_timeout=5000ms; 若仍被锁则重试 3 次
     (间隔 1s/3s/5s), 最后一次抛异常 (调用方 decide 是否 swallow).
     """

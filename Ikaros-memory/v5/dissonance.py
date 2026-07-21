@@ -86,7 +86,7 @@ def detect_dissonance(
 
     elapsed_ms = (time.time() - t0) * 1000
 
-    # 3) 发现矛盾 → 写入 V4 + 返回
+    # 3) 发现矛盾 → 写入 V5 + 返回
     if conflicts:
         _record_dissonance(content, conflicts)
 

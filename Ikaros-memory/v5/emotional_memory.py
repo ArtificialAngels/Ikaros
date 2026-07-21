@@ -37,7 +37,7 @@ def maybe_record_emotion(
     user_text: str,
     prev_user_text: str = "",
 ) -> dict | None:
-    """检测 PAD 变化是否够大, 够大则生成因果记忆并写入 V4。
+    """检测 PAD 变化是否够大, 够大则生成因果记忆并写入 V5。
 
     Args:
         old_pad: 变更前的 (p, a, d)
@@ -62,7 +62,7 @@ def maybe_record_emotion(
     if not causal_text:
         return None
 
-    # 写入 V4
+    # 写入 V5
     try:
         from v5 import store as v4
         mid = v4.store(
@@ -250,7 +250,7 @@ def maybe_label_emotion(
     new_pad: tuple[float, float, float],
     user_text: str,
 ) -> Optional[list[str]]:
-    """每轮对话结束后为对话打情感标签并落 v4.db (fire-and-forget 入口).
+    """每轮对话结束后为对话打情感标签并落 v5.db (fire-and-forget 入口).
 
     设计: 不阻塞回复. 调用方用 threading.Thread(daemon=True) 包一层.
     返回打到的标签列表 (失败返 None).

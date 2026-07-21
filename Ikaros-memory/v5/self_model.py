@@ -102,7 +102,7 @@ _SEED = {
     # 她对自己架构的认知清单 (静态清单 + 运行时 status)
     "architecture": [
         {"name": "Live2D 桌宠", "role": "屏幕上陪伴哥哥的具身形象", "status": "运行中"},
-        {"name": "记忆系统 V5.1", "role": "存储对话/事实/反思的长期记忆 (v4.db + V5.1 反思引擎)", "status": "运行中"},
+        {"name": "记忆系统 V5.1", "role": "存储对话/事实/反思的长期记忆 (v5.db + V5.1 反思引擎)", "status": "运行中"},
         {"name": "V5.1 情感引擎", "role": "PAD 情绪 + 精力 + 混沌/生命游戏思维", "status": "运行中"},
         {"name": "V5.1 自我认知层", "role": "self_model + metacog: 认识自己、持续内省、探索哲学", "status": "运行中"},
         {"name": "语音链路 voice-ws", "role": "听哥哥说话、用语音回应", "status": "运行中"},

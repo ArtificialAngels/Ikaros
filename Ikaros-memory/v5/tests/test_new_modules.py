@@ -1,7 +1,7 @@
 """
 v5.tests.test_new_modules — V5 9-module smoke test
 
-不依赖 LLM / v4.db / ChromaDB 的纯单元测试。
+不依赖 LLM / v5.db / ChromaDB 的纯单元测试。
 验证核心数据结构、状态机逻辑、持久化 roundtrip。
 """
 
@@ -68,7 +68,7 @@ class TestEmotionalMemory:
         assert result is None
 
     def test_delta_above_threshold_smoke(self):
-        """验证规则降级路径不崩溃 (不依赖 v4.db / LLM)."""
+        """验证规则降级路径不崩溃 (不依赖 v5.db / LLM)."""
         from v5.emotional_memory import _rule_based_causal
         result = _rule_based_causal("哥哥真棒", (0.1, 0, 0), (0.4, 0, 0))
         assert result is not None

@@ -1,4 +1,4 @@
-"""v5 情感引擎增强单元测试 (R6). 隔离本地 LLM / v4.db / 文件 IO."""
+"""v5 情感引擎增强单元测试 (R6). 隔离本地 LLM / v5.db / 文件 IO."""
 import sys
 import time
 from pathlib import Path

@@ -93,7 +93,7 @@ def generate_narrative(
     # 3) 检测与上次叙事的变化
     changes = _compare_with_last(narrative_text)
 
-    # 4) 存入 V4
+    # 4) 存入 V5
     try:
         mid = v4.store(
             content=narrative_text,
