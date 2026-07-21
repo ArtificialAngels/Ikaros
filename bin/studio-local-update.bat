@@ -1,15 +1,15 @@
 @echo off
 rem ============================================================
 rem Studio local update (fork-safe)
-rem Only updates hermes-studio/ from Ikaros upstream.
-rem Does NOT pull the entire repo (which would revert local
-rem changes to tools/ikaros-dashboard/ and other directories).
-rem register PATH (CUDA / node / git / python) via Ikaros-environment init
+rem Pulls the latest hermes-studio from its official upstream
+rem (EKKOLearnAI/hermes-studio), then reapplies Ikaros patches.
+rem Does NOT touch the Ikaros repo's other directories.
 rem Pure ASCII. No setlocal. No timeout.
 rem ============================================================
 set "HERE=%~dp0"
 for %%I in ("%HERE%..") do set "ROOT=%%~fI"
 call "%ROOT%\Ikaros-environment\init.bat"
+set "PY=%ROOT%\runtime\portable-python\python.exe"
 set "STUDIO=%ROOT%\hermes-studio"
 set "PATCHES=%STUDIO%\.ikaros-patches"
 set "LOGDIR=%ROOT%\data\logs"
@@ -20,31 +20,43 @@ echo [studio-local-update] started %DATE% %TIME% > "%LOG%"
 
 cd /d "%ROOT%"
 
-rem 1. Fetch latest from origin (read-only, no merge)
-echo [1/5] Fetch origin/main >> "%LOG%"
-git fetch origin main >> "%LOG%" 2>&1
+rem 1. Fetch latest from studio official upstream
+echo [1/6] Fetch studio-upstream/main >> "%LOG%"
+git fetch studio-upstream main >> "%LOG%" 2>&1
+if errorlevel 1 (
+  echo [FATAL] git fetch studio-upstream failed >> "%LOG%"
+  echo DONE >> "%LOG%"
+  exit /b 1
+)
 
-rem 2. Stash local changes in hermes-studio/ only (NOT the whole repo)
-echo [2/5] Stash local hermes-studio changes (if any) >> "%LOG%"
+rem 2. Stash local changes in hermes-studio/ only
+echo [2/6] Stash local hermes-studio changes (if any) >> "%LOG%"
 git stash push -- hermes-studio/ -m "studio-local-update-autostash" >> "%LOG%" 2>&1
 
-rem 3. Update ONLY hermes-studio from upstream (does NOT touch tools/ikaros-dashboard/)
-echo [3/5] Checkout upstream hermes-studio/ >> "%LOG%"
-git checkout origin/main -- hermes-studio/ >> "%LOG%" 2>&1
+rem 3. Extract upstream files into hermes-studio/ (Python tarfile - no tar.exe needed)
+echo [3/6] Extract studio-upstream into hermes-studio/ >> "%LOG%"
+"%PY%" -c "import subprocess,tarfile,io; data=subprocess.check_output(['git','archive','studio-upstream/main']); tf=tarfile.open(fileobj=io.BytesIO(data)); tf.extractall(r'%STUDIO%')" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  echo [warn] git archive extraction failed >> "%LOG%"
+  git stash pop >> "%LOG%" 2>&1
+  echo DONE >> "%LOG%"
+  exit /b 1
+)
 
 rem 4. Restore local changes
-echo [4/5] Restore local changes (git stash pop) >> "%LOG%"
+echo [4/6] Restore local changes (git stash pop) >> "%LOG%"
 git stash pop >> "%LOG%" 2>&1
 
+rem 5. Install deps + reapply Ikaros agent patches
+echo [5/6] npm install >> "%LOG%"
 cd /d "%STUDIO%"
-
-rem 5. Reinstall deps and reapply patches
-echo [5/5] npm install + reapply Ikaros patches >> "%LOG%"
 if not exist "%STUDIO%\node_modules" (
   call npm install --no-audit --no-fund >> "%LOG%" 2>&1
 ) else (
   call npm install --no-audit --no-fund --prefer-offline >> "%LOG%" 2>&1
 )
+
+echo [6/6] Reapply Ikaros patches >> "%LOG%"
 copy /Y "%PATCHES%\v5-agent-manager.ts" "%STUDIO%\packages\server\src\services\v5-agent\manager.ts" >> "%LOG%" 2>&1
 copy /Y "%PATCHES%\handle-v5-agent-run.ts" "%STUDIO%\packages\server\src\services\hermes\run-chat\handle-v5-agent-run.ts" >> "%LOG%" 2>&1
 if not exist "%STUDIO%\packages\server\src\services\hermes\run-chat\types-v5.ts" (
