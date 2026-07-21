@@ -59,6 +59,7 @@ export class V5AgentManager {
 
       return {
         ...result,
+        output: result.output || '',
         runId,
       }
     } finally {
