@@ -12,6 +12,8 @@ const getSessionMock = vi.hoisted(() => vi.fn((sessionId?: string) => sessionId
 const bridgeMock = vi.hoisted(() => ({
   status: vi.fn(),
   statusIfLoaded: vi.fn(),
+  releaseBackgroundNotification: vi.fn(async () => ({ ok: true, released: true })),
+  close: vi.fn(async () => {}),
 }))
 
 vi.mock('../../packages/server/src/services/hermes/run-chat/handle-bridge-run', () => ({
@@ -55,6 +57,7 @@ vi.mock('../../packages/server/src/lib/llm-prompt', () => ({
 
 vi.mock('../../packages/server/src/db/hermes/session-store', () => ({
   getSession: getSessionMock,
+  getSessionMetadata: getSessionMock,
   getSessionDetail: vi.fn(() => null),
 }))
 
@@ -107,6 +110,10 @@ describe('ensureBridgeReadyForChatRun', () => {
     getRuntimeStateMock.mockReset()
     bridgeMock.status.mockReset()
     bridgeMock.statusIfLoaded.mockReset()
+    bridgeMock.releaseBackgroundNotification.mockReset()
+    bridgeMock.close.mockReset()
+    bridgeMock.releaseBackgroundNotification.mockResolvedValue({ ok: true, released: true })
+    bridgeMock.close.mockResolvedValue(undefined)
     handleBridgeRunMock.mockReset()
     resumeBridgeRunMock.mockReset()
     handleCodingAgentRunMock.mockReset()
@@ -178,6 +185,10 @@ describe('ChatRunSocket bridge readiness gating', () => {
     getRuntimeStateMock.mockReset()
     bridgeMock.status.mockReset()
     bridgeMock.statusIfLoaded.mockReset()
+    bridgeMock.releaseBackgroundNotification.mockReset()
+    bridgeMock.close.mockReset()
+    bridgeMock.releaseBackgroundNotification.mockResolvedValue({ ok: true, released: true })
+    bridgeMock.close.mockResolvedValue(undefined)
     handleBridgeRunMock.mockReset()
     resumeBridgeRunMock.mockReset()
     handleCodingAgentRunMock.mockReset()
@@ -261,6 +272,34 @@ describe('ChatRunSocket bridge readiness gating', () => {
       session_source: 'global_agent',
     }))
     expect(socket.emit).not.toHaveBeenCalledWith('run.failed', expect.anything())
+  })
+
+  it('keeps workflow Hermes runs behind the broker readiness gate', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      reachable: false,
+      status: 'unreachable',
+      endpoint: 'ipc:///tmp/hermes-agent-bridge.sock',
+      error: 'bridge offline',
+    })
+    const { ChatRunSocket } = await import('../../packages/server/src/services/hermes/run-chat')
+    const { handlers, io, socket } = makeServerHarness()
+    const server = new ChatRunSocket(io as any)
+
+    ;(server as any).onConnection(socket)
+    await handlers.get('run')?.({
+      input: 'next workflow node',
+      session_id: 'workflow-session-1',
+      source: 'workflow',
+      session_source: 'workflow',
+    })
+
+    expect(ensureReadyMock).toHaveBeenCalledTimes(1)
+    expect(handleBridgeRunMock).not.toHaveBeenCalled()
+    expect(socket.emit).toHaveBeenCalledWith('run.failed', {
+      event: 'run.failed',
+      session_id: 'workflow-session-1',
+      error: 'Agent Bridge is not reachable: bridge offline',
+    })
   })
 
   it('routes global coding-agent runs through the coding-agent path while preserving session source', async () => {
@@ -529,6 +568,58 @@ describe('ChatRunSocket bridge readiness gating', () => {
     }))
   })
 
+  it('reattaches workflow bridge runs with the workflow source preserved', async () => {
+    getSessionMock.mockImplementation((sessionId?: string) => sessionId
+      ? { id: sessionId, profile: 'default', source: 'workflow', agent: 'hermes', model: 'gpt-test', provider: 'openai' }
+      : undefined)
+    bridgeMock.statusIfLoaded.mockResolvedValueOnce({
+      ok: true,
+      exists: true,
+      running: true,
+      loaded: true,
+      current_run_id: 'run-workflow',
+    })
+    loadSessionStateFromDbMock.mockResolvedValueOnce({
+      messages: [],
+      isWorking: false,
+      isAborting: false,
+      runId: undefined,
+      activeRunMarker: undefined,
+      profile: 'default',
+      events: [],
+      queue: [],
+    })
+    const { ChatRunSocket } = await import('../../packages/server/src/services/hermes/run-chat')
+    const { emitted, handlers, io, socket } = makeServerHarness()
+    const server = new ChatRunSocket(io as any)
+    let sourceAtResume = ''
+    resumeBridgeRunMock.mockImplementationOnce((...args: any[]) => {
+      const sessionMap = args[3] as Map<string, any>
+      sourceAtResume = sessionMap.get('session-1').source
+      return Promise.resolve()
+    })
+
+    ;(server as any).onConnection(socket)
+    await handlers.get('resume')?.({ session_id: 'session-1' })
+
+    expect(sourceAtResume).toBe('workflow')
+    expect(ensureReadyMock).not.toHaveBeenCalled()
+    expect(bridgeMock.statusIfLoaded).toHaveBeenCalledWith('session-1', 'default', { timeoutMs: 1000 })
+    expect(resumeBridgeRunMock).toHaveBeenCalledWith(
+      expect.anything(),
+      socket,
+      expect.objectContaining({
+        sessionId: 'session-1',
+        runId: 'run-workflow',
+        source: 'workflow',
+      }),
+      expect.any(Map),
+      bridgeMock,
+      expect.any(Function),
+    )
+    expect(emitted.some(({ event }) => event === 'run.reattach_failed')).toBe(false)
+  })
+
   it('reattaches global-agent bridge runs with the global source preserved', async () => {
     getSessionMock.mockImplementation((sessionId?: string) => sessionId
       ? { id: sessionId, profile: 'default', source: 'global_agent', model: 'gpt-test', provider: 'openai' }
@@ -617,5 +708,46 @@ describe('ChatRunSocket bridge readiness gating', () => {
       isWorking: false,
       events: [],
     }))
+  })
+
+  it('releases queued background completion claims before closing bridge clients', async () => {
+    const order: string[] = []
+    bridgeMock.releaseBackgroundNotification.mockImplementationOnce(async () => {
+      order.push('release')
+      return { ok: true, released: true }
+    })
+    bridgeMock.close.mockImplementation(async () => {
+      order.push('close')
+    })
+    const { ChatRunSocket } = await import('../../packages/server/src/services/hermes/run-chat')
+    const { io } = makeServerHarness()
+    const server = new ChatRunSocket(io as any)
+    ;(server as any).sessionMap.set('session-1', {
+      messages: [],
+      isWorking: true,
+      isAborting: false,
+      events: [],
+      queue: [{
+        queue_id: 'delegation-d1',
+        input: 'completion',
+        profile: 'default',
+        source: 'cli',
+        backgroundDelegationId: 'd1',
+        backgroundClaimId: 'claim-1',
+      }],
+    })
+
+    await server.close()
+
+    expect(bridgeMock.releaseBackgroundNotification).toHaveBeenCalledWith(
+      'session-1',
+      'default',
+      'd1',
+      'claim-1',
+    )
+    expect(order[0]).toBe('release')
+    expect(order.slice(1)).toEqual(['close', 'close'])
+    expect((server as any).sessionMap.size).toBe(0)
+    expect((server as any).closing).toBe(true)
   })
 })

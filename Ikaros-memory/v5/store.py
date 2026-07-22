@@ -1,4 +1,4 @@
-# 详细说明见 docs/scripts/Ikaros-memory/v5/store.md
+# See docs/scripts/Ikaros-memory/v5/store.md
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from typing import Iterator
 
 logger = logging.getLogger("ikaros.memory.v5.store")
 
-# 内联说明见 docs/scripts/Ikaros-memory/v5/store.md（见“内联注释摘录”）
+# Inline docs: docs/scripts/Ikaros-memory/v5/store.md
 MEM_ROOT = Path(__file__).resolve().parent.parent
 V5_DATA_DIR = MEM_ROOT / "data" / "v5"
 V5_DB_PATH = V5_DATA_DIR / "v5.db"
 
-# V3 schema 直接复用 (Phase 4 切换期不需要 migrate)
+# V3 schema reused directly (no migration needed during Phase 4 transition)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS memory (
     created REAL NOT NULL DEFAULT (strftime('%s','now')),
     short_term INTEGER NOT NULL DEFAULT 1,
     long_term INTEGER NOT NULL DEFAULT 0,
-    -- V5 情感指纹 (PAD 模型: pleasure / arousal / dominance)
+    -- V5 emotion fingerprint (PAD model: pleasure / arousal / dominance)
     pad_p REAL NOT NULL DEFAULT 0.0,
     pad_a REAL NOT NULL DEFAULT 0.0,
     pad_d REAL NOT NULL DEFAULT 0.0
@@ -47,7 +47,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     content_rowid='id'
 );
 
--- V3 触发器: FTS5 同步 (V4 复用, Phase 4 切换期兼容)
+-- V3 triggers: FTS5 sync (V4 reused, Phase 4 transition compatible)
 CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
     INSERT INTO memory_fts(rowid, content, type, tags)
     VALUES (new.id, new.content, new.type, new.tags);
@@ -64,10 +64,75 @@ CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
 END;
 """
 
+# Entity graph schema (from Innerlife architecture)
+ENTITY_GRAPH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS eg_entities (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    embedding_text TEXT NOT NULL DEFAULT '',
+    embedding TEXT NOT NULL DEFAULT '[]',
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_updated_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    last_seen_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_eg_entities_type ON eg_entities(type);
+CREATE INDEX IF NOT EXISTS idx_eg_entities_name ON eg_entities(canonical_name);
 
-# ─── 连接管理 (与 V3 思路一致, V4 简化) ────────────────────────
+CREATE TABLE IF NOT EXISTS eg_aliases (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source_memory_id TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    last_seen_at INTEGER,
+    UNIQUE(entity_id, alias)
+);
+CREATE INDEX IF NOT EXISTS idx_eg_aliases_entity ON eg_aliases(entity_id);
 
-# 内联说明见 docs/scripts/Ikaros-memory/v5/store.md（见“内联注释摘录”）
+CREATE TABLE IF NOT EXISTS eg_edges (
+    source_entity_id TEXT NOT NULL,
+    target_entity_id TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 0.0,
+    co_occurrence_count INTEGER NOT NULL DEFAULT 0,
+    last_seen_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    PRIMARY KEY(source_entity_id, target_entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS eg_episodic (
+    id TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    source_text TEXT NOT NULL DEFAULT '',
+    detail TEXT DEFAULT '',
+    entity_text TEXT NOT NULL DEFAULT '',
+    importance REAL NOT NULL DEFAULT 0.5,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS eg_episodic_entities (
+    memory_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 0.5,
+    PRIMARY KEY(memory_id, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS eg_activations (
+    episodic_memory_id TEXT NOT NULL,
+    activated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    expires_at INTEGER NOT NULL,
+    score REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY(episodic_memory_id)
+);
+"""
+
+
+# ─── Connection management (same approach as V3, simplified in V4) ───
+
+# Inline docs: docs/scripts/Ikaros-memory/v5/store.md
 import threading
 
 _tls = threading.local()
@@ -75,14 +140,15 @@ _tls = threading.local()
 
 @contextmanager
 def conn() -> Iterator[sqlite3.Connection]:
-    """获取 V4 db 连接 (每次新连接, 用完即关).
+    """Get a V5 db connection (fresh each time, closed on exit).
 
-    V4 行为:
-      - 每次操作开新连接 (不再缓存 thread-local, 避免读操作用完后
-        挂着隐式读事务阻塞后续 write 操作 → "database is locked")
-      - 首次调用建库
-      - 出错时显式抛, 不吞
-      - 上下文退出时自动 commit/rollback + close
+    Behavior:
+      - Opens a new connection per operation (no thread-local caching, avoids
+        implicit read transactions hanging and blocking subsequent writes
+        leading to "database is locked")
+      - Creates the database on first access
+      - Raises on error, does not swallow
+      - Auto commits/rollbacks and closes the connection on context exit
     """
     c = getattr(_tls, "c", None)
     if c is not None:
@@ -95,31 +161,33 @@ def conn() -> Iterator[sqlite3.Connection]:
     V5_DATA_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(V5_DB_PATH))
     c.row_factory = sqlite3.Row
-    # 多进程并发: 看门狗(反思 op)与 cloud_chat(store) 可能同时访问 v5.db
-    # busy_timeout 让写入方等待而非立刻 "database is locked"
+    # Multi-process concurrency: watchdog (reflection op) and cloud_chat (store)
+    # may access v5.db concurrently. busy_timeout lets the writer wait instead of
+    # immediately returning "database is locked"
     try:
         c.execute("PRAGMA busy_timeout=5000")
     except Exception:
         pass
-    # WAL 模式: 写事务不阻塞读事务
+    # WAL mode: write transactions don't block read transactions
     try:
         c.execute("PRAGMA journal_mode=WAL")
     except Exception:
         pass
     c.executescript(SCHEMA)
-    # V5: 给已有表加 PAD 列 (幂等, 已存在则跳过)
+    c.executescript(ENTITY_GRAPH_SCHEMA)
+    # V5: add PAD columns to existing table (idempotent, skip if exists)
     for col in ("pad_p", "pad_a", "pad_d"):
         try:
             c.execute(f"ALTER TABLE memory ADD COLUMN {col} REAL NOT NULL DEFAULT 0.0")
         except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-            pass  # 已存在: SQLite 报 duplicate column name
+            pass  # Column already exists
     c.commit()
     logger.info("V5 store: initialized at %s", V5_DB_PATH)
     try:
         yield c
     finally:
         try:
-            c.rollback()  # 结束任何未完成的读事务
+            c.rollback()  # End any incomplete read transactions
         except Exception:
             pass
         try:
@@ -129,7 +197,7 @@ def conn() -> Iterator[sqlite3.Connection]:
 
 
 def close() -> None:
-    """关闭当前线程的连接 (测试 / 切换 db 时用)."""
+    """Close the current thread's connection (for testing / db switching)."""
     c = getattr(_tls, "c", None)
     if c is not None:
         try:
@@ -139,15 +207,15 @@ def close() -> None:
         _tls.c = None
 
 
-# ─── 核心 API (V3 兼容) ──────────────────────────────────────
+# ─── Core API (V3 compatible) ──────────────────────────────────
 
 @dataclass(frozen=True)
 class Memory:
-    """V4 Memory 数据类 (V3 dict 风格 → V4 typed).
+    """V5 Memory data class (typed, immutable).
 
-    V3 返 dict, 调用方易拼错字段名。
-    V4 返 frozen dataclass, IDE 提示 + 不可变。
-    V5 新增: pad_p / pad_a / pad_d (情感指纹, 默认 0.0).
+    V3 returned dicts — easy to misspell field names.
+    V4 switched to frozen dataclass — IDE hints + immutable.
+    V5 adds: pad_p / pad_a / pad_d (emotion fingerprint, default 0.0).
     """
     id: int
     content: str
@@ -159,7 +227,7 @@ class Memory:
     created: float
     short_term: bool
     long_term: bool
-    # V5 情感指纹
+    # V5 emotion fingerprint
     pad_p: float = 0.0
     pad_a: float = 0.0
     pad_d: float = 0.0
@@ -189,25 +257,32 @@ class Memory:
 
 
 def store(content: str, type: str = "fact", weight: float = 0.6,
-          tags: str = "", *,  # V5: keyword-only args, 不破坏 V3 调用方
+          tags: str = "", *,  # V5: keyword-only args, don't break V3 callers
           pad_p: float = 0.0, pad_a: float = 0.0, pad_d: float = 0.0) -> int:
-    """存一条记忆, 返 id.
+    """Store a memory, return its id.
 
-    V3 兼容 API: 同样 4 个参数 + 同样返 int.
-    V5 新增: pad_p/a/d, keyword-only, 默认 0.0 (不传则不记录情感).
+    V3 compatible API: same 4 positional params + same int return type.
+    V5 additions: pad_p/a/d, keyword-only, default 0.0 (omit to skip emotion).
 
-    并发安全: 多进程(看门狗+cloud_chat+Hermes Agent)同时读写 v5.db,
-    WAL 模式下写入者等待 busy_timeout=5000ms; 若仍被锁则重试 3 次
-    (间隔 1s/3s/5s), 最后一次抛异常 (调用方 decide 是否 swallow).
+    Concurrency-safe: multiple processes (watchdog + cloud_chat + Hermes Agent)
+    may read/write v5.db concurrently. WAL mode with busy_timeout=5000ms.
+    If still locked, retry 3 times (1s/3s/5s backoff). Last retry raises.
     """
     import time as _time
+
+    # Validation: catch issues early before retry loop
+    from v5.validation import validate_memory, check_and_log
+    check_and_log(content, lambda v: validate_memory(
+        v, mem_type=type, weight=weight, pad_p=pad_p, pad_a=pad_a, pad_d=pad_d
+    ), context="store")
+
     weight = max(0.0, min(1.0, weight))
     last_err = None
     for attempt in range(4):
         try:
             with conn() as c:
-                # 写入前主动做 WAL checkpoint, 释放未决帧
-                # (Hermes Agent 可能通过其他连接写了大量未 checkpoint 数据)
+                # Run WAL checkpoint before write to flush pending frames
+                # (Hermes Agent may have written lots of un-checkpointed data via other connections)
                 try:
                     c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 except Exception:
@@ -234,12 +309,14 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
 
 def _sync_vector_best_effort(memory_id: int, content: str, type: str,
                              tags: str, weight: float) -> bool:
-    """写库后 best-effort 把向量同步进 Chroma.
+    """Best-effort sync this memory's vector into Chroma after DB write.
 
-    - 仅在 chromadb 可用时生效 (否则静默跳过, 不报错)
-    - :8587 不可用 / 嵌入失败 -> 返回 False, 由后续 vector_sync 反思 op 兜底
-    - 线程超时保护: VectorIndex() 初始化 (ChromaLM compactor) 从未知的C扩展挂起中
-      恢复, 最长阻塞 SYNC_TIMEOUT 秒, 超时后静默跳过, 绝不阻塞 store.store().
+    - Only runs when chromadb is available (silently skips otherwise)
+    - :8587 unavailable or embedding failed -> returns False, picked up later by
+      vector_sync reflection op
+    - Thread timeout guard: VectorIndex() init (ChromaLM compactor) may hang
+      in unknown C extensions; max block SYNC_TIMEOUT seconds, then silently
+      skip to never block store.store()
     """
     _SYNC_TIMEOUT = 10.0  # max seconds to wait for ChromaDB init + add
 
@@ -274,7 +351,7 @@ def _sync_vector_best_effort(memory_id: int, content: str, type: str,
 
 
 def get(memory_id: int) -> Memory | None:
-    """按 id 取单条. 找不到返 None."""
+    """Fetch a single memory by id. Returns None if not found."""
     with conn() as c:
         row = c.execute("SELECT * FROM memory WHERE id = ?", (memory_id,)).fetchone()
         return Memory.from_row(row) if row else None
@@ -325,7 +402,7 @@ def search(query: str, top_k: int = 5, min_weight: float = 0.0) -> list[Memory]:
 
 
 def list_all(limit: int = 50, type_filter: str | None = None) -> list[Memory]:
-    """列出记忆 (调试用)."""
+    """List memories (for debugging)."""
     with conn() as c:
         if type_filter:
             rows = c.execute(
@@ -342,10 +419,10 @@ def list_all(limit: int = 50, type_filter: str | None = None) -> list[Memory]:
 
 def search_by_time_range(start_ts: float, end_ts: float,
                          limit: int = 10) -> list[Memory]:
-    """按时间范围检索记忆（支持 cloud_chat 时间指代解析）。
+    """Search memories by time range (supports cloud_chat time reference resolution).
 
-    created 列存的是 Unix epoch (strftime('%s','now'))。
-    start_ts / end_ts 同为 Unix epoch float。
+    The 'created' column stores Unix epoch (strftime('%s','now')).
+    start_ts / end_ts are also Unix epoch floats.
     """
     with conn() as c:
         rows = c.execute(
@@ -359,7 +436,7 @@ def search_by_time_range(start_ts: float, end_ts: float,
 
 
 def delete(memory_id: int) -> bool:
-    """删一条. 返 True/False."""
+    """Delete one memory. Returns True/False."""
     with conn() as c:
         cur = c.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
         c.commit()
@@ -367,7 +444,7 @@ def delete(memory_id: int) -> bool:
 
 
 def access(memory_id: int) -> None:
-    """记录访问 + weight +0.05 (与 V3 一致)."""
+    """Record access + weight +0.05 (same as V3)."""
     with conn() as c:
         c.execute(
             "UPDATE memory SET "
@@ -381,7 +458,7 @@ def access(memory_id: int) -> None:
 
 
 def stats() -> dict:
-    """v3.stats() 兼容 API."""
+    """v3.stats() compatible API."""
     with conn() as c:
         total = c.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
         by_type = c.execute(
@@ -401,7 +478,7 @@ def stats() -> dict:
     }
 
 
-# ─── CLI (走 ikaros-mem.bat v4) ──────────────────────────────
+# ─── CLI (via ikaros-mem.bat v5) ──────────────────────────────
 
 def main():
     import argparse

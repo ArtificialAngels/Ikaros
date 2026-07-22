@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 详细说明见 docs/scripts/Ikaros-memory/v5/mcp_server.md
+# See docs/scripts/Ikaros-memory/v5/mcp_server.md
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-# ── 确保 Ikaros-memory/ 在 Python 路径中 ──────────────────────
+# Ensure Ikaros-memory/ is on the Python path
 _HERE = Path(__file__).resolve().parent  # Ikaros-memory/v5/
 _V5_ROOT = _HERE.parent                  # Ikaros-memory/
 if str(_V5_ROOT) not in sys.path:
@@ -27,13 +27,48 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP(
     "Ikaros V5 Memory",
     instructions=(
-        "Ikaros V5 Memory System — long-term memory store, "
-        "semantic search, and self-reflection."
+        "Ikaros V5 Memory System provides long-term memory storage, entity graph retrieval, "
+        "emotion tracking, self-reflection, curiosity-driven introspection, care scoring, "
+        "vitality management, relationship modeling, narrative generation, dissonance "
+        "detection, and proactive self-improvement.\n"
+        "\n"
+        "Memory tools: memory_store saves facts, preferences, lessons, and emotional events "
+        "with PAD emotion fingerprints. memory_search performs dual-path retrieval combining "
+        "full-text keyword and semantic vector search. memory_get fetches a single memory by ID. "
+        "memory_delete removes a memory by ID. memory_stats returns total count, long-term count, "
+        "average weight, and per-type breakdown.\n"
+        "\n"
+        "Emotion tools: analyze_emotion processes text through the PAD model to extract "
+        "pleasure, arousal, and dominance scores, producing a raw dict and a human-readable "
+        "mood label. emotion_status returns the current emotional state. emotion_label maps "
+        "PAD values to mood labels.\n"
+        "\n"
+        "Self tools: self_model returns the full self-model JSON including curiosity, vitality, "
+        "relationship, and care state. self_reflect triggers a deep self-reflection cycle. "
+        "latest_thought returns what Ikaros is currently thinking. curiosity_check returns "
+        "curiosity level and whether it crosses the reflection threshold. subconscious returns "
+        "subconscious activity state. self_discover generates new self-knowledge by introspecting "
+        "on stored memories. reflect_run_op is the background reflection operator.\n"
+        "\n"
+        "Care tools: care_check evaluates a conversation message for care and concern signals. "
+        "care_status returns current care state and trend history.\n"
+        "\n"
+        "Vitality tools: vitality returns the current vitality meter and decay rate. "
+        "vitality_tick advances vitality decay by one increment.\n"
+        "\n"
+        "Relationship tools: relationship returns the relationship model with brother "
+        "including trust, familiarity, and mood trends. relationship_tick advances the "
+        "relationship decay cycle.\n"
+        "\n"
+        "Narrative and proactive tools: narrative_generate synthesizes recent memories "
+        "into a coherent daily narrative. dissonance_check detects logical contradictions "
+        "among stored memories. proactive_check evaluates whether Ikaros should initiate "
+        "conversation proactively."
     ),
 )
 
 
-# 内联说明见 docs/scripts/Ikaros-memory/v5/mcp_server.md（见“内联注释摘录”）
+# Inline docs: docs/scripts/Ikaros-memory/v5/mcp_server.md
 from v5.tools import (  # noqa: E402
     v5_analyze_emotion, v5_emotion_status, v5_emotion_label,
     v5_memory_store, v5_memory_search, v5_memory_get, v5_memory_delete,
@@ -67,7 +102,7 @@ for _tool_fn in _NEW_V5_TOOLS:
                        getattr(_tool_fn, "__name__", _tool_fn), _e)
 
 
-# ── 启动 ────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "sse":
         # Hermes Studio transport: SSE on :9877.

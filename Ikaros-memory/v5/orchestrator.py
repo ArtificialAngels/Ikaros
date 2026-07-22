@@ -117,23 +117,40 @@ def local_llm_chat(
     *,
     max_tokens: int = 512,
     temperature: float = 0.2,
-    timeout: float = 3,
+    timeout: float = 60,
 ) -> str | None:
-    """Best-effort chat completion against the local :8080 server.
+    """Best-effort chat completion.
 
-    Returns the assistant content, or ``None`` on any failure (server down,
-    timeout, bad payload).  Never raises.
+    Two modes:
+    - ``V5_LLM_OVERRIDE_BASE_URL`` set → use Studio's model config (cloud/local).
+    - Otherwise → fallback to the hardcoded :8080 local server (memory/compression).
+    Returns the assistant content, or ``None`` on any failure. Never raises.
     """
     try:
-        # TCP pre-flight: if :8080 isn't even listening, fail fast instead of
-        # blocking urllib for the full timeout (MCP stdio expects sub-second replies).
-        try:
-            _probe = socket.create_connection(("127.0.0.1", 8080), timeout=0.5)
-            _probe.close()
-        except Exception:
-            return None
+        base_url = os.environ.get("V5_LLM_OVERRIDE_BASE_URL", "").strip()
+        if base_url:
+            # Studio model mode: use the forwarded config
+            api_key = os.environ.get("V5_LLM_OVERRIDE_API_KEY", "").strip()
+            model = os.environ.get("V5_LLM_OVERRIDE_MODEL", "local")
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            url = base_url.rstrip("/")
+            if not url.endswith("/chat/completions"):
+                url = url.rstrip("/v1") + "/v1/chat/completions"
+        else:
+            # Fallback: hardcoded local :8080 (memory retrieval / compression)
+            try:
+                _probe = socket.create_connection(("127.0.0.1", 8080), timeout=0.5)
+                _probe.close()
+            except Exception:
+                return None
+            url = _LOCAL_LLM_URL
+            model = "local"
+            headers = {"Content-Type": "application/json"}
+
         payload = {
-            "model": "local",
+            "model": model,
             "messages": [
                 {"role": "system", "content": system_text},
                 {"role": "user", "content": user_text},
@@ -143,9 +160,9 @@ def local_llm_chat(
             "stream": False,
         }
         req = urllib.request.Request(
-            _LOCAL_LLM_URL,
+            url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -237,6 +254,11 @@ def agent_loop(
     (or to ``_fallback`` when supplied — used by tests to stay offline).
     """
     state.session_id = session_id or state.session_id
+
+    # Input validation: check user input before processing
+    from v5.validation import validate_input, check_and_log
+    if not check_and_log(user_text, validate_input, context="agent_loop"):
+        logger.warning("agent_loop: input validation failed for session=%s", session_id)
 
     # 1) think: LLM chooses a tool.
     tool_name, args = _think(user_text)

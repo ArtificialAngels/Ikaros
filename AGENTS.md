@@ -4,15 +4,152 @@
 > This file captures the project state, architecture, modification history,
 > debugging tips, and the gotchas we hit along the way.
 
-> **Last revised:** 2026-07-20 (launcher switched from Rust `ikaros.exe` to control panel `bin/ikaros-control.bat`; b10000-cuda confirmed usable via panel start). Prev: 2026-07-16 (portable-python moved under runtime).
-> Two bugs killed the startup chain:
-> 1. `Ikaros-environment/init.bat` had UTF-8 Chinese comments — cmd.exe parses as GBK,
->    multi-byte UTF-8 sequences become garbage commands → instant crash on double-click.
->    Fix: all comments converted to pure ASCII. **Rule: .bat files MUST be pure ASCII.**
-> 2. `ikaros-desktop-pet/main.py` imported `from modules.model_manager.llm_manager import LLMManager`
->    but the module didn't exist → `ModuleNotFoundError`. Fix: created
->    `modules/model_manager/llm_manager.py` stub (scans local GGUFs + queries :8080 + cloud models).
-> Also: memory watchdog now manages both :8587 (embedding) AND :8080 (local LLM for v3 extraction).
+> **Last revised:** 2026-07-22 (architecture refresh + entity graph + V5 Agent integration + Hermes-layered architecture).
+> Prev: 2026-07-22 (entity graph integration from Innerlife).
+>
+> **架构策略修正**: Hermes 不是耦合源，而是 Ikaros Agent 的基础设施层（身体）。
+> Ikaros V5 是人格/记忆/情感层（大脑）。两者深度融合而非解耦。
+> 详细方案: `docs/ikaros-agent-standalone-architecture-analysis.md` (修订版)
+>
+> ── **Ikaros 全栈架构速览 (2026-07-22)** ──
+>
+> ## 系统全景图
+>
+> ```
+>                         ┌──── 控制面板 (:9100) ────┐
+>                         │  tools/ikaros-dashboard   │
+>                         │  server.py (纯 stdlib)     │
+>                         │  一键启停全部组件           │
+>                         └──────────┬────────────────┘
+>                                    │ start 按钮
+>          ┌─────────────────────────┼─────────────────────────┐
+>          │                         │                         │
+>     ┌────▼────────┐     ┌──────────▼──────┐     ┌───────────▼───────────┐
+>     │  记忆看门狗   │     │  语音桥 :7870    │     │  V5 自思考循环          │
+>     │  :8587 嵌入  │     │  voice-ws.py     │     │  think.py --watch     │
+>     │  :8080 LLM   │◄───►│  STT+TTS :7870  │◄───►│  + orchestrator 双模   │
+>     │  (1.7B Qwen3)│     │  Chat :7871     │     │  + metacog 元认知      │
+>     │  ONNX 兜底   │     │  → cloud_chat   │     │                       │
+>     └──────┬───────┘     └────────┬─────────┘     └───────────┬───────────┘
+>            │                      │                           │
+>            │            ┌─────────▼─────────┐                 │
+>            │            │   Tauri 桌宠       │                 │
+>            │            │   :1420 (Vite)     │                 │
+>            │            │   Live2D webview   │     ┌──────────▼──────────┐
+>            │            │   + 系统托盘右键菜单 │     │   Hermes Studio      │
+>            │            └───────────────────┘     │   Vite :8649         │
+>            │                                      │   Koa :8647          │
+>            │                                      │   + Ikaros V5 Agent  │
+>            │                                      └─────────────────────┘
+>            │
+>     ┌──────▼──────────────┐
+>     │  V5 数据层           │
+>     │  Ikaros-memory/     │
+>     │  data/v5/*.json     │
+>     │  v5.db (SQLite)     │
+>     │  chroma/ (向量)      │
+>     └─────────────────────┘
+> ```
+>
+> ## 端口映射 (12 个服务)
+>
+> | 端口 | 服务 | 组件 | 状态 |
+> |------|------|------|------|
+> | :9100 | 控制面板 Web UI | `tools/ikaros-dashboard/server.py` | ✅ |
+> | :8587 | Embedding (nomic) | `ikaros-memory-watchdog.py` / ONNX fallback | ⚠️ CFG 崩溃 |
+> | :8080 | 本地 LLM (Qwen3-1.7B) | `ikaros-memory-watchdog.py` → llama-server | ⚠️ |
+> | :7870 | 语音 WebSocket | `ikaros-voice-ws.py` (STT/TTS) | ✅ |
+> | :7871 | ChatDock HTTP 桥 | `ikaros-voice-ws.py` (文字聊天) | ✅ |
+> | :1420 | Live2D Vite dev | `Ikaros-Live2D/` (Tauri webview) | ✅ |
+> | :9119 | Hermes Dashboard | Hermes `hermes_cli/web_server.py` | ✅ |
+> | :8649 | Studio Vite 前端 | `hermes-studio/` (npm run dev) | ✅ |
+> | :8647 | Studio Koa 后端 | `hermes-studio/` (nodemon) | ✅ |
+> | :8999 | Bootstrap 遥测 | `monitor-main.ts` HTTP 上报 | ✅ |
+> | :9999 | Gopeed 下载 | `ikaros-fastdl.py` | 按需 |
+> | :7860 | 旧语音桥 | 历史遗留，已废弃 | ❌ |
+>
+> ## V5 核心模块清单 (~30 模块, `Ikaros-memory/v5/`)
+>
+> | 层级 | 模块 | 职责 |
+> |------|------|------|
+> | **入口/编排** | `orchestrator.py` | agent/companion 双模；对外统一入口 `agent_loop()` |
+> | **编排中枢** | `bin/cloud_chat.py` | companion 模式主链；system prompt 组装；LLM 路由 |
+> | **语音入口** | `bin/ikaros-voice-ws.py` | WebSocket :7870；STT→cloud_chat→TTS |
+> | **路由/任务** | `router.py`, `task_runner.py` | 分类 task/conversation；后台委托 Hermes |
+> | **主动意识** | `think.py`, `proactive.py`, `care.py` | 5min 统一循环；门控主动搭话；关怀 |
+> | **自我认知** | `self_model.py`, `metacog.py` | 持久自我/信念/探索欲；真LLM内省·哲思 |
+> | **情感/精力** | `affect.py`(6D PAD+TLS), `vitality.py`, `drivers.py` | PAD情感维+信任/孤独/满足；精力自循环；混沌/Lorenz/ECA/AIS 驱动 |
+> | **关系/叙事** | `relationship.py`, `narrative.py`, `dissonance.py` | 亲密度追踪；月度叙事；认知失调检测 |
+> | **记忆/反思** | `store.py`, `search.py`, `memory_retrieval.py`, `reflect/` | 三路检索；consolidate/distill/reflect |
+> | **预处理工厂** | `rhythm.py`, `summary.py`, `profile.py`, `emotional_memory.py` | R2-R6 注入 system prompt；`preprocess_config.yaml` |
+> | **接口/落盘** | `mcp_server.py`, `hermes_client.py`, `supervisor_persist.py` | MCP 暴露；Hermes WS 集成；持久化治理 |
+> | **实体图谱** | `entity_graph.py` (🆕 from Innerlife) | 实体提取→解析→扩散激活搜索→情景固化；6 表 |
+> |
+> | **数据文件** | `data/v5/*.json` + `v5.db` (含 eg_* 实体图谱 6 表) + `chroma/` |
+>
+> ### 运行时支撑模块（不在 v5/ 目录，同属 V5 体系）
+>
+> | 模块 | 位置 | 职责 |
+> |------|------|------|
+> | **cogno_5d** | `Ikaros-memory/cogno_5d.py` | 5D 认知增强（时间/设备/地理/情绪/上下文压缩），cloud_chat 调其 `enrich_reply()` |
+> | **memory watchdog** | `bin/ikaros-memory-watchdog.py` | 同时管 :8587(nomic emb) + :8080(llama-server Qwen3-1.7B)；含 ONNX fallback |
+> | **ikaros_monitor** | `bin/ikaros_monitor.py` | 本地活动监测（进程/idle/CPU），供 care 模块读取 snapshot |
+>
+> ### ⚠️ 命名债：`as v4` 别名
+>
+> V5 的 `store.py` 写入的是 **`v5.db`**（非 v4.db）。但以下 8 个模块共 **19 处** `from v5 import store as v4`——这是 V4→V5 迁移遗留的别名，容易误导。应统一改为 `as store` 或 `as v5_store`。（P2 清理任务）
+>
+> ## Hermes Studio V5 Agent 注册 (2026-07-22 完整落地)
+>
+> - **注册方式**: 源码级补丁 `.ikaros-patches/` → `packages/` 运行时副本
+> - **关键文件**: `handle-v5-agent-run.ts`, `v5-agent-manager.ts`, `restore-v5-agent.bat`
+> - **V5 路由**: `services/hermes/run-chat/index.ts` 含 `isV5AgentExecution()` 分发
+> - **前端可见**: `ChatCodingAgentId` / `ChatPanel.vue` 选择器含 "Ikaros V5"
+> - **后端配置**: 读 Hermes profile 的 `base_url/api_key/model`，无则 fallback 本地 :8080
+> - **独立更新**: `bin/studio-local-update.bat` (7 步日志增强，fork-safe)
+> - **独立恢复**: `restore-v5-route.bat`, `restore-v5-agent.bat`, `restore-ikaros-backend.bat`
+>
+> ## 启动链路
+>
+> 1. 双击 `bin/ikaros-control.bat` → 拉起控制面板 :9100
+> 2. 面板 "start" 按钮 → 装配 CUDA 环境 → 拉记忆看门狗(:8587 + :8080) + 语音桥(:7870) + V5 思考循环
+> 3. 手动启动桌宠: `Ikaros-Live2D/` (Tauri) → webview 连 :7870
+> 4. 手动启动 Studio: 控制面板 studio 按钮 → `npm run dev` (:8649 + :8647)
+> 5. 手动启动 Dashboard: :9119 Hermes 控制台
+>
+> ## ThirdSpace Vault (双轨知识库)
+>
+> - 源: `data/thirdspace-vault/`(00-系统 ~ 99-归档)
+> - 同步: `bin/sync-thirdspace-v5.py`(读 latest_thought → 写 02-日记)
+> - Hermes 桥接: `data/hermes-agent/skills/thirdspace-bridge/SKILL.md`
+>
+> ## 已知待收口问题 (2026-07-22)
+>
+> | 优先级 | 问题 | 状态 |
+> |--------|------|------|
+> | 🔴 P0 | llama-server CFG/Exploit Protection 崩溃 → ONNX 临时替代 | 待根因修复 |
+> | 🔴 P0 | `narrative.py` 基本孤儿 — 月度叙事未回写 self_model | 待接线 |
+> | 🔴 P0 | `relationship` 仅事件驱动、无后台演化 — 亲密度不会自己生长 | 待接线 |
+> | 🟡 P1 | `dissonance` 仅事实写入侧检测，非持续认知协调 | 待升级 |
+> | 🟡 P1 | 多入口并发写 `data/v5/*.json` 部分无统一锁 | 待加固 |
+> | 🟡 P1 | `label_emotion` 写死 `provider="local"` | 待改 auto |
+> | 🟢 P2 | 本地 LLM 注释仍写 "Qwen2.5-7B" 实为 Qwen3-1.7B；MEMORY.md 存两份 8B 引用 | 待同步 |
+> | 🟢 P2 | `data/v5` 状态文件无 schema 版本管理 | 待统一 |
+> | 🟢 P2 | 8 个 V5 模块 19 处 `from v5 import store as v4` 别名（store 实际写 v5.db，命名误导） | 待统一为 `as store` |
+
+Previous: 2026-07-22 (comprehensive architecture refresh).
+- **Hermes Studio V5 Agent 完整落地**: 前端选择器含 "Ikaros V5"（`ChatCodingAgentId` / `ChatPanel.vue`），
+  后端 `run-chat/index.ts` 有 `isV5AgentExecution()` 分发 → `handleV5AgentRun` → `v5-agent-manager.ts` 拉起
+  Python 子进程跑 `orchestrator.agent_loop`。后端优先读 Hermes profile 的 base_url/api_key/model，无则
+  fallback 本地 :8080。补丁体系 `.ikaros-patches/` + `restore-*.bat` 独立恢复 + `studio-local-update.bat` fork-safe。
+- **Agent Bridge 阻塞修复**: Hermes Studio `bootstrap()` 因 `startAgentBridgeManager()` 120s 超时阻塞导致
+  前端 API 超时 → 注入 `HERMES_AGENT_BRIDGE_STARTUP_TIMEOUT_MS=100`（几乎不阻塞）。
+- **Dashboard 更新按钮修复**: `server.py:107` 路径从 `Ikaros-environment/` 改为 `bin/studio-local-update.bat`。
+- **更新流程日志增强**: 7 步含编号/时间戳/退出码/状态标记；Python stderr UTF-8 与 batch cp936 混合编码待统一。
+- **控制面板整栈重写已完成** (commit `61e009e`)：组件注册 9 项，启动/停止/重启 + SSE 实时事件流 + V5 状态读取。
+- **V5 意识工厂累积重构** (commit `b878a5c`)：think.py 致命 bug 修复 + 运行锁。
+- **llama-server CFG 崩溃**: Windows Exploit Protection 杀 ntdll.dll → ONNX 临时替代 embedding:8587。
+- **N.E.K.O 三层监控** (前台进程/idle/CPU + 应用分类/隐私层 + 截图/VLM) 已完成研究但未在主工程集成。
 
 Previous: 2026-07-16 (bin/*.bat → Rust `ikaros` launcher + portable-python under runtime).
 - **启动器切换为控制面板 `bin/ikaros-control.bat` (2026-07-20)**: 双击 → 拉起 `tools/ikaros-dashboard/server.py`

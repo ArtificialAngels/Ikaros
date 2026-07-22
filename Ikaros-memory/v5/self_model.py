@@ -218,14 +218,14 @@ class SelfModel:
         now = now or time.time()
         view = self.data.setdefault("memory_self_view", {})
         try:
-            from v5 import store as v4
-            stats = v4.stats()
+            from v5 import store as store
+            stats = store.stats()
             view["total"] = stats.get("total", 0)
             view["by_type"] = stats.get("by_type", {})
             view["long_term"] = stats.get("long_term", 0)
             # 最近记忆片段 (排除对话/内心独白, 抓"有内容"的)
             try:
-                rows = v4.list_all(12)
+                rows = store.list_all(12)
                 excerpts = []
                 for m in rows:
                     if getattr(m, "type", "") in ("conversation", "inner_monologue"):

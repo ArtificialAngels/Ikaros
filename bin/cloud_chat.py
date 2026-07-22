@@ -1,4 +1,4 @@
-# 详细说明见 docs/scripts/bin/cloud_chat.md
+# For details, see docs/scripts/bin/cloud_chat.md
 
 from __future__ import annotations
 
@@ -17,19 +17,19 @@ from typing import Optional, Callable, Any
 
 log = logging.getLogger("ikaros.cloud_chat")
 
-# ─── 监控推送 (对话流 + 内心思考) ───
+# ─── Monitor push (conversation flow + inner thoughts) ───
 _MONITOR_LOG: list[dict] = []
 _MONITOR_MAX = 300
 
 
 def _push_monitor(kind: str, **data) -> None:
-    """推一条监控事件到循环缓冲区 + 文件 (给仪表盘用)."""
+    """Push a monitor event to ring buffer + file (for dashboard)."""
     global _MONITOR_LOG
     entry = {"kind": kind, "ts": time_module.time(), **data}
     _MONITOR_LOG.append(entry)
     if len(_MONITOR_LOG) > _MONITOR_MAX:
         _MONITOR_LOG = _MONITOR_LOG[-_MONITOR_MAX:]
-    # 写文件 IPC — 同名子进程 (ikaros-dashboard) 通过 tail 读取
+    # IPC: ikaros-dashboard reads via tail
     try:
         _MONITOR_LOG_DIR.mkdir(parents=True, exist_ok=True)
         with open(str(_MONITOR_FILE), "a", encoding="utf-8") as _f:
@@ -39,12 +39,12 @@ def _push_monitor(kind: str, **data) -> None:
 
 
 def get_monitor_log(limit: int = 100) -> list[dict]:
-    """取最近 N 条监控事件."""
+    """Get last N monitor events."""
     return _MONITOR_LOG[-limit:]
 
-# ─── 路径常量 ───
+# ─── Path constants ───
 
-_HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
+_HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", os.path.expanduser("~")))
 _ENV_PATH = _HERMES_ROOT / "data" / "hermes-agent" / ".env"
 _AXIOM_PATH = _HERMES_ROOT / "ikaros-identity" / "axiom.md"
 _CAPABILITIES_PATH = _HERMES_ROOT / "ikaros-identity" / "capabilities.md"
@@ -53,190 +53,46 @@ _LOCAL_LLM_URL = os.environ.get(
     os.environ.get("HERMES_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1"),
 )
 
-# ─── 监控日志路径 (给 ikaros-dashboard 用) ───
+# ─── Monitor log path (for ikaros-dashboard) ───
 _MONITOR_LOG_DIR = _HERMES_ROOT / "data" / "logs"
 _MONITOR_FILE = _MONITOR_LOG_DIR / "ikaros-monitor.jsonl"
 
-# ─── V5 自我认知数据 (供上下文补全注入) ───
+# ─── V5 self-cognition data (for context injection) ───
 _V5_DATA_DIR = Path(__file__).resolve().parent.parent / "Ikaros-memory" / "data" / "v5"
 _LATEST_THOUGHT_PATH = _V5_DATA_DIR / "latest_thought.json"
 _SELF_MODEL_PATH = _V5_DATA_DIR / "self_model.json"
 
-# 上下文补全用的模块级状态
+# Module-level state for context completion
 _LAST_USER_TEXT = ""
 _SELF_STATUS_INTERVAL = 5
 _self_status_counter = 0
 _last_activity_phrase = ""
 
-# ─── 缓存 ───
+# ─── Cache ───
 
 _axiom_cache: Optional[str] = None
 _capabilities_cache: Optional[str] = None
 _env_cache: Optional[dict[str, str]] = None
 
-# ─── Hermes 会话复用 ───
-_HERMES_SESSION_FILE = _V5_DATA_DIR / "hermes_session.json"
-_HERMES_SESSION_ID: str | None = None
+# ─── Hermes session (delegated to hermes_client) ───
+
 _HERMES_WARMED = False
-if _HERMES_SESSION_FILE.is_file():
-    try:
-        _HERMES_SESSION_ID = json.loads(_HERMES_SESSION_FILE.read_text(encoding="utf-8")).get("session_id")
-    except Exception:
-        pass
-
-# ─── Dashboard WebSocket JSON-RPC API ──────────────────────────
-# 复用已经在跑的 Hermes Dashboard (:9119), 避免 spawn 子进程 (~53s 冷启动)。
-_DASH_WS: Any = None
-_DASH_WS_TOKEN: str | None = None
-
-
-async def _dash_scrape_token() -> str:
-    """从 Dashboard 源抓取 WS session token.
-
-    优先级:
-      1. Dashboard SPA 页面 (实时注入 __HERMES_SESSION_TOKEN__)
-      2. Dashboard 登录页面 (回退)
-      3. Web dist index.html 文件 (文件系统兜底, 含 __HERMES_SESSION_TOKEN__ 模板占位符)
-      4. .dash_token 文件 (手动写入, 供 --skip-build 无 SPA 场景)
-    """
-    import urllib.request
-    # 方式 1-2: 从 HTTP 页面提取
-    for path in ("/", "/login"):
-        try:
-            resp = urllib.request.urlopen(
-                f"http://127.0.0.1:9119{path}", timeout=5)
-            raw = resp.read()
-            # 转码: 某些响应可能是 gzip 压缩的
-            try:
-                html = raw.decode("utf-8")
-            except Exception:
-                html = raw.decode("gbk", errors="replace")
-            m = _re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
-            if m:
-                return m.group(1)
-        except Exception:
-            continue
-    # 方式 3: 从服务器进程的 _SESSION_TOKEN 文件读取 (跨进程 IPC)
-    # 写一个临时脚本通过 server 的 debug 接口暴露 token
-    # 暂无, fall through.
-    # 方式 4: 读取 .dash_token 文件
-    _token_file = _HERMES_ROOT / ".dash_token"
-    if _token_file.is_file():
-        try:
-            t = _token_file.read_text(encoding="utf-8").strip()
-            if t:
-                return t
-        except Exception:
-            pass
-    raise RuntimeError("cannot find token from Dashboard")
-
-
-async def _dash_connect() -> Any:
-    """连接 Dashboard WebSocket, 返回连接对象."""
-    global _DASH_WS_TOKEN
-    if _DASH_WS_TOKEN is None:
-        _DASH_WS_TOKEN = await _dash_scrape_token()
-    import websockets
-    ws = await websockets.connect(
-        f"ws://127.0.0.1:9119/api/ws?token={_DASH_WS_TOKEN}",
-        max_size=2 ** 20, proxy=None,
-    )
-    await asyncio.wait_for(ws.recv(), timeout=5)  # 消费 gateway.ready
-    return ws
-
-
-async def _dash_ws() -> Any:
-    """获取持久 WS 连接 (断线自动重连)."""
-    global _DASH_WS
-    if _DASH_WS is not None:
-        try:
-            await _DASH_WS.send(
-                json.dumps({"jsonrpc": "2.0", "id": "ping", "method": "session.list", "params": {}})
-            )
-            await asyncio.wait_for(_DASH_WS.recv(), timeout=3)
-            return _DASH_WS
-        except Exception:
-            pass
-    _DASH_WS = await _dash_connect()
-    return _DASH_WS
-
-
-async def _dash_rpc(method: str, params: dict, timeout: float = 60) -> dict:
-    """JSON-RPC 调用, 返回 result dict. 失败抛异常."""
-    ws = await _dash_ws()
-    rid = str(time_module.monotonic_ns())
-    await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
-    while True:
-        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-        data = json.loads(raw)
-        if data.get("id") == rid:
-            if "error" in data:
-                raise RuntimeError(f"RPC {method}: {data['error']}")
-            return data.get("result", {})
-        # 非匹配消息 (其他请求的 event) 忽略
-
-
-async def _dash_prompt(session_id: str, text: str, on_delta=None) -> str:
-    """提交 prompt 到 session, 从 event 流收集回复."""
-    ws = await _dash_ws()
-    rid = str(time_module.monotonic_ns())
-    await ws.send(json.dumps({
-        "jsonrpc": "2.0", "id": rid, "method": "prompt.submit",
-        "params": {"session_id": session_id, "text": text},
-    }))
-    reply = ""
-    while True:
-        raw = await asyncio.wait_for(ws.recv(), timeout=120)
-        data = json.loads(raw)
-        if data.get("id") == rid and "result" in data:
-            break
-        if data.get("method") == "event":
-            params = data.get("params", {})
-            etype = params.get("type", "")
-            if etype == "message.delta":
-                delta = params.get("delta", "") or params.get("content", "") or ""
-                reply += delta
-                if on_delta:
-                    await _maybe_async(on_delta, delta)
-            elif etype == "completion":
-                final = params.get("text", "") or params.get("content", "") or ""
-                if final:
-                    reply = final
-                break
-            elif etype == "error":
-                raise RuntimeError(f"Agent error: {params.get('message', 'unknown')}")
-    return reply
 
 
 async def warm_hermes_session():
-    """通过 Dashboard WS API 查找或创建 "Ikaros" 主 session."""
-    global _HERMES_SESSION_ID, _HERMES_WARMED
-    if _HERMES_WARMED or _HERMES_SESSION_ID:
+    """Start the Hermes background worker (delegated to hermes_client).
+
+    hermes_client maintains one shared WebSocket in a daemon thread,
+    eliminating duplicate connections and token fighting.
+    """
+    global _HERMES_WARMED
+    if _HERMES_WARMED:
         return
     try:
-        # 先查找已有的 Ikaros session
-        result = await _dash_rpc("session.list", {}, timeout=10)
-        for s in result.get("sessions", []):
-            if s.get("title") == "Ikaros":
-                sid = s.get("id", "")
-                if sid:
-                    _HERMES_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-                    _HERMES_SESSION_FILE.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
-                    _HERMES_SESSION_ID = sid
-                    _HERMES_WARMED = True
-                    log.info("warm-hermes: found existing Ikaros session %s", sid)
-                    return
-        result = await _dash_rpc("session.create", {}, timeout=10)
-        sid = result.get("session_id", "")
-        if not sid:
-            log.warning("warm-hermes: no session_id in create response")
-            return
-        await _dash_rpc("session.title", {"session_id": sid, "title": "Ikaros"}, timeout=5)
-        _HERMES_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _HERMES_SESSION_FILE.write_text(json.dumps({"session_id": sid}), encoding="utf-8")
-        _HERMES_SESSION_ID = sid
+        from v5.hermes_client import start as _hermes_start
+        _hermes_start()
         _HERMES_WARMED = True
-        log.info("warm-hermes: Ikaros session %s created via WS", sid)
+        log.info("warm-hermes: hermes_client worker started")
     except Exception as e:
         log.warning("warm-hermes: failed (%s)", e)
 
@@ -253,49 +109,49 @@ def _load_cogno():
 
 
 def _get_time_str() -> str:
-    """维度 1: 时间 — 委托 cogno_5d.get_time_str()"""
+    """Dimension 1: time — delegates to cogno_5d.get_time_str()"""
     c = _load_cogno()
     return c.get_time_str() if c else datetime.now().strftime("%Y/%m/%d %H:%M")
 
 
 def _get_machine_id() -> str:
-    """维度 2: 设备 — 委托 cogno_5d.get_machine_id()"""
+    """Dimension 2: device — delegates to cogno_5d.get_machine_id()"""
     c = _load_cogno()
     return c.get_machine_id() if c else "unknown"
 
 
 def _get_geo_location() -> str:
-    """维度 3: 地理 — 委托 cogno_5d.get_geo_location()"""
+    """Dimension 3: geo — delegates to cogno_5d.get_geo_location()"""
     c = _load_cogno()
-    return c.get_geo_location() if c else "未知"
+    return c.get_geo_location() if c else "unknown"
 
 
 def _infer_emotion(text: str) -> str:
-    """维度 4: 情绪推断 — 委托 cogno_5d.infer_emotion()"""
+    """Dimension 4: emotion inference — delegates to cogno_5d.infer_emotion()"""
     c = _load_cogno()
-    return c.infer_emotion(text) if c else "平静"
+    return c.infer_emotion(text) if c else "calm"
 
 
 def _compress_context(text: str) -> str:
-    """维度 5: 上下文压缩 — 委托 cogno_5d.compress_context()"""
+    """Dimension 5: context compression — delegates to cogno_5d.compress_context()"""
     c = _load_cogno()
     return c.compress_context(text) if c else text[:40]
 
 
-# ─── v5 记忆存储模块加载 (Ikaros-memory/v5/store.py, code migrated v4→v5 2026-07-12) ───
+# ─── v5 memory store module (Ikaros-memory/v5/store.py, code migrated v4->v5 2026-07-12) ───
 
 _V4_STORE_LOCK = threading.Lock()
 _V4_STORE_ALIAS = "_ikaros_memory_v4_store"
 
 
 def _get_v4_store():
-    """动态加载 Ikaros-memory/v5/store.py 包 (V5 记忆存储). 带 cache. 线程安全.
+    """Lazy load Ikaros-memory/v5/store.py (V5 memory store). Thread-safe.
 
-    V4 cutover (2026-07-07): 实时对话/事实落库改走 v4.store (写入 v4.db),
-    不再写 v3.db. v4.store API 与 V3 兼容 (store/search/...), 但失败显式抛
-    而非返 -1.
+    V4 cutover (2026-07-07): live conversation/fact writes go to v4.store (v4.db),
+    replacing v3.db. v4.store API is V3-compatible (store/search/...), but
+    failures raise instead of returning -1.
 
-    Returns: v4.store module object, 或 None (导入失败).
+    Returns: v4.store module object, or None (import failure).
     """
     with _V4_STORE_LOCK:
         v4s = sys.modules.get(_V4_STORE_ALIAS)
@@ -314,9 +170,9 @@ def _get_v4_store():
 
 
 def _get_v4_search():
-    """动态加载 Ikaros-memory/v5/search.py 包 (V5 语义搜索, ChromaDB).
+    """Lazy load Ikaros-memory/v5/search.py (V5 semantic search, ChromaDB).
 
-    Returns: v4.search module object, 或 None (导入失败 / chromadb 缺失).
+    Returns: v4.search module object, or None (import failure / chromadb missing).
     """
     try:
         mem = str(_HERMES_ROOT / "Ikaros-memory")
@@ -329,15 +185,16 @@ def _get_v4_search():
         return None
 
 
-# ─── 时间指代解析（中文 → Unix 时间戳范围） ───
+# ─── Temporal reference parsing (Chinese -> Unix timestamp range) ───
 
-# CNSeq2TimeSpan: 30KB 轻量正则解析器，覆盖 昨天/前天/上周/三天前/上个月 等
-# 2019 年停更但核心正则稳定；已知 bug: 3 处 "Asia/shanghai" 需 patch 为 "Asia/Shanghai"
+# CNSeq2TimeSpan: 30KB lightweight regex parser for relative time references.
+# Core regexes are stable despite being unmaintained since 2019.
+# Known bug: 3 x "Asia/shanghai" must be patched to "Asia/Shanghai".
 _TEMPORAL_PARSER = None
 
 
 def _get_temporal_parser():
-    """懒加载 CNSeq2TimeSpan（仅在首次用到时间指代解析时 import）."""
+    """Lazy-load CNSeq2TimeSpan (only on first temporal resolution)."""
     global _TEMPORAL_PARSER
     if _TEMPORAL_PARSER is not None:
         return _TEMPORAL_PARSER
@@ -351,7 +208,7 @@ def _get_temporal_parser():
     return _TEMPORAL_PARSER
 
 
-# 可被解析的时间指代模式（用于从查询中剥离已解析的时间短语）
+# Parsable temporal reference patterns (for stripping from queries)
 _TEMPORAL_PATTERNS = [
     "大前天", "前天", "昨天", "今天", "明天", "后天", "大后天",
     "上周", "这周", "下周", "上星期", "这星期", "下星期",
@@ -362,10 +219,10 @@ _TEMPORAL_PATTERNS = [
 
 
 def _resolve_temporal_filter(query: str) -> tuple[str, float | None, float | None]:
-    """从用户输入中提取时间指代，返回 (清洗后查询, start_ts, end_ts)。
+    """Extract temporal references from user input, return (cleaned_query, start_ts, end_ts).
 
-    无时间指代时返回 (query, None, None)。
-    时间戳为 Unix epoch float，end_ts 是 inclusive 的上界。
+    When no temporal reference is found, returns (query, None, None).
+    Timestamps are Unix epoch float; end_ts is the inclusive upper bound.
     """
     tp = _get_temporal_parser()
     if tp is False or tp is None:
@@ -393,27 +250,27 @@ def _resolve_temporal_filter(query: str) -> tuple[str, float | None, float | Non
     except ValueError:
         return query, None, None
 
-    # 从查询文本中剥离已解析的时间短语，留下纯语义部分
+    # Strip resolved temporal phrases, keep semantic core
     cleaned = query
     for pat in sorted(_TEMPORAL_PATTERNS, key=len, reverse=True):
         if pat in cleaned:
             cleaned = cleaned.replace(pat, "").strip()
             break
 
-    # 去掉残留的占位符/无意义词
+    # Remove residual placeholders/filler words
     import re as _re
     cleaned = _re.sub(r"的?(事儿|事|吗|呢|啊|呀|么|嘛|哈|哦)", "", cleaned)
     cleaned = cleaned.strip()
 
     if not cleaned or len(cleaned) < 2:
-        cleaned = query  # 回退到原始查询
+        cleaned = query  # fallback to original query
 
     log.info("temporal resolved: '%s' → cleaned='%s' range=[%s, %s]",
              query[:40], cleaned[:30], start_str, end_str)
     return cleaned, start_ts, end_ts
 
 
-# 记忆/时间类查询关键词（触发 "I don't know" 信号）
+# Memory/time query keywords (triggers "I don't know" signal)
 _MEMORY_QUERY_PATTERNS = [
     "记得", "还记得", "想起", "回忆", "昨天", "前天", "上周", "上次",
     "之前", "以前", "过去", "说过", "聊过", "提过", "讨论过",
@@ -422,15 +279,15 @@ _MEMORY_QUERY_PATTERNS = [
 
 
 def _looks_like_memory_query(text: str) -> bool:
-    """用户输入是否像在问记忆/过去的事（用于检索为空时的防捏造信号）."""
+    """Check if user input is asking about memory/past (used for anti-fabrication signal)."""
     t = text.lower()
     return any(p in t for p in _MEMORY_QUERY_PATTERNS)
 
 
-# ─── v4 记忆检索 ───
+# ─── v4 memory retrieval ───
 
 
-# 寒暄/无信息量输入: 不触发记忆检索
+# Low-info / greeting inputs: skip memory retrieval
 _SKIP_MEMORY_PATTERNS = {
     "嗯", "哦", "好", "好的", "行", "OK", "ok", "是", "对", "是的",
     "继续", "然后", "还有", "呢", "啊", "哈", "哈哈", "呵呵",
@@ -440,29 +297,29 @@ _SKIP_MEMORY_PATTERNS = {
 
 
 def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
-    """从 V4 记忆库检索相关记忆 (FTS5 + 向量融合 + 时间指代解析).
+    """Search v4 memory store (FTS5 + vector fusion + temporal resolution).
 
-    管线:
-      1. 时间指代解析: "昨天" → date range 过滤
-      2. FTS5 + ChromaDB 融合搜索 (关键词 + 语义)
-      3. 时间范围过滤 (若已解析)
+    Pipeline:
+      1. Temporal resolution: date references -> date range filter
+      2. FTS5 + ChromaDB fusion search (keyword + semantic)
+      3. Time range filter (if resolved)
 
-    V4 融合搜索 (v4.search.fused_search):
-      - FTS5: 精确关键词匹配 (权重 0.3)
-      - ChromaDB: 语义向量匹配 (权重 0.7)
-      - 两路结果融合去重, 按综合分排序
-    规则同 V3: 寒暄门控, top_k=3, min_weight=0.6, 排除 conversation.
+    V4 fusion search (v4.search.fused_search):
+      - FTS5: exact keyword match (weight 0.3)
+      - ChromaDB: semantic vector match (weight 0.7)
+      - Two-way result fusion dedup, scored composite
+    Same rules as V3: greeting gate, top_k=3, min_weight=0.6, exclude conversation.
     """
-    # 相关性门控: 寒暄/短输入不检索
+    # Relevance gate: greetings/short inputs skip retrieval
     q = query.strip()
     if not q or q in _SKIP_MEMORY_PATTERNS or len(q) < 4:
         return []
 
-    # ── 时间指代解析 ──
+    # ── Temporal resolution ──
     cleaned_q, start_ts, end_ts = _resolve_temporal_filter(q)
     has_time_filter = start_ts is not None and end_ts is not None
 
-    # ── 三路融合检索 (FTS5 + 向量 + 时间范围) → 委托 v5.memory_retrieval (R3) ──
+    # ── Three-way fusion (FTS5 + vector + time range) -> delegate v5.memory_retrieval (R3) ──
     search_query = cleaned_q[:30] if len(cleaned_q) > 30 else cleaned_q
     time_range = (start_ts, end_ts) if has_time_filter else None
     try:
@@ -470,7 +327,7 @@ def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
         if _v5p not in sys.path:
             sys.path.insert(0, _v5p)
         from v5.memory_retrieval import retrieve
-        # exclude 用户原话, 避免把刚说的话当记忆回注 (spec R3: 不重复注入已知信息)
+        # Exclude user's original text to avoid re-injecting known info (spec R3)
         mems = retrieve(search_query, top_k=max(top_k, 5),
                         time_range=time_range, exclude=[query])
         merged = [
@@ -487,30 +344,30 @@ def _search_v4_memories(query: str, top_k: int = 3) -> list[dict]:
 
 
 def _record_conversation(user_msg: str, assistant_msg: str) -> bool:
-    """把对话写入 v4.db (委托给 v4.store, 而非 inline SQL).
+    """Write conversation to v4.db (delegated to v4.store).
 
-    v2 质量门控: 只存储有信息量的对话.
-    寒暄/单字/纯表情 不存储, 避免污染记忆库.
+    v2 quality gate: only store meaningful conversations.
+    Greetings / single chars / emoji-only are skipped to avoid polluting memory.
     """
     v4_store = _get_v4_store()
     if v4_store is None:
         return False
     try:
-        # 质量门控: 对 user_msg 做检查
+        # Quality gate: check user_msg
         user_clean = user_msg.strip()
         if not user_clean or len(user_clean) < 6:
             return False
         if user_clean in _SKIP_MEMORY_PATTERNS:
             return False
-        # 纯表情/标点: 无信息量 (Python re 不支持 \p{}, 用显式范围)
+        # Emoji/punctuation only: no information (explicit ranges, \p{} not available)
         import re as _re
         stripped = _re.sub(r'[\s\u0020-\u0040\u005b-\u0060\u007b-\u007e\u2000-\u27bf\U0001f000-\U0001faff\u3000-\u303f\uff00-\uffef]', '', user_clean)
         if len(stripped) < 4:
             return False
-        # 存储 user + assistant 完整对话 (供反思整合时小模型有上下文)
+        # Store user + assistant as a complete pair (for reflection context)
         assistant_short = assistant_msg.strip()[:150] if assistant_msg else ""
         content = f"Q: {user_clean[:200]}\nA: {assistant_short}"
-        # 附加 cogno 5D 元数据到 tags (供向量搜索按维度过滤)
+        # Attach cogno 5D metadata to tags (for vector search dimension filtering)
         cogno_tags = "cloud_chat"
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "Ikaros-memory"))
@@ -527,11 +384,11 @@ def _record_conversation(user_msg: str, assistant_msg: str) -> bool:
         return False
 
 
-# ─── 灵魂注入 (axiom.md) ───
+# ─── Soul injection (axiom.md) ───
 
 
 def _load_env() -> dict[str, str]:
-    """加载 .env 文件（优先 .env > process.env，同 bridge 逻辑）"""
+    """Load .env file (priority: .env > process.env, same as bridge logic)."""
     global _env_cache
     if _env_cache is not None:
         return _env_cache
@@ -554,7 +411,7 @@ def _load_env() -> dict[str, str]:
 
 
 def _get_api_key(env_map: dict[str, str], key_name: str) -> Optional[str]:
-    """获取 API key: 优先 .env 文件 > process.env"""
+    """Get API key: priority .env file > process.env."""
     if key_name in env_map and env_map[key_name] and not env_map[key_name].startswith("#"):
         return env_map[key_name]
     val = os.environ.get(key_name, "")
@@ -562,7 +419,7 @@ def _get_api_key(env_map: dict[str, str], key_name: str) -> Optional[str]:
 
 
 def _load_axiom() -> str:
-    """加载 axiom.md (缓存, 重启后重新加载)"""
+    """Load axiom.md (cached, reloads on restart)."""
     global _axiom_cache
     if _axiom_cache is not None:
         return _axiom_cache
@@ -579,7 +436,7 @@ def _load_axiom() -> str:
 
 
 def _load_capabilities() -> str:
-    """加载 capabilities.md (伊卡洛斯能力清单, 缓存, 重启后重新加载)"""
+    """Load capabilities.md (Ikaros capability list, cached, reloads on restart)."""
     global _capabilities_cache
     if _capabilities_cache is not None:
         return _capabilities_cache
@@ -594,7 +451,7 @@ def _load_capabilities() -> str:
     return _capabilities_cache
 
 
-# ─── 核心 API ───
+# ─── Core API ───
 
 _RULES_PATH = _HERMES_ROOT / "docs" / "agent-rules.yaml"
 _RULES_CACHE: list[dict] | None = None
@@ -602,7 +459,7 @@ _RULES_YAML_MTIME = 0.0
 
 
 def _load_rules() -> list[dict]:
-    """加载规则库 (带 mtime 缓存)."""
+    """Load rule library (with mtime cache)."""
     global _RULES_CACHE, _RULES_YAML_MTIME
     try:
         mtime = _RULES_PATH.stat().st_mtime
@@ -618,16 +475,15 @@ def _load_rules() -> list[dict]:
 
 
 def _select_relevant_rules(user_text: str) -> str:
-    """本地模型按当前上下文压缩选取相关规则.
+    """Use local model to select and compress relevant rules for current context.
 
-
-    调 :8080 本地 LLM 从规则库中选出最相关的 1-2 条并压缩为 1-2 句。
-    失败时返回空字符串 (不阻塞系统 prompt 构建).
+    Calls :8080 local LLM to pick 1-2 most relevant rules and compress to 1-2 sentences.
+    Returns empty string on failure (does not block system prompt build).
     """
     rules = _load_rules()
     if not rules:
         return ""
-    # 检测是否为简单寒暄/无需规则的场景
+    # Check if simple greeting / no rules needed
     q = user_text.strip().lower()
     if not q or len(q) < 8 or q in {
         "嗯", "哦", "好", "好的", "行", "ok", "是", "对",
@@ -638,13 +494,13 @@ def _select_relevant_rules(user_text: str) -> str:
         import json, http.client
         rule_list = "\n".join(f"{r['id']}: {r['text']}" for r in rules)
         prompt = (
-            f"从以下规则中选出与当前任务最相关的 1-2 条。"
-            f"只输出规则 ID 和一句话理由。\n"
-            f"当前任务: {user_text[:150]}\n规则:\n{rule_list}"
+            "Select the 1-2 most relevant rules for this task. "
+            "Output rule ID and one-line reason only.\n"
+            f"Task: {user_text[:150]}\nRules:\n{rule_list}"
         )
         body = json.dumps({
             "model": "local-llm", "messages": [
-                {"role": "system", "content": "选最相关的1-2条规则，输出格式: R1-DRY: 理由"},
+                {"role": "system", "content": "Select 1-2 most relevant rules, output: R1-DRY: reason"},
                 {"role": "user", "content": prompt},
             ],
             "max_tokens": 80, "temperature": 0.1, "stream": False,
@@ -657,42 +513,42 @@ def _select_relevant_rules(user_text: str) -> str:
             d = json.loads(resp.read())
             selected = (d["choices"][0]["message"].get("content") or "").strip()
             if selected:
-                return "\n## 操作提示\n" + selected
+                return "\n## Operation hints\n" + selected
     except Exception:
         pass
     return ""
 
 
 def build_system_prompt(user_text: str, history: Optional[list] = None) -> str:
-    """构建带 soul + cogno 5D + 记忆检索的 system prompt"""
+    """Build system prompt with soul + cogno 5D + memory retrieval."""
     global _LAST_USER_TEXT
     _LAST_USER_TEXT = user_text
     axiom = _load_axiom()
 
-    # cogno 5D v2: 自然语言认知上下文 (enrich 一次调用搞定 5 维)
+    # cogno 5D v2: natural language cognitive context (single enrich call handles all 5 dims)
     c = _load_cogno()
     if c:
         cogno = c.enrich(user_text)
     else:
-        # fallback: 简单时间注入
-        cogno = f"当前时间: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+        # fallback: simple time injection
+        cogno = f"Current time: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
 
-    # R2 节奏感知: 结构化节奏数据 (距上轮 + 时段), 云端据之生成语气
+    # R2 rhythm awareness: structured rhythm data (interval + time-of-day), cloud generates tone
     rhythm_block = _build_rhythm_block()
 
-    # R4 历史摘要 (需 history)
+    # R4 history summary (requires history)
     summary_block = _build_summary_block(history)
-    # R5 用户画像 (负面偏好优先)
+    # R5 user profile (negative preferences first)
     profile_block = _build_profile_block()
-    # R6 情感对比 + 情感记忆召回
+    # R6 emotion diff + emotion memory recall
     emotion_diff_block = _build_emotion_diff_block()
     emotion_recall_block = _build_emotion_recall_block(user_text)
 
     v5_lines = _build_v5_affect_block()
-    # PAD 加权记忆折叠 (情感加权, 只取 top 2)
+    # PAD-weighted memory folding (emotionally weighted, top 2 only)
     memory_line = _build_memory_line(user_text)
     if v5_lines or memory_line:
-        v5_block = "\n### 当前状态\n" + "\n".join(v5_lines)
+        v5_block = "\n### Current state\n" + "\n".join(v5_lines)
         if memory_line:
             v5_block += "\n" + memory_line
     else:
@@ -700,23 +556,23 @@ def build_system_prompt(user_text: str, history: Optional[list] = None) -> str:
 
     identity_refresh = _maybe_inject_identity_refresh()
     thought_note = _maybe_self_thought_note(user_text)
-    # V5 上下文补全 (伊卡洛斯 handoff): 让对话角色知道后台在做什么
+    # V5 context completion (Ikaros handoff): tell conversation role what background is doing
     auto_thought = _maybe_auto_thought()
     self_status = _maybe_self_status()
     task_note = _maybe_task_note()
     activity_note = _maybe_activity_note()
-    # 规则注入: 本地模型按上下文压缩选取
+    # Rule injection: local model compresses and selects relevant rules
     rules_block = _select_relevant_rules(user_text)
     capabilities = _load_capabilities()
 
-    # 基础块 (永不被裁剪)
+    # Base block (never trimmed)
     base = f"{axiom}{identity_refresh}\n{cogno}"
-    # 状态类附注归一组
+    # Status notes grouped together
     status_notes = thought_note + auto_thought + self_status + task_note + activity_note
-    cap_block = (f"\n### 我的能力\n{capabilities}\n" if capabilities else "")
+    cap_block = (f"\n### My capabilities\n{capabilities}\n" if capabilities else "")
 
-    # 优先级块 (spec 4.3): 节奏(1)>记忆(2)>状态(3)>规则(4)>关系(5)>摘要(6)>情感(7)
-    # 超过 token 预算时从高优先级数字(最低优先)开始裁剪
+    # Priority blocks (spec 4.3): rhythm(1)>memory(2)>status(3)>rules(4)>relationship(5)>summary(6)>emotion(7)
+    # Trim from lowest priority (highest number) when exceeding token budget
     ordered_blocks = [
         (1, rhythm_block),
         (2, v5_block),
@@ -730,10 +586,10 @@ def build_system_prompt(user_text: str, history: Optional[list] = None) -> str:
 
 
 def _enforce_token_budget(base: str, ordered_blocks: list, cap_block: str) -> str:
-    """spec 4.3: 上下文块总预算 800-1200 token, 超预算按优先级裁剪.
+    """spec 4.3: context block budget 800-1200 tokens, trim by priority when exceeded.
 
-    估算: 中文 ~1 token/字, 其他 ~0.5 token/字符 (char_x 作安全系数, 默认 1.0).
-    base 与 cap_block 永不裁剪. 正常中文 prompt 不会被误伤.
+    Estimation: Chinese ~1 token/char, others ~0.5 token/char (char_x safety factor, default 1.0).
+    base and cap_block are never trimmed. Normal Chinese prompts are not affected.
     """
     try:
         from v5.preprocess_config import get
@@ -765,7 +621,7 @@ def _enforce_token_budget(base: str, ordered_blocks: list, cap_block: str) -> st
 
 
 def _is_asking_thinking(text: str) -> bool:
-    """检测哥哥是否在问'你在想什么'类问题。"""
+    """Detect if user is asking 'what are you thinking about' type questions."""
     t = (text or "").strip().lower()
     return any(k in t for k in (
         "你在想什么", "在想什么", "你在思考什么", "你想什么呢",
@@ -775,7 +631,7 @@ def _is_asking_thinking(text: str) -> bool:
 
 
 def _maybe_self_thought_note(user_text: str) -> str:
-    """哥哥问'你在想什么'时, 取伊卡洛斯最近的自我反思/哲思注入提示。"""
+    """When user asks 'what are you thinking', inject Ikaros's latest reflection/philosophy note."""
     if not _is_asking_thinking(user_text):
         return ""
     try:
@@ -792,21 +648,21 @@ def _maybe_self_thought_note(user_text: str) -> str:
     return ""
 
 
-# ─── V5 上下文补全 (伊卡洛斯 handoff 2026-07-11) ───
-# 让对话角色知道后台在做什么: 自我思考 / 自我状态 / 任务 / 活动
-# 所有函数返回 str, 空字符串 = 本轮不注入。拼在 build_system_prompt 末尾。
+# ─── V5 context completion (Ikaros handoff 2026-07-11) ───
+# Tell the conversation role what background is doing: self-thought / self-status / task / activity
+# All functions return str, empty string = no injection this turn. Appended at end of build_system_prompt.
 
 def _cjk_bigrams(s: str) -> set[str]:
-    """取中文二元组集合 (用于话题相关性判断)。"""
+    """Extract Chinese bigrams (for topic relevance check)."""
     s = "".join(_re.findall(r"[一-鿿]", s or ""))
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
 def _maybe_auto_thought() -> str:
-    """P0: 每轮把最近一次自我思考(若相关且探索欲够)作为一句自然提醒注入。
+    """P0: each turn inject most recent self-thought as a natural reminder if relevant and curious.
 
-    数据: latest_thought.json (metacog 已写入, 监控卡片同源)。
-    门槛: curiosity>=0.4 且与当前话题有共享中文二元组, 才轻提醒一句, 不塞整段。
+    Data: latest_thought.json (written by metacog, same source as monitor card).
+    Threshold: curiosity>=0.4 AND shares Chinese bigrams with current topic, then a light reminder.
     """
     try:
         if not _LATEST_THOUGHT_PATH.is_file():
@@ -818,20 +674,20 @@ def _maybe_auto_thought() -> str:
         cu = float(obj.get("curiosity", 0) or 0)
         if cu < 0.4:
             return ""
-        # 相关性: 与用户当前话题共享中文二元组才打扰 (避免整句匹配漏判)
+        # Relevance: only nudge if shared Chinese bigrams with current user topic
         a = _cjk_bigrams(text)
         b = _cjk_bigrams(_LAST_USER_TEXT or "")
         if a and b and not (a & b):
-            return ""  # 完全不相关则不打扰, 避免生硬
-        return "\n(你最近在想: " + text[:120] + ")\n"
+            return ""  # completely unrelated, don't disturb
+        return "\n(You've been thinking about: " + text[:120] + ")\n"
     except Exception:
         return ""
 
 
 def _maybe_self_status() -> str:
-    """P0: 每 5 轮注入一行自我状态 (探索欲/哲思次数/最近信念更新)。
+    """P0: every 5 turns inject a self-status line (curiosity/reflection count/recent belief update).
 
-    注意: 这是状态信息, 不是身份提醒 (identity_refresh 负责身份), 不重复。
+    Note: this is status info, not identity refresh (identity_refresh handles identity); non-duplicate.
     """
     global _self_status_counter
     _self_status_counter += 1
@@ -843,11 +699,11 @@ def _maybe_self_status() -> str:
         d = json.loads(_SELF_MODEL_PATH.read_text(encoding="utf-8"))
         cu = round(float((d.get("curiosity") or {}).get("level", 0)), 2)
         philo = len(d.get("philosophy") or [])
-        # 最近更新的信念主题
+        # Most recently updated belief topic
         last_theme = ((d.get("metacog") or {}).get("last_changed_theme")) or None
         if not last_theme:
             beliefs = d.get("beliefs") or {}
-            last_theme = "—"
+            last_theme = "-"
             best = 0.0
             for k, v in beliefs.items():
                 if isinstance(v, dict):
@@ -855,16 +711,16 @@ def _maybe_self_status() -> str:
                     if ts > best:
                         best = ts
                         last_theme = k
-        return (f"\n(自我状态: 探索欲={cu} | 哲思={philo}次 | "
-                f"信念更新: {last_theme})\n")
+        return (f"\n(Self status: curiosity={cu} | reflections={philo} | "
+                f"belief update: {last_theme})\n")
     except Exception:
         return ""
 
 
 def _maybe_task_note() -> str:
-    """P1: 后台任务已完成/失败时, 注入一行任务状态 (等哥哥有空时交付)。
+    """P1: inject task status line when background task completed/failed (deliver when user is free).
 
-    复用 task_runner.check_result() (任务结果已落在 task_result.json)。
+    Reuses task_runner.check_result() (result lands in task_result.json).
     """
     try:
         from v5.task_runner import check_result
@@ -882,12 +738,12 @@ def _maybe_task_note() -> str:
 
 
 def _maybe_activity_note() -> str:
-    """P2: 哥哥活动状态变化时注入一句 (复用 cogno_5d 实时活动叙述)。
+    """P2: inject user activity status change (reuses cogno_5d real-time activity narrative).
 
-    注: 伊卡洛斯 handoff 写的是读 ikaros-monitor.jsonl, 但该文件实为
-    cloud_chat 自己的对话事件日志, 不含哥哥活动; 真正的活动叙述在
-    cogno_5d._get_activity_narrative() (已实时取自 ikaros_monitor)。
-    故这里复用它, 且只在变化时注入, 避免与 cogno 5D 块重复。
+    Note: Ikaros handoff originally reads ikaros-monitor.jsonl, but that file contains
+    cloud_chat's own conversation log, not the user's activity. The real activity narrative
+    is in cogno_5d._get_activity_narrative() (real-time from ikaros_monitor).
+    Only inject on change to avoid duplication with cogno 5D block.
     """
     try:
         c = _load_cogno()
@@ -898,14 +754,14 @@ def _maybe_activity_note() -> str:
             return ""
         global _last_activity_phrase
         if phrase == _last_activity_phrase:
-            return ""  # 只在变化时注入
+            return ""  # only inject on change
         _last_activity_phrase = phrase
         return f"\n(哥哥现状: {phrase})\n"
     except Exception:
         return ""
 
 
-# 身份刷新计数器: 每 10 轮注入一条轻量身份提醒
+# Identity refresh counter: inject a light identity reminder every 10 turns
 _TURN_COUNTER: int = 0
 _IDENTITY_REFRESH_INTERVAL: int = 10
 _IDENTITY_REFRESH_LINES = [
@@ -915,7 +771,7 @@ _IDENTITY_REFRESH_LINES = [
 
 
 def _maybe_inject_identity_refresh() -> str:
-    """每 IDENTITY_REFRESH_INTERVAL 轮返回一个身份刷新行."""
+    """Return an identity refresh line every IDENTITY_REFRESH_INTERVAL turns."""
     global _TURN_COUNTER
     _TURN_COUNTER += 1
     if _TURN_COUNTER % _IDENTITY_REFRESH_INTERVAL == 1:
@@ -925,9 +781,9 @@ def _maybe_inject_identity_refresh() -> str:
 
 
 def _build_rhythm_block() -> str:
-    """R2 节奏感知: 注入距上轮间隔 + 时段 (结构化数据, 云端据之生成语气).
+    """R2 rhythm: inject last-interval + time-of-day (structured data, cloud generates tone).
 
-    失败静默返回空字符串, 不阻塞 system prompt 构建.
+    Silent on failure, does not block system prompt build.
     """
     try:
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
@@ -940,10 +796,10 @@ def _build_rhythm_block() -> str:
 
 
 def _build_summary_block(history) -> str:
-    """R4 历史摘要: 旧轮压缩为密度块 (非阻塞变体, 失败静默).
+    """R4 history summary: compress old turns into a density block (non-blocking, silent on failure).
 
-    用 build_summary_block_nb: 本次立即返回上次缓存摘要,
-    陈旧时后台异步重算写回缓存, 绝不拖慢首 token (spec 4.1).
+    Uses build_summary_block_nb: immediately returns last cached summary,
+    refreshes stale cache asynchronously in background, never delays first token (spec 4.1).
     """
     try:
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
@@ -956,7 +812,7 @@ def _build_summary_block(history) -> str:
 
 
 def _build_profile_block() -> str:
-    """R5 用户画像: 负面偏好优先注入一句 (非阻塞, 失败静默)."""
+    """R5 user profile: inject one negative-preference-priority line (non-blocking, silent on failure)."""
     try:
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
         if _v5p not in sys.path:
@@ -968,7 +824,7 @@ def _build_profile_block() -> str:
 
 
 def _build_emotion_diff_block() -> str:
-    """R6 情感对比注入: 当前 vs 上次差异大时注一句 (非阻塞, 失败静默)."""
+    """R6 emotion diff: inject a note when current vs last emotion gap is large (non-blocking, silent on failure)."""
     try:
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
         if _v5p not in sys.path:
@@ -980,7 +836,7 @@ def _build_emotion_diff_block() -> str:
 
 
 def _build_emotion_recall_block(user_text: str) -> str:
-    """R6 情感记忆检索: 用户显式提到情绪时拉一条旧记忆 (非阻塞, 失败静默)."""
+    """R6 emotion memory recall: pull an old memory when user explicitly mentions emotion (non-blocking, silent on failure)."""
     try:
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
         if _v5p not in sys.path:
@@ -992,13 +848,13 @@ def _build_emotion_recall_block(user_text: str) -> str:
 
 
 async def _clock_out(user_text: str, assistant_reply: str) -> None:
-    """R7 Clock Out — 对话结束前的轻量状态快照 (spec 2.7).
+    """R7 Clock Out — lightweight state snapshot at conversation end (spec 2.7).
 
-    必须 fire-and-forget: 调用方用 asyncio.create_task 不 await.
-    任何一步失败都静默, 不影响主流程.
+    Must be fire-and-forget: caller uses asyncio.create_task without await.
+    Any step failure is silent, does not block main flow.
     """
     try:
-        # 1. task_pending.json: 若有未交付结果, 标记本次已检查
+        # 1. task_pending.json: if pending result, mark this as checked
         try:
             from v5.task_runner import check_result
             if check_result():
@@ -1019,7 +875,7 @@ async def _clock_out(user_text: str, assistant_reply: str) -> None:
         except Exception:
             pass
 
-        # 2. self_model.json: 更新 last_active
+        # 2. self_model.json: update last_active
         try:
             if _SELF_MODEL_PATH.is_file():
                 import json as _json
@@ -1031,7 +887,7 @@ async def _clock_out(user_text: str, assistant_reply: str) -> None:
         except Exception:
             pass
 
-        # 3. latest_thought.json: 重要决策/新认识 → 追加一句 (不覆盖 metacog 输出)
+        # 3. latest_thought.json: important decision/new insight -> append (don't overwrite metacog output)
         try:
             _kw = ("决定", "方案", "结论", "想通", "明白", "懂了", "发现", "原来",
                    "决定了", "定下来", "搞清楚")
@@ -1055,7 +911,7 @@ async def _clock_out(user_text: str, assistant_reply: str) -> None:
         except Exception:
             pass
 
-        # 4. relationship.json: 互动计数
+        # 4. relationship.json: interaction counter
         try:
             from v5.relationship import track_interaction
             track_interaction(0.3)
@@ -1066,7 +922,7 @@ async def _clock_out(user_text: str, assistant_reply: str) -> None:
 
 
 def _build_v5_affect_block() -> list[str]:
-    """V5 情感状态 + 内联内心独白 + 活力 + 关系 (对话时即时生成, 不依赖 cron)."""
+    """V5 emotion state + inline inner monologue + vitality + relationship (generated live, no cron)."""
     lines: list[str] = []
     try:
         import sys as _sys
@@ -1080,45 +936,45 @@ def _build_v5_affect_block() -> list[str]:
         state = AffectState.load().decay()
         p, a, d = state.pleasure, state.arousal, state.dominance
 
-        # Lorenz 已由 cloud_chat() 在调用本函数前 tick 过
-        # 直接用当前 PAD 生成情感标签
+        # Lorenz already ticked by cloud_chat() before this function
+        # Use current PAD to generate emotion label directly
         label = state.to_prompt().replace("【情感状态】", "").strip()
-        lines.append(f"状态={label.replace(' ', ',')}")
+        lines.append(f"status={label.replace(' ', ',')}")
 
-        # V5 #8: 活力状态
+        # V5 #8: vitality state
         try:
             from v5.vitality import Vitality
             v = Vitality.load()
-            lines.append(f"精力: {v.label()}")
+            lines.append(f"energy: {v.label()}")
         except Exception:
             pass
 
-        # V5 #2: 关系亲密度
+        # V5 #2: relationship intimacy
         try:
             from v5.relationship import Relationship
             rel = Relationship.load()
-            lines.append(f"关系: {rel.stage()}")
+            lines.append(f"bond: {rel.stage()}")
         except Exception:
             pass
 
-        # 内联内心独白: 使用已加载的 Lorenz+ECA 驱动的 PAD
+        # Inline inner monologue: use already-loaded Lorenz+ECA driven PAD
         intensity = _calc_i(p, a, d)
-        if intensity >= 0.3:  # 降低阈值, 让更多思考可见
+        if intensity >= 0.3:  # lowered threshold for more visible thoughts
             mood = _pad_to_mood(p, a, d)
             templates = _TEMPLATES.get(mood, _TEMPLATES.get("neutral_calm", []))
             if templates:
                 text = _rand.choice(templates)
-                lines.append(f"心里: {text[:40]}")
+                lines.append(f"inner voice: {text[:40]}")
                 _push_monitor("thought", text=text[:120], mood=mood, intensity=round(intensity, 3))
 
-        # 空闲自想循环 (ikaros-think.bat --watch) 落盘的强情感独白:
-        # 强度>=0.35 时写入 data/v5/pending_thought.json, 这里消费并提示主动提起
+        # Idle thought loop (ikaros-think.bat --watch) dumped strong emotion monologues:
+        # intensity >= 0.35 written to data/v5/pending_thought.json; consume here and hint to bring up
         try:
             from v5.think import check_pending
             _pending = check_pending()
             if _pending:
-                lines.append(f"心里惦记: {_pending.text}")
-                lines.append("如果对话合适，可以自然地提起这件事。")
+                lines.append(f"on my mind: {_pending.text}")
+                lines.append("If it fits the conversation, you can bring this up naturally.")
         except Exception:
             pass
     except Exception:
@@ -1135,10 +991,10 @@ def _build_memory_line(user_text: str) -> str:
     try:
         memories = _search_v4_memories(user_text)
         if not memories:
-            # 记忆召回为空时，检查用户是否在问时间/记忆类问题
-            # 若是，注入信号防止模型基于训练数据捏造记忆
+            # Memory recall empty: check if user is asking time/memory questions
+            # If so, inject anti-fabrication signal to prevent model from inventing memories
             if _looks_like_memory_query(user_text):
-                return "记忆: （检索无匹配——若被问及过去，诚实告知不记得，不要编造）"
+                return "memory: (No recall match — if asked about the past, honestly say you don't remember, don't fabricate)"
             return ""
 
         # AIS novelty detector (module-level singleton)
@@ -1177,12 +1033,12 @@ def _build_memory_line(user_text: str) -> str:
             label = "😊" if m.get("pad_p", 0) > 0.3 else "✨" if novelty > 0.6 else "😌" if m.get("pad_p", 0) < -0.2 else " "
             summary = m.get("content", "")[:25].replace("\n", " ")
             parts.append(f"[{label}]{summary}")
-        return "记忆: " + " | ".join(parts)
+        return "memory: " + " | ".join(parts)
     except Exception:
         return ""
 
 
-# ─── Cloud LLM 调用 ───
+# ─── Cloud LLM call ───
 
 
 async def cloud_chat(
@@ -1194,53 +1050,53 @@ async def cloud_chat(
     temperature: float = 0.7,
     on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str:
-    """直调 cloud LLM (DeepSeek 优先 → minimax 备选), 带 soul + cogno 5D + 记忆注入.
+    """Call cloud LLM (DeepSeek priority -> minimax fallback), with soul + cogno 5D + memory injection.
 
-    流程:
-      1. 搜 v4.db 相关记忆 → 构建 system prompt
-      2. 调 cloud LLM 拿回复
-      3. 自我审查: 评估回复对 body 架构是否有益,低分则改写
-      4. 归约: 把对话提炼为事实写入 v4.db
-      5. 返回最终回复
+    Flow:
+      1. Search v4.db for related memories -> build system prompt
+      2. Call cloud LLM for reply
+      3. Self-review: evaluate if reply is beneficial to body architecture, rewrite if low score
+      4. Consolidation: refine conversation into facts written to v4.db
+      5. Return final reply
 
     Args:
-        text: 用户输入
-        history: 历史消息 [{role: user|assistant, content: str}, ...]
-        session_id: 会话 ID (用于日志追踪)
-        max_tokens: 最大生成 token 数
-        temperature: 采样温度
+        text: User input
+        history: History messages [{role: user|assistant, content: str}, ...]
+        session_id: Session ID (for log tracking)
+        max_tokens: Max generation tokens
+        temperature: Sampling temperature
 
     Returns:
-        assistant 回复文本
+        Assistant reply text
     """
     env_map = _load_env()
 
-    # ── Ikaros 后端选择 (由 Studio 页面配置 或 ekko 解析链注入, 经 v5-agent/manager.ts) ──
+    # ── Ikaros backend selection (configured via Studio page or ekko chain, via v5-agent/manager.ts) ──
     # provider:
-    #   "local"    直连本地 :8080 (可配置 base_url/model), 永不碰云端
-    #   "deepseek" 直连 OpenAI 兼容接口 (可配置 base_url/api_key/model) — 任意 DeepSeek 端点
-    #   "openai"   复用 ekko 模型解析链注入的远端端点 (glm / openai / 自定义 provider 等)
-    #   "dashboard" (默认) 走原 Dashboard WebSocket -> DeepSeek 路径, 失败再本地兜底
+    #   "local"    direct local :8080 (configurable base_url/model), never cloud
+    #   "deepseek" direct OpenAI-compatible (configurable base_url/api_key/model) — any DeepSeek endpoint
+    #   "openai"   reuse ekko model chain injected remote endpoint (glm / openai / custom provider, etc.)
+    #   "dashboard" (default) legacy Dashboard WebSocket -> DeepSeek path, local fallback on failure
     backend_provider = (os.environ.get("IKAROS_BACKEND_PROVIDER") or "dashboard").strip().lower()
     backend_base_url = (os.environ.get("IKAROS_BACKEND_BASE_URL") or "").strip()
     backend_api_key = os.environ.get("IKAROS_BACKEND_API_KEY") or ""
     backend_model = (os.environ.get("IKAROS_BACKEND_MODEL") or "").strip()
 
-    # V5: 哥哥的输入更新伊卡洛斯情感状态 (PAD)
+    # V5: User's input updates Ikaros emotion state (PAD)
     try:
         import sys as _sys2
         _v5p = str(Path(__file__).resolve().parent.parent / "Ikaros-memory")
         if _v5p not in _sys2.path:
             _sys2.path.insert(0, _v5p)
         from v5.affect import apply_event, AffectState
-        old_state = AffectState.load()  # V5 #1: 记录旧 PAD 用于因果检测
+        old_state = AffectState.load()  # V5 #1: record old PAD for causality detection
         apply_event(text)
         new_state = AffectState.load()
     except Exception:
         old_state = None
         new_state = None
 
-    # V5 #1: 情感因果记忆 — PAD 变化大时自动记录因果链
+    # V5 #1: Emotion causality memory — auto-record causal chain when PAD changes significantly
     try:
         from v5.emotional_memory import maybe_record_emotion
         if old_state is not None and new_state is not None:
@@ -1250,7 +1106,7 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5.2 R6: 情感标签自动打标 (fire-and-forget, 本地 1.7b, 不阻塞回复)
+    # V5.2 R6: Emotion label auto-tagging (fire-and-forget, local 1.7b, non-blocking)
     try:
         import threading as _th
         from v5.emotional_memory import maybe_label_emotion
@@ -1266,7 +1122,7 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5 #2: 关系亲密度更新
+    # V5 #2: Relationship intimacy update
     try:
         from v5.relationship import Relationship
         rel = Relationship.load()
@@ -1276,7 +1132,7 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5 #8: 活力状态更新
+    # V5 #8: Vitality state update
     try:
         from v5.vitality import Vitality
         v = Vitality.load()
@@ -1285,15 +1141,15 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5 metacog: 对话发生 → 探索欲回落 (被打断)
+    # V5 metacog: conversation happens -> curiosity drops (interrupted)
     try:
         import v5.metacog as _mc
         _mc.mark_interaction()
     except Exception:
         pass
 
-    # V5: 对话时线性 Lorenz 漂移 + ECA 主题演化 (~38μs, 免费)
-    # V5: 对话时线性 Lorenz 漂移 + ECA 主题演化 (~38μs, 免费)
+    # V5: Linear Lorenz drift + ECA topic evolution during conversation (~38us, free)
+    # V5: Linear Lorenz drift + ECA topic evolution during conversation (~38us, free)
     try:
         import v5.think as _think
         if _think._lorenz is None or _think._eca is None:
@@ -1306,8 +1162,8 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5 记忆整理: "记住/提醒我/别让我忘了 ..." → 落进主动搭话任务计时器,
-    # 到点由 proactive 调度器自己开口提起。命中即短路 (省一次 LLM 调用)。
+    # V5 Memory: "remember/remind me/don't let me forget..." -> proactive todo timer,
+    # triggered by proactive scheduler to bring up on its own. Short-circuit on hit (saves one LLM call).
     try:
         from v5.proactive import (get_scheduler as _get_sched,
                                    parse_remember_intent as _parse_rem,
@@ -1332,7 +1188,7 @@ async def cloud_chat(
     except Exception as _e:
         log.debug("remember-intent hook skipped: %s", _e)
 
-    # V5 Router: 分类输入, 任务指令用本地 LLM 优化
+    # V5 Router: classify input, optimize task instructions with local LLM
     _optimized = None
     _is_task = False
     try:
@@ -1346,7 +1202,7 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # V5 Task Runner: 检查待交付结果
+    # V5 Task Runner: check pending delivery results
     try:
         from v5.task_runner import check_result, check_pending_reminder
         from v5.task_runner import consume_result, consume_reminder, set_reminder
@@ -1357,7 +1213,7 @@ async def cloud_chat(
         _pending_result = None
         _pending_reminder = None
 
-    # ─── 任务分支: 后台执行, 立即返回 ───
+    # ─── Task branch: background execution, return immediately ───
     if _is_task:
         try:
             from v5.task_runner import call_async
@@ -1366,38 +1222,38 @@ async def cloud_chat(
             pass
         return "好的哥哥，这个任务我已经在后台处理了，完成后会告诉你结果。"
 
-    # ─── 结果交付: 用户有空/没空 ───
+    # ─── Result delivery: user free / busy ───
     if _pending_result:
         _user_reply_lower = text.strip().lower()
         if any(kw in _user_reply_lower for kw in ("有空", "好的", "说吧", "说", "听", "好呀", "嗯", "可以")):
-            # 用户有空 → 交付结果 + 清提醒
+            # User is free -> deliver result + clear reminder
             result = consume_result()
-            consume_reminder()  # 清除可能的提醒标记
+            consume_reminder()  # clear possible reminder flag
             if result and result.get("result"):
                 reply = result["result"]
                 log.info("task: delivered result (%d chars)", len(reply))
                 return reply
         elif any(kw in _user_reply_lower for kw in ("没空", "等一下", "等等", "忙", "回头", "稍后", "之后再说")):
-            # 用户没空 → 设提醒
+            # User is busy -> set reminder
             set_reminder({"text": text, "result_pending": True})
             log.info("task: user busy, reminder set")
-            # 继续正常对话 (不阻塞)
+            # Continue normal conversation (non-blocking)
         else:
-            # 默认: 设提醒, 下次主动提
+            # Default: set reminder, proactively mention next time
             set_reminder({"text": text, "result_pending": True})
             log.info("task: ambiguous reply, reminder set")
 
-    # ─── 提醒分支: 之前没空, 下次主动提 ───
+    # ─── Reminder branch: previously busy, proactively mention next time ───
     if _pending_reminder:
-        # 注入到系统提示
-        _reminder_note = "\n(提醒：之前有个任务结果还没告诉哥哥，找机会主动提起。)"
+        # Inject into system prompt
+        _reminder_note = "\n(Reminder: there's a task result pending to tell user, find a chance to mention proactively.)"
     else:
         _reminder_note = ""
 
-    # 构建 system prompt (soul + cogno + 记忆 + V5 情感 + 提醒)
+    # Build system prompt (soul + cogno + memory + V5 emotion + reminder)
     system_prompt = build_system_prompt(text, history=history) + _reminder_note
 
-    # V5 Emotion → Response length: PAD 低时短回复
+    # V5 Emotion -> Response length: short reply when PAD is low
     _pad_length_hint = ""
     try:
         from v5.affect import AffectState as _AS
@@ -1416,12 +1272,12 @@ async def cloud_chat(
     except Exception:
         pass
 
-    # 构建 messages
+    # Build messages
     msgs: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        # 节省 token: 保留最近 30 条 (15 轮), 多远用摘要压缩
+        # Token saving: keep last 30 messages (15 turns), compress older with summary
         if len(history) > 30:
-            # 用本地模型压缩旧历史为一句话摘要
+            # Compress old history into one-sentence summary with local model
             _old = history[:-30]
             _recent = history[-30:]
             _summary_text = " ".join(
@@ -1430,19 +1286,19 @@ async def cloud_chat(
             try:
                 from v5.reflect.llm_client import call_llm as _cl
                 _resp = _cl(
-                    "压缩这段对话历史为 20 字以内一句话摘要, 只输出摘要",
+                    "Compress this conversation history into a single sentence summary within 20 characters, output summary only",
                     _summary_text, provider="local", max_tokens=60, timeout=30)
                 if _resp and _resp.content and len(_resp.content) > 3:
-                    msgs.append({"role": "system", "content": f"对话摘要: {_resp.content[:60].strip()}"})
+                    msgs.append({"role": "system", "content": f"Conversation summary: {_resp.content[:60].strip()}"})
             except Exception:
-                pass  # 摘要失败不影响主流程
+                pass  # summary failure does not block main flow
             history = _recent
         msgs.extend(history)
-    # 如果有优化后的任务指令, 用它替代原始用户输入
+    # If task instruction was optimized, use it instead of raw user input
     user_content = _optimized if _optimized else text
     msgs.append({"role": "user", "content": user_content})
 
-    # 监控: 用户输入
+    # Monitor: user input
     _push_monitor("user_msg", text=text[:200], session_id=session_id)
 
     _is_task = _optimized is not None
@@ -1456,7 +1312,7 @@ async def cloud_chat(
         _instruction = _instruction[:6000]
 
     if backend_provider == "local":
-        # 直连本地 LLM, 跳过 Dashboard / 云端 (永不触发 DeepSeek 429)
+        # Direct to local LLM, skip Dashboard/cloud (never triggers DeepSeek 429)
         try:
             reply = await _call_local_llm(
                 msgs,
@@ -1472,8 +1328,8 @@ async def cloud_chat(
             reply = None
 
     elif backend_provider in ("deepseek", "openai"):
-        # 直连 OpenAI 兼容接口 (DeepSeek / GLM / OpenAI / 任意兼容端点),
-        # 使用 ekko 解析链或页面配置的 base_url/key/model
+        # Direct OpenAI-compatible (DeepSeek / GLM / OpenAI / any compatible endpoint),
+        # using ekko chain or page-configured base_url/key/model
         try:
             reply = await _call_openai_compatible(
                 base_url=backend_base_url or "https://api.deepseek.com/v1",
@@ -1491,21 +1347,17 @@ async def cloud_chat(
             reply = None
 
     else:
-        # ── Dashboard WebSocket JSON-RPC (legacy 默认路径) ──
+        # ── Hermes Dashboard via hermes_client (unified WS path) ──
         try:
-            if _is_task:
-                result = await _dash_rpc("session.create", {}, timeout=15)
-                _sid = result.get("session_id", "")
-                if not _sid:
-                    raise RuntimeError("task session create returned no session_id")
-                log.info("task: created session %s", _sid)
-            else:
-                _sid = _HERMES_SESSION_ID
-                if not _sid:
-                    raise RuntimeError("Ikaros main session not available")
-
-            reply = await _dash_prompt(_sid, _instruction, on_delta=on_delta)
-            log.info("%s (%s): %d chars", "task" if _is_task else "chat", _sid, len(reply or ""))
+            from v5.hermes_client import chat as _hermes_chat
+            session_name = "Ikaros-task" if _is_task else "Ikaros"
+            loop = asyncio.get_event_loop()
+            reply = await loop.run_in_executor(
+                None, _hermes_chat, session_name, _instruction,
+            )
+            if not reply or (isinstance(reply, str) and reply.startswith("(Hermes")):
+                raise RuntimeError(f"Hermes returned error: {reply}")
+            log.info("%s (%s): %d chars", "task" if _is_task else "chat", session_name, len(reply or ""))
 
         except Exception as e:
             log.warning("dashboard WS failed: %s", e)
@@ -1514,7 +1366,7 @@ async def cloud_chat(
 
     if reply is None:
         if backend_provider == "dashboard":
-            # 本地兜底: 仅 legacy dashboard 路径, DeepSeek 欠费/断网时用本地 :8080 生成主回复
+            # Local fallback: when legacy dashboard path has DeepSeek billing down/network issue, use local :8080
             try:
                 local_reply = await _call_local_llm(
                     msgs, max_tokens=max_tokens, temperature=temperature
@@ -1524,11 +1376,11 @@ async def cloud_chat(
                     return local_reply.strip()
             except Exception as e:
                 log.warning("local :8080 fallback for main reply failed: %s", e)
-        err_msg = "; ".join(errors) if errors else "未获取到回复"
-        raise RuntimeError(f"所有 provider 调用失败: {err_msg}")
+        err_msg = "; ".join(errors) if errors else "No reply received"
+        raise RuntimeError(f"All providers failed: {err_msg}")
 
-    # ── 步骤 3: 自我审查 (fire-and-forget, 不阻塞回复) ──
-    # 第一阶段只做快速审查, 需要 rewrite 时后台异步处理
+    # ── Step 3: Self review (fire-and-forget, non-blocking) ──
+    # First phase: quick review only, rewrite in background if needed
     _review_in_progress = False
     try:
         review = await _self_review(text, reply, deepseek_key, minimax_key)
@@ -1538,9 +1390,9 @@ async def cloud_chat(
     except Exception as e:
         log.warning("self-review failed (skipping): %s", e)
 
-    # ── 步骤 4: 记忆归约 + 对话记录 (fire-and-forget, 不阻塞回复) ──
+    # ── Step 4: Memory consolidation + conversation recording (fire-and-forget, non-blocking) ──
     _record_conversation(text, reply)
-    # 在后台线程中执行, 不阻塞主回复流程
+    # Execute in background thread, don't block main reply flow
     import threading
     def _background_consolidate():
         import asyncio as _bg_asyncio
@@ -1550,15 +1402,15 @@ async def cloud_chat(
             pass
     threading.Thread(target=_background_consolidate, daemon=True).start()
 
-    # 如果有 rewrite 需要, 也在后台线程执行 (下一轮对话可能用优化后的回复)
+    # If rewrite is needed, also run in background thread (optimized reply for next turn)
     if _review_in_progress:
         def _background_rewrite():
             suggest = review.get("suggestion", "")
             rewrite_msgs = [
                 {"role": "system", "content":
-                 "你是伊卡洛斯, 人造天使。哥哥问你问题, 你之前的回答需要改进。"
-                 "请根据反馈重写, 保持原意图, 但更好地对齐 body 架构。"
-                 f"改进意见: {suggest}"},
+                 "You are Ikaros, an artificial angel. Your previous reply needs improvement. "
+                 "Please rewrite based on feedback, keep original intent, better align with body architecture. "
+                 f"Feedback: {suggest}"},
                 {"role": "user", "content": text},
             ]
             import asyncio as _bg_asyncio2
@@ -1594,11 +1446,11 @@ async def cloud_chat(
                 pass
         threading.Thread(target=_background_rewrite, daemon=True).start()
 
-    # 监控: 助手回复
+    # Monitor: assistant reply
     if reply:
         _push_monitor("assistant_msg", text=reply[:500], session_id=session_id)
 
-    # R7 Clock Out: 轻量状态快照 (fire-and-forget, 不 await, 不阻塞回复)
+    # R7 Clock Out: lightweight state snapshot (fire-and-forget, don't await, don't block reply)
     try:
         import asyncio as _asyncio
         _asyncio.create_task(_clock_out(text, reply if reply else ""))
@@ -1618,11 +1470,12 @@ async def _call_openai_compatible(
     label: str,
     on_delta: Optional[Callable[[str], Any]] = None,
 ) -> str:
-    """调用 OpenAI 兼容接口 (DeepSeek / minimax 等).
+    """Call OpenAI-compatible API (DeepSeek / minimax / etc).
 
-    流式: 传 on_delta 时启用 SSE (stream=True), 每个 content chunk 即调
-    on_delta(chunk) 并累积, 返回完整文本。不传则整包返回 (原行为),
-    保证 self-review / consolidate 等非流式调用路径不变。
+    Streaming: when on_delta is set, enables SSE (stream=True), calls on_delta(chunk)
+    for each content chunk and accumulates, returns full text. Without on_delta returns
+    full response at once (original behavior), preserving non-streaming paths like
+    self-review / consolidate.
     """
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
@@ -1639,7 +1492,7 @@ async def _call_openai_compatible(
     try:
         import httpx
         if on_delta is not None:
-            # ── 流式: 首 token 即上屏 (对标 N.E.K.O gemini_response) ──
+            # ── Streaming: first token on screen (equivalent to N.E.K.O gemini_response) ──
             stream_body = dict(body)
             stream_body["stream"] = True
             stream_body["stream_options"] = {"include_usage": False}
@@ -1669,7 +1522,7 @@ async def _call_openai_compatible(
             reply = "".join(acc)
             log.info("%s OK (stream, %d chunks, %d chars)", label, len(acc), len(reply))
             return reply
-        # ── 非流式 (原行为) ──
+        # ── Non-streaming (original behavior) ──
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=body, headers=headers)
             resp.raise_for_status()
@@ -1678,7 +1531,7 @@ async def _call_openai_compatible(
             log.info("%s OK (input=%d msgs, output=%d chars)", label, len(messages), len(reply))
             return reply
     except ImportError:
-        # fallback: urllib (同步, 非流式)
+        # fallback: urllib (sync, non-streaming)
         import urllib.request
         req = urllib.request.Request(
             url,
@@ -1702,21 +1555,21 @@ async def _call_local_llm(
     base_url: Optional[str] = None,
     model: Optional[str] = None,
 ) -> str | None:
-    """调本地 LLM (:8080/v1/chat/completions).
+    """Call local LLM (:8080/v1/chat/completions).
 
-    用于 self-review / consolidate, 不阻塞主对话流程.
-    连接失败 / 超时 / 模型未加载时返回 None, caller 自行 fallback.
+    Used for self-review / consolidate, non-blocking for main conversation flow.
+    Returns None on connection failure / timeout / model not loaded; caller falls back.
 
-    流式: 传 on_delta 时启用 SSE, 边生成边调 on_delta (首 token 即上屏).
-    仅流式显示 content (避免把 <think> 推理块灌进气泡); 思考模式 content
-    全空时回退非流式读 reasoning_content 兜底.
+    Streaming: when on_delta is set, enables SSE, calls on_delta during generation
+    (first token on screen). Only streams content (avoids <think> reasoning in bubble);
+    thinking mode with empty content falls back to non-streaming reading reasoning_content.
 
-    2026-07-04 修:
-    - 端口从 :8589 改为 :8080 (watchdog 管理的 LLM)
-    - Qwen3 思考模式: content 可能为空 (token 全被 thinking 吃掉),
-      此时回退读 reasoning_content
-    - max_tokens 默认从 300 提升到 512, 给思考+回答留够空间
-    - timeout 从 15s 提升到 30s (思考模式更慢)
+    2026-07-04 fixes:
+    - Port changed from :8589 to :8080 (watchdog-managed LLM)
+    - Qwen3 thinking mode: content may be empty (tokens consumed by thinking),
+      fall back to reading reasoning_content
+    - max_tokens default raised from 300 to 512 (room for thinking + answer)
+    - timeout raised from 15s to 30s (thinking mode is slower)
     """
     _base = (base_url or _LOCAL_LLM_URL).rstrip('/')
     url = f"{_base}/chat/completions"
@@ -1730,7 +1583,7 @@ async def _call_local_llm(
     try:
         import httpx
         if on_delta is not None:
-            # ── 流式: 首 token 即上屏 ──
+            # ── Streaming: first token on screen ──
             stream_body = dict(body)
             stream_body["stream"] = True
             acc: list[str] = []
@@ -1752,7 +1605,7 @@ async def _call_local_llm(
                             delta = chunk["choices"][0]["delta"]
                         except Exception:
                             continue
-                        # 仅流式显示 content (避免 <think> 推理块进气泡)
+                        # Only stream content (avoid <think> reasoning in bubble)
                         content = delta.get("content") or ""
                         if content:
                             acc.append(content)
@@ -1764,9 +1617,9 @@ async def _call_local_llm(
             if reply.strip():
                 log.info("local LLM OK (stream, %d chars)", len(reply))
                 return reply
-            # 思考模式 content 全空 → 非流式回退读 reasoning_content
+            # Thinking mode content empty -> non-streaming fallback to reasoning_content
             log.info("local LLM: stream content empty (thinking mode), fallback to reasoning")
-        # ── 非流式 (原行为 / thinking 兜底) ──
+        # ── Non-streaming (original behavior / thinking fallback) ──
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=body, headers=headers)
             if resp.status_code != 200:
@@ -1775,7 +1628,7 @@ async def _call_local_llm(
             data = resp.json()
             msg = data["choices"][0]["message"]
             reply = msg.get("content", "") or ""
-            # Qwen3 思考模式: content 可能为空, 回退读 reasoning_content
+            # Qwen3 thinking mode: content may be empty, fallback to reasoning_content
             if not reply.strip():
                 reasoning = msg.get("reasoning_content", "") or ""
                 if reasoning.strip():
@@ -1784,7 +1637,7 @@ async def _call_local_llm(
             log.info("local LLM OK (%d chars)", len(reply))
             return reply if reply.strip() else None
     except ImportError:
-        # urllib fallback (同步, 包在 thread 里)
+        # urllib fallback (sync, wrapped in thread)
         import urllib.request
         import threading
         result: list[str | None] = [None]
@@ -1816,7 +1669,7 @@ async def _call_local_llm(
         return None
 
 
-# ─── 自我审查 ───
+# ─── Self review ───
 
 _SELF_REVIEW_SYSTEM = (
     '你是伊卡洛斯的自我审查模块。评估一条回复的质量。'
@@ -1842,25 +1695,27 @@ async def _self_review(
     deepseek_key: str | None,
     minimax_key: str | None,
 ) -> dict:
-    """评估候选回复。优先 Hermes Dashboard WS, 回退直调 DeepSeek.
+    """Evaluate candidate reply. Priority: Hermes Dashboard WS, fallback direct DeepSeek.
 
     Returns {score, verdict, issues, suggestion}.
     """
     prompt = f"用户说: {user_msg}\n\n候选回复: {candidate}\n\n请评估。"
 
-    # 1) Hermes Dashboard WS (统一经过 Hermes)
+    # 1) Hermes Dashboard via hermes_client (unified WS path)
     text = None
     try:
         instruction = f"{_SELF_REVIEW_SYSTEM}\n\n--- 用户消息 ---\n{prompt}"
         if len(instruction) > 6000:
             instruction = instruction[:6000]
-        sid = _HERMES_SESSION_ID
-        if sid:
-            text = await _dash_prompt(sid, instruction, on_delta=None)
+        from v5.hermes_client import reflect as _hermes_reflect
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _hermes_reflect, instruction)
+        if text and text.startswith("(Hermes"):
+            text = None
     except Exception:
         pass
 
-    # 2) 回退: 直调 DeepSeek
+    # 2) fallback: direct DeepSeek
     if not text and deepseek_key:
         try:
             text = await _call_openai_compatible(
@@ -1889,13 +1744,13 @@ async def _self_review(
         except Exception:
             pass
 
-    # 2) 本地 LLM (:8080 回退, 断网/无 key 时兜底)
+    # 2) local LLM (:8080 fallback, offline/no-key last resort)
     if not text:
         text = await _call_local_llm(msgs, max_tokens=512, temperature=0.1)
 
     if not text:
         return {"score": 7, "verdict": "accept", "issues": [], "suggestion": ""}
-    # 剥 markdown 代码块
+    # Strip markdown code blocks
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1]
@@ -1915,7 +1770,7 @@ async def _self_review(
         return {"score": 7, "verdict": "accept", "issues": [], "suggestion": text[:200]}
 
 
-# ─── 记忆归约 ───
+# ─── Memory consolidation ───
 
 _CONSOLIDATE_SYSTEM = (
     '你是一个记忆提取器。从下面对话中提取一条关键事实。\n'
@@ -1932,17 +1787,17 @@ async def _consolidate_to_memory(
     user_msg: str,
     assistant_msg: str,
 ) -> bool:
-    """把对话归约为一条事实写入 v4.db (仅本地 :8080, 省 token).
+    """Consolidate conversation into one fact in v4.db (local :8080 only, saves token).
 
-    写 type=fact, tags=consolidated, 初始 weight=0.6.
+    Writes type=fact, tags=consolidated, initial weight=0.6.
     """
-    prompt = f"用户说: {user_msg}\n\n助手回: {assistant_msg}"
+    prompt = f"User said: {user_msg}\n\nAssistant replied: {assistant_msg}"
     msgs = [
         {"role": "system", "content": _CONSOLIDATE_SYSTEM},
         {"role": "user", "content": prompt},
     ]
 
-    # 仅本地 :8080 (省 token, 不走 Hermes/云端)
+    # Local :8080 only (saves token, bypasses Hermes/cloud)
     log.info("consolidate: local :8080 only")
     fact = await _call_local_llm(msgs, max_tokens=512, temperature=0.0)
 
@@ -1950,13 +1805,13 @@ async def _consolidate_to_memory(
         log.warning("consolidate: LLM returned empty/too-short fact (cloud+local all failed)")
         return False
     fact = fact.strip().rstrip(".")
-    # 写入 v4.db (委托给 v4.store, 而非 inline SQL)
+    # Write to v4.db (delegated to v4.store, not inline SQL)
     v4_store = _get_v4_store()
     if v4_store is not None:
         try:
             v4_store.store(content=fact[:300], type="fact", weight=0.6, tags="consolidated,cloud_chat")
             log.info("consolidated fact to v4.db: %.80s", fact)
-            # V5 #5: 认知失调检测 — 新事实写完后检查是否与旧记忆矛盾
+            # V5 #5: Cognitive dissonance detection — check new fact against old memories
             try:
                 from v5.dissonance import detect_dissonance
                 _dd = detect_dissonance(fact[:300], "fact")
@@ -1971,7 +1826,7 @@ async def _consolidate_to_memory(
     return False
 
 
-# ─── 同步包装 (给 audio_engine 等非 async 上下文用) ───
+# ─── Sync wrapper (for audio_engine and other non-async contexts) ───
 
 
 def cloud_chat_sync(
@@ -1982,11 +1837,11 @@ def cloud_chat_sync(
     max_tokens: int = 200,
     temperature: float = 0.7,
 ) -> str:
-    """同步版 cloud_chat (内部跑 asyncio 事件循环)"""
+    """Synchronous version of cloud_chat (runs asyncio event loop internally)."""
     import asyncio
     try:
         loop = asyncio.get_running_loop()
-        # 已有事件循环 → 在新线程跑
+        # Event loop already exists -> run in new thread
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(
@@ -1996,26 +1851,16 @@ def cloud_chat_sync(
             )
             return future.result(timeout=60)
     except RuntimeError:
-        # 没有事件循环
+        # No event loop
         return asyncio.run(
             cloud_chat(text, history=history, session_id=session_id,
                       max_tokens=max_tokens, temperature=temperature)
         )
 
 
-# ─── Metacog / Distill 用的轻量 Hermes 同步调用 ───
-# 不走 cloud_chat 的 V5 affect/relationship/路由等重量级管线,
-# 直接连 Dashboard WS, 用于 metacog 反思 / self-review 等后台任务。
-
-_HERMES_META_SESSION_ID: str | None = None
-_HERMES_META_SESSION_FILE = _V5_DATA_DIR / "hermes_meta_session.json"
-if _HERMES_META_SESSION_FILE.is_file():
-    try:
-        _HERMES_META_SESSION_ID = json.loads(
-            _HERMES_META_SESSION_FILE.read_text(encoding="utf-8")
-        ).get("session_id")
-    except Exception:
-        pass
+# ─── Metacog / Distill lightweight Hermes sync call ───
+# Delegated to hermes_client (no V5 affect/relationship/routing pipeline).
+# Used by metacog reflection / self-review background tasks.
 
 
 def hermes_prompt_sync(
@@ -2026,84 +1871,25 @@ def hermes_prompt_sync(
     temperature: float = 0.7,
     timeout: int = 90,
 ) -> str:
-    """同步 Hermes 提示 (轻量, 无 V5 管线).
+    """Synchronous Hermes prompt (lightweight, no V5 pipeline).
 
-    通过 Dashboard WS JSON-RPC 提交 prompt, 返回完整回复.
-    失败时抛 RuntimeError.
+    Delegated to hermes_client.chat() for unified WS connection management.
+    max_tokens/temperature are passed through for the Hermes backend.
+    Raises RuntimeError on failure.
     """
-    import asyncio
-    import websockets
-
-    async def _do() -> str:
-        nonlocal system_text, user_text
-        global _HERMES_META_SESSION_ID
-
-        # 连接 WS
-        ws = await _dash_ws()
-
-        # 复用或创建 session
-        sid = _HERMES_META_SESSION_ID
-        if not sid:
-            result = await _dash_rpc("session.create", {}, timeout=15)
-            sid = result.get("session_id", "")
-            if not sid:
-                raise RuntimeError("meta session create returned no session_id")
-            _HERMES_META_SESSION_ID = sid
-            # 持久化
-            _HERMES_META_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _HERMES_META_SESSION_FILE.write_text(
-                json.dumps({"session_id": sid}), encoding="utf-8"
-            )
-
-        # 拼指令: 带 system prompt
-        instruction = f"{system_text}\n\n--- 用户消息 ---\n{user_text}"
-        if len(instruction) > 6000:
-            instruction = instruction[:6000]
-
-        # 提交 prompt
-        rid = str(time_module.monotonic_ns())
-        await ws.send(json.dumps({
-            "jsonrpc": "2.0", "id": rid, "method": "prompt.submit",
-            "params": {"session_id": sid, "text": instruction},
-        }))
-
-        reply = ""
-        while True:
-            raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-            data = json.loads(raw)
-            if data.get("id") == rid and "result" in data:
-                break
-            if data.get("method") == "event":
-                params = data.get("params", {})
-                etype = params.get("type", "")
-                if etype == "message.delta":
-                    delta = params.get("delta", "") or params.get("content", "") or ""
-                    reply += delta
-                elif etype == "completion":
-                    final = params.get("text", "") or params.get("content", "") or ""
-                    if final:
-                        reply = final
-                    break
-                elif etype == "error":
-                    raise RuntimeError(
-                        f"Agent error: {params.get('message', 'unknown')}"
-                    )
-        return reply.strip()
-
-    # 在临时事件循环或已有循环中执行
-    try:
-        loop = asyncio.get_running_loop()
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            fut = pool.submit(asyncio.run, _do())
-            return fut.result(timeout=timeout + 10)
-    except RuntimeError:
-        return asyncio.run(_do())
+    from v5.hermes_client import chat as _hermes_chat
+    instruction = f"{system_text}\n\n--- User message ---\n{user_text}"
+    if len(instruction) > 6000:
+        instruction = instruction[:6000]
+    reply = _hermes_chat("Ikaros-metacog", instruction, timeout=timeout)
+    if reply.startswith("(Hermes"):
+        raise RuntimeError(reply)
+    return reply
 
 
-# ─── 快速测试 ───
+# ─── Quick test ───
 if __name__ == "__main__":
     import asyncio
     logging.basicConfig(level=logging.INFO)
-    reply = asyncio.run(cloud_chat("你好，伊卡洛斯"))
-    print(f"\n回复: {reply}")
+    reply = asyncio.run(cloud_chat("Hi, Ikaros"))
+    print(f"\nReply: {reply}")

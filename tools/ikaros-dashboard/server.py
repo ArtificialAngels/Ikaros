@@ -102,9 +102,10 @@ ENV: dict = {}
 log = logging.getLogger("ikaros-dashboard")
 
 # ── Studio local-update state (driven by POST /api/studio/update) ──
-# Script is registered under Ikaros-environment and resolved relative to HERMES_ROOT
-# (no hardcoded drive letter), per project convention.
-STUDIO_UPDATE_SCRIPT = HERMES_ROOT / "Ikaros-environment" / "studio-local-update.bat"
+# Script is registered under bin/ and resolved relative to HERMES_ROOT
+# (no hardcoded drive letter), per project convention — the actual file
+# lives at bin/studio-local-update.bat (not Ikaros-environment/).
+STUDIO_UPDATE_SCRIPT = HERMES_ROOT / "bin" / "studio-local-update.bat"
 STUDIO_UPDATE_LOG = HERMES_ROOT / "data" / "logs" / "studio-update.log"
 studio_update_lock = threading.Lock()
 studio_updating = False
@@ -446,6 +447,9 @@ def start_component_studio(root, env, do_open=True):
     cenv["PATH"] = str(root / "runtime" / "node") + ";" + env["PATH"]
     cenv["NODE_PATH"] = ""
     cenv["HERMES_WEB_UI_HOME"] = str(root / "data" / "hermes-studio")
+    # 缩短 Agent Bridge Python 进程启动超时至接近 0，避免阻塞前端 API。
+    # 桥接进程在 Ikaros 环境下通常不可用，快速跳过即可。
+    cenv["HERMES_AGENT_BRIDGE_STARTUP_TIMEOUT_MS"] = "100"
     if not (studio / "node_modules").exists():
         log.info("[install] node_modules missing - running npm install (several minutes)...")
         run_child("cmd", ["/c", "npm", "install"], cenv, str(studio), False)
@@ -833,25 +837,52 @@ def _sse_event(wfile, data: dict, event: str | None = None) -> None:
 
 # ── Studio local update (fork-safe git pull + reinstall + reapply + restart) ──
 
+def _ts() -> str:
+    """ISO-like timestamp for log lines."""
+    return time.strftime("%H:%M:%S")
+
 def run_studio_local_update() -> None:
-    """Run the Ikaros-environment/studio-local-update.bat in a background thread,
+    """Run bin/studio-local-update.bat in a background thread,
     capture its output line-by-line into studio_update_lines, then restart Studio
-    so the pulled/patched code takes effect."""
+    so the pulled/patched code takes effect.
+
+    Logging is structured so the dashboard UI and studio-update.log both contain
+    enough context to diagnose failures: timestamps, process ID, exit codes,
+    durations for each phase.
+    """
     global studio_updating, studio_update_lines
     with studio_update_lock:
         if studio_updating:
             return
         studio_updating = True
     studio_update_lines = []
+    t0 = time.time()
+
+    def _log(msg: str) -> None:
+        t = time.time() - t0
+        line = f"[{_ts()}] [{t:.1f}s] {msg}"
+        studio_update_lines.append(line)
+        try:
+            with open(STUDIO_UPDATE_LOG, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+
     try:
         if not STUDIO_UPDATE_SCRIPT.exists():
-            studio_update_lines.append(
-                f"ERROR: update script not found: {STUDIO_UPDATE_SCRIPT}")
+            _log(f"ERROR: update script not found: {STUDIO_UPDATE_SCRIPT}")
+            _log(f"       (expected at bin/studio-local-update.bat)")
+            _log(f"       HERMES_ROOT={HERMES_ROOT}")
             return
+
         STUDIO_UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
-        # run the bat with node on PATH (so npm works)
+        _log(f"Starting update script: {STUDIO_UPDATE_SCRIPT}")
+        _log(f"Node PATH: {HERMES_ROOT / 'runtime' / 'node'}")
+
         cenv = dict(os.environ)
         cenv["PATH"] = str(HERMES_ROOT / "runtime" / "node") + os.pathsep + cenv.get("PATH", "")
+        cenv["IKAROS_PYTHON"] = str(HERMES_ROOT / "runtime" / "portable-python" / "python.exe")
+
         proc = subprocess.Popen(
             ["cmd", "/c", str(STUDIO_UPDATE_SCRIPT)],
             cwd=str(HERMES_ROOT),
@@ -863,6 +894,8 @@ def run_studio_local_update() -> None:
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
         )
+        _log(f"Script PID={proc.pid}")
+
         assert proc.stdout is not None
         for raw in proc.stdout:
             line = raw.rstrip("\n")
@@ -873,23 +906,29 @@ def run_studio_local_update() -> None:
             except OSError:
                 pass
         proc.wait()
-        studio_update_lines.append(f"[exit code {proc.returncode}]")
+        elapsed = time.time() - t0
+        _log(f"Script exited code={proc.returncode} duration={elapsed:.1f}s")
+
         # restart Studio so the pulled/patched code takes effect
+        _log("Stopping Studio for restart...")
         try:
             component_stop("studio", build_env(HERMES_ROOT))
+            _log("Studio stopped")
         except Exception as e:  # noqa: BLE001
-            studio_update_lines.append(f"[warn] stop studio: {e}")
+            _log(f"WARN stop studio: {e}")
+
         time.sleep(3)
+
+        _log("Starting Studio (patched code)...")
         try:
-            component_start("studio", build_env(HERMES_ROOT))
+            component_start("studio", build_env(HERMES_ROOT), wait=False)
+            _log("Studio started")
         except Exception as e:  # noqa: BLE001
-            studio_update_lines.append(f"[warn] start studio: {e}")
-        studio_update_lines.append("DONE")
-        try:
-            with open(STUDIO_UPDATE_LOG, "a", encoding="utf-8") as f:
-                f.write("DONE\n")
-        except OSError:
-            pass
+            _log(f"WARN start studio: {e}")
+
+        total = time.time() - t0
+        _log(f"Update flow complete (total {total:.1f}s)")
+        _log("DONE")
     finally:
         with studio_update_lock:
             studio_updating = False

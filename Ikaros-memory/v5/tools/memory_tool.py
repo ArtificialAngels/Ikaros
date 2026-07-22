@@ -136,5 +136,5 @@ def v5_memory_delete(memory_id: int) -> str:
 @safe_tool
 def v5_memory_stats() -> str:
     """Return storage statistics."""
-    from v5 import store as v4
-    return answer(f"共 {v4.stats()["total"]} 条记忆", v4.stats())
+    from v5 import store as store
+    return answer(f"共 {store.stats()["total"]} 条记忆", store.stats())

@@ -112,11 +112,25 @@ describe('desktop runtime paths', () => {
     expect(resolveRuntimeResourceDir('git', false, appPath, runtimeRoot)).toBe(join(appPath, 'resources', 'git', runtimePlatformKey()))
   })
 
+  it('uses explicit runtime override for development runtime paths', async () => {
+    const runtimeRoot = tempDir()
+    process.env.HERMES_DESKTOP_RUNTIME_DIR = runtimeRoot
+    createRuntime(runtimeRoot, '0.17.0')
+
+    const { pythonDir, nodeDir, gitDir } = await import('../../packages/desktop/src/main/paths')
+
+    expect(pythonDir()).toBe(join(runtimeRoot, 'python'))
+    expect(nodeDir()).toBe(join(runtimeRoot, 'node'))
+    expect(gitDir()).toBe(join(runtimeRoot, 'git'))
+  })
+
   it('uses active-version.json paths for startup while keeping the current target runtime path', async () => {
     const homeDir = tempDir()
     const appPath = tempDir()
     const runtimeDir = tempDir()
-    const webUiDir = tempDir()
+    const storageRoot = tempDir()
+    const webUiDir = join(storageRoot, 'webui', '0.6.10')
+    const staleAbsoluteWebUiDir = tempDir()
     process.env.HERMES_WEB_UI_HOME = homeDir
     mockElectronApp.getAppPath = () => appPath
 
@@ -130,7 +144,8 @@ describe('desktop runtime paths', () => {
       hermesRuntimeVersion: '0.15.1',
       webUiVersion: '0.6.10',
       runtimeDirectory: runtimeDir,
-      webUiDirectory: webUiDir,
+      runtimeRootDirectory: storageRoot,
+      webUiDirectory: staleAbsoluteWebUiDir,
       platform: runtimePlatformKey(),
     }))
 
@@ -138,7 +153,7 @@ describe('desktop runtime paths', () => {
 
     expect(desktopRuntimeDir()).toBe(runtimeDir)
     expect(webuiDir()).toBe(webUiDir)
-    expect(targetDesktopRuntimeDir()).toBe(join(homeDir, 'desktop-runtime', 'hermes', '0.18.0', runtimePlatformKey()))
+    expect(targetDesktopRuntimeDir()).toBe(join(storageRoot, 'hermes', '0.19.0', runtimePlatformKey()))
   })
 
   it('falls back to the bundled Web UI when the active Web UI directory is incomplete', async () => {
@@ -169,7 +184,7 @@ describe('desktop runtime paths', () => {
     expect(active.webUiVersion).toBeUndefined()
   })
 
-  it('removes downloaded Web UI caches below 0.6.23 so startup falls back to the bundled Web UI', async () => {
+  it('does not scan or delete Web UI versions from the legacy directory', async () => {
     const homeDir = tempDir()
     const appPath = tempDir()
     const legacyWebUiDir = join(homeDir, 'webui', '0.6.22')
@@ -194,7 +209,7 @@ describe('desktop runtime paths', () => {
     const { webuiDir } = await import('../../packages/desktop/src/main/paths')
 
     expect(webuiDir()).not.toBe(legacyWebUiDir)
-    expect(existsSync(legacyWebUiDir)).toBe(false)
+    expect(existsSync(legacyWebUiDir)).toBe(true)
     expect(existsSync(currentWebUiDir)).toBe(true)
   })
 
@@ -256,7 +271,7 @@ describe('desktop runtime paths', () => {
 
     const { runtimePlatformKey } = await import('../../packages/desktop/src/main/runtime-paths')
     const runtimeDir = join(homeDir, 'desktop-runtime', 'hermes', '0.15.2', runtimePlatformKey())
-    const targetRuntimeDir = join(homeDir, 'desktop-runtime', 'hermes', '0.18.0', runtimePlatformKey())
+    const targetRuntimeDir = join(homeDir, 'desktop-runtime', 'hermes', '0.19.0', runtimePlatformKey())
     createRuntimeWithoutManifest(runtimeDir)
 
     const { desktopRuntimeDir, targetDesktopRuntimeDir } = await import('../../packages/desktop/src/main/paths')

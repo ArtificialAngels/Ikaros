@@ -364,6 +364,43 @@ describe('Database Schema Synchronization', () => {
         .toEqual({ count: 1 })
     })
 
+
+    it('adds assistant turn attribution to legacy workspace changes without losing audit rows', async () => {
+      const {
+        syncTable,
+        WORKSPACE_RUN_CHANGES_TABLE,
+        WORKSPACE_RUN_CHANGES_SCHEMA,
+        WORKSPACE_RUN_CHANGES_INDEXES,
+      } = await import('../../packages/server/src/db/hermes/schemas')
+      const db = getTestDb()
+      const legacySchema = Object.fromEntries(
+        Object.entries(WORKSPACE_RUN_CHANGES_SCHEMA).filter(([name]) => name !== 'assistant_message_id'),
+      )
+      const columnSql = Object.entries(legacySchema)
+        .map(([name, definition]) => `"${name}" ${definition}`)
+        .join(', ')
+      db.exec(`CREATE TABLE "${WORKSPACE_RUN_CHANGES_TABLE}" (${columnSql})`)
+      db.prepare(`
+        INSERT INTO "${WORKSPACE_RUN_CHANGES_TABLE}"
+          (change_id, session_id, workspace, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run('legacy-change', 'session-1', '/tmp/repo', 42)
+
+      syncTable(WORKSPACE_RUN_CHANGES_TABLE, WORKSPACE_RUN_CHANGES_SCHEMA, {
+        indexes: WORKSPACE_RUN_CHANGES_INDEXES,
+      })
+
+      expect(getTableColumns(db, WORKSPACE_RUN_CHANGES_TABLE).has('assistant_message_id')).toBe(true)
+      expect(db.prepare(`
+        SELECT change_id, session_id, assistant_message_id
+        FROM "${WORKSPACE_RUN_CHANGES_TABLE}"
+      `).get()).toEqual({
+        change_id: 'legacy-change',
+        session_id: 'session-1',
+        assistant_message_id: '',
+      })
+    })
+
     it('adds missing safe columns to existing table without rebuilding', async () => {
       const { syncTable, USAGE_TABLE, USAGE_SCHEMA } = await import('../../packages/server/src/db/hermes/schemas')
 
@@ -636,6 +673,44 @@ describe('Database Schema Synchronization', () => {
       const row = db.prepare(`SELECT * FROM "${USAGE_TABLE}" WHERE session_id = ?`).get('test-1')
       expect(row).toBeTruthy()
       expect(row.session_id).toBe('test-1')
+    })
+  })
+
+  describe('Model context profile migration', () => {
+    it('moves legacy rows to default profile and replaces the global unique index', async () => {
+      const {
+        initAllHermesTables,
+        LEGACY_MODEL_CONTEXT_INDEX,
+        MODEL_CONTEXT_TABLE,
+      } = await import('../../packages/server/src/db/hermes/schemas')
+      const db = getTestDb()
+      db.exec(`CREATE TABLE "${MODEL_CONTEXT_TABLE}" (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        context_limit INTEGER NOT NULL
+      )`)
+      db.exec(`CREATE UNIQUE INDEX ${LEGACY_MODEL_CONTEXT_INDEX} ON "${MODEL_CONTEXT_TABLE}"(provider, model)`)
+      db.prepare(`INSERT INTO "${MODEL_CONTEXT_TABLE}" (provider, model, context_limit) VALUES (?, ?, ?)`)
+        .run('deepseek', 'shared-model', 64000)
+
+      expect(() => initAllHermesTables()).not.toThrow()
+
+      const legacyRow = db.prepare(
+        `SELECT profile, context_limit FROM "${MODEL_CONTEXT_TABLE}" WHERE provider = ? AND model = ?`,
+      ).get('deepseek', 'shared-model') as { profile: string; context_limit: number }
+      expect(legacyRow).toEqual({ profile: 'default', context_limit: 64000 })
+      expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`).get(LEGACY_MODEL_CONTEXT_INDEX))
+        .toBeUndefined()
+      expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_model_context_profile_provider_model'`).get())
+        .toBeTruthy()
+
+      expect(() => db.prepare(
+        `INSERT INTO "${MODEL_CONTEXT_TABLE}" (profile, provider, model, context_limit) VALUES (?, ?, ?, ?)`,
+      ).run('research', 'deepseek', 'shared-model', 128000)).not.toThrow()
+      expect(() => db.prepare(
+        `INSERT INTO "${MODEL_CONTEXT_TABLE}" (profile, provider, model, context_limit) VALUES (?, ?, ?, ?)`,
+      ).run('default', 'deepseek', 'shared-model', 128000)).toThrow()
     })
   })
 })

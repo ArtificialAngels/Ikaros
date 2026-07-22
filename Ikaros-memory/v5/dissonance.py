@@ -122,7 +122,7 @@ def _nli_check(old_text: str, new_text: str) -> str | None:
 def _record_dissonance(new_content: str, conflicts: list[dict]) -> None:
     """记录认知失调事件到 V4."""
     try:
-        from v5 import store as v4
+        from v5 import store as store
         old_summaries = "; ".join(
             [c["old_content"][:60] for c in conflicts[:2]]
         )
@@ -130,7 +130,7 @@ def _record_dissonance(new_content: str, conflicts: list[dict]) -> None:
             f"我注意到一个新信息与之前的记忆矛盾。"
             f"新: {new_content[:100]}  旧: {old_summaries}"
         )
-        v4.store(
+        store.store(
             content=content,
             type="dissonance",
             weight=0.8,

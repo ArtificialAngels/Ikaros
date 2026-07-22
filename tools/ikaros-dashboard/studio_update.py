@@ -40,7 +40,10 @@ _studio_update_lines: list[str] = []
 
 def run_studio_local_update() -> None:
     """Background thread: launch the bat, tail its log file, and restart
-    Studio when it finishes."""
+    Studio when it finishes.
+
+    Log lines include timestamps relative to start so the dashboard UI
+    shows clear timing context for diagnosing failures."""
     # late imports avoid circular dependency at module load
     from server import ENV, ROOT, component_start, component_stop  # noqa: E402
 
@@ -48,23 +51,36 @@ def run_studio_local_update() -> None:
     with _studio_update_mlock:
         _studio_update_lines = []
         _studio_updating = True
+    t0 = time.time()
+
+    def _ts() -> str:
+        return time.strftime("%H:%M:%S")
+
+    def _log(msg: str) -> str:
+        t = time.time() - t0
+        line = f"[{_ts()}] [{t:.1f}s] {msg}"
+        log.info("[studio-update] %s", msg)
+        with _studio_update_mlock:
+            _studio_update_lines.append(line)
+        return line
+
     try:
         script = STUDIO_UPDATE_SCRIPT
         if not script.exists():
-            msg = "update script not found: %s" % script
-            log.error(msg)
-            with _studio_update_mlock:
-                _studio_update_lines.append(msg)
+            _log(f"ERROR: update script not found: {script}")
+            _log(f"       HERMES_ROOT={HERMES_ROOT}")
             return
 
-        # prepend runtime/node to PATH as a fallback
-        # (the bat itself also calls Ikaros-environment/init.bat for full
-        # CUDA/node/git/python registration)
+        # prepend runtime/node to PATH and inject IKAROS_PYTHON
         cenv = dict(os.environ)
         node_dir = str(HERMES_ROOT / "runtime" / "node")
         cenv["PATH"] = node_dir + os.pathsep + cenv.get("PATH", "")
+        cenv["IKAROS_PYTHON"] = str(HERMES_ROOT / "runtime" / "portable-python" / "python.exe")
 
-        log.info("[studio-update] running %s", script)
+        _log(f"Launching: {script}")
+        _log(f"PATH[0]={node_dir}")
+        _log(f"IKAROS_PYTHON={cenv.get('IKAROS_PYTHON', '(unset)')}")
+
         try:
             proc = subprocess.Popen(
                 ["cmd", "/c", str(script)],
@@ -74,13 +90,12 @@ def run_studio_local_update() -> None:
                 stderr=subprocess.DEVNULL,
             )
         except Exception as e:
-            msg = "[studio-update] failed to launch script: %s" % e
-            log.error(msg)
-            with _studio_update_mlock:
-                _studio_update_lines.append(msg)
+            _log(f"FAILED to launch script: {e}")
             return
 
-        # tail the bat's own log file (it truncates at start, then appends)
+        _log(f"Script PID={proc.pid} — tailing {LOG_PATH}")
+
+        # tail the bat's own log file (it writes to LOG_PATH)
         seen = 0
         while True:
             try:
@@ -96,29 +111,38 @@ def run_studio_local_update() -> None:
             if proc.poll() is not None:
                 try:
                     with open(str(LOG_PATH), "r", encoding="utf-8", errors="replace") as lf:
-                        lines = lf.read().splitlines()
+                        tail_lines = lf.read().splitlines()
                 except FileNotFoundError:
-                    lines = []
-                tail = lines[seen:]
+                    tail_lines = []
+                tail = tail_lines[seen:]
                 if tail:
                     with _studio_update_mlock:
                         _studio_update_lines.extend(tail)
                 break
             time.sleep(0.5)
-        log.info("[studio-update] script exited code=%s", proc.returncode)
+
+        elapsed = time.time() - t0
+        _log(f"Script exited code={proc.returncode} duration={elapsed:.1f}s")
 
         # restart Studio after the script finishes
+        _log("Stopping Studio for restart...")
         try:
             component_stop("studio", ENV)
+            _log("Studio stopped")
         except Exception as e:
-            log.warning("[studio-update] stop studio failed: %s", e)
+            _log(f"WARN stop studio: {e}")
+
         time.sleep(3)
+
+        _log("Starting Studio (patched code)...")
         try:
             component_start("studio", ENV, False)
+            _log("Studio started")
         except Exception as e:
-            log.warning("[studio-update] start studio failed: %s", e)
-        with _studio_update_mlock:
-            _studio_update_lines.append("[studio-update] flow done — Studio restart attempted")
+            _log(f"WARN start studio: {e}")
+
+        total = time.time() - t0
+        _log(f"Update flow complete (total {total:.1f}s)")
     finally:
         with _studio_update_mlock:
             _studio_updating = False

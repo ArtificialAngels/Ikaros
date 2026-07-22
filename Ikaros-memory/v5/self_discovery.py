@@ -84,9 +84,9 @@ def self_discover() -> int:
         return 0
 
     try:
-        from v5 import store as v4
+        from v5 import store as store
         text = f"[自我探索] {analysis['analysis']}"
-        mid = v4.store(
+        mid = store.store(
             text, type="self_discovery", weight=0.85,
             tags="self_discovery,hermes,architecture",
         )

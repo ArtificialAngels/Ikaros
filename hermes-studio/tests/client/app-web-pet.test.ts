@@ -55,6 +55,10 @@ vi.mock('@/components/auth/DefaultCredentialPrompt.vue', () => ({
   default: { name: 'DefaultCredentialPrompt', template: '<div />' },
 }))
 
+vi.mock('@/components/hermes/models/ProviderConfigurationPrompt.vue', () => ({
+  default: { name: 'ProviderConfigurationPrompt', template: '<div />' },
+}))
+
 vi.mock('@/components/hermes/chat/SessionSearchModal.vue', () => ({
   default: { name: 'SessionSearchModal', template: '<div />' },
 }))
@@ -70,7 +74,12 @@ vi.mock('@/components/layout/DesktopTitleBar.vue', () => ({
 import App from '@/App.vue'
 
 type WindowWithDesktop = typeof window & {
-  hermesDesktop?: { isDesktop?: boolean; platform?: string }
+  hermesDesktop?: {
+    isDesktop?: boolean
+    platform?: string
+    getWindowState?: () => Promise<{ isMaximized: boolean }>
+    onWindowStateChange?: (callback: (state: { isMaximized: boolean }) => void) => () => void
+  }
 }
 
 function mountApp() {
@@ -106,7 +115,7 @@ describe('App web pet mounting', () => {
     expect(wrapper.findComponent({ name: 'WebPet' }).exists()).toBe(true)
   })
 
-  it('does not mount the web pet in the Electron desktop shell', () => {
+  it('uses native macOS traffic lights without mounting custom window controls', () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: { isDesktop: true, platform: 'darwin' },
@@ -115,6 +124,46 @@ describe('App web pet mounting', () => {
     const wrapper = mountApp()
 
     expect(wrapper.findComponent({ name: 'WebPet' }).exists()).toBe(false)
+    expect(wrapper.find('.app-shell').classes()).toContain('desktop-platform-darwin')
+    expect(wrapper.findComponent({ name: 'DesktopTitleBar' }).exists()).toBe(false)
+  })
+
+  it('mounts the standalone Windows control bar above main content', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { isDesktop: true, platform: 'win32' },
+    })
+
+    const wrapper = mountApp()
+    await flushPromises()
+
+    expect(wrapper.find('.app-shell').classes()).toContain('desktop-platform-win32')
+    expect(wrapper.findComponent({ name: 'DesktopTitleBar' }).exists()).toBe(true)
+  })
+
+  it('marks Windows desktop shell as maximized when the native window state changes', async () => {
+    let listener: ((state: { isMaximized: boolean }) => void) | undefined
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        isDesktop: true,
+        platform: 'win32',
+        getWindowState: vi.fn().mockResolvedValue({ isMaximized: false }),
+        onWindowStateChange: vi.fn((callback) => {
+          listener = callback
+          return vi.fn()
+        }),
+      },
+    })
+
+    const wrapper = mountApp()
+    await flushPromises()
+    expect(wrapper.find('.app-shell').classes()).not.toContain('desktop-window-maximized')
+
+    listener?.({ isMaximized: true })
+    await flushPromises()
+
+    expect(wrapper.find('.app-shell').classes()).toContain('desktop-window-maximized')
   })
 
   it('does not duplicate the web pet on the dedicated desktop pet route', () => {

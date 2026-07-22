@@ -12,6 +12,22 @@ const chatRunMock = vi.hoisted(() => ({
   sessionOutputs: new Map<string, string>(),
 }))
 
+const workflowSkillResolverMock = vi.hoisted(() => ({
+  resolve: null as null | ((args: { agent?: string; profile: string; skillName: string }) => Promise<any>),
+}))
+
+vi.mock('../../packages/server/src/services/workflow-skill-resolver', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../packages/server/src/services/workflow-skill-resolver')>()
+  return {
+    ...actual,
+    resolveWorkflowSkillContent: (args: { agent?: string; profile: string; skillName: string }) => (
+      workflowSkillResolverMock.resolve
+        ? workflowSkillResolverMock.resolve(args)
+        : actual.resolveWorkflowSkillContent(args)
+    ),
+  }
+})
+
 vi.mock('../../packages/server/src/routes/hermes/chat-run', () => ({
   getChatRunServer: () => chatRunMock,
 }))
@@ -210,9 +226,65 @@ describe('workflow manager', () => {
       expect(result.run.snapshot_nodes[0]?.data).not.toHaveProperty('executionPolicy')
       expect(chatRunMock.runAndWait).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'custom:test', model: 'model-a', one_shot_model: true, reasoning_effort: 'high',
+        background_delegation_enabled: false,
       }), expect.any(Object))
       expect(chatRunMock.runAndWait.mock.calls[0]?.[0]).not.toHaveProperty('apiMode')
       expect(chatRunMock.runAndWait.mock.calls[0]?.[0]).not.toHaveProperty('execution_policy')
+    } finally { await manager.delete(workflow.id) }
+  })
+
+  it('preserves authored visual graph fields in an immutable run snapshot', async () => {
+    const { initAllStores } = await import('../../packages/server/src/db/hermes/init')
+    const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
+    initAllStores()
+    chatRunMock.sessionOutputs.clear()
+    chatRunMock.runAndWait.mockReset().mockImplementation(async (request: { session_id: string }) => {
+      const output = chatRunMock.runAndWait.mock.calls.length === 1 ? '{"decision":"READY"}' : 'delivered'
+      chatRunMock.sessionOutputs.set(request.session_id, output)
+      return { ok: true, output }
+    })
+    const manager = new WorkflowManager()
+    const workflow = manager.create({
+      name: `Visual run snapshot ${Date.now()}`, profile: 'default',
+      nodes: [
+        { id: 'plan', type: 'agent', position: { x: -320, y: -40 }, data: { title: 'Plan', agent: 'hermes', input: 'plan' } },
+        { id: 'delivery', type: 'agent', position: { x: 1_860, y: 265 }, data: { title: 'Delivery', agent: 'hermes', input: 'deliver' } },
+      ],
+      edges: [{
+        id: 'plan-delivery-ready', source: 'plan', target: 'delivery',
+        sourceHandle: 'top', targetHandle: 'bottom', label: 'READY path', animated: true,
+        sourceNode: { id: 'plan', runtimeOnly: true }, targetNode: { id: 'delivery', runtimeOnly: true },
+        sourceX: 123, targetX: 456, events: { click: 'runtime-only' },
+        data: { orchestration: {
+          route: 'success', condition: { path: 'outputJson.decision', operator: 'equals', value: 'READY' },
+        } },
+      } as any],
+    })
+    try {
+      const result = await manager.runNow(workflow.id)
+      expect(result.run.status).toBe('completed')
+      expect(result.run.snapshot_nodes.map((node: any) => ({ id: node.id, position: node.position }))).toEqual([
+        { id: 'plan', position: { x: -320, y: -40 } },
+        { id: 'delivery', position: { x: 1_860, y: 265 } },
+      ])
+      expect(result.run.snapshot_edges).toEqual([expect.objectContaining({
+        id: 'plan-delivery-ready', source: 'plan', target: 'delivery',
+        sourceHandle: 'top', targetHandle: 'bottom', label: 'READY path', animated: true,
+        data: { orchestration: {
+          route: 'success', condition: { path: 'outputJson.decision', operator: 'equals', value: 'READY' },
+        } },
+      })])
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('sourceNode')
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('targetNode')
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('sourceX')
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('targetX')
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('events')
+      expect(result.run.snapshot_edges[0]).not.toHaveProperty('orchestration')
+      expect(chatRunMock.runAndWait).toHaveBeenCalledTimes(2)
+
+      const rerun = await manager.rerunFromNode(workflow.id, result.run.id, 'delivery')
+      expect(rerun.run.status).toBe('completed')
+      expect(chatRunMock.runAndWait).toHaveBeenCalledTimes(3)
     } finally { await manager.delete(workflow.id) }
   })
 
@@ -236,6 +308,7 @@ describe('workflow manager', () => {
       expect(chatRunMock.runAndWait).toHaveBeenCalledWith(expect.objectContaining({
         coding_agent_id: 'codex', apiMode: 'chat_completions',
       }), expect.any(Object))
+      expect(chatRunMock.runAndWait.mock.calls[0]?.[0]).not.toHaveProperty('background_delegation_enabled')
     } finally { await manager.delete(workflow.id) }
   })
 
@@ -362,6 +435,21 @@ describe('workflow manager', () => {
     }])
   })
 
+  it('compiles a one-node feedback connection as a bounded self loop', async () => {
+    const { compileWorkflowLoops, normalizeWorkflowEdge } = await import('../../packages/server/src/services/workflow-manager')
+    const feedback = normalizeWorkflowEdge({
+      id: 'review-review', source: 'review', target: 'review',
+      sourceHandle: 'output', targetHandle: 'top',
+      data: { orchestration: { route: 'success', feedback: { maxIterations: 3 } } },
+    })!
+
+    expect(compileWorkflowLoops(['review'], [feedback])).toEqual([{
+      id: 'loop:review-review', feedbackEdgeId: 'review-review',
+      headerNodeId: 'review', latchNodeId: 'review', bodyNodeIds: ['review'],
+      maxIterations: 3, parentLoopId: null,
+    }])
+  })
+
   it('rejects ordinary cycles and feedback edges without a forward path', async () => {
     const { compileWorkflowLoops, normalizeWorkflowEdge } = await import('../../packages/server/src/services/workflow-manager')
     const edge = (id: string, source: string, target: string, feedback = false) => normalizeWorkflowEdge({
@@ -470,6 +558,19 @@ describe('workflow manager', () => {
     expect(evaluateWorkflowEdgeRoute({ route: 'always', condition: { ...condition, value: 'RETRY' } }, 'success', context)).toMatchObject({ status: 'not_taken', routeMatched: true, reason: 'condition_not_matched' })
   })
 
+  it('parses unambiguous structured assistant output without depending on JSON whitespace', async () => {
+    const { parseWorkflowStructuredOutput } = await import('../../packages/server/src/services/workflow-manager')
+    const expected = { decision: 'RELEASED', route_token: 'HSR_RELEASED_OK' }
+
+    expect(parseWorkflowStructuredOutput(JSON.stringify(expected))).toEqual(expected)
+    expect(parseWorkflowStructuredOutput(JSON.stringify(expected, null, 2))).toEqual(expected)
+    expect(parseWorkflowStructuredOutput(`Result:\n\n\`\`\`json\n${JSON.stringify(expected, null, 2)}\n\`\`\``)).toEqual(expected)
+    expect(parseWorkflowStructuredOutput('```json\n{"decision":"A"}\n```\n```json\n{"decision":"B"}\n```')).toBeUndefined()
+    expect(parseWorkflowStructuredOutput('```json\n{"decision":"A"}\n```\n```json\n{"decision":"B"')).toBeUndefined()
+    expect(parseWorkflowStructuredOutput('```json\n{"decision":\n```')).toBeUndefined()
+    expect(parseWorkflowStructuredOutput('not json')).toBeUndefined()
+  })
+
   it('rejects dangerous condition paths before evaluation', async () => {
     const { evaluateWorkflowEdgeCondition } = await import('../../packages/server/src/services/workflow-manager')
 
@@ -558,11 +659,53 @@ describe('workflow manager', () => {
       const result = await manager.runNow(workflow.id, { timeoutMs: 100 })
       expect(result.run.status).toBe('failed')
       expect(result.run.error).toBe('workflow run timed out after 100ms')
+      expect(result.run).toMatchObject({
+        requested_timeout_ms: 100,
+        deadline_at: 1100,
+      })
       expect(receivedTimeouts).toEqual([100, 60, 20])
+      expect(result.nodeSessions.map(session => [session.execution_id, session.remaining_timeout_ms_at_start])).toEqual([
+        ['header@loop:retry:0', 100],
+        ['latch@loop:retry:0', 60],
+        ['header@loop:retry:1', 20],
+      ])
       expect(result.nodeSessions.map(session => session.execution_id)).toEqual([
         'header@loop:retry:0', 'latch@loop:retry:0', 'header@loop:retry:1',
       ])
     } finally { nowSpy.mockRestore(); await manager.delete(workflow.id) }
+  })
+
+  it('bounds skill assembly by the same absolute Run deadline', async () => {
+    const { initAllStores } = await import('../../packages/server/src/db/hermes/init')
+    const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
+    initAllStores()
+    const manager = new WorkflowManager()
+    chatRunMock.runAndWait.mockReset()
+    let resolutionCount = 0
+    workflowSkillResolverMock.resolve = async ({ skillName }) => {
+      resolutionCount += 1
+      if (resolutionCount === 1) return { name: skillName, content: 'preflight evidence' }
+      return new Promise(() => {})
+    }
+    const workflow = manager.create({
+      name: `Skill assembly deadline ${Date.now()}`,
+      profile: 'default',
+      nodes: [{ id: 'agent', type: 'agent', data: {
+        title: 'Agent', agent: 'hermes', input: 'work', skills: ['delayed-skill'],
+      } }],
+      edges: [],
+    })
+    try {
+      const result = await manager.runNow(workflow.id, { timeoutMs: 20 })
+      expect(result.run.status).toBe('failed')
+      expect(result.run.error).toBe('workflow run timed out after 20ms')
+      expect(result.nodeSessions).toEqual([])
+      expect(chatRunMock.runAndWait).not.toHaveBeenCalled()
+      expect(manager.getRuntimeStatus(workflow.id).nodeStatuses.agent).toBe('failed')
+    } finally {
+      workflowSkillResolverMock.resolve = null
+      await manager.delete(workflow.id)
+    }
   })
 
   it('fails closed when run-deadline loop epoch evidence cannot be persisted', async () => {
@@ -1567,6 +1710,50 @@ describe('workflow manager', () => {
     } finally { await manager.delete(workflow.id) }
   })
 
+  it('evaluates structured JSON fields on feedback edges in the recursive scheduler', async () => {
+    const { initAllStores } = await import('../../packages/server/src/db/hermes/init')
+    const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
+    const { listWorkflowRunEdgeEvaluations } = await import('../../packages/server/src/db/hermes/workflow-run-store')
+    initAllStores()
+    const manager = new WorkflowManager()
+    chatRunMock.runAndWait.mockReset()
+    const outputs = [
+      'header', JSON.stringify({ action: 'continue' }, null, 2),
+      'header', JSON.stringify({ action: 'stop' }, null, 2),
+    ]
+    chatRunMock.sessionOutputs.clear()
+    chatRunMock.runAndWait.mockImplementation(async (request: { session_id: string }) => {
+      const output = outputs.shift() || 'unexpected'
+      chatRunMock.sessionOutputs.set(request.session_id, output)
+      return { ok: true, output }
+    })
+    const workflow = manager.create({
+      name: `Structured feedback ${Date.now()}`, profile: 'default',
+      nodes: [
+        { id: 'header', type: 'agent', data: { title: 'Header', agent: 'hermes', input: 'header' } },
+        { id: 'latch', type: 'agent', data: { title: 'Latch', agent: 'hermes', input: 'latch' } },
+      ],
+      edges: [
+        { id: 'forward', source: 'header', target: 'latch' },
+        { id: 'retry', source: 'latch', target: 'header', data: { orchestration: {
+          route: 'success', feedback: { maxIterations: 3 },
+          condition: { path: 'outputJson.action', operator: 'equals', value: 'continue' },
+        } } },
+      ],
+    })
+    try {
+      const result = await manager.runNow(workflow.id)
+      expect(result.run.status).toBe('completed')
+      expect(chatRunMock.runAndWait).toHaveBeenCalledTimes(4)
+      expect(listWorkflowRunEdgeEvaluations(result.run.id).filter(item => item.edge_id === 'retry').map(item => ({
+        status: item.status, condition: item.condition_evaluation,
+      }))).toEqual([
+        { status: 'taken', condition: { status: 'matched', actual: 'continue' } },
+        { status: 'not_taken', condition: { status: 'not_matched', actual: 'stop', reason: 'not_equal' } },
+      ])
+    } finally { await manager.delete(workflow.id) }
+  })
+
   it('executes one downstream node after a top-level loop exits', async () => {
     const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
     const { listWorkflowRunEdgeEvaluations } = await import('../../packages/server/src/db/hermes/workflow-run-store')
@@ -2050,6 +2237,67 @@ describe('workflow manager', () => {
     } finally { await manager.delete(workflow.id) }
   })
 
+  it('routes pretty-printed JSON output through structured fields instead of serialized text', async () => {
+    const { initAllStores } = await import('../../packages/server/src/db/hermes/init')
+    const { listWorkflowRunEdgeEvaluations } = await import('../../packages/server/src/db/hermes/workflow-run-store')
+    const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
+    initAllStores()
+    const manager = new WorkflowManager()
+    const structuredOutput = JSON.stringify({
+      decision: 'RELEASED',
+      route_token: 'HSR_RELEASED_OK',
+    }, null, 2)
+    chatRunMock.runAndWait.mockReset().mockImplementation(async (request: { session_id: string; input: string }) => {
+      const output = request.input.includes('source') ? structuredOutput : 'handled'
+      chatRunMock.sessionOutputs.set(request.session_id, output)
+      return { ok: true, output }
+    })
+    const workflow = manager.create({
+      name: `Structured JSON branch ${Date.now()}`, profile: 'default',
+      nodes: [
+        { id: 'source', type: 'agent', data: { title: 'Source', agent: 'hermes', input: 'source' } },
+        { id: 'released', type: 'agent', data: { title: 'Released', agent: 'hermes', input: 'released' } },
+        { id: 'blocked', type: 'agent', data: { title: 'Blocked', agent: 'hermes', input: 'blocked' } },
+      ],
+      edges: [
+        { id: 'released-route', source: 'source', target: 'released', data: { orchestration: { route: 'success', condition: { path: 'outputJson.route_token', operator: 'equals', value: 'HSR_RELEASED_OK' } } } },
+        { id: 'blocked-route', source: 'source', target: 'blocked', data: { orchestration: { route: 'success', condition: { path: 'outputJson.decision', operator: 'equals', value: 'BLOCKED' } } } },
+      ],
+    })
+    try {
+      const result = await manager.runNow(workflow.id)
+      expect(result.run.status).toBe('completed')
+      expect(result.nodeSessions.map(session => session.node_id).sort()).toEqual(['released', 'source'])
+      expect(listWorkflowRunEdgeEvaluations(result.run.id).map(item => ({
+        edge: item.edge_id, status: item.status, condition: item.condition_evaluation,
+      }))).toEqual([
+        { edge: 'released-route', status: 'taken', condition: { status: 'matched', actual: 'HSR_RELEASED_OK' } },
+        { edge: 'blocked-route', status: 'not_taken', condition: { status: 'not_matched', actual: 'RELEASED', reason: 'not_equal' } },
+      ])
+      expect(manager.getRuntimeStatus(workflow.id).nodeStatuses).toMatchObject({
+        source: 'completed', released: 'completed', blocked: 'skipped',
+      })
+    } finally { await manager.delete(workflow.id) }
+  })
+
+  it('fails structured paths closed when assistant output is malformed or ambiguous', async () => {
+    const { evaluateWorkflowEdgeRoute, parseWorkflowStructuredOutput } = await import('../../packages/server/src/services/workflow-manager')
+    const condition = { path: 'outputJson.decision', operator: 'equals', value: 'RELEASED' } as const
+    const outputs = [
+      '```json\n{"decision":\n```',
+      '```json\n{"decision":"RELEASED"}\n```\n```json\n{"decision":"BLOCKED"}\n```',
+    ]
+
+    for (const output of outputs) {
+      const outputJson = parseWorkflowStructuredOutput(output)
+      const context = outputJson === undefined ? { output } : { output, outputJson }
+      expect(evaluateWorkflowEdgeRoute({ route: 'success', condition }, 'success', context)).toEqual({
+        status: 'not_taken', routeMatched: true, reason: 'condition_not_matched',
+        condition: { status: 'not_matched', reason: 'path_not_found' },
+      })
+    }
+  })
+
   it('runs an any-join once when at least one incoming edge is taken', async () => {
     const { initAllStores } = await import('../../packages/server/src/db/hermes/init')
     const { WorkflowManager } = await import('../../packages/server/src/services/workflow-manager')
@@ -2509,6 +2757,14 @@ describe('workflow manager', () => {
     try {
       const result = await manager.rerunFromNode(workflow.id, run.id, 'first', { timeoutMs: 100 })
       expect(receivedTimeouts).toEqual([100, 30])
+      expect(result.run).toMatchObject({
+        requested_timeout_ms: 100,
+        deadline_at: 9100,
+      })
+      expect(result.nodeSessions.filter(session => session.started_at !== null && session.started_at >= 9000)
+        .map(session => [session.node_id, session.remaining_timeout_ms_at_start])).toEqual([
+        ['first', 100], ['second', 30],
+      ])
       expect({ status: result.run.status, error: result.run.error, startedAt: result.run.started_at }).toEqual({
         status: 'failed', error: 'workflow run timed out after 100ms', startedAt: 9000,
       })

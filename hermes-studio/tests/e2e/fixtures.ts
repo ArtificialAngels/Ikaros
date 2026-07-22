@@ -26,16 +26,34 @@ interface MockSkillsPayload {
   paths?: unknown
 }
 
+interface MockSkillBundlePayload {
+  name: string
+  commandName: string
+  description: string
+  skills: string[]
+}
+
 interface MockHermesApiOptions {
   tokenValidationStatus?: number
   initialProfileName?: 'default' | 'research'
   sessions?: unknown[]
+  sessionCategories?: Array<{ id: number; name: string; created_at?: number; updated_at?: number }>
   journey?: MockJourneyPayload
   skills?: MockSkillsPayload
+  bundles?: MockSkillBundlePayload[]
   workflows?: unknown[]
   workflowRuns?: unknown[]
   workflowImportDocument?: unknown
   workflowImportPreviewError?: string
+  channelCredentials?: boolean
+  channelConfig?: Record<string, unknown>
+  providerEditor?: Record<string, unknown>
+  modelGroups?: Array<{
+    provider: string
+    label: string
+    models: string[]
+    [key: string]: unknown
+  }>
 }
 
 export const TEST_MODEL_GROUP = {
@@ -44,8 +62,10 @@ export const TEST_MODEL_GROUP = {
   base_url: 'https://example.invalid/v1',
   models: ['test-model'],
   available_models: ['test-model'],
-  api_key: '',
+  api_key: 'list-response-credential',
   builtin: true,
+  provider_editable: true,
+  editable_fields: ['label', 'base_url', 'api_key', 'preferred_model', 'context_lengths'],
 }
 
 const sampleJob = {
@@ -117,6 +137,24 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
   const unexpectedRequests: MockedRequest[] = []
   const tokenValidationStatus = options.tokenValidationStatus ?? 200
   let activeProfileName = options.initialProfileName ?? 'research'
+  const sessionCategories = [...(options.sessionCategories ?? [])]
+  const skillBundles = [...(options.bundles ?? [])]
+  let channelCredentialsPresent = options.channelCredentials ?? false
+  let providerEditor = {
+    id: 'test-provider',
+    label: 'Test Provider',
+    builtin: true,
+    source: 'builtin_env',
+    base_url: 'https://example.invalid/v1',
+    preferred_model: 'test-model',
+    credential_configured: true,
+    editable: true,
+    editable_fields: ['label', 'base_url', 'api_key', 'preferred_model', 'context_lengths'],
+    context_lengths: {},
+    connection_test_supported: true,
+    revision: 'provider-revision-1',
+    ...options.providerEditor,
+  }
 
   await page.route('**/*', async (route: Route) => {
     const request = route.request()
@@ -209,6 +247,11 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (/^\/api\/hermes\/workflows\/[^/]+\/run$/.test(pathname) && request.method() === 'POST') {
+      await route.fulfill(jsonResponse({ ok: true, status: 'accepted' }, 202))
+      return
+    }
+
     if (/^\/api\/hermes\/workflows\/[^/]+\/runs$/.test(pathname)) {
       await route.fulfill(jsonResponse({ runs: options.workflowRuns ?? [] }))
       return
@@ -242,6 +285,50 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (pathname === '/api/hermes/session-categories') {
+      if (request.method() === 'GET') {
+        await route.fulfill(jsonResponse({ categories: sessionCategories }))
+        return
+      }
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}') as { name?: string }
+        const now = Math.floor(Date.now() / 1000)
+        const category = {
+          id: Math.max(0, ...sessionCategories.map(item => item.id)) + 1,
+          name: String(body.name || '').trim(),
+          created_at: now,
+          updated_at: now,
+        }
+        sessionCategories.push(category)
+        await route.fulfill(jsonResponse({ category }))
+        return
+      }
+    }
+
+    if (/^\/api\/hermes\/session-categories\/\d+$/.test(pathname)) {
+      const categoryId = Number(pathname.split('/').at(-1))
+      const categoryIndex = sessionCategories.findIndex(item => item.id === categoryId)
+      if (categoryIndex < 0) {
+        await route.fulfill(jsonResponse({ error: 'Category not found' }, 404))
+        return
+      }
+      if (request.method() === 'PATCH') {
+        const body = JSON.parse(request.postData() || '{}') as { name?: string }
+        sessionCategories[categoryIndex] = {
+          ...sessionCategories[categoryIndex],
+          name: String(body.name || '').trim(),
+          updated_at: Math.floor(Date.now() / 1000),
+        }
+        await route.fulfill(jsonResponse({ category: sessionCategories[categoryIndex] }))
+        return
+      }
+      if (request.method() === 'DELETE') {
+        sessionCategories.splice(categoryIndex, 1)
+        await route.fulfill(jsonResponse({ ok: true }))
+        return
+      }
+    }
+
     if (pathname === '/api/hermes/sessions/hermes') {
       await route.fulfill(jsonResponse({ sessions: [] }))
       return
@@ -249,6 +336,16 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
 
     if (pathname === '/api/hermes/sessions/context-length') {
       await route.fulfill(jsonResponse({ context_length: 256000 }))
+      return
+    }
+
+    if (pathname === '/api/hermes/workspace/folders' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ base: '/workspace', current: '', folders: [] }))
+      return
+    }
+
+    if (/^\/api\/hermes\/sessions\/[^/]+\/category$/.test(pathname) && request.method() === 'POST') {
+      await route.fulfill(jsonResponse({ ok: true }))
       return
     }
 
@@ -263,6 +360,42 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
 
     if (pathname === '/api/hermes/skills') {
       await route.fulfill(jsonResponse(options.skills ?? { categories: [], archived: [] }))
+      return
+    }
+
+    if (pathname === '/api/hermes/bundles') {
+      if (request.method() === 'GET') {
+        await route.fulfill(jsonResponse({ bundles: skillBundles }))
+        return
+      }
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}') as { name?: string; description?: string; skills?: string[] }
+        const commandName = String(body.name || '')
+          .trim()
+          .toLowerCase()
+          .replace(/ /g, '-')
+          .replace(/_/g, '-')
+          .replace(/[^a-z0-9-]/g, '')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '')
+        const bundle = {
+          name: String(body.name || '').trim(),
+          commandName,
+          description: String(body.description || '').trim(),
+          skills: Array.isArray(body.skills) ? body.skills : [],
+        }
+        skillBundles.push(bundle)
+        await route.fulfill(jsonResponse({ bundle }, 201))
+        return
+      }
+    }
+
+    const bundleDeleteMatch = pathname.match(/^\/api\/hermes\/bundles\/([^/]+)$/)
+    if (bundleDeleteMatch && request.method() === 'DELETE') {
+      const commandName = decodeURIComponent(bundleDeleteMatch[1])
+      const index = skillBundles.findIndex(bundle => bundle.commandName === commandName)
+      if (index >= 0) skillBundles.splice(index, 1)
+      await route.fulfill(jsonResponse({ success: true }))
       return
     }
 
@@ -286,12 +419,62 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (/^\/api\/hermes\/config\/providers\/[^/]+\/editor\/test$/.test(pathname) && request.method() === 'POST') {
+      await route.fulfill(jsonResponse({ success: true, models: ['test-model'], model_count: 1 }))
+      return
+    }
+
+    if (/^\/api\/hermes\/config\/providers\/[^/]+\/editor\/contexts$/.test(pathname) && request.method() === 'PATCH') {
+      let body: Record<string, any> = {}
+      try { body = JSON.parse(request.postData() || '{}') } catch {}
+      providerEditor = {
+        ...providerEditor,
+        context_lengths: { ...(providerEditor.context_lengths as Record<string, number>), ...(body.context_lengths || {}) },
+        revision: 'provider-revision-3',
+      }
+      await route.fulfill(jsonResponse({ success: true, provider: providerEditor, changed: ['context_lengths'] }))
+      return
+    }
+
+    if (/^\/api\/hermes\/config\/providers\/[^/]+\/editor$/.test(pathname)) {
+      if (request.method() === 'GET') {
+        await route.fulfill(jsonResponse({ provider: providerEditor }))
+        return
+      }
+      if (request.method() === 'PATCH') {
+        let body: Record<string, any> = {}
+        try { body = JSON.parse(request.postData() || '{}') } catch {}
+        providerEditor = {
+          ...providerEditor,
+          ...(body.label !== undefined ? { label: body.label } : {}),
+          ...(body.base_url !== undefined ? { base_url: body.base_url } : {}),
+          ...(body.api_mode !== undefined ? { api_mode: body.api_mode } : {}),
+          ...(body.preferred_model !== undefined ? { preferred_model: body.preferred_model } : {}),
+          ...(body.credential_action === 'clear' ? { credential_configured: false } : {}),
+          ...(body.credential_action === 'replace' ? { credential_configured: true } : {}),
+          revision: 'provider-revision-2',
+        }
+        await route.fulfill(jsonResponse({ success: true, provider: providerEditor, changed: Object.keys(body) }))
+        return
+      }
+      await route.fulfill(jsonResponse({ error: 'Method not allowed' }, 405))
+      return
+    }
+
     if (pathname === '/api/hermes/available-models') {
+      const groups = options.modelGroups ?? [TEST_MODEL_GROUP]
+      const defaultGroup = groups.find(group => Array.isArray(group.models) && group.models.length > 0)
       await route.fulfill(jsonResponse({
-        default: 'test-model',
-        default_provider: 'test-provider',
-        groups: [TEST_MODEL_GROUP],
-        allProviders: [TEST_MODEL_GROUP],
+        default: defaultGroup?.models?.[0] || '',
+        default_provider: defaultGroup?.provider || '',
+        groups,
+        allProviders: groups,
+        profiles: ['default', 'research'].map(profile => ({
+          profile,
+          default: defaultGroup?.models?.[0] || '',
+          default_provider: defaultGroup?.provider || '',
+          groups,
+        })),
         model_aliases: {},
         model_visibility: {},
       }))
@@ -365,6 +548,22 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (/^\/api\/hermes\/config\/credentials\/[^/]+$/.test(pathname) && request.method() === 'DELETE') {
+      const platform = pathname.split('/').at(-1)
+      if (platform !== 'telegram') {
+        await route.fulfill(jsonResponse({ error: 'Unsupported test platform' }, 400))
+        return
+      }
+      channelCredentialsPresent = false
+      await route.fulfill(jsonResponse({
+        success: true,
+        platform,
+        clearedPaths: ['token', 'proxy'],
+        gatewayRestarted: true,
+      }))
+      return
+    }
+
     if (pathname === '/api/hermes/config') {
       await route.fulfill(jsonResponse({
         display: { streaming: true, show_reasoning: true, show_cost: true },
@@ -373,6 +572,10 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
         session_reset: {},
         privacy: {},
         approvals: {},
+        ...options.channelConfig,
+        platformCredentialStatus: options.channelConfig?.platformCredentialStatus || {
+          telegram: channelCredentialsPresent,
+        },
       }))
       return
     }

@@ -40,7 +40,7 @@ def generate_narrative(
     Returns:
         {"narrative": str|None, "source_count": int, "changes_from_last": str|None}
     """
-    from v5 import store as v4
+    from v5 import store as store
 
     t0 = time.time()
 
@@ -48,7 +48,7 @@ def generate_narrative(
     now = time.time()
     cutoff = now - days * 86400
 
-    with v4.conn() as c:
+    with store.conn() as c:
         rows = c.execute(
             "SELECT id, content, type, weight, created FROM memory "
             "WHERE type IN ('emotional_event', 'identity', 'lesson', 'reflect', 'narrative') "
@@ -95,7 +95,7 @@ def generate_narrative(
 
     # 4) 存入 V5
     try:
-        mid = v4.store(
+        mid = store.store(
             content=narrative_text,
             type="narrative",
             weight=0.9,
@@ -150,8 +150,8 @@ def _simple_narrative(rows: list) -> str:
 def _compare_with_last(new_narrative: str) -> Optional[str]:
     """与上次叙事比对变化."""
     try:
-        from v5 import store as v4
-        with v4.conn() as c:
+        from v5 import store as store
+        with store.conn() as c:
             last = c.execute(
                 "SELECT content FROM memory WHERE type='narrative' "
                 "ORDER BY id DESC LIMIT 2"

@@ -67,3 +67,24 @@ cache:
   vector_refresh_seconds: 30   # 最多 30s 重开一次, 拾取反思循环等外部新增记忆
   retrieve_ttl_seconds: 20     # 检索结果短 TTL: 同 query 20s 内直接返回, 跳过 embedding+chroma
   retrieve_ttl_enabled: true
+
+# Validation rules (v5.validation module)
+# Each rule can be individually enabled/disabled.
+# Rules check input format, type, range, and consistency.
+validation:
+  input:
+    not_empty: {enabled: true}
+    max_length: {enabled: true}
+  memory:
+    not_empty: {enabled: true}
+    max_length: {enabled: true}
+    allowed_type: {enabled: true}
+    weight_range: {enabled: true}
+    pad_range: {enabled: true}
+  query:
+    not_empty: {enabled: true}
+    query_min_length: {enabled: true}
+    max_length: {enabled: true}
+  entity:
+    not_empty: {enabled: true}
+    entity_type: {enabled: true}

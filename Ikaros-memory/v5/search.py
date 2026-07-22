@@ -1,4 +1,4 @@
-# 详细说明见 docs/scripts/Ikaros-memory/v5/search.md
+# See docs/scripts/Ikaros-memory/v5/search.md
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger("ikaros.memory.v5.search")
 
-# 内联说明见 docs/scripts/Ikaros-memory/v5/search.md（见“内联注释摘录”）
+# Inline docs: docs/scripts/Ikaros-memory/v5/search.md
 _EMBED_LOCK = threading.Lock()
 _EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
 _EMBED_CACHE_MAX = 512
@@ -41,8 +41,8 @@ MEM_ROOT = Path(__file__).resolve().parent.parent
 V5_DATA_DIR = MEM_ROOT / "data" / "v5"
 CHROMA_DIR = V5_DATA_DIR / "chroma"
 
-# Embedding 服务: 同 V3, 走 :8587 nomic-embed-text
-# V3 注释 (vector_search.py:36-43) 2026-07-05 fix: 用 /embedding singular path
+# Embedding service: same as V3, uses :8587 nomic-embed-text
+# V3 fix (vector_search.py:36-43) 2026-07-05: use /embedding singular path
 EMBED_URL = os.environ.get("IKAROS_EMBED_URL", "http://127.0.0.1:8587/embedding")
 EMBED_MODEL = os.environ.get("IKAROS_EMBED_MODEL", "nomic-embed-text-v2-moe")
 EMBED_TIMEOUT = 10
@@ -50,17 +50,18 @@ USER_AGENT = "ikaros-vector-search-v4/1.0 (curl-compatible)"
 
 
 def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
-    """调 :8587 embedding 服务 (网络实现, 无缓存).
+    """Call :8587 embedding service (network implementation, no cache).
 
-    V3 → V4 改进:
-      - 走相对路径 (urllib 走 absolute URI 触发 404, V3 注释记录)
-      - 显式 User-Agent (V3 注释记录 urllib UA 被拒)
-      - 失败时显式 log + 返 None, 不 swallow
+    V3 -> V4 improvements:
+      - Uses relative path (urllib with absolute URI triggers 404, V3 comment recorded)
+      - Explicit User-Agent (V3 comment records urllib UA rejection)
+      - Logs on failure + returns None, does not swallow
 
-    nomic-embed-text-v2-moe 任务前缀 (2026-07-14):
-      - task="query"    (语义搜索)  -> "search_query: "
-      - task="document" (入库/重嵌) -> "search_document: "
-      不加前缀会落到默认任务, 导致 query/document 向量空间不一致、召回失真.
+    nomic-embed-text-v2-moe task prefixes (2026-07-14):
+      - task="query"    (semantic search)  -> "search_query: "
+      - task="document" (index/re-embed)   -> "search_document: "
+      Without prefix, falls to default task, causing query/document vector space
+      mismatch and recall distortion.
     """
     import http.client
     from urllib.parse import urlparse
@@ -81,8 +82,8 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
             logger.warning("embed HTTP %d for '%s...'", resp.status, text[:30])
             return None
         data = json.loads(resp.read().decode("utf-8"))
-        # :8587 实测返回 list: [{"index":0,"embedding":[[...]]}]
-        # 也兼容 dict 形状 {"embedding":[[...]]} / {"data":[{"embedding":[...]}]}
+        # :8587 observed response: list: [{"index":0, "embedding":[[...]]}]
+        # Also compatible with dict shapes {"embedding":[[...]]} / {"data":[{"embedding":[...]}]}
         return _extract_vector(data)
     except Exception as e:
         logger.warning("embedding failed: %s", e)
@@ -90,10 +91,11 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
 
 
 def _get_embedding(text: str, task: str = "query") -> Optional[list[float]]:
-    """带进程级 LRU 缓存的 embedding 入口 (key = task+text[:2000]).
+    """Embedding entry with process-level LRU cache (key = task+text[:2000]).
 
-    命中缓存 => 跳过 :8587 网络调用 (闲时省 ~60ms, 忙时省 ~1s, 冷启动省更多).
-    缓存跨 session 共享 (watchdog 进程长驻); 容量上限防内存膨胀.
+    Cache hit -> skip :8587 network call (~60ms idle savings, ~1s busy, more cold).
+    Cache is shared across sessions (watchdog process lives long); capacity cap
+    prevents memory bloat.
     """
     if not _cache_enabled():
         return _fetch_embedding(text, task)
@@ -115,12 +117,12 @@ def _get_embedding(text: str, task: str = "query") -> Optional[list[float]]:
 
 
 def _extract_vector(data) -> Optional[list[float]]:
-    """从 :8587 各种响应形状中提取单条向量 (list[float]).
+    """Extract single vector (list[float]) from various :8587 response shapes.
 
-    已观测形状:
-      - list:  [{"index":0, "embedding":[[...]]}]   (llama-server /embedding 实测)
-      - dict:  {"embedding": [[...]]} 或 {"embedding": [...]}
-      - dict:  {"data": [{"embedding": [...]}]}      (OpenAI 风格)
+    Observed shapes:
+      - list:  [{"index":0, "embedding":[[...]]}]   (llama-server /embedding observed)
+      - dict:  {"embedding": [[...]]} or {"embedding": [...]}
+      - dict:  {"data": [{"embedding": [...]}]}      (OpenAI style)
     """
     if isinstance(data, list):
         for item in data:
@@ -145,7 +147,7 @@ def _extract_vector(data) -> Optional[list[float]]:
 
 
 def _coerce_vector(emb) -> Optional[list[float]]:
-    """embedding 字段可能是 [[...]] (list 套单条) 或 [...]; 展平成 list[float]."""
+    """embedding field may be [[...]] (list wrapping single) or [...]; flatten to list[float]."""
     if isinstance(emb, list) and emb:
         if isinstance(emb[0], list):
             cand = emb[0]
@@ -157,11 +159,11 @@ def _coerce_vector(emb) -> Optional[list[float]]:
 
 
 class VectorIndex:
-    """V4 ChromaDB 向量索引, 与 v4.store 同步.
+    """V5 ChromaDB vector index, synced with v5.store.
 
-    V3 → V4 改进:
-      - import chromadb 移到 __init__ (不是模块级), 失败显式
-      - 路径走 V4 子目录 (与 V3 隔离)
+    V3 -> V4 improvements:
+      - import chromadb moved to __init__ (not module-level), explicit on failure
+      - Path uses V5 subdirectory (isolated from V3)
     """
 
     def __init__(self, persist_dir: Path | None = None):
@@ -184,7 +186,7 @@ class VectorIndex:
 
     def add(self, memory_id: int, content: str, *,
             type: str = "fact", tags: str = "", weight: float = 0.6) -> bool:
-        """添加/更新一条记忆向量."""
+        """Add or update a memory vector."""
         embedding = _get_embedding(content, task="document")
         if embedding is None:
             return False
@@ -202,7 +204,7 @@ class VectorIndex:
 
     def search(self, query: str, top_k: int = 5,
                min_weight: float = 0.0) -> list[dict]:
-        """语义搜索, 返 [{id, content, type, weight, score}]."""
+        """Semantic search, returns [{id, content, type, weight, score}]."""
         embedding = _get_embedding(query, task="query")
         if embedding is None:
             logger.warning("search: embedding failed for '%s...'", query[:30])
@@ -249,12 +251,14 @@ class VectorIndex:
 
 
 def get_vector_index(persist_dir: Path | None = None, *, refresh: bool = False):
-    """返回缓存的 VectorIndex 单例 (性能优化, 哥哥优化项).
+    """Return cached VectorIndex singleton (performance optimization).
 
-    - 进程内复用同一个 chroma 客户端, 避免每轮 `VectorIndex()` 重开 (冷启动 850ms, 暖后 ~15ms).
-    - "每轮覆写"语义: 每隔 vector_refresh_seconds 自动重开一次, 拾取反思循环等
-      **其他进程**新增的记忆 (同进程内的 add 经同一客户端立即可见, 无需重开).
-    - 配置 cache.vector_index_singleton=false 时退化为每次新建 (原行为).
+    - Process-level reuse of the same chroma client, avoids reopening every cycle
+      (cold start 850ms, warm ~15ms).
+    - Auto-refresh every vector_refresh_seconds to pick up memories added by
+      other processes (reflection loop, etc.). Same-process adds via the same
+      client are immediately visible without refresh.
+    - Set cache.vector_index_singleton=false to disable and create fresh each call.
     """
     cfg = _cache_cfg()
     if not cfg.get("vector_index_singleton", True):
@@ -272,7 +276,7 @@ def get_vector_index(persist_dir: Path | None = None, *, refresh: bool = False):
                 _VI["dir"] = pdir
                 _VI["ts"] = now
             except Exception:
-                # 创建失败: 清空缓存, 交给调用方静默处理 (不缓存坏实例)
+                # Creation failed: clear cache, let caller handle silently (don't cache bad instance)
                 _VI["instance"] = None
                 _VI["dir"] = None
                 raise
@@ -280,11 +284,11 @@ def get_vector_index(persist_dir: Path | None = None, *, refresh: bool = False):
 
 
 def fused_search(query: str, top_k: int = 5) -> list[dict]:
-    """双路融合: FTS5 (关键词) + ChromaDB (语义) → 合并去重.
+    """Dual-path fusion: FTS5 (keyword) + ChromaDB (semantic) -> merge + deduplicate.
 
-    V3 → V4: FTS5 走 v4.store, 向量走 v4.search.
+    V3 -> V4: FTS5 via v5.store, vectors via v5.search.
     """
-    # v4 包在 Ikaros-memory/ 下; 插入 Ikaros-memory 而非其父目录
+    # V5 package lives in Ikaros-memory/; insert Ikaros-memory not its parent dir
     sys.path.insert(0, str(MEM_ROOT))
     from v5 import store  # noqa: F401
 
@@ -296,7 +300,7 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
         "pad_p": getattr(m, "pad_p", 0.0), "pad_a": getattr(m, "pad_a", 0.0),
     } for i, m in enumerate(fts_hits)]
 
-    # 2. 向量语义搜索
+    # 2. Vector semantic search
     vec_results: list[dict] = []
     try:
         idx = get_vector_index()
@@ -307,7 +311,7 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     except Exception as e:
         logger.warning("vector search skipped: %s", e)
 
-    # 3. 合并去重 (id 维度)
+    # 3. Merge and deduplicate by id
     seen: dict[str, dict] = {}
     for r in fts_results + vec_results:
         if r["id"] not in seen:
@@ -317,6 +321,28 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
 
     merged = sorted(seen.values(), key=lambda x: -x.get("score", 0))
     return merged[:top_k]
+
+
+def entity_graph_search(query: str, top_k: int = 5) -> list[dict]:
+    """Entity graph spreading activation search.
+    Matches query against entity graph and activates linked episodic memories.
+    Returns list of episodic memory dicts with graph_score.
+    """
+    try:
+        from v5.entity_graph import find_entity_candidates, spreading_activation_search
+        candidates = find_entity_candidates(query)
+        if not candidates:
+            return []
+        seeds = [(c.entity_id, c.similarity) for c in candidates[:5]]
+        episodic = spreading_activation_search(seeds, top_k=top_k)
+        return [{
+            "id": m.id, "content": m.summary, "type": "episodic",
+            "weight": m.importance, "score": m.graph_score,
+            "source": "entity_graph", "detail": m.detail
+        } for m in episodic]
+    except Exception as e:
+        logger.debug("entity_graph search skipped: %s", e)
+        return []
 
 
 if __name__ == "__main__":

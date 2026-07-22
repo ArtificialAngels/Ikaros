@@ -113,8 +113,8 @@ def optimize_task(text: str) -> Optional[str]:
 def _search_relevant(text: str) -> str:
     """搜 V4 找与当前任务相关的记忆上下文."""
     try:
-        from v5 import store as v4
-        hits = v4.search(text, top_k=3, min_weight=0.4)
+        from v5 import store as store
+        hits = store.search(text, top_k=3, min_weight=0.4)
         if not hits:
             return ""
         lines = []

@@ -64,8 +64,8 @@ def maybe_record_emotion(
 
     # 写入 V5
     try:
-        from v5 import store as v4
-        mid = v4.store(
+        from v5 import store as store
+        mid = store.store(
             content=causal_text,
             type="emotional_event",
             weight=min(0.95, 0.5 + intensity * 0.45),
@@ -259,8 +259,8 @@ def maybe_label_emotion(
     if not tags:
         return None
     try:
-        from v5 import store as v4
-        v4.store(
+        from v5 import store as store
+        store.store(
             content=f"情感标签: {('、'.join(tags))}",
             type="emotion_label",
             weight=0.5,
@@ -284,9 +284,9 @@ def search_by_emotion(emotion_tag: str, top_k: int = 5) -> list[dict]:
     """
     out: list[dict] = []
     try:
-        from v5 import store as v4
-        mems = v4.list_all(type_filter="emotional_event", limit=200)
-        mems += v4.list_all(type_filter="emotion_label", limit=200)
+        from v5 import store as store
+        mems = store.list_all(type_filter="emotional_event", limit=200)
+        mems += store.list_all(type_filter="emotion_label", limit=200)
         seen = set()
         for m in mems:
             if m.id in seen:

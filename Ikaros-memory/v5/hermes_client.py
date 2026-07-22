@@ -1,44 +1,140 @@
-# 详细说明见 docs/scripts/Ikaros-memory/v5/hermes_client.md
+# For details, see docs/scripts/Ikaros-memory/v5/hermes_client.md
 from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import random
 import re
 import threading
 import time
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger("ikaros.memory.v5.hermes")
 
-_HERMES_URL = "http://127.0.0.1:9119"
-_WS_URL = "ws://127.0.0.1:9119/api/ws"
+# Environment-configurable URLs
+_HERMES_DASHBOARD_URL = os.environ.get(
+    "HERMES_DASHBOARD_URL", "http://127.0.0.1:9119"
+)
+_HERMES_WS_URL = os.environ.get(
+    "HERMES_WS_URL", "ws://127.0.0.1:9119/api/ws"
+)
 
-# 在模块加载时（主线程）预先 import websockets C 扩展。
-# 此扩展在 portable-python 下若首次在 daemon 线程里导入会触发 0xC0000005；
-# 预加载使其入口在主线程完成，daemon 线程复用时命中 sys.modules 缓存。
+# Preload websockets C extension in the main thread.
+# In portable-python environments, importing websockets for the first time
+# in a daemon thread can trigger 0xC0000005. Preloading here ensures the
+# cached module is reused by the daemon thread via sys.modules.
 try:
     import websockets as _preload_ws  # noqa: F401
 except Exception:
     pass
 
-_sessions: dict[str, str] = {}  # {session_name: session_id}
-_requests: "queue.Queue[_HermesRequest] | None" = None
-_started = False
+
+# ═══════════════════════════════════════════════════════════════
+# Configuration
+# ═══════════════════════════════════════════════════════════════
+
+
+@dataclass
+class RetryConfig:
+    """Exponential backoff reconnection settings with jitter.
+
+    Attributes:
+        initial_delay: Seconds before the first retry.
+        max_delay: Upper bound on the computed backoff (seconds).
+        multiplier: Factor by which each successive delay grows.
+        jitter_factor: Fraction (0-1) of the delay added as random jitter.
+        max_retries: How many times a single request can be retried
+                     after a WebSocket disconnection.
+    """
+    initial_delay: float = 1.0
+    max_delay: float = 30.0
+    multiplier: float = 2.0
+    jitter_factor: float = 0.1
+    max_retries: int = 3
+
+
+@dataclass
+class ClientConfig:
+    """Global configuration for the Hermes client.
+
+    Attributes:
+        retry: Retry/backoff policy.
+        request_timeout: Default per-request timeout in seconds.
+        ws_connect_timeout: Timeout for the WebSocket handshake.
+        ws_recv_timeout: Timeout for the initial ``gateway.ready`` message.
+    """
+    retry: RetryConfig = field(default_factory=RetryConfig)
+    request_timeout: float = 120.0
+    ws_connect_timeout: float = 10.0
+    ws_recv_timeout: float = 5.0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════
+
+
+class _RetryDelay:
+    """Manages exponential backoff delays with jitter for a run."""
+
+    def __init__(self, config: RetryConfig) -> None:
+        self.config = config
+        self._attempt = 0
+
+    def next_delay(self) -> float:
+        """Return the next backoff duration (seconds) and advance the counter."""
+        delay = min(
+            self.config.initial_delay * (self.config.multiplier ** self._attempt),
+            self.config.max_delay,
+        )
+        jitter = random.uniform(0, self.config.jitter_factor * delay)
+        self._attempt += 1
+        return delay + jitter
+
+    def reset(self) -> None:
+        """Reset the attempt counter (e.g. after a successful connection)."""
+        self._attempt = 0
 
 
 class _HermesRequest:
-    def __init__(self, session_name: str, prompt: str, timeout: float = 120):
+    """A single RPC request enqueued for the background worker."""
+
+    def __init__(
+        self, session_name: str, prompt: str, timeout: float
+    ) -> None:
         self.session_name = session_name
         self.prompt = prompt
         self.timeout = timeout
         self.result: "queue.Queue[str]" = queue.Queue()
+        self.retry_count = 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Global state
+# ═══════════════════════════════════════════════════════════════
+
+_sessions: dict[str, str] = {}  # {session_name: session_id}
+_sessions_lock = threading.Lock()
+_requests: "queue.Queue[_HermesRequest] | None" = None
+_started = False
+_shutdown_event = threading.Event()
+_worker_thread: Optional[threading.Thread] = None
+_ws_connected = threading.Event()
+_config = ClientConfig()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Token scraping
+# ═══════════════════════════════════════════════════════════════
 
 
 def _scrape_token() -> str:
-    """从仪表盘 HTML 抓取 WS token (HTTP GET, 同步)."""
-    resp = urllib.request.urlopen(f"{_HERMES_URL}/", timeout=5)
+    """Scrape the WebSocket auth token from the dashboard HTML (HTTP GET)."""
+    resp = urllib.request.urlopen(f"{_HERMES_DASHBOARD_URL}/", timeout=5)
     html = resp.read().decode("utf-8")
     m = re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
     if not m:
@@ -46,79 +142,119 @@ def _scrape_token() -> str:
     return m.group(1)
 
 
-def start():
-    """启动后台 asyncio 线程 (幂等)."""
-    global _started, _requests
-    if _started:
-        return
-    _requests = queue.Queue()
-    _started = True
-    t = threading.Thread(target=_worker, daemon=True, name="hermes-client")
-    t.start()
-    logger.info("hermes_client: background worker started")
+# ═══════════════════════════════════════════════════════════════
+# Background worker
+# ═══════════════════════════════════════════════════════════════
 
 
-def _worker():
-    """后台线程: 维护一条 WS 连接, 处理请求队列."""
+def _worker() -> None:
+    """Background thread: maintain one WebSocket connection and process requests."""
     import asyncio
     import websockets
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def _run():
+    async def _run() -> None:
         ws = None
-        retry_delay = 1
-        while True:
+        retry_delay = _RetryDelay(_config.retry)
+
+        while not _shutdown_event.is_set():
+            # Poll with a short timeout so shutdown checks are prompt.
             req: Optional[_HermesRequest] = None
             try:
-                req = _requests.get(timeout=30)  # type: ignore
+                req = _requests.get(timeout=1)  # type: ignore[union-attr]
             except queue.Empty:
                 continue
 
             try:
-                # 确保 WS 连接
+                # ── Establish WebSocket if needed ────────────
                 if ws is None:
                     token = _scrape_token()
                     ws = await asyncio.wait_for(
-                        websockets.connect(f"{_WS_URL}?token={token}", max_size=2**20),
-                        timeout=10,
+                        websockets.connect(
+                            f"{_HERMES_WS_URL}?token={token}",
+                            max_size=2 ** 20,
+                        ),
+                        timeout=_config.ws_connect_timeout,
                     )
-                    await asyncio.wait_for(ws.recv(), timeout=5)  # gateway.ready
-                    retry_delay = 1
+                    await asyncio.wait_for(
+                        ws.recv(), timeout=_config.ws_recv_timeout
+                    )  # gateway.ready
+                    _ws_connected.set()
+                    retry_delay.reset()
 
+                # ── Execute the RPC ──────────────────────────
                 reply = await _chat_one(ws, req)
                 req.result.put(reply)
+                retry_delay.reset()
+
             except Exception as e:
+                # Tear down the broken connection.
                 if ws:
                     try:
                         await ws.close()
                     except Exception:
                         pass
                     ws = None
+                _ws_connected.clear()
+
+                # Retry the request if the retry budget remains.
+                req.retry_count += 1
+                if req.retry_count <= _config.retry.max_retries:
+                    delay = retry_delay.next_delay()
+                    logger.debug(
+                        "hermes_client: %s, retrying in %.1fs (attempt %d/%d)",
+                        e, delay, req.retry_count, _config.retry.max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                    _requests.put(req)  # type: ignore[union-attr]
+                else:
+                    try:
+                        req.result.put_nowait(f"(Hermes unavailable: {e})")
+                    except Exception:
+                        pass
+                    retry_delay.reset()
+
+        # ── Shutdown: close WebSocket, drain remaining requests ──
+        if ws:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        while True:
+            try:
+                req = _requests.get_nowait()  # type: ignore[union-attr]
                 try:
-                    req.result.put_nowait(f"(Hermes unavailable: {e})")
+                    req.result.put_nowait("(Hermes shutting down)")
                 except Exception:
                     pass
-                logger.debug("hermes_client: %s, retry in %ds", e, retry_delay)
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 30)
+            except queue.Empty:
+                break
 
     loop.run_until_complete(_run())
 
 
+# ═══════════════════════════════════════════════════════════════
+# Hermes RPC helpers (called from the event loop)
+# ═══════════════════════════════════════════════════════════════
+
+
 async def _chat_one(ws, req: _HermesRequest) -> str:
-    """单次 Hermes RPC: 找/建 session, prompt.submit, 收集回复."""
+    """Single Hermes RPC: find/create session, submit prompt, collect reply."""
     sid = await _find_or_create_session(ws, req.session_name)
     return await _submit_prompt(ws, sid, req.prompt, req.timeout)
 
 
 async def _find_or_create_session(ws, name: str) -> str:
-    """查找已有 session, 找不到就建."""
-    if name in _sessions:
-        return _sessions[name]
+    """Look up an existing session by title, or create a new one."""
+    with _sessions_lock:
+        if name in _sessions:
+            return _sessions[name]
 
-    rid = f"find_{int(time.time()*1000)}"
+    # List sessions and look for a match.
+    rid = f"find_{int(time.time() * 1000)}"
     await ws.send(json.dumps({
         "jsonrpc": "2.0", "id": rid, "method": "session.list", "params": {},
     }))
@@ -130,12 +266,13 @@ async def _find_or_create_session(ws, name: str) -> str:
                 if s.get("title") == name:
                     sid = s.get("id", "")
                     if sid:
-                        _sessions[name] = sid
+                        with _sessions_lock:
+                            _sessions[name] = sid
                         return sid
             break
 
-    # 不存在 → 创建
-    rid2 = f"new_{int(time.time()*1000)}"
+    # Not found — create a new session.
+    rid2 = f"new_{int(time.time() * 1000)}"
     await ws.send(json.dumps({
         "jsonrpc": "2.0", "id": rid2, "method": "session.new",
         "params": {"title": name},
@@ -146,22 +283,26 @@ async def _find_or_create_session(ws, name: str) -> str:
         if d.get("id") == rid2:
             sid = d.get("result", {}).get("id", "")
             if sid:
-                _sessions[name] = sid
+                with _sessions_lock:
+                    _sessions[name] = sid
                 return sid
             break
 
-    raise RuntimeError(f"Cannot create session '{name}' (Hermes backend may be unavailable)")
+    raise RuntimeError(
+        f"Cannot create session '{name}' (Hermes backend may be unavailable)"
+    )
 
 
 async def _submit_prompt(ws, sid: str, text: str, timeout: float) -> str:
-    """发送 prompt.submit, 从 event 流收集完整回复."""
-    rid = f"chat_{int(time.time()*1000)}"
+    """Submit ``prompt.submit`` and collect the full reply from the event stream."""
+    import asyncio as _asyncio
+
+    rid = f"chat_{int(time.time() * 1000)}"
     await ws.send(json.dumps({
         "jsonrpc": "2.0", "id": rid, "method": "prompt.submit",
         "params": {"session_id": sid, "text": text},
     }))
     reply = ""
-    import asyncio as _asyncio
     deadline = _asyncio.get_event_loop().time() + timeout
     while _asyncio.get_event_loop().time() < deadline:
         remaining = deadline - _asyncio.get_event_loop().time()
@@ -181,34 +322,107 @@ async def _submit_prompt(ws, sid: str, text: str, timeout: float) -> str:
                 reply = final if final else reply
                 break
             elif t == "error":
-                raise RuntimeError(f"Hermes error: {p.get('message', 'unknown')}")
+                raise RuntimeError(
+                    f"Hermes error: {p.get('message', 'unknown')}"
+                )
     return reply.strip()
 
 
-def chat(session_name: str, prompt: str, timeout: float = 120) -> str:
-    """同步阻塞: 通过 Hermes :9119 发送 prompt, 返回 LLM 回复.
+# ═══════════════════════════════════════════════════════════════
+# Public API
+# ═══════════════════════════════════════════════════════════════
 
-    若 Hermes 不可用, 返回 "(Hermes unavailable: ...)" 错误字符串,
-    调用方可据此 fallback 本地 :8080。
+
+def start() -> None:
+    """Start the background asyncio worker thread (idempotent)."""
+    global _started, _requests, _worker_thread
+    if _started:
+        return
+    _shutdown_event.clear()
+    _ws_connected.clear()
+    _requests = queue.Queue()
+    _started = True
+    _worker_thread = threading.Thread(
+        target=_worker, daemon=True, name="hermes-client"
+    )
+    _worker_thread.start()
+    logger.info("hermes_client: background worker started")
+
+
+def stop(timeout: float = 30.0) -> None:
+    """Graceful shutdown: signal the worker, drain pending requests, close WS.
+
+    Blocks until the worker thread exits or *timeout* seconds elapse.
+    After calling ``stop()``, ``start()`` can be called again to restart
+    the client.
     """
+    global _started, _requests, _worker_thread
+    if not _started:
+        return
+
+    _shutdown_event.set()
+
+    if _worker_thread is not None and _worker_thread.is_alive():
+        _worker_thread.join(timeout=timeout)
+
+    _started = False
+    _worker_thread = None
+    _ws_connected.clear()
+    _requests = None
+    with _sessions_lock:
+        _sessions.clear()
+    logger.info("hermes_client: worker shut down")
+
+
+def is_connected() -> bool:
+    """Return ``True`` if the WebSocket is currently established."""
+    return _ws_connected.is_set()
+
+
+def is_healthy() -> bool:
+    """Return ``True`` if the client is started and the WebSocket is connected."""
+    return _started and _ws_connected.is_set()
+
+
+def chat(
+    session_name: str, prompt: str, timeout: Optional[float] = None
+) -> str:
+    """Synchronous blocking: send a prompt via Hermes :9119, return LLM reply.
+
+    If Hermes is unavailable the result is an error string like
+    ``"(Hermes unavailable: ...)"``; callers can fall back to local :8080.
+
+    Args:
+        session_name: Hermes session title to route the prompt to.
+        prompt: The text prompt to submit.
+        timeout: Per-request override in seconds.  Falls back to
+            ``ClientConfig.request_timeout`` when not provided.
+    """
+    if _shutdown_event.is_set():
+        return "(Hermes unavailable: client is shutting down)"
     if not _started:
         start()
-    req = _HermesRequest(session_name, prompt, timeout)
-    _requests.put(req)  # type: ignore
+    effective_timeout = (
+        timeout if timeout is not None else _config.request_timeout
+    )
+    req = _HermesRequest(session_name, prompt, effective_timeout)
+    _requests.put(req)  # type: ignore[union-attr]
     try:
-        return req.result.get(timeout=timeout + 5)
+        return req.result.get(timeout=effective_timeout + 10)
     except queue.Empty:
         return "(Hermes timeout)"
 
 
-# ─── 便利函数 ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# Convenience functions
+# ═══════════════════════════════════════════════════════════════
 
 
-def reflect(prompt: str, timeout: float = 180) -> str:
-    """反思会话 (session: Ikaros-反思)."""
-    return chat("Ikaros-反思", prompt, timeout)
+def reflect(prompt: str, timeout: Optional[float] = None) -> str:
+    """Reflection session (``Ikaros-reflect``)."""
+    return chat("Ikaros-reflect", prompt, timeout)
 
 
-def whisper(prompt: str, timeout: float = 120) -> str:
-    """内心独白会话 (session: Ikaros-内心独白)."""
-    return chat("Ikaros-内心独白", prompt, timeout)
+def whisper(prompt: str, timeout: Optional[float] = None) -> str:
+    """Internal monologue session (``Ikaros-monologue``)."""
+    return chat("Ikaros-monologue", prompt, timeout)
