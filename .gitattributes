@@ -1,0 +1,80 @@
+# ============================================================
+# Hermes Agent .gitattributes
+# ============================================================
+# Controls how Git treats line endings and binary detection
+# across Windows / macOS / Linux clones. CRITICAL for portable
+# USB-drive deployment because cmd.exe cannot parse LF-only
+# .bat files (paths with spaces get silently truncated).
+# ============================================================
+
+# --- Force CRLF for Windows-native scripts ---
+# cmd.exe and Windows Explorer require CRLF. Without this,
+# developers on macOS/Linux will silently commit LF-only .bat
+# files that fail on Windows. Combined with .githooks/pre-commit
+# that calls bin/fix-eol.py --check, this provides belt-and-
+# suspenders protection.
+*.bat          text eol=crlf
+*.cmd          text eol=crlf
+
+# PowerShell is tolerant of LF but we standardize on CRLF for
+# consistency with .bat (and the pre-commit hook checks both).
+*.ps1          text eol=crlf
+
+# --- Force LF for cross-platform scripts ---
+*.sh           text eol=lf
+*.py           text eol=lf
+*.js           text eol=lf
+*.ts           text eol=lf
+*.tsx          text eol=lf
+*.jsx          text eol=lf
+*.json         text eol=lf
+*.yaml         text eol=lf
+*.yml          text eol=lf
+*.toml         text eol=lf
+*.md           text eol=lf
+*.txt          text eol=lf
+
+# --- Mark binary explicitly (prevent CRLF/LF drift) ---
+*.png          binary
+*.jpg          binary
+*.jpeg         binary
+*.gif          binary
+*.webp         binary
+*.ico          binary
+*.pdf          binary
+*.zip          binary
+*.7z           binary
+*.tar          binary
+*.gz           binary
+*.exe          binary
+*.dll          binary
+*.pyd          binary
+*.so           binary
+*.dylib        binary
+*.gguf         binary
+*.bin          binary
+*.ggml         binary
+*.gguf.index   binary
+
+# --- Don't diff / merge lockfiles ---
+package-lock.json   -diff merge=union
+yarn.lock           -diff merge=union
+pnpm-lock.yaml      -diff merge=union
+uv.lock             -diff merge=union
+*.lock              -diff merge=union
+
+# --- Jupyter notebooks (merge cleanly) ---
+*.ipynb      merge=union
+
+# --- Export GitHub language stats correctly ---
+*.ps1        linguist-language=PowerShell
+*.bat        linguist-language=Batchfile
+*.cmd        linguist-language=Batchfile
+*.psm1       linguist-language=PowerShell
+
+# --- Exclude vendored upstream from language stats (it's their code) ---
+/hermes-agent/*           linguist-vendored
+/hermes-web-ui/*          linguist-vendored
+/hermes-web-ui/node_modules/** linguist-vendored
+/runtime/*                linguist-vendored
+/portable-python/*        linguist-vendored

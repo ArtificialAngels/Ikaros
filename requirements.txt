@@ -1,0 +1,55 @@
+# ============================================================
+# Mavis + Hermes Agent — 完整 Python 依赖
+# ============================================================
+
+# ---- Mavis 框架核心 ----
+# （按你的 Mavis 安装方式调整，常见情况：）
+# mavis==0.1.0           # 假设 PyPI 发布版
+# 或 git+https://github.com/your-org/mavis.git@main
+# 或本地: -e /opt/mavis
+
+# ---- Web 框架 ----
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+pydantic-settings==2.6.0
+python-multipart==0.0.12
+websockets==13.1
+
+# ---- LLM 客户端（多 provider 抽象）----
+openai==1.54.3           # OpenAI / OpenAI-compatible (llama-server, ollama, vllm)
+anthropic==0.39.0        # Anthropic Claude
+google-generativeai==0.8.3
+
+# ---- Embedding & 向量库 ----
+chromadb==0.5.20
+sentence-transformers==3.2.1   # 可选：本地 embedding
+sqlite-vec==0.1.9              # SQLite vector search (hermes-agent 0.17.0+)
+
+# ---- 工具/工具集 ----
+httpx[http2]==0.27.2
+beautifulsoup4==4.12.3
+lxml==5.3.0
+requests==2.32.3
+pyyaml==6.0.1
+python-dotenv==1.0.1
+
+# ---- 实用 ----
+tenacity==9.0.0            # retry
+rich==13.9.4               # terminal UI
+typer==0.13.0              # CLI
+click==8.1.7
+structlog==24.4.0
+loguru==0.7.2
+croniter==6.0.0            # cron schedule calculator (used by hermes.cron)
+concurrent-log-handler==0.9.29  # thread-safe file logging (hermes-agent 0.17.0+)
+portalocker==3.2.0              # file locking (concurrent_log_handler dep)
+
+# ---- 安全 / 加密 ----
+cryptography==43.0.3
+
+# ============================================================
+# 依赖可复现性（dependency reproducibility）
+# ============================================================
+# hermes venv requires EXACT pydantic-core==2.46.4 (venv rebuild/`pip install -U` breaks hermes dashboard at import fastapi)
+pydantic-core==2.46.4

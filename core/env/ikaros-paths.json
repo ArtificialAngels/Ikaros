@@ -1,0 +1,71 @@
+{
+  "_comment": "Ikaros 路径配置 - 由 scripts/setup-native.py 生成 (相对 IKAROS_ROOT)。",
+  "_version": "1.1",
+  "ikaros_root": "E:\\Ikaros",
+  "core": {
+    "python": "E:\\Ikaros\\runtime\\portable-python\\python.exe",
+    "portable_python": "E:\\Ikaros\\runtime\\portable-python\\python.exe",
+    "runtime": "E:\\Ikaros\\runtime",
+    "node": "E:\\Ikaros\\runtime\\node\\node.exe",
+    "npm": "E:\\Ikaros\\runtime\\node\\npm.cmd",
+    "node_modules": "E:\\Ikaros\\runtime\\node\\node_modules",
+    "aria2": "E:\\Ikaros\\runtime\\aria2",
+    "gopeed": "E:\\Ikaros\\runtime\\gopeed",
+    "rpc_server": "E:\\Ikaros\\runtime\\rpc-server",
+    "data": "E:\\Ikaros\\data",
+    "data_models": "E:\\Ikaros\\data\\models",
+    "bin": "E:\\Ikaros\\bin",
+    "config": "E:\\Ikaros\\config",
+    "logs": "E:\\Ikaros\\data\\logs"
+  },
+  "hermes": {
+    "agent": "E:\\Ikaros\\core/hermes",
+    "home": "E:\\Ikaros\\data\\core/hermes",
+    "bridge": "E:\\Ikaros\\bridge",
+    "core": "E:\\Ikaros\\hermes"
+  },
+  "memory": {
+    "root": "E:\\Ikaros\\core\\v5",
+    "data": "E:\\Ikaros\\core\\v5\\data",
+    "models": "E:\\Ikaros\\core\\v5\\models",
+    "db": "E:\\Ikaros\\core\\v5\\data\\v5\\v5.db",
+    "chromadb": "E:\\Ikaros\\core\\v5\\data\\v5\\chroma"
+  },
+  "llama": {
+    "version": "b10000-cuda",
+    "dir": "E:\\Ikaros\\runtime\\llama\\b10000-cuda",
+    "server": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-server.exe",
+    "cli": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-cli.exe"
+  },
+  "models": {
+    "embedding": "E:\\Ikaros\\core\\v5\\models\\nomic-embed-text-v2-moe.f32.gguf",
+    "llm": "E:\\Ikaros\\core\\v5\\models\\Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+  },
+  "neko": {
+    "root": "E:\\Ikaros\\core\\neko",
+    "python": "E:\\Ikaros\\core\\neko\\.venv\\Scripts\\python.exe",
+    "server": "E:\\Ikaros\\core\\neko\\app\\main_server.py",
+    "desktop": "E:\\Ikaros\\core\\neko\\N.E.K.O.exe",
+    "static": "E:\\Ikaros\\core\\neko\\static",
+    "templates": "E:\\Ikaros\\core\\neko\\templates",
+    "venv": "E:\\Ikaros\\core\\neko\\.venv",
+    "start_script": "E:\\Ikaros\\bin\\neko-start.bat",
+    "stop_script": "E:\\Ikaros\\bin\\neko-stop.bat"
+  },
+  "mcp": {
+    "root": "E:\\Ikaros\\runtime\\MCPServe",
+    "codebase_memory_exe": "E:\\Ikaros\\runtime\\MCPServe\\codebase-memory\\package\\bin\\codebase-memory-mcp.exe"
+  },
+  "herdr": {
+    "exe": "E:\\Ikaros\\runtime\\herdr\\herdr.exe",
+    "dir": "E:\\Ikaros\\runtime\\herdr"
+  },
+  "ports": {
+    "embedding": 8587,
+    "llama": 8080,
+    "bridge": 7860,
+    "neko_main": 48911,
+    "neko_memory": 48912,
+    "neko_bridge": 9460
+  }
+}

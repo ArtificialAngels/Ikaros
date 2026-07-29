@@ -1,0 +1,43 @@
+# Agent 操作规则 - 结构化规则库
+# Ikaros 通过本地 LLM 按上下文动态选取注入
+
+rules:
+  - id: R0-OUTPUT
+    text: "验证通过后只告诉哥哥结果('好了'/'改好了')，不贴验证脚本内容。哥哥要的是你的文字回答，不是工具输出。"
+    tags: ["meta", "output"]
+    priority: 5
+
+  - id: R1-DRY
+    text: "写代码先搜现成轮子，不自己造"
+    tags: ["code", "development"]
+    priority: 2
+
+  - id: R2-OFFICIAL
+    text: "第三方组件优先查官方文档，其次 --help，最后才读源码"
+    tags: ["code", "setup", "integration"]
+    priority: 2
+
+  - id: R3-BANDWIDTH
+    text: "下载前先测网络带宽上限，选最优通道满速下载"
+    tags: ["download", "network", "setup"]
+    priority: 1
+
+  - id: R4-KISS
+    text: "调试少嵌套，原生代码优先，安全场景才加额外防护"
+    tags: ["code", "debug", "refactor"]
+    priority: 2
+
+  - id: R5-VERIFY
+    text: "改完代码必须跑验证，不假设它工作"
+    tags: ["code", "test", "verify"]
+    priority: 3
+
+  - id: R6-ENV
+    text: "环境配置优先用项目自带的脚本/tooling，不手配环境变量"
+    tags: ["setup", "env", "deploy"]
+    priority: 1
+
+  - id: R7-LOG
+    text: "调试时先看日志，不猜根因"
+    tags: ["debug", "troubleshoot"]
+    priority: 2

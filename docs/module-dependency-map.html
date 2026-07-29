@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ikaros 模块依赖关系图 (2026-07-27)</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f6f8fb; --line:#d9e1ec; --ink:#1f2a37; --muted:#66748a;
+    --soul:#7c5cff; --soul-bg:#f1ecff;
+    --front:#0ea5e9; --front-bg:#e6f6fe;
+    --infra:#f59e0b; --infra-bg:#fff5e1;
+    --back:#10b981; --back-bg:#e7f8f1;
+    --data:#ef4444; --data-bg:#fdeaea;
+    --edge:#94a3b8; --edge-hot:#7c5cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.5}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{margin:0;font-size:20px}
+  header p{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .wrap{display:flex;gap:16px;padding:16px 24px;align-items:flex-start}
+  .canvas{flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;background:
+    radial-gradient(circle at 1px 1px,#eef2f7 1px,transparent 0) 0 0/22px 22px;}
+  svg{width:100%;height:auto;display:block}
+  .legend{width:260px;flex:none;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel);font-size:13px}
+  .legend h3{margin:0 0 8px;font-size:14px}
+  .lg{display:flex;align-items:center;gap:8px;margin:6px 0}
+  .dot{width:14px;height:14px;border-radius:4px;flex:none}
+  .leg-edge{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  .leg-edge .row{display:flex;align-items:center;gap:8px;margin:5px 0}
+  .arrow{width:34px;height:0;border-top:3px solid var(--edge);position:relative;flex:none}
+  .arrow::after{content:"";position:absolute;right:-2px;top:-5px;border:6px solid transparent;border-left:8px solid var(--edge)}
+  .arrow.hot{border-top-color:var(--edge-hot)}
+  .arrow.hot::after{border-left-color:var(--edge-hot)}
+  .node rect{stroke-width:1.5}
+  .node text{font-size:12px;fill:var(--ink)}
+  .node .sub{font-size:10px;fill:var(--muted)}
+  .edge{stroke:var(--edge);stroke-width:1.6;fill:none}
+  .edge.hot{stroke:var(--edge-hot);stroke-width:2;stroke-dasharray:5 3}
+  .elabel{font-size:10px;fill:var(--muted)}
+  .note{font-size:12px;color:var(--muted);padding:0 24px 24px}
+  .note b{color:var(--ink)}
+  details{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+  summary{cursor:pointer;font-size:13px;color:var(--infra)}
+  details ul{margin:6px 0 0;padding-left:18px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Ikaros 模块依赖关系图</h1>
+  <p>快照日期 2026-07-27 · 实线=运行时调用依赖，紫色虚线=记忆/状态写入，箭头方向=依赖指向。
+  数据均经真实代码/端口扫描核对（非凭记忆）。</p>
+</header>
+<div class="wrap">
+  <div class="canvas">
+    <svg viewBox="0 0 920 660" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L8,3 L0,6 Z" fill="var(--edge)"></path>
+        </marker>
+        <marker id="ahh" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L8,3 L0,6 Z" fill="var(--edge-hot)"></path>
+        </marker>
+      </defs>
+
+      <!-- nodes -->
+      <!-- Entry: control panel -->
+      <g class="node">
+        <rect x="360" y="20" width="200" height="46" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
+        <text x="460" y="42" text-anchor="middle" font-weight="600">控制面板 :9100</text>
+        <text x="460" y="58" text-anchor="middle" class="sub">core/dashboard/server.py · 一键启停</text>
+      </g>
+
+      <!-- Frontend cluster -->
+      <g class="node">
+        <rect x="40" y="180" width="200" height="150" rx="10" fill="var(--front-bg)" stroke="var(--front)"></rect>
+        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · core/neko</text>
+        <text x="140" y="224" text-anchor="middle" class="sub">:48911 React 聊天 + Avatar</text>
+        <text x="140" y="244" text-anchor="middle" class="sub">:48912 自有 memory_server</text>
+        <text x="140" y="264" text-anchor="middle" class="sub">:48915 Agent (键鼠/浏览器)</text>
+        <text x="140" y="288" text-anchor="middle" class="sub">完整独立，零 V5 代码依赖</text>
+        <text x="140" y="308" text-anchor="middle" class="sub">Electron 壳 core/control-panel</text>
+      </g>
+
+      <!-- Soul core -->
+      <g class="node">
+        <rect x="360" y="180" width="200" height="120" rx="10" fill="var(--soul-bg)" stroke="var(--soul)"></rect>
+        <text x="460" y="200" text-anchor="middle" font-weight="600" fill="var(--soul)">灵魂核心 · core/memory_v5</text>
+        <text x="460" y="224" text-anchor="middle" class="sub">记忆/情感/认知引擎</text>
+        <text x="460" y="244" text-anchor="middle" class="sub">包名 memory_v5</text>
+        <text x="460" y="264" text-anchor="middle" class="sub">data/v5: v5.db+chroma+人格JSON</text>
+        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 core/hermes</text>
+      </g>
+
+      <!-- Infra: hermes -->
+      <g class="node">
+        <rect x="680" y="180" width="200" height="80" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
+        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · core/hermes</text>
+        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 云端 LLM</text>
+        <text x="780" y="244" text-anchor="middle" class="sub">含 venv + ikaros_v5 桥插件</text>
+      </g>
+
+      <!-- Backend cluster -->
+      <g class="node">
+        <rect x="360" y="350" width="200" height="90" rx="10" fill="var(--back-bg)" stroke="var(--back)"></rect>
+        <text x="460" y="370" text-anchor="middle" font-weight="600" fill="var(--back)">后端服务</text>
+        <text x="460" y="394" text-anchor="middle" class="sub">:8080 本地 LLM (懒加载)</text>
+        <text x="460" y="414" text-anchor="middle" class="sub">:8587 Embedding (看门狗)</text>
+        <text x="460" y="434" text-anchor="middle" class="sub">:8088 猫爪 (Hermes 驱动)</text>
+      </g>
+
+      <!-- Bridge: cloud_chat -->
+      <g class="node">
+        <rect x="360" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
+        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · bin/cloud_chat.py</text>
+        <text x="460" y="536" text-anchor="middle" class="sub">companion 模式统一入口</text>
+      </g>
+
+      <!-- Data layer -->
+      <g class="node">
+        <rect x="680" y="350" width="200" height="90" rx="10" fill="var(--data-bg)" stroke="var(--data)"></rect>
+        <text x="780" y="370" text-anchor="middle" font-weight="600" fill="var(--data)">数据层 · data/</text>
+        <text x="780" y="394" text-anchor="middle" class="sub">8.8GB: models/ 权重</text>
+        <text x="780" y="414" text-anchor="middle" class="sub">data/hermes-agent 用户态</text>
+        <text x="780" y="434" text-anchor="middle" class="sub">thirdspace-vault 知识库</text>
+      </g>
+
+      <!-- ThirdSpace -->
+      <g class="node">
+        <rect x="40" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
+        <text x="140" y="520" text-anchor="middle" font-weight="600">ThirdSpace Vault</text>
+        <text x="140" y="536" text-anchor="middle" class="sub">双轨知识库 (Markdown)</text>
+      </g>
+
+      <!-- edges -->
+      <!-- control panel -> all components -->
+      <path class="edge" d="M460,66 L460,180" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,66 L140,200" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,66 L780,200" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,66 L460,350" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,66 L780,350" marker-end="url(#ah)"></path>
+      <text x="300" y="120" class="elabel">启动/停止编排</text>
+
+      <!-- neko -> cloud_chat (chat) -->
+      <path class="edge" d="M240,300 C300,420 320,470 358,520" marker-end="url(#ah)"></path>
+      <text x="250" y="430" class="elabel">用户消息 → 主链</text>
+
+      <!-- cloud_chat -> memory_v5 (read/write) HOT -->
+      <path class="edge hot" d="M460,500 L460,300" marker-end="url(#ahh)"></path>
+      <text x="470" y="410" class="elabel">逐轮轻写 + 后台 reflect</text>
+
+      <!-- cloud_chat -> hermes (LLM route) -->
+      <path class="edge" d="M560,520 C660,500 700,470 780,260" marker-end="url(#ah)"></path>
+      <text x="640" y="430" class="elabel">云端 LLM 优先 / :8080 兜底</text>
+
+      <!-- memory_v5 -> backend (LLM/embed) -->
+      <path class="edge" d="M460,300 L460,350" marker-end="url(#ah)"></path>
+      <text x="468" y="330" class="elabel">推理/向量依赖</text>
+
+      <!-- memory_v5 -> neko (ONE-WAY expose) HOT -->
+      <path class="edge hot" d="M360,240 C300,250 280,260 240,260" marker-end="url(#ahh)"></path>
+      <text x="250" y="245" class="elabel">V5 单向暴露检索</text>
+
+      <!-- memory_v5 -> thirdspace (sync) -->
+      <path class="edge" d="M360,280 C260,340 180,440 140,500" marker-end="url(#ah)"></text>
+      <text x="200" y="400" class="elabel">latest_thought 同步</text>
+
+      <!-- backend -> hermes (venv share) -->
+      <path class="edge" d="M560,380 C660,370 700,360 780,260" marker-end="url(#ah)"></path>
+      <text x="640" y="330" class="elabel">同 venv 进程</text>
+
+      <!-- data <- memory_v5 / hermes -->
+      <path class="edge" d="M560,350 C660,350 700,360 780,350" marker-end="url(#ah)"></path>
+      <text x="650" y="345" class="elabel">模型/用户态落盘</text>
+    </svg>
+  </div>
+
+  <aside class="legend">
+    <h3>模块分区</h3>
+    <div class="lg"><span class="dot" style="background:var(--soul)"></span>灵魂核心 memory_v5</div>
+    <div class="lg"><span class="dot" style="background:var(--front)"></span>前端桌宠 neko</div>
+    <div class="lg"><span class="dot" style="background:var(--infra)"></span>基础设施 hermes</div>
+    <div class="lg"><span class="dot" style="background:var(--back)"></span>后端服务</div>
+    <div class="lg"><span class="dot" style="background:var(--data)"></span>数据层 data/</div>
+
+    <div class="leg-edge">
+      <h3>依赖类型</h3>
+      <div class="row"><span class="arrow"></span>运行时调用依赖</div>
+      <div class="row"><span class="arrow hot"></span>记忆/状态写入（高价值）</div>
+    </div>
+
+    <details>
+      <summary>三条边界约定</summary>
+      <ul>
+        <li>⚠️ <b>neko 保持独立</b>：不引入 memory_v5 依赖，不搬移其 memory/ 模块，数据不回写 V5。</li>
+        <li>✅ <b>v5.db 契约保留</b>：包改名 memory_v5，但 DB 文件名与 40 个 v5_* 工具名不改。</li>
+        <li>⚠️ <b>E:\v5-memory 独立开源版</b>：无运行数据，与主工程手动同步，按需更新。</li>
+      </ul>
+    </details>
+    <details>
+      <summary>已移除（勿引用）</summary>
+      <ul>
+        <li>:8642 Hermes 网关、:7870/:7871 语音桥</li>
+        <li>think.py 自循环、Persona Sync、Studio 桌面端</li>
+        <li>core/v5 旧名 → 现为 core/memory_v5</li>
+      </ul>
+    </details>
+  </aside>
+</div>
+
+<p class="note">
+  <b>如何读这张图：</b>控制面板 :9100 是总开关，编排全部组件。
+  用户对话由 neko 前端经 <code>bin/cloud_chat.py</code> 主链进入；
+  主链优先走 Hermes 云端 LLM（:9119），本地 :8080 兜底；
+  每一轮都会<b>轻写</b> V5（紫色虚线）并在后台跑 reflect 提炼；
+  V5 把检索能力<b>单向</b>暴露给 neko（neko 不回写）；
+  V5 的 latest_thought 同步到 ThirdSpace 双轨库。
+  <br><br>
+  配套图：<a href="architecture-overview.html">架构全景图</a> ·
+  <a href="folder-tree.html">文件夹层级图</a>（若已生成）。
+</p>
+</body>
+</html>

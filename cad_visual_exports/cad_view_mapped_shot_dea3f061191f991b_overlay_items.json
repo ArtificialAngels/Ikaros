@@ -1,0 +1,721 @@
+{
+  "clean_image_path": "E:\\Ikaros\\cad_visual_exports\\cad_view_mapped_shot_dea3f061191f991b.wmf",
+  "overlay_image_path": "E:\\Ikaros\\cad_visual_exports\\cad_view_mapped_shot_dea3f061191f991b_overlay.svg",
+  "overlay_vlm_ready": false,
+  "overlay_items": [
+    {
+      "overlay_id": "E001",
+      "item_kind": "entity",
+      "handle": "2CE",
+      "native_handle": "2CE",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        328.64627363737486,
+        117.64627363737486,
+        865.3537263626251,
+        654.3537263626251
+      ],
+      "world_bbox": {
+        "min": [
+          -50.0,
+          -50.0
+        ],
+        "max": [
+          50.0,
+          50.0
+        ],
+        "center": [
+          0.0,
+          0.0
+        ],
+        "width": 100.0,
+        "height": 100.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E002",
+      "item_kind": "entity",
+      "handle": "2D1",
+      "native_handle": "2D1",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        575.53170189099,
+        53.241379310344826,
+        618.46829810901,
+        117.64627363737486
+      ],
+      "world_bbox": {
+        "min": [
+          -4.0,
+          50.0
+        ],
+        "max": [
+          4.0,
+          62.0
+        ],
+        "center": [
+          0.0,
+          56.0
+        ],
+        "width": 8.0,
+        "height": 12.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E003",
+      "item_kind": "entity",
+      "handle": "2D2",
+      "native_handle": "2D2",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        473.7542575083426,
+        62.89352614015576,
+        534.491829810901,
+        137.4142825361513
+      ],
+      "world_bbox": {
+        "min": [
+          -22.9633,
+          46.3168
+        ],
+        "max": [
+          -11.6466,
+          60.2016
+        ],
+        "center": [
+          -17.304949999999998,
+          53.2592
+        ],
+        "width": 11.3167,
+        "height": 13.884799999999998
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E004",
+      "item_kind": "entity",
+      "handle": "2D3",
+      "native_handle": "2D3",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        384.0409232480534,
+        104.17384315906565,
+        456.63382647385987,
+        181.51607063403785
+      ],
+      "world_bbox": {
+        "min": [
+          -39.6788,
+          38.0997
+        ],
+        "max": [
+          -26.1532,
+          52.5102
+        ],
+        "center": [
+          -32.916,
+          45.30495
+        ],
+        "width": 13.525600000000004,
+        "height": 14.410499999999999
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E005",
+      "item_kind": "entity",
+      "handle": "2D4",
+      "native_handle": "2D4",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        315.17384315906565,
+        173.0409232480534,
+        392.5160706340379,
+        245.63382647385987
+      ],
+      "world_bbox": {
+        "min": [
+          -52.5102,
+          26.1532
+        ],
+        "max": [
+          -38.0997,
+          39.6788
+        ],
+        "center": [
+          -45.30495,
+          32.916
+        ],
+        "width": 14.410499999999999,
+        "height": 13.525600000000004
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E006",
+      "item_kind": "entity",
+      "handle": "2D5",
+      "native_handle": "2D5",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        273.89352614015576,
+        262.7542575083426,
+        348.4142825361513,
+        323.491829810901
+      ],
+      "world_bbox": {
+        "min": [
+          -60.2016,
+          11.6466
+        ],
+        "max": [
+          -46.3168,
+          22.9633
+        ],
+        "center": [
+          -53.2592,
+          17.304949999999998
+        ],
+        "width": 13.884799999999998,
+        "height": 11.3167
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E007",
+      "item_kind": "entity",
+      "handle": "2D6",
+      "native_handle": "2D6",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        264.2413793103448,
+        364.53170189099,
+        328.64627363737486,
+        407.46829810901
+      ],
+      "world_bbox": {
+        "min": [
+          -62.0,
+          -4.0
+        ],
+        "max": [
+          -50.0,
+          4.0
+        ],
+        "center": [
+          -56.0,
+          0.0
+        ],
+        "width": 12.0,
+        "height": 8.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E008",
+      "item_kind": "entity",
+      "handle": "2D7",
+      "native_handle": "2D7",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        273.89352614015576,
+        448.508170189099,
+        348.4142825361513,
+        509.2457424916574
+      ],
+      "world_bbox": {
+        "min": [
+          -60.2016,
+          -22.9633
+        ],
+        "max": [
+          -46.3168,
+          -11.6466
+        ],
+        "center": [
+          -53.2592,
+          -17.304949999999998
+        ],
+        "width": 13.884799999999998,
+        "height": 11.3167
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E009",
+      "item_kind": "entity",
+      "handle": "2D8",
+      "native_handle": "2D8",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        315.17384315906565,
+        526.3661735261401,
+        392.5160706340379,
+        598.9590767519467
+      ],
+      "world_bbox": {
+        "min": [
+          -52.5102,
+          -39.6788
+        ],
+        "max": [
+          -38.0997,
+          -26.1532
+        ],
+        "center": [
+          -45.30495,
+          -32.916
+        ],
+        "width": 14.410499999999999,
+        "height": 13.525600000000004
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E010",
+      "item_kind": "entity",
+      "handle": "2D9",
+      "native_handle": "2D9",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        384.0409232480534,
+        590.4839293659621,
+        456.63382647385987,
+        667.8261568409343
+      ],
+      "world_bbox": {
+        "min": [
+          -39.6788,
+          -52.5102
+        ],
+        "max": [
+          -26.1532,
+          -38.0997
+        ],
+        "center": [
+          -32.916,
+          -45.30495
+        ],
+        "width": 13.525600000000004,
+        "height": 14.410499999999999
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E011",
+      "item_kind": "entity",
+      "handle": "2DA",
+      "native_handle": "2DA",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        473.7542575083426,
+        634.5857174638487,
+        534.491829810901,
+        709.1064738598443
+      ],
+      "world_bbox": {
+        "min": [
+          -22.9633,
+          -60.2016
+        ],
+        "max": [
+          -11.6466,
+          -46.3168
+        ],
+        "center": [
+          -17.304949999999998,
+          -53.2592
+        ],
+        "width": 11.3167,
+        "height": 13.884799999999998
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E012",
+      "item_kind": "entity",
+      "handle": "2DB",
+      "native_handle": "2DB",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        575.53170189099,
+        654.3537263626251,
+        618.46829810901,
+        718.7586206896551
+      ],
+      "world_bbox": {
+        "min": [
+          -4.0,
+          -62.0
+        ],
+        "max": [
+          4.0,
+          -50.0
+        ],
+        "center": [
+          0.0,
+          -56.0
+        ],
+        "width": 8.0,
+        "height": 12.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E013",
+      "item_kind": "entity",
+      "handle": "2DC",
+      "native_handle": "2DC",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        659.508170189099,
+        634.5857174638487,
+        720.2457424916574,
+        709.1064738598443
+      ],
+      "world_bbox": {
+        "min": [
+          11.6466,
+          -60.2016
+        ],
+        "max": [
+          22.9633,
+          -46.3168
+        ],
+        "center": [
+          17.304949999999998,
+          -53.2592
+        ],
+        "width": 11.3167,
+        "height": 13.884799999999998
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E014",
+      "item_kind": "entity",
+      "handle": "2DD",
+      "native_handle": "2DD",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        737.3661735261401,
+        590.4839293659621,
+        809.9590767519467,
+        667.8261568409343
+      ],
+      "world_bbox": {
+        "min": [
+          26.1532,
+          -52.5102
+        ],
+        "max": [
+          39.6788,
+          -38.0997
+        ],
+        "center": [
+          32.916,
+          -45.30495
+        ],
+        "width": 13.525600000000004,
+        "height": 14.410499999999999
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E015",
+      "item_kind": "entity",
+      "handle": "2DE",
+      "native_handle": "2DE",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        801.4839293659621,
+        526.3661735261401,
+        878.8261568409343,
+        598.9590767519467
+      ],
+      "world_bbox": {
+        "min": [
+          38.0997,
+          -39.6788
+        ],
+        "max": [
+          52.5102,
+          -26.1532
+        ],
+        "center": [
+          45.30495,
+          -32.916
+        ],
+        "width": 14.410499999999999,
+        "height": 13.525600000000004
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E016",
+      "item_kind": "entity",
+      "handle": "2DF",
+      "native_handle": "2DF",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        845.5857174638487,
+        448.508170189099,
+        920.1064738598443,
+        509.2457424916574
+      ],
+      "world_bbox": {
+        "min": [
+          46.3168,
+          -22.9633
+        ],
+        "max": [
+          60.2016,
+          -11.6466
+        ],
+        "center": [
+          53.2592,
+          -17.304949999999998
+        ],
+        "width": 13.884799999999998,
+        "height": 11.3167
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E017",
+      "item_kind": "entity",
+      "handle": "2E0",
+      "native_handle": "2E0",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        865.3537263626251,
+        364.53170189099,
+        929.7586206896551,
+        407.46829810901
+      ],
+      "world_bbox": {
+        "min": [
+          50.0,
+          -4.0
+        ],
+        "max": [
+          62.0,
+          4.0
+        ],
+        "center": [
+          56.0,
+          0.0
+        ],
+        "width": 12.0,
+        "height": 8.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E018",
+      "item_kind": "entity",
+      "handle": "2E1",
+      "native_handle": "2E1",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        845.5857174638487,
+        262.7542575083426,
+        920.1064738598443,
+        323.491829810901
+      ],
+      "world_bbox": {
+        "min": [
+          46.3168,
+          11.6466
+        ],
+        "max": [
+          60.2016,
+          22.9633
+        ],
+        "center": [
+          53.2592,
+          17.304949999999998
+        ],
+        "width": 13.884799999999998,
+        "height": 11.3167
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E019",
+      "item_kind": "entity",
+      "handle": "2E2",
+      "native_handle": "2E2",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        801.4839293659621,
+        173.0409232480534,
+        878.8261568409343,
+        245.63382647385987
+      ],
+      "world_bbox": {
+        "min": [
+          38.0997,
+          26.1532
+        ],
+        "max": [
+          52.5102,
+          39.6788
+        ],
+        "center": [
+          45.30495,
+          32.916
+        ],
+        "width": 14.410499999999999,
+        "height": 13.525600000000004
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E020",
+      "item_kind": "entity",
+      "handle": "2E3",
+      "native_handle": "2E3",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        737.3661735261401,
+        104.17384315906565,
+        809.9590767519467,
+        181.51607063403785
+      ],
+      "world_bbox": {
+        "min": [
+          26.1532,
+          38.0997
+        ],
+        "max": [
+          39.6788,
+          52.5102
+        ],
+        "center": [
+          32.916,
+          45.30495
+        ],
+        "width": 13.525600000000004,
+        "height": 14.410499999999999
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E021",
+      "item_kind": "entity",
+      "handle": "2E4",
+      "native_handle": "2E4",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        659.508170189099,
+        62.89352614015576,
+        720.2457424916574,
+        137.4142825361513
+      ],
+      "world_bbox": {
+        "min": [
+          11.6466,
+          46.3168
+        ],
+        "max": [
+          22.9633,
+          60.2016
+        ],
+        "center": [
+          17.304949999999998,
+          53.2592
+        ],
+        "width": 11.3167,
+        "height": 13.884799999999998
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    },
+    {
+      "overlay_id": "E022",
+      "item_kind": "entity",
+      "handle": "2E5",
+      "native_handle": "2E5",
+      "entity_type": "AcDb3dSolid",
+      "layer": "0",
+      "pixel_bbox": [
+        597.0,
+        386.0,
+        597.0,
+        386.0
+      ],
+      "world_bbox": {
+        "min": [
+          0.0,
+          0.0
+        ],
+        "max": [
+          0.0,
+          0.0
+        ],
+        "center": [
+          0.0,
+          0.0
+        ],
+        "width": 0.0,
+        "height": 0.0
+      },
+      "semantic_tags": [],
+      "confidence": 0.95
+    }
+  ],
+  "overlay_style": "bbox",
+  "image": {
+    "width": 1194,
+    "height": 772
+  },
+  "warnings": [
+    "AutoCAD exported WMF and no WMF→PNG converter is installed (ImageMagick, wand, Inkscape, or LibreOffice). VLM APIs cannot read WMF. Install one of those tools to enable VLM image input, or export a PDF and render it externally. Coordinate grounding (ground_vlm_region / map_pixel_region_to_world_bbox) still works without a VLM-readable image.",
+    "WMF export uses AutoCAD selection-set extents; mapping was derived from scanned entity extents.",
+    "Raster overlay unavailable (Pillow not installed or source is not a raster image); wrote an SVG overlay for human review only. Do NOT send the SVG to a VLM API — install Pillow for a PNG overlay, or use ground_vlm_region / map_pixel_region_to_world_bbox for coordinate-based grounding without an overlay image."
+  ]
+}

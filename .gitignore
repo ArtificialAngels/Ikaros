@@ -1,0 +1,406 @@
+# ============================================================
+# Ikaros .gitignore
+# ============================================================
+# IMPORTANT (2026-06-08 portability audit):
+#   The following heavy blobs are NOT in git because of size:
+#     - portable-python/  (~230 MB, embedded Python 3.12.10)
+#     - runtime/          (~700 MB, llama.cpp + CUDA DLLs + Node 23)
+#     - data/models/*.gguf (multi-GB model files)
+#   A fresh `git clone` therefore does NOT run on its own. The user
+#   must follow the "Fresh install on a new PC" section in README.md
+#   which runs `bin\setup-portable.bat` to fetch these via aria2
+#   (or downloads them from the GitHub release assets).
+#
+#   If you want a single-double-click "plug and play" experience,
+#   publish portable-python + runtime as GitHub release assets and
+#   have setup-portable.bat download from there. See §16 in AGENTS.md.
+# ============================================================
+
+# --- Portable runtime (heavy, downloaded by setup-portable.bat) ---
+portable-python/
+runtime/
+# Deps junctions to runtime content (don't commit through them):
+deps/python-test/         # symlink to portable-python (test copy)
+deps/tools/               # symlink to runtime tools (aria2c, gopeed)
+deps/node/                # symlink to runtime/node23 (Node.js)
+deps/llamacpp/            # mostly empty stub; junction content is in runtime/
+
+# --- Upstream clean copy: hermes (clone separately; tracked upstream) ---
+# `core/hermes/` is a giant clean copy of the NousResearch/hermes-agent
+# upstream (Agent core / CLI), relocated from the old repo-root `hermes-agent/`.
+# It is tracked upstream and we just clone it into our workspace. The local
+# copy is NEVER committed here because:
+#   1. It is ~5000 files
+#   2. It is READ-ONLY for us (we modify in `modules/` not here)
+#   3. Upstream `git pull` would conflict with our local edits
+#   4. It is versioned upstream; pinning it in this repo would
+#      duplicate state that is already canonically versioned elsewhere.
+# To get a working copy, run:
+#     git clone https://github.com/NousResearch/hermes-agent.git core/hermes
+core/hermes/
+
+# Note: the EKKOLearnAI/hermes-web-ui WebUI is NOT a sibling clone anymore
+# (2026-06-15a). The runtime copy lives at runtime/node23/node_modules/
+# hermes-web-ui/ and is installed via `npm install -g hermes-web-ui` from
+# runtime/node23/. No dev-source folder is needed.
+
+# --- Data directories (user state; never commit) ---
+# All per-user state lives under data/ and hermes/data/. Even though
+# some files were committed before these rules were added, they are
+# EXCLUDED from future tracking (see `git rm --cached` in commit log).
+hermes/data/
+hermes/data/nextchat/
+tests/hermes/data/
+# IMPORTANT (2026-06-13 fix): use `data/**` (not `data/`) so the
+# `!data/models/*` negation below can actually re-include files in
+# data/models/. With the old `data/` pattern, git's "parent dir
+# excluded" rule blocks all negations under data/, and *nothing*
+# under data/models/ could be tracked (router-preset.example.ini and
+# 初始模型下载.bat were silently dropped in commit 8e9de8bf).
+data/**
+!data/models/
+!data/models/*
+data/models/*.gguf
+data/models/*.bin
+# user-specific NGL/ctx per model (do not commit the real one;
+# data/models/router-preset.example.ini is the template)
+data/models/router-preset.ini
+data/hermes-agent/                   # webui state, auth, sessions, kanban
+data/webui/                          # webui home, sqlite, secret key
+data/memory/                         # chat memory store
+data/knowledge/                      # knowledge base index
+data/skills/                         # user-installed skills
+data/kanban/                         # kanban boards/tasks/events
+data/crons/                          # cron jobs
+# Runtime logs (2026-06-29: ikaros-pet.lock = singleton mutex file)
+data/logs/
+# NOTE: *.log files are also ignored by the wider rule above (#133)
+# ikaros-pet.lock is a zero-byte-or-PID Windows LockFileEx mutex; never commit it.
+
+# --- Configuration & secrets (never commit) ---
+.env
+.env.*
+.envrc
+*.env.local
+.webui_secret_key
+*.pem
+*.key
+secrets/
+
+# --- Backups, dumps, runtime caches ---
+*.bak
+*.backup
+*.dump
+*.corrupt.*.bak
+config.yaml.corrupt.*.bak
+# HERMES_ROOT cache (atomic write, written by bin/hermes-root.py persist)
+.hermes-root
+# NOTE: .githooks/ is intentionally NOT ignored here -- the versioned
+#       git hooks in this directory are meant to be tracked so they
+#       ship with the repo (see bin/install-git-hooks.bat).
+
+# --- Qoder / opencode IDE state ---
+.qoder/
+.opencode/
+.opencode/tmp/
+
+# --- Local agent plans / specs (workspace artifacts, never commit) ---
+# mavis agent plan workspace
+.mavis/
+# trae AI assistant rules/specs
+.trae/
+
+# --- Python build artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node artifacts ---
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+
+# --- Logs & temp files ---
+*.log
+logs/
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.bak
+.tmp/
+
+# --- Editor & IDE state ---
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+.history/
+*.code-workspace
+
+# --- Diagnostic / scratch files generated by the agent itself ---
+.git_status.txt
+.git_tracked.txt
+*.diag*
+.tmp.*
+
+# --- DWG / DXF tooling outputs and scratch (2026-06-16c) ---
+# tools/ is committed (README.md + dwg/ + oda_setup.exe are real project assets);
+# the *outputs* of those tools and the throwaway scratch scripts are not.
+# (Inline `#` comments after a rule are NOT supported by git's .gitignore
+# syntax and were silently breaking the rules below; keep them bare.)
+dxf_conversion_log/
+tools/_scratch/
+tools/dwg/_archive/
+tools/_find_*.ps1
+
+# --- Docker ---
+docker-compose*.yml
+Dockerfile.local
+
+# --- OS / shell artifacts ---
+ehthumbs.db
+ehthumbs_vista.db
+.Trashes
+.Spotlight-V100
+.fseventsd
+
+# --- Misc build/test outputs ---
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.rollup.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+upstream/
+
+# --- CodeGraph (dead end on Node 23.11 — keeps trying to be installed) ---
+deps/codegraph/
+bin/.codegraph/
+
+# --- Reference projects cloned for study (Neuro, etc.) — large, do not track ---
+deps/_src/
+
+# --- Ikaros ↔ other-agent coordination log (dynamic, not git-tracked) ---
+# Coordination happens via JSON files in data/ikaros-coordination/
+# git is for snapshots, this is the live workbench
+# File naming convention:
+#   - ikaros-coordination-schema.json (static schema, tracked)
+#   - README.md (design doc, tracked)
+#   - handshake.*.json (live handoffs, NOT tracked — dynamic)
+#   - *.md under data/ikaros-coordination/ (daily logs, NOT tracked — dynamic)
+!data/ikaros-coordination/
+!data/ikaros-coordination/README.md
+!data/ikaros-coordination/ikaros-coordination-schema.json
+data/ikaros-coordination/handshake.*.json
+data/ikaros-coordination/*.md
+!data/ikaros-coordination/README.md
+
+# --- Aesthetic assets (美丽与优雅元原则 2026-06-17, NEVER delete) ---
+# These are Ikaros' visual identity. Treat as design tokens, not throwaway.
+bin/favicon.ico
+bin/logo.png
+ArtificialAngel.ico
+
+# --- GitNexus external (installed in user HOME, not in repo) ---
+.claude/
+*.code-workspace
+package-lock.json
+bin/desktop.ini
+config.yaml.pre-gitnexus.*.bak
+bridge/data/
+data/ikaros-memory/
+
+# --- Rust build artifacts (Quest 6-28) ---
+bridge-rs/target/
+
+# --- Llama upgrade test staging (Quest 6-28, not for production) ---
+tools/llama-upgrade-test/
+
+# --- MinGW / MSYS2 toolchain artifacts (Quest 6-28) ---
+deps/mingw.zip
+deps/mingw-linker/
+deps/msys2.exe
+
+# --- 6-27 backup (memory.py before Quest fixed bridge) ---
+*.bak
+*.bak-*
+**/*.bak
+**/*.bak-*
+
+# --- Disabled module markers (local runtime state, not project source) ---
+modules/*/module.json.disabled
+
+# sherpa-onnx 模型 (解压后留着, tarball 不要)
+data/models/sense-voice/sense-voice.tar.bz2
+data/models/sense-voice/sense-voice.zip
+data/models/sense-voice/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-*/
+
+# bridge-rs / cargo lock (大文件)
+**/Cargo.lock
+
+# sherpa-onnx prebuilt libs (large, vendor only)
+bridge-rs/sherpa-onnx-prebuilt-extracted/
+bridge-rs/sherpa-onnx-prebuilt.tar.bz2
+
+bridge-rs/sherpa-onnx-shared-extracted/
+bridge-rs/sherpa-onnx-prebuilt.tar.bz2
+bridge-rs/sherpa-onnx-shared.tar.bz2
+
+nul                                        # Windows reserved name (can't unlink)
+.qdrant-initialized                        # Qdrant 1.14 sentinel (auto-generated)
+data/**/*.db                               # SQLite (state.db, kanban.db) — 已被 data/** ignore, 显式 list
+**/Cargo.lock                              # Rust: hermes-agent 跟 bridge-rs 自己的 lockfile 不在仓库
+
+packages                                    # webui sqlite db (隐私: users/devices/sessions, 任何深度)
+# nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在
+packages
+
+# 7-2 cleanup batch additions
+packages                                    # webui sqlite db (隐私: users/devices/sessions, 任何深度)
+# nul + .qdrant-initialized: Windows 特殊名, gitignore 接受存在 (verified via check-ignore)
+
+# 7-4 push-to-github cleanup
+# Ikaros-memory models: 5GB+ gguf weights + junk (.bak/.q4/.placed/.corrupt).
+# Pull, not push — never commit model binaries.
+Ikaros-memory/models/
+# Live2D Rust build artifacts: cargo target
+Ikaros-Live2D/src-tauri/target/
+Ikaros-Live2D/src-tauri/Cargo.lock
+# 临时诊断/调试脚本 (哥哥 7-4 裁定:不推送)
+tests/_debug_*.py
+tests/debug_*.py
+tests/_test_*.py
+tests/_diagnose_*.py
+tests/diagnose_*.py
+tests/benchmark_*.py
+tests/check_model_*.py
+tests/clean_v3_*.py
+tests/smoke_*.py
+tests/test_ikaros_dojo_daily.py
+tests/test_sem_*.py
+# bin/oldcode/ 与 root oldcode/ 同源(都是历史旧数据,本地保留,不推)
+bin/oldcode/
+
+# === UNCONDITIONAL 7-4 lockout (AGENTSMD wants NO oldcode sync) ===
+oldcode/
+oldcode/**
+/oldcode/
+**/oldcode/
+
+# === Ikaros v3 记忆数据库 — NEVER push (哥哥 7-4 明令) ===
+Ikaros-memory/data/v3.db
+Ikaros-memory/data/v3.db-*
+Ikaros-memory/data/*.db
+Ikaros-memory/data/space/
+Ikaros-memory/data/_workspace/
+
+# === Ikaros-memory 运行时配置 — 本地保留,不推送 ===
+Ikaros-memory/data/
+Ikaros-memory/services/launchd/
+
+# === 2026-07-05: ephemeral / generated artifacts (binaries + clones) ===
+
+# Quest 7-4 Rust build artifacts (cargo target/).  Source lives in
+# Ikaros-environment/scripts/detect-root/ (committed) and rebuilds
+# via `cargo build --release`.  The .exe is regenerated each time
+# and must NOT enter the repo (~110MB).
+Ikaros-environment/detect-root/target/
+Ikaros-environment/detect-root/Cargo.lock
+Ikaros-environment/scripts/detect-root.exe
+Ikaros-environment/ikaros-cli/target/
+Ikaros-environment/ikaros-cli/Cargo.lock
+
+# bin/ikaros-monitor.exe is the Rust monitor binary rebuilt from
+# bin/ikaros-desktop-pet/agent/.  Skip the binary; commit the source
+# .py / .ps1 / .vbs files in the same dir.
+bin/ikaros-monitor.exe
+
+# tools/ikaros-monitor/ is a standalone Rust workspace (cargo).  Ignore
+# its build output (target/) — regenerated by `cargo build --release`.
+# Source under tools/ikaros-monitor/src/ is committed.
+tools/ikaros-monitor/target/
+
+# exProject/ holds sibling open-source clones (Live2DPet, MewCo-AI,
+# etc.) that Ikaros reads for inspiration but does not re-distribute.
+# 1.2 GB+ of source — never push.
+exProject/
+
+# launch-hidden.vbs is a per-host Windows startup shim that points at
+# the user's logged-in shell.  Path is hard-coded to the host's
+# username (PZS0X) and is not portable; do not push.
+bin/launch-hidden.vbs
+
+# 2026-07-05 (哥哥 instruction): hermes agent verify scripts and
+# ad-hoc verification artifacts must live under the project root
+# (e.g. Ikaros/tmp/hermes-verify/), not under the OS-default
+# C:/Users/<user>/AppData/Local/Temp/ which yields stray roots
+# like E:/Users/.  The tmp/ tree is per-host and never pushes.
+tmp/
+tmp/**
+
+# --- Agent workspace data (WorkBuddy / CodeBuddy local state) ---
+# These hold agent memory, session logs, and task state. They are
+# host-specific and must NEVER enter the repo.
+.workbuddy/
+.codebuddy/
+nul
+
+# === 2026-07-15: hermes-studio (hermes-web-ui) frontend ===
+# Source in hermes-studio/ is committed. Its nested .gitignore already
+# drops node_modules/dist, but we lock it down at root too so the large
+# npm tree + build output never enter the repo. Runtime state is redirected
+# to data/hermes-studio/ (covered by data/**) and logs to data/logs/.
+hermes-studio/node_modules/
+hermes-studio/dist/
+hermes-studio/packages/server/dist/
+hermes-studio/packages/desktop/dist/
+hermes-studio/packages/desktop/release/
+hermes-studio/packages/desktop/resources/
+hermes-studio/packages/*/node_modules/
+hermes-studio/.hermes-web-ui/
+hermes-studio/logs/
+
+# === secrets & stray output (never commit) ===
+.dash_token
+output/
+
+# ThirdSpace vault 临时文件
+data/thirdspace-vault/.thirdspace/queues/
+data/thirdspace-vault/.thirdspace/reports/
+data/thirdspace-vault/.thirdspace/manifests/
+data/thirdspace-vault/02-日记/
+data/thirdspace-vault/99-归档/
+
+# === 2026-07-26: core/ heavy binaries & built artifacts (NOT in git) ===
+# Model weights (multi-GB) — pulled locally, never pushed (per repo blob policy)
+*.gguf
+*.onnx_data
+# === 2026-07-27: core/neko = N.E.K.O 上游桌宠前端 (Apache-2.0, github.com/Project-N-E-K-O/N.E.K.O) ===
+# 本仓库不修改其源码, 集成走独立桥/启动脚本。由 scripts/fetch-upstreams.py 拉取; 清单见 UPSTREAM.md。
+core/neko/
+
+# === build artifacts (NOT in git) ===
+# Rust cargo 构建产物 (含本仓库自带 core/env/*/target)
+target/
+core/memory_v5/data/
+core/neko/resources/app.asar
+.codebase-memory/

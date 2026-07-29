@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Explore — Conversation Tree v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ===== Design Tokens ===== */
+:root{
+  --brand:#13E425;--brand-secondary:#13E425;--brand-danger:#EF4444;--brand-opposite:#EC1BDA;
+  --bg:#0d0d0d;--bg-modal:#171717;--bg-card:#1c1c1c;--bg-card-up:#222;--bg-card-down:#222;
+  --bg-floating:#2a2a2a;--bg-btn:#333;--bg-btn-hover:#555;--bg-item:#2a2a2a;--bg-item-hover:#3a3a3a;
+  --bg-usermsg:#3a3a3a;--bg-input:#2a2a2a;--bg-bar:#444;--bg-separator:#666;
+  --border-std:#3a3a3a;--border-divider:#2a2a2a;--border-turn:#3a3a3a;
+  --text-primary:#f0f0f0;--text-secondary:#c0c0c0;--text-tertiary:#888;--text-quaternary:#666;
+  --shadow-card:0 4px 24px rgba(0,0,0,.4);--shadow-btn:0 2px 4px rgba(0,0,0,.5);
+  --shadow-usermsg:0 2px 12px rgba(0,0,0,.6);
+  --color-success:#22c55e;--color-warning:#f59e0b;--color-info:#6366f1;
+  --radius-sm:6px;--radius-md:10px;--radius-lg:14px;
+}
+[data-theme="warm"]{
+  --bg:#f5f0e8;--bg-modal:#ede8df;--bg-card:#e8e3da;--bg-card-up:#e8e3da;--bg-card-down:#e8e3da;
+  --bg-floating:#ddd8cf;--bg-btn:#d5d0c7;--bg-btn-hover:#c5c0b7;--bg-item:#d8d3ca;--bg-item-hover:#cec9c0;
+  --bg-usermsg:#d5cdb9;--bg-input:#e2ddd4;--bg-bar:#ddd8cf;
+  --border-std:#d0cbc2;--border-divider:#c5c0b7;
+  --text-primary:#1a1a1a;--text-secondary:#555;--text-tertiary:#888;--text-quaternary:#aaa;
+  --shadow-card:0 4px 24px rgba(0,0,0,.08);--shadow-btn:0 2px 4px rgba(0,0,0,.12);
+  --shadow-usermsg:0 2px 12px rgba(0,0,0,.1);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);
+color:var(--text-primary);display:flex;height:100vh;transition:background .3s,color .3s;}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb-card,#888);border-radius:6px}
+.app{display:flex;width:100%;height:100%}
+:root{--sidebar-w:180px;--tree-w:300px}
+
+/* ===== Resizable Splitter ===== */
+.splitter{width:6px;min-width:6px;background:transparent;cursor:col-resize;position:relative;
+z-index:50;flex-shrink:0;transition:background .15s}
+.splitter::after{content:'';position:absolute;top:0;bottom:0;left:2px;right:2px;
+background:var(--border-divider);border-radius:1px;transition:background .15s}
+.splitter:hover::after,.splitter.active::after{background:var(--brand)}
+.splitter.active{background:rgba(19,228,37,.06)}
+
+/* ===== Sidebar ===== */
+.sidebar{width:var(--sidebar-w);min-width:120px;max-width:300px;background:var(--bg-modal);
+display:flex;flex-direction:column;transition:background .3s;overflow:hidden}
+.sidebar-header{padding:16px 14px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-divider)}
+.logo-icon{width:26px;height:26px;background:var(--brand);border-radius:7px;display:flex;align-items:center;
+justify-content:center;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px;color:#000;flex-shrink:0}
+.logo-text{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;letter-spacing:-.3px}
+.sidebar-nav{flex:1;padding:8px;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;
+color:var(--text-secondary);font-size:13px;transition:all .15s;margin-bottom:1px}
+.nav-item:hover{background:var(--bg-item-hover);color:var(--text-primary)}
+.nav-item.active{background:var(--bg-item);color:var(--text-primary);font-weight:500}
+.nav-icon{width:15px;height:15px;opacity:.7;flex-shrink:0}
+.nav-item.active .nav-icon{opacity:1}
+.nav-sub{font-size:10px;color:var(--text-quaternary);text-transform:uppercase;letter-spacing:.8px;padding:8px 10px 2px}
+.sidebar-footer{padding:10px 12px;border-top:1px solid var(--border-divider)}
+.theme-switcher{display:flex;gap:4px;margin-bottom:6px}
+.theme-btn{flex:1;padding:5px 0;border:1px solid var(--border-std);border-radius:5px;background:transparent;
+color:var(--text-secondary);font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit}
+.theme-btn:hover{border-color:var(--text-tertiary)}
+.theme-btn.active{border-color:var(--brand);color:var(--brand);background:rgba(19,228,37,.06)}
+.reset-btn{width:100%;padding:6px 0;border:1px solid var(--border-std);border-radius:5px;background:transparent;
+color:var(--text-tertiary);font-size:11px;cursor:pointer;font-family:inherit;transition:all .15s}
+.reset-btn:hover{border-color:var(--brand-danger);color:var(--brand-danger)}
+
+/* ===== Tree Canvas ===== */
+.tree-panel{width:var(--tree-w);background:var(--bg);border-right:none;
+display:flex;flex-direction:column;transition:background .3s;position:relative;overflow:hidden}
+.tree-panel-head{padding:10px 14px;border-bottom:1px solid var(--border-divider);display:flex;
+align-items:center;justify-content:space-between;flex-shrink:0}
+.tree-panel-title{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;
+display:flex;align-items:center;gap:6px}
+.tree-panel-title .dot{width:7px;height:7px;border-radius:50%;background:var(--brand);box-shadow:0 0 8px var(--brand)}
+.tree-zoom-info{font-size:10px;color:var(--text-quaternary);font-family:'JetBrains Mono',monospace}
+
+.canvas-wrap{flex:1;position:relative;overflow:hidden;cursor:grab;user-select:none;-webkit-user-select:none}
+.canvas-wrap:active{cursor:grabbing}
+.canvas-wrap.panning{cursor:grabbing;user-select:none;-webkit-user-select:none}
+.canvas-grid{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;
+background-image:radial-gradient(circle,var(--border-divider) 1px,transparent 1px);
+background-size:24px 24px;opacity:.5}
+.canvas-layer{position:absolute;top:0;left:0;transform-origin:0 0;z-index:1}
+.edges-svg{position:absolute;top:0;left:0;pointer-events:none;z-index:2;overflow:visible}
+.nodes-layer{position:absolute;top:0;left:0;z-index:3}
+.temp-svg{position:absolute;top:0;left:0;pointer-events:none;z-index:10;overflow:visible}
+
+/* ===== Node Card ===== */
+.node-card{position:absolute;background:var(--bg-card);border:1.5px solid var(--border-std);
+border-radius:var(--radius-md);padding:8px 10px;width:160px;
+box-shadow:var(--shadow-card);cursor:pointer;transition:border-color .15s,box-shadow .15s,opacity .2s;
+font-family:'JetBrains Mono',monospace;font-size:10.5px;line-height:1.4;user-select:none;
+transform:translate(-50%,-50%)}
+.node-card:hover{border-color:var(--text-tertiary);box-shadow:0 6px 24px rgba(0,0,0,.5);z-index:5}
+.node-card.selected{border-color:var(--text-secondary);box-shadow:0 0 0 1px var(--text-secondary)}
+.node-card.current{border-color:var(--brand)!important;box-shadow:0 0 20px rgba(19,228,37,.2)!important}
+
+/* node type accent bar + colors */
+.node-card.trunk{border-left:3px solid #555}
+.node-card.branch{border-left:3px solid var(--color-info)}
+.node-card.conclusion{border-left:3px solid var(--color-warning)}
+.node-card.merge_point{border-left:3px solid var(--brand-opposite)}
+.node-card:not(.is-valid){opacity:.45;border-left:3px solid var(--brand-danger)}
+
+.node-card .node-depth{font-size:9px;color:var(--text-quaternary);margin-bottom:3px}
+.node-card .node-label{color:var(--text-secondary);font-weight:500;margin-bottom:1px;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node-card .node-tags{display:flex;gap:3px;flex-wrap:wrap;margin-top:4px}
+.node-card .node-tag{font-size:8.5px;padding:1px 5px;border-radius:3px;line-height:1.4;
+white-space:nowrap}
+.node-card .tag-branch{background:rgba(99,102,241,.15);color:var(--color-info)}
+.node-card .tag-conclusion{background:rgba(245,158,11,.15);color:var(--color-warning)}
+.node-card .tag-merged{background:rgba(236,27,218,.12);color:var(--brand-opposite)}
+.node-card .tag-abandoned{background:rgba(239,68,68,.12);color:var(--brand-danger)}
+.node-card .tag-current{background:rgba(19,228,37,.12);color:var(--brand)}
+
+/* Handle connection points */
+.node-handle{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--border-std);
+border:1.5px solid var(--bg-card);left:50%;transform:translateX(-50%);z-index:6;cursor:crosshair;
+transition:background .15s,transform .15s,box-shadow .15s;opacity:0}
+.node-card:hover .node-handle,.node-card.selected .node-handle{opacity:1}
+.node-handle:hover{background:var(--brand);transform:translateX(-50%) scale(1.4);box-shadow:0 0 8px var(--brand)}
+.node-handle.source{bottom:-6px}
+.node-handle.target{top:-6px}
+.node-handle.dragging{background:var(--brand);transform:translateX(-50%) scale(1.6);opacity:1;
+box-shadow:0 0 14px var(--brand);animation:pulse-handle .6s ease-in-out infinite}
+@keyframes pulse-handle{0%,100%{box-shadow:0 0 8px var(--brand)}50%{box-shadow:0 0 18px var(--brand)}}
+
+/* Edge (bezier) */
+.edge-path{fill:none;stroke:var(--border-std);stroke-width:1.5;transition:stroke .2s,stroke-width .2s}
+.edge-path:hover{stroke:var(--text-tertiary);stroke-width:2.5}
+.edge-path.highlight{stroke:var(--text-secondary);stroke-width:2.5;filter:drop-shadow(0 0 3px rgba(255,255,255,.1))}
+.edge-path.merge-line{stroke:var(--brand-opposite);stroke-width:1.5;stroke-dasharray:6 4;opacity:.5}
+.edge-path.temp-line{stroke:var(--brand);stroke-width:2;stroke-dasharray:8 4;opacity:.8}
+.edge-path.selected-edge{stroke:var(--brand);stroke-width:2.5}
+.arrow-marker{fill:var(--border-std)}
+
+/* ===== Tree Info + Memory ===== */
+.tree-info{padding:8px 12px;border-top:1px solid var(--border-divider);font-size:11px;color:var(--text-tertiary);flex-shrink:0}
+.tree-info b{color:var(--text-secondary);font-weight:500}
+.mem-head{padding:8px 12px 4px;border-top:1px solid var(--border-divider);font-size:10px;
+text-transform:uppercase;letter-spacing:.6px;color:var(--text-quaternary);display:flex;align-items:center;gap:5px;flex-shrink:0}
+.mem-list{max-height:140px;overflow-y:auto;padding:0 8px 8px;flex-shrink:0}
+.mem-item{background:var(--bg-modal);border:1px solid var(--border-divider);border-radius:6px;padding:6px 7px;
+margin-bottom:4px;font-size:10.5px;line-height:1.4;color:var(--text-secondary)}
+.mem-item .tag{display:inline-block;font-size:8.5px;padding:1px 4px;border-radius:3px;margin-top:3px;margin-right:2px}
+.mem-item.path .tag{background:rgba(19,228,37,.14);color:var(--brand)}
+.mem-item.cross .tag{background:rgba(236,27,218,.14);color:var(--brand-opposite)}
+.mem-item .src{font-size:8px;color:var(--text-quaternary);float:right;text-transform:uppercase}
+
+/* ===== Context Menu ===== */
+.ctx-menu{position:absolute;background:var(--bg-floating);border:1px solid var(--border-std);border-radius:var(--radius-sm);
+box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:100;min-width:140px;padding:4px;display:none}
+.ctx-menu.show{display:block}
+.ctx-menu-item{padding:7px 12px;font-size:12px;color:var(--text-secondary);cursor:pointer;border-radius:4px;
+display:flex;align-items:center;gap:8px;transition:all .1s;font-family:inherit}
+.ctx-menu-item:hover{background:var(--bg-item-hover);color:var(--text-primary)}
+.ctx-menu-item.danger{color:var(--brand-danger)}
+.ctx-menu-item.danger:hover{background:rgba(239,68,68,.12)}
+.ctx-divider{height:1px;background:var(--border-divider);margin:4px 6px}
+
+/* ===== Main Chat ===== */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.chat-header{height:44px;min-height:44px;display:flex;align-items:center;justify-content:space-between;
+padding:0 16px;border-bottom:1px solid var(--border-divider);flex-shrink:0}
+.breadcrumb{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-tertiary);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%}
+.breadcrumb b{color:var(--text-secondary)}
+.breadcrumb .cur{color:var(--brand)}
+.chat-header-actions{display:flex;gap:6px}
+.header-btn{width:28px;height:28px;border:none;border-radius:5px;background:transparent;color:var(--text-tertiary);
+cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.header-btn:hover{background:var(--bg-item);color:var(--text-primary)}
+.branch-banner{padding:6px 16px;background:rgba(19,228,37,.07);border-bottom:1px solid var(--border-divider);
+font-size:11px;color:var(--brand);display:none;align-items:center;gap:7px}
+.branch-banner.show{display:flex}
+
+.messages-area{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.ctx-note{font-size:11px;color:var(--text-quaternary);text-align:center;font-family:'JetBrains Mono',monospace}
+.turn{display:flex;flex-direction:column;gap:6px;max-width:700px;width:100%;align-self:center}
+.turn-head{display:flex;align-items:center;gap:6px;padding:0 2px}
+.turn-badge{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;
+background:var(--bg-item);color:var(--text-tertiary);border:1px solid var(--border-divider)}
+.turn-badge.branch{color:var(--brand-opposite);border-color:rgba(236,27,218,.4)}
+.turn.current .turn-badge{color:var(--brand);border-color:var(--brand)}
+.turn-time{font-size:10px;color:var(--text-quaternary)}
+.turn-branch-tag{font-size:9.5px;color:var(--text-quaternary);margin-left:auto}
+.branch-divider{height:2px;width:100%;max-width:700px;align-self:center;margin:2px 0;
+background:linear-gradient(to right,transparent,var(--brand),transparent);opacity:.5;border-radius:2px}
+
+.bubble{padding:12px 15px;border-radius:14px 4px 14px 14px;max-width:82%;line-height:1.6;font-size:14px;word-break:break-word}
+.bubble-user{background:var(--bg-usermsg);box-shadow:var(--shadow-usermsg);color:var(--text-primary);align-self:flex-end}
+.ai-card{background:linear-gradient(180deg,var(--bg-card-up),var(--bg-card-down));border:1px solid var(--border-std);
+border-radius:12px;box-shadow:var(--shadow-card);overflow:hidden;max-width:680px;width:100%}
+.card-header{padding:10px 14px 7px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--border-divider)}
+.card-avatar{width:22px;height:22px;background:var(--brand);border-radius:6px;display:flex;align-items:center;
+justify-content:center;font-weight:700;font-size:11px;color:#000;flex-shrink:0}
+.card-label{font-size:12px;font-weight:600;color:var(--text-secondary)}
+.card-body{padding:12px 14px}
+.card-body p{font-size:13.5px;line-height:1.65;color:var(--text-primary);margin-bottom:8px}
+.card-body p:last-child{margin-bottom:0}
+.concept-term{border-bottom:1.5px dotted var(--text-tertiary);cursor:pointer;transition:border-color .2s;padding-bottom:1px}
+.concept-term:hover{border-bottom-style:solid;border-bottom-color:var(--text-primary)}
+.code-block{background:var(--bg);border:1px solid var(--border-divider);border-radius:6px;padding:9px 11px;
+margin:8px 0;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.5;overflow-x:auto;
+white-space:pre-wrap;word-break:break-all;color:var(--text-secondary)}
+.card-footer{padding:7px 14px 10px;display:flex;gap:5px;border-top:1px solid var(--border-divider)}
+.card-action-btn{padding:4px 9px;border:1px solid var(--border-std);border-radius:5px;background:var(--bg-btn);
+color:var(--text-secondary);font-size:11px;cursor:pointer;display:flex;align-items:center;gap:3px;
+transition:all .15s;font-family:inherit}
+.card-action-btn:hover{background:var(--bg-btn-hover);color:var(--text-primary)}
+
+/* Input */
+.input-area{padding:12px 16px 14px;border-top:1px solid var(--border-divider);flex-shrink:0}
+.input-wrapper{max-width:700px;margin:0 auto;background:var(--bg-input);border:1px solid var(--border-std);
+border-radius:12px;display:flex;align-items:flex-end;padding:7px 11px;gap:7px;transition:border-color .2s}
+.input-wrapper:focus-within{border-color:var(--brand)}
+.input-field{flex:1;background:transparent;border:none;outline:none;color:var(--text-primary);font-size:14px;
+font-family:inherit;line-height:1.5;resize:none;max-height:120px;min-height:20px;padding:3px 0}
+.input-field::placeholder{color:var(--text-quaternary)}
+.send-btn{width:30px;height:30px;border:none;border-radius:7px;background:var(--brand);color:#000;cursor:pointer;
+display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;font-size:14px}
+.send-btn:hover{filter:brightness(1.1);transform:scale(1.04)}
+.send-btn:active{transform:scale(.96)}
+.input-toolbar{max-width:700px;margin:5px auto 0;display:flex;gap:3px}
+.tool-btn{width:26px;height:26px;border:none;border-radius:5px;background:transparent;color:var(--text-quaternary);
+cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;font-size:13px}
+.tool-btn:hover{background:var(--bg-item);color:var(--text-secondary)}
+
+@keyframes fadeIn{0%{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+.animate-fadeIn{animation:fadeIn .3s ease-out forwards}
+::selection{background:rgba(19,228,37,.25);color:var(--text-primary)}
+@media(max-width:900px){.sidebar,.splitter,.tree-panel{display:none}}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-icon">E</div>
+      <span class="logo-text">Explore</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Chat</span>
+      </div>
+      <div class="nav-sub">Branches</div>
+      <div class="nav-item" style="font-size:12px" id="branchList"></div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="theme-switcher">
+        <button class="theme-btn active" data-theme="dark" onclick="switchTheme('dark')">Dark</button>
+        <button class="theme-btn" data-theme="warm" onclick="switchTheme('warm')">Warm</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="splitter" id="splitter1" data-side="left"></div>
+
+  <!-- Tree Canvas Panel -->
+  <section class="tree-panel">
+    <div class="tree-panel-head">
+      <div class="tree-panel-title"><span class="dot"></span>Conv Tree <span class="tree-zoom-info" id="zoomInfo"></span></div>
+      <div style="display:flex;gap:4px">
+        <button class="tool-btn" title="Fit view" onclick="fitView()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+        <button class="tool-btn" title="Reset" onclick="resetAll()" style="color:var(--brand-danger)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap">
+      <div class="canvas-grid"></div>
+      <div class="canvas-layer" id="canvasLayer">
+        <svg class="edges-svg" id="edgesSvg">
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" class="arrow-marker"/>
+            </marker>
+            <marker id="arrowhead-merge" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="var(--brand-opposite)" opacity=".6"/>
+            </marker>
+          </defs>
+        </svg>
+        <svg class="temp-svg" id="tempSvg"><path id="tempLine" class="edge-path temp-line" style="display:none"/></svg>
+        <div class="nodes-layer" id="nodesLayer"></div>
+      </div>
+      <div class="ctx-menu" id="ctxMenu"></div>
+    </div>
+    <div class="tree-info" id="treeInfo"></div>
+    <div class="mem-head"><span style="color:var(--brand)">⟡</span> Path Memories</div>
+    <div class="mem-list" id="memPath"></div>
+    <div class="mem-head"><span style="color:var(--brand-opposite)">⟡</span> Cross-Branch</div>
+    <div class="mem-list" id="memCross"></div>
+  </section>
+
+  <div class="splitter" id="splitter2" data-side="right"></div>
+
+  <!-- Main Chat -->
+  <main class="main">
+    <header class="chat-header">
+      <span class="breadcrumb" id="breadcrumb"></span>
+      <div class="chat-header-actions">
+        <button class="header-btn" title="Branch from current" onclick="branchFromCurrent()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/></svg>
+        </button>
+        <button class="header-btn" title="Prune" onclick="pruneCurrent()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="branch-banner" id="branchBanner">
+      <span>↳ 正在从历史节点继续 — 发送将在此处创建<b style="margin:0 3px">新分支</b></span>
+    </div>
+    <div class="messages-area" id="messagesArea"></div>
+    <div class="input-area">
+      <div class="input-wrapper">
+        <textarea class="input-field" id="inputField" rows="1" placeholder="从当前节点继续，或点树中节点跳转…" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+'use strict';
+
+/* ===== API Client ===== */
+const API = {
+  async _get(p){ const r=await fetch(p); return r.json(); },
+  async _post(p,b){ const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}); return r.json(); },
+  state(){return this._get('/api/state')},
+  addTurn(b){return this._post('/api/add_turn',b)},
+  chat(b){return this._post('/api/chat',b)},
+  branchFrom(b){return this._post('/api/branch_from',b)},
+  jumpTo(id){return this._post('/api/jump_to',{node_id:id})},
+  prune(id){return this._post('/api/prune',{node_id:id})},
+  memory(id){return this._get('/api/memory?node_id='+encodeURIComponent(id))},
+  reset(){return this._post('/api/reset',{})},
+  // v2 APIs
+  fork(b){return this._post('/api/fork',b)},
+  conclude(id){return this._post('/api/conclude',{node_id:id})},
+  merge(from,target){return this._post('/api/merge',{source_id:from,target_id:target})},
+  unmerge(id){return this._post('/api/unmerge',{node_id:id})},
+  abandon(id){return this._post('/api/abandon',{node_id:id})},
+  // B2: 设置节点执行状态 (supervisor / 测试)
+  setExecState(b){return this._post('/api/node/exec_state',b)}
+};
+
+/* ===== Data Model ===== */
+class ConvNode{
+  constructor(o){o=o||{};this.id=o.id;this.parentId=o.parentId||null;this.children=o.children||[];
+  this.depth=o.depth||0;this.branchLabel=o.branchLabel||null;this.messages=o.messages||[];
+  this.state=o.state||{};this.config=o.config||{};this.meta=o.meta||{};this.createdAt=o.createdAt||Date.now();
+  this.nodeType=o.nodeType||'trunk';this.isValid=o.isValid!==false;
+  this.mergeTarget=o.mergeTarget||null;this.mergedFrom=o.mergedFrom||[];
+  this.skillsUsed=o.skillsUsed||[];this.toolCalls=o.toolCalls||[];this.conclusions=o.conclusions||[];
+  this.execState=o.exec_state||'idle';this.execProgress=o.exec_progress||0;this.execDetail=o.exec_detail||'';}
+}
+class TreeView{
+  constructor(nodesMap,rootId,currentId){this.nodes=nodesMap;this.rootId=rootId;this.currentId=currentId;this.version=0}
+  get current(){return this.nodes.get(this.currentId)}
+  getNode(id){return this.nodes.get(id)}
+  getPath(id){id=id||this.currentId;const p=[];let c=this.nodes.get(id);while(c){p.unshift(c);c=c.parentId?this.nodes.get(c.parentId):null}return p}
+  getContext(id){return this.getPath(id).reduce((a,n)=>a.concat(n.messages),[])}
+  siblings(id){const n=this.nodes.get(id);if(!n||!n.parentId)return[];const p=this.nodes.get(n.parentId);return p.children.filter(c=>c!==id)}
+  subtree(id){const res=[];const st=[id];while(st.length){const c=st.pop();const n=this.nodes.get(c);if(!n)continue;res.push(n);st.push.apply(st,n.children)}return res}
+  isLeaf(id){const n=this.nodes.get(id);return n?n.children.length===0:true}
+}
+
+let tree=null,currentMem={path:[],cross:[]},branchParentId=null;
+
+function installState(s){
+  const m=new Map();
+  Object.values(s.nodes).forEach(n=>{
+    m.set(n.id,new ConvNode({id:n.id,parentId:n.parent_id,children:n.children,depth:n.depth,
+      branchLabel:n.branch_label,messages:n.messages,state:n.state,config:n.config,
+      meta:n.meta,createdAt:n.created_at,nodeType:n.node_type,isValid:n.is_valid,
+      mergeTarget:n.merge_target,mergedFrom:n.merged_from,      skillsUsed:n.skills_used,
+      toolCalls:n.tool_calls,conclusions:n.conclusions,
+      execState:n.exec_state,execProgress:n.exec_progress,execDetail:n.exec_detail}));
+  });
+  tree=new TreeView(m,s.root_id,s.current_id);
+}
+
+/* ===== Canvas State ===== */
+let panX=20,panY=20,zoom=1;
+const nodePositions={};      // id -> {x,y} in layout coordinates
+const manualPositions={};    // id -> {x,y} manual override (persists across re-renders)
+const NODE_W=160,NODE_H=50;
+const H_GAP=100,V_GAP=90;
+let selectedNode=null;
+let connecting=null;         // {fromId, fromX, fromY, toX, toY}
+let ctxMenuNode=null;        // node id for context menu
+
+/* ===== Layout Algorithm ===== */
+function calcLayout(){
+  // Creation-order index: earlier nodes (by insertion) sort to the left
+  const orderIdx={};let oi=0;tree.nodes.forEach((n,id)=>{orderIdx[id]=oi++});
+  const pos={};let leaf=0;
+  (function dfs(id,depth){
+    const n=tree.nodes.get(id);if(!n)return;
+    // Sort children by creation order for a predictable, comprehensible spread
+    const kids=n.children.filter(c=>tree.nodes.has(c)).sort((a,b)=>orderIdx[a]-orderIdx[b]);
+    if(!kids.length){pos[id]={x:leaf++,depth};}
+    else{kids.forEach(k=>dfs(k,depth+1));const xs=kids.map(k=>pos[k].x);pos[id]={x:(Math.min(...xs)+Math.max(...xs))/2,depth};}
+  })(tree.rootId,0);
+  let maxX=0,maxD=0;
+  Object.keys(pos).forEach(id=>{maxX=Math.max(maxX,pos[id].x);maxD=Math.max(maxD,pos[id].depth)});
+  // Top-down tree: depth → vertical (y), leaf order → horizontal (x)
+  const w=maxX*(NODE_W+H_GAP)+NODE_W+60, h=maxD*V_GAP+NODE_H+60;
+  // Set canvas dimensions
+  const layer=document.getElementById('canvasLayer');
+  layer.style.width=w+'px';layer.style.height=h+'px';
+  const es=document.getElementById('edgesSvg'),ts=document.getElementById('tempSvg');
+  es.setAttribute('width',w);es.setAttribute('height',h);
+  es.setAttribute('viewBox','0 0 '+w+' '+h);
+  ts.setAttribute('width',w);ts.setAttribute('height',h);
+  ts.setAttribute('viewBox','0 0 '+w+' '+h);
+  // Node positions (absolute within layer)
+  // x = leaf_x * (NODE_W + H_GAP) + offset (horizontal = sibling spread, left→right)
+  // y = depth * V_GAP + offset (vertical = depth, top→bottom)
+  Object.keys(pos).forEach(id=>{
+    const manual=manualPositions[id];
+    nodePositions[id]=manual
+      ? {x:manual.x,y:manual.y}
+      : {x:pos[id].x*(NODE_W+H_GAP)+NODE_W/2+30, y:pos[id].depth*V_GAP+NODE_H/2+30};
+  });
+  return {maxX:w, maxY:h};
+}
+
+/* ===== Canvas Transform ===== */
+function applyTransform(){
+  const layer=document.getElementById('canvasLayer');
+  layer.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
+  document.getElementById('zoomInfo').textContent=Math.round(zoom*100)+'%';
+}
+function screenToCanvas(sx,sy){
+  const rect=document.getElementById('canvasWrap').getBoundingClientRect();
+  return {x:(sx-rect.left-panX)/zoom, y:(sy-rect.top-panY)/zoom};
+}
+
+/* ===== Rendering: Nodes ===== */
+function renderNodes(){
+  const layer=document.getElementById('nodesLayer');
+  let html='';
+  tree.nodes.forEach(n=>{
+    const p=nodePositions[n.id];if(!p)return;
+    const isCur=n.id===tree.currentId;
+    const isSel=n.id===selectedNode;
+    const label=nodeText(n);
+    const typeCls=n.nodeType||'trunk';
+    const validCls=n.isValid!==false?'is-valid':'';
+    let tags='';
+    if(!n.isValid)tags+='<span class="node-tag tag-abandoned">abandoned</span>';
+    if(n.nodeType==='conclusion')tags+='<span class="node-tag tag-conclusion">conclusion</span>';
+    if(n.mergeTarget)tags+='<span class="node-tag tag-merged">merged</span>';
+    if(isCur)tags+='<span class="node-tag tag-current">current</span>';
+    html+=`<div class="node-card ${typeCls} ${validCls} ${isCur?'current':''} ${isSel?'selected':''}"
+      data-id="${n.id}" style="left:${p.x}px;top:${p.y}px"
+      onmousedown="onNodeMouseDown(event,'${n.id}')"
+      oncontextmenu="onNodeContextMenu(event,'${n.id}')">
+      <div class="node-handle target" data-node="${n.id}" data-side="target"
+        onmousedown="onHandleMouseDown(event,'${n.id}','target')"></div>
+      <div class="node-depth">#${n.depth} · ${n.branchLabel||'main'}</div>
+      <div class="node-label">${escapeHtml(label)}</div>
+      ${tags?`<div class="node-tags">${tags}</div>`:''}
+      ${execWrap(n)}
+      <div class="node-handle source" data-node="${n.id}" data-side="source"
+        onmousedown="onHandleMouseDown(event,'${n.id}','source')"></div>
+    </div>`;
+  });
+  layer.innerHTML=html;
+}
+
+function nodeText(n){
+  if(n.depth===0)return 'ROOT';
+  const um=n.messages.find(m=>m.role==='user');
+  let s=um?um.content:'turn '+n.depth;
+  if(s.length>18)s=s.slice(0,18)+'...';
+  if(n.conclusions&&n.conclusions.length){
+    s=n.conclusions[0];
+    if(s.length>22)s=s.slice(0,22)+'...';
+  }
+  return s;
+}
+
+/* ===== B2: 执行状态徽标 (herdr exec_state 内化) ===== */
+const EXEC_LABEL={idle:'idle',pending:'pending',working:'working',blocked:'blocked',done:'done',unknown:'unknown'};
+function execInner(n){
+  const st=n.execState||'idle';
+  let h=`<span class="exec-badge badge-${st}">${EXEC_LABEL[st]||st}</span>`;
+  if(st==='working'||st==='blocked'){
+    const p=Math.max(0,Math.min(100,(n.execProgress||0)*100));
+    h+=`<div class="exec-progress"><div class="exec-progress-fill" style="width:${p}%"></div></div>`;
+  }
+  if(n.execDetail){h+=`<div class="exec-detail">${escapeHtml(n.execDetail)}</div>`;}
+  return h;
+}
+function execWrap(n){
+  const st=n.execState||'idle';
+  if(st==='idle')return '';
+  return `<div class="exec-state-wrap" data-state="${st}">${execInner(n)}</div>`;
+}
+
+/* ===== Rendering: Edges (Bezier) ===== */
+function renderEdges(){
+  const svg=document.getElementById('edgesSvg');
+  let paths='';
+  // Parent-child edges (vertical: parent bottom-center → child top-center)
+  tree.nodes.forEach(n=>{
+    if(!n.parentId)return;
+    const sp=nodePositions[n.parentId],tp=nodePositions[n.id];
+    if(!sp||!tp)return;
+    const startY=sp.y+NODE_H/2, endY=tp.y-NODE_H/2;
+    const midY=startY+(endY-startY)*0.4;
+    paths+=`<path class="edge-path parent-edge" data-from="${n.parentId}" data-to="${n.id}"
+      d="M${sp.x},${startY} C${sp.x},${midY} ${tp.x},${midY} ${tp.x},${endY}"
+      marker-end="url(#arrowhead)"/>`;
+  });
+  // Merge edges (vertical arc: source bottom-center → target top-center)
+  tree.nodes.forEach(n=>{
+    if(!n.mergeTarget)return;
+    const sp=nodePositions[n.id],tp=nodePositions[n.mergeTarget];
+    if(!sp||!tp)return;
+    const startY=sp.y+NODE_H/2, endY=tp.y-NODE_H/2;
+    const midY=(startY+endY)/2;
+    paths+=`<path class="edge-path merge-line" data-from="${n.id}" data-to="${n.mergeTarget}"
+      d="M${sp.x},${startY} C${sp.x},${midY} ${tp.x},${midY} ${tp.x},${endY}"
+      marker-end="url(#arrowhead-merge)"/>`;
+  });
+  svg.innerHTML=svg.querySelector('defs').outerHTML+paths;
+}
+
+/* ===== Drag to Connect ===== */
+function onHandleMouseDown(e,nodeId,side){
+  e.stopPropagation();e.preventDefault();
+  if(side!=='source')return;
+  const p=nodePositions[nodeId];if(!p)return;
+  connecting={fromId:nodeId, fromX:p.x, fromY:p.y+NODE_H/2, toX:p.x, toY:p.y+NODE_H/2};
+  updateTempLine();
+  document.getElementById('tempLine').style.display='';
+  const handle=document.querySelector(`.node-card[data-id="${nodeId}"] .node-handle.source`);
+  if(handle)handle.classList.add('dragging');
+}
+
+function onNodeMouseDown(e,nodeId){
+  if(e.button!==0)return;
+  e.preventDefault(); // prevent text selection / browser drag
+  selectedNode=nodeId;
+  renderNodes();renderEdges();
+  // Start node drag
+  const p=nodePositions[nodeId];if(!p)return;
+  const startX=e.clientX,startY=e.clientY,startPX=p.x,startPY=p.y;
+  document.body.style.userSelect='none';
+  document.body.style.webkitUserSelect='none';
+  function onMove(ev){
+    ev.preventDefault();
+    const dx=(ev.clientX-startX)/zoom,dy=(ev.clientY-startY)/zoom;
+    p.x=startPX+dx;p.y=startPY+dy;
+    renderNodes();renderEdges();
+  }
+  function onUp(ev){
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+    document.body.style.userSelect='';
+    document.body.style.webkitUserSelect='';
+    if(Math.abs(ev.clientX-startX)<3&&Math.abs(ev.clientY-startY)<3){
+      // Click (not drag) -> jump to node
+      doJump(nodeId);
+    }else{
+      // Persist manual position so re-renders don't reset it
+      manualPositions[nodeId]={x:p.x, y:p.y};
+    }
+  }
+  window.addEventListener('mousemove',onMove);
+  window.addEventListener('mouseup',onUp);
+}
+
+/* ===== Context Menu ===== */
+function onNodeContextMenu(e,nodeId){
+  e.preventDefault();e.stopPropagation();
+  ctxMenuNode=nodeId;
+  const menu=document.getElementById('ctxMenu');
+  const n=tree.nodes.get(nodeId);
+  let items=[
+    {label:'↳ Fork Branch',action:'fork',icon:'⎇'},
+    {label:'✔ Conclude',action:'conclude',icon:'✓'},
+  ];
+  if(n.mergeTarget){
+    items.push({label:'✕ Unmerge',action:'unmerge',icon:'↩',danger:true});
+  }else{
+    items.push({label:'⊕ Merge to Trunk',action:'merge',icon:'⥂'});
+  }
+  items.push({divider:true});
+  items.push({label:'✕ Abandon',action:'abandon',icon:'⊘',danger:true});
+  items.push({label:'✂ Prune Subtree',action:'prune',icon:'🗑',danger:true});
+  menu.innerHTML=items.map(it=>{
+    if(it.divider)return '<div class="ctx-divider"></div>';
+    return `<div class="ctx-menu-item${it.danger?' danger':''}" data-action="${it.action}">
+      <span style="font-size:13px">${it.icon||''}</span>${it.label}</div>`;
+  }).join('');
+  menu.querySelectorAll('.ctx-menu-item').forEach(el=>{
+    el.addEventListener('click',()=>handleCtxAction(el.dataset.action));
+  });
+  const wrap=document.getElementById('canvasWrap');
+  const rect=wrap.getBoundingClientRect();
+  menu.style.left=(e.clientX-rect.left)+'px';
+  menu.style.top=(e.clientY-rect.top)+'px';
+  menu.classList.add('show');
+  setTimeout(()=>document.addEventListener('click',hideCtxMenu,{once:true}),50);
+}
+
+function hideCtxMenu(){document.getElementById('ctxMenu').classList.remove('show');ctxMenuNode=null}
+
+async function handleCtxAction(action){
+  hideCtxMenu();
+  if(!ctxMenuNode)return;
+  const nid=ctxMenuNode;
+  switch(action){
+    case 'fork': branchParentId=nid;document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(tree.nodes.get(nid))+'…';focusInput();break;
+    case 'conclude':await API.conclude(nid);await refresh();break;
+    case 'merge':await API.merge(nid,'__trunk__');await refresh();break;
+    case 'unmerge':await API.unmerge(nid);await refresh();break;
+    case 'abandon':await API.abandon(nid);await refresh();break;
+    case 'prune':if(nid!==tree.rootId){await API.prune(nid);await refresh();}break;
+  }
+}
+
+/* ===== Canvas Pan & Zoom ===== */
+(function setupCanvas(){
+  const wrap=document.getElementById('canvasWrap');
+  let panning=false,px=0,py=0;
+  wrap.addEventListener('mousedown',e=>{
+    if(e.target===wrap||e.target.classList.contains('canvas-grid')){
+      panning=true;px=e.clientX-panX;py=e.clientY-panY;
+      wrap.classList.add('panning');e.preventDefault();
+    }
+  });
+  window.addEventListener('mousemove',e=>{
+    if(panning){panX=e.clientX-px;panY=e.clientY-py;applyTransform();}
+    if(connecting){
+      const c=screenToCanvas(e.clientX,e.clientY);
+      connecting.toX=c.x;connecting.toY=c.y;updateTempLine();
+      document.querySelectorAll('.node-handle.target').forEach(h=>h.classList.remove('dragging'));
+      const el=document.elementFromPoint(e.clientX,e.clientY);
+      if(el&&el.classList.contains('node-handle')&&el.dataset.side==='target'){
+        el.classList.add('dragging');
+      }
+    }
+  });
+  window.addEventListener('mouseup',e=>{
+    if(panning){panning=false;wrap.classList.remove('panning')}
+    if(connecting){
+      // Check if dropped on a target handle
+      const el=document.elementFromPoint(e.clientX,e.clientY);
+      if(el&&el.classList.contains('node-handle')&&el.dataset.side==='target'){
+        const targetId=el.dataset.node;
+        if(targetId&&targetId!==connecting.fromId){
+          createConnection(connecting.fromId,targetId);
+        }
+      }
+      connecting=null;
+      document.getElementById('tempLine').style.display='none';
+      document.querySelectorAll('.node-handle.dragging').forEach(h=>h.classList.remove('dragging'));
+    }
+  });
+  wrap.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const delta=e.deltaY>0?0.9:1.1;
+    const newZoom=Math.min(3,Math.max(0.15,zoom*delta));
+    const rect=wrap.getBoundingClientRect();
+    const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+    panX=mx-(mx-panX)*(newZoom/zoom);
+    panY=my-(my-panY)*(newZoom/zoom);
+    zoom=newZoom;applyTransform();
+  },{passive:false});
+  // Touch support
+  let touches=[];
+  wrap.addEventListener('touchstart',e=>{
+    if(e.touches.length===1){panning=true;px=e.touches[0].clientX-panX;py=e.touches[0].clientY-panY}
+    else if(e.touches.length===2){touches=[...e.touches]}
+    e.preventDefault();
+  },{passive:false});
+  wrap.addEventListener('touchmove',e=>{
+    if(panning&&e.touches.length===1){panX=e.touches[0].clientX-px;panY=e.touches[0].clientY-py;applyTransform()}
+    else if(e.touches.length===2){
+      const d0=Math.hypot(touches[0].clientX-touches[1].clientX,touches[0].clientY-touches[1].clientY);
+      const d1=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+      zoom=Math.min(3,Math.max(0.15,zoom*(d1/d0)));applyTransform();touches=[...e.touches];
+    }
+    e.preventDefault();
+  },{passive:false});
+  wrap.addEventListener('touchend',()=>{panning=false});
+})();
+
+/* ===== Resizable Splitters ===== */
+(function setupSplitters(){
+  const sidebar=document.querySelector('.sidebar');
+  const treePanel=document.querySelector('.tree-panel');
+  const s1=document.getElementById('splitter1');
+  const s2=document.getElementById('splitter2');
+  // Restore saved widths
+  try{
+    const saved=JSON.parse(localStorage.getItem('conv-tree-layout')||'{}');
+    if(saved.sw&&saved.sw>=120&&saved.sw<=300) sidebar.style.setProperty('--sidebar-w',saved.sw+'px');
+    if(saved.tw) treePanel.style.setProperty('--tree-w',saved.tw+'px');
+  }catch(e){}
+  function saveLayout(){
+    const sw=parseInt(getComputedStyle(sidebar).width);
+    const tw=parseInt(getComputedStyle(treePanel).width);
+    try{localStorage.setItem('conv-tree-layout',JSON.stringify({sw,tw}))}catch(e){}
+  }
+  // Splitter 1: sidebar (--sidebar-w, min 120 / max 300) ↔ tree-panel (--tree-w)
+  (function(){
+    let dragging=false,startX=0,startSw=0,startTw=0;
+    s1.addEventListener('mousedown',e=>{
+      dragging=true;s1.classList.add('active');
+      startX=e.clientX;startSw=parseInt(getComputedStyle(sidebar).width);
+      startTw=parseInt(getComputedStyle(treePanel).width);
+      document.body.style.userSelect='none';document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    s1.addEventListener('touchstart',e=>{
+      dragging=true;s1.classList.add('active');
+      startX=e.touches[0].clientX;startSw=parseInt(getComputedStyle(sidebar).width);
+      startTw=parseInt(getComputedStyle(treePanel).width);
+      document.body.style.userSelect='none';document.body.style.cursor='col-resize';
+    },{passive:false});
+    function onMove(e){
+      if(!dragging)return;
+      const cx=e.touches?e.touches[0].clientX:e.clientX;
+      let nw=startSw+(cx-startX);
+      if(nw<120)nw=120;if(nw>300)nw=300;
+      sidebar.style.setProperty('--sidebar-w',nw+'px');
+      treePanel.style.setProperty('--tree-w',(startSw+startTw-nw)+'px');
+    }
+    function onUp(){
+      if(!dragging)return;
+      dragging=false;s1.classList.remove('active');
+      document.body.style.userSelect='';document.body.style.cursor='';
+      saveLayout();
+    }
+    window.addEventListener('mousemove',onMove);
+    window.addEventListener('touchmove',onMove,{passive:false});
+    window.addEventListener('mouseup',onUp);
+    window.addEventListener('touchend',onUp);
+  })();
+  // Splitter 2: tree-panel (--tree-w) ↔ main (flex:1, auto)
+  (function(){
+    let dragging=false,startX=0,startTw=0;
+    s2.addEventListener('mousedown',e=>{
+      dragging=true;s2.classList.add('active');
+      startX=e.clientX;startTw=parseInt(getComputedStyle(treePanel).width);
+      document.body.style.userSelect='none';document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    s2.addEventListener('touchstart',e=>{
+      dragging=true;s2.classList.add('active');
+      startX=e.touches[0].clientX;startTw=parseInt(getComputedStyle(treePanel).width);
+      document.body.style.userSelect='none';document.body.style.cursor='col-resize';
+    },{passive:false});
+    function onMove(e){
+      if(!dragging)return;
+      const cx=e.touches?e.touches[0].clientX:e.clientX;
+      let nw=startTw+(cx-startX);
+      treePanel.style.setProperty('--tree-w',nw+'px');
+    }
+    function onUp(){
+      if(!dragging)return;
+      dragging=false;s2.classList.remove('active');
+      document.body.style.userSelect='';document.body.style.cursor='';
+      saveLayout();
+    }
+    window.addEventListener('mousemove',onMove);
+    window.addEventListener('touchmove',onMove,{passive:false});
+    window.addEventListener('mouseup',onUp);
+    window.addEventListener('touchend',onUp);
+  })();
+  saveLayout();
+})();
+
+function updateTempLine(){
+  const line=document.getElementById('tempLine');
+  const f=connecting;
+  const midY=f.fromY+(f.toY-f.fromY)*0.4;
+  line.setAttribute('d',`M${f.fromX},${f.fromY} C${f.fromX},${midY} ${f.toX},${midY} ${f.toX},${f.toY}`);
+}
+
+async function createConnection(fromId,targetId){
+  // Determine action based on tree structure
+  const from=tree.nodes.get(fromId),target=tree.nodes.get(targetId);
+  if(!from||!target)return;
+  // If target is a trunk ancestor and from is a branch -> merge
+  const targetPath=tree.getPath(targetId);
+  const isTrunk=target.nodeType==='trunk'||target.depth<from.depth;
+  if(isTrunk&&from.nodeType==='branch'){
+    await API.merge(fromId,targetId);
+  }else{
+    // Default: fork from target
+    branchParentId=targetId;
+    document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(target)+'…';
+    focusInput();
+  }
+  await refresh();
+}
+
+function fitView(){
+  const dims=calcLayout();
+  const wrap=document.getElementById('canvasWrap');
+  const rw=wrap.clientWidth-40,rh=wrap.clientHeight-40;
+  zoom=Math.min(1.5,Math.min(rw/dims.maxX,rh/dims.maxY));
+  panX=20;panY=20;
+  applyTransform();
+}
+
+/* ===== Render All ===== */
+function renderAll(){
+  calcLayout();
+  renderNodes();
+  renderEdges();
+  renderThread();
+  renderHeader();
+  applyTransform();
+}
+
+/* ===== Chat Thread (unchanged) ===== */
+function renderThread(){
+  const area=document.getElementById('messagesArea');
+  const path=tree.getPath();
+  const total=path.reduce((a,n)=>a+n.messages.filter(m=>m.role!=='system').length,0);
+  let html=`<div class="ctx-note">⟡ 上下文 · ${path.length} 节点 · ${total} 条消息（根 → 当前）</div>`;
+  path.forEach((n,idx)=>{
+    const isCur=n.id===tree.currentId;
+    const hasSib=tree.siblings(n.id).length>0;
+    const brTag=n.branchLabel&&n.branchLabel!=='main'?`<span class="turn-branch-tag">branch: ${n.branchLabel}</span>`:'';
+    let body='';
+    n.messages.filter(m=>m.role!=='system').forEach(m=>{
+      if(m.role==='user')body+=`<div class="bubble bubble-user">${escapeHtml(m.content)}</div>`;
+      else body+=aiCardHtml(m.content,isCur);
+    });
+    if(idx>0&&hasSib)html+=`<div class="branch-divider"></div>`;
+    html+=`<div class="turn ${isCur?'current animate-fadeIn':''}" data-node="${n.id}">
+      <div class="turn-head"><span class="turn-badge ${n.branchLabel&&n.branchLabel!=='main'?'branch':''}">#${n.depth} ${n.branchLabel||'main'}</span>
+      <span class="turn-time">${new Date(n.createdAt).toLocaleTimeString()}</span>${brTag}
+      ${isCur?'<span class="turn-branch-tag" style="color:var(--brand)">● current</span>':''}</div>${body}</div>`;
+  });
+  area.innerHTML=html;
+  area.scrollTop=area.scrollHeight;
+}
+
+function aiCardHtml(content,isCur){
+  const parts=content.split(/```/);
+  let h='';
+  parts.forEach((seg,i)=>{
+    if(i%2===1)h+=`<div class="code-block">${escapeHtml(seg.trim())}</div>`;
+    else if(seg.trim())h+=`<p>${highlightConcepts(escapeHtml(seg.trim()),isCur)}</p>`;
+  });
+  const sbCls=isCur?'streaming-border-effect':'';
+  return `<div class="ai-card ${sbCls}"><div class="card-header"><div class="card-avatar">E</div><span class="card-label">Explore</span></div>
+    <div class="card-body">${h}</div><div class="card-footer">
+    <button class="card-action-btn" onclick="copyCard(event)">⧉ Copy</button>
+    <button class="card-action-btn" data-branch="1">↳ Branch</button>
+    <button class="card-action-btn" style="margin-left:auto" onclick="favoriteCard(this)">★ Favorite</button>
+    </div></div>`;
+}
+function highlightConcepts(s,isCur){
+  const cls=isCur?'concept-term highlight-text-flash':'concept-term';
+  return s.replace(/(GTO|Nash equilibrium|neural network|attention|self-play|policy|equilibrium|game theory)/gi,'<span class="'+cls+'">$1</span>');
+}
+function renderHeader(){
+  const path=tree.getPath();
+  const crumbs=path.map((n,i)=>i===path.length-1?`<span class="cur">${escapeHtml(nodeText(n))}</span>`:`<b>${escapeHtml(nodeText(n))}</b>`);
+  document.getElementById('breadcrumb').innerHTML='Path: '+crumbs.join(' <span style="opacity:.4">›</span> ');
+  document.getElementById('branchBanner').classList.toggle('show',!tree.isLeaf(tree.currentId));
+  const cur=tree.current;
+  document.getElementById('treeInfo').innerHTML=
+    `<div><b>Current</b> #${cur.depth} · ${cur.branchLabel||'main'} · ${cur.children.length} children</div>
+     <div style="margin-top:2px;font-size:10px">Path <b>${path.length}</b> · Siblings <b>${tree.siblings(cur.id).length}</b> · Total <b>${tree.nodes.size}</b> nodes</div>`;
+  const mp=document.getElementById('memPath'),mc=document.getElementById('memCross');
+  mp.innerHTML=currentMem.path&&currentMem.path.length?currentMem.path.map(x=>memItem(x,'path')).join(''):'<div class="mem-item" style="opacity:.45">No path memories</div>';
+  mc.innerHTML=currentMem.cross&&currentMem.cross.length?currentMem.cross.map(x=>memItem(x,'cross')).join(''):'<div class="mem-item" style="opacity:.45">No cross-branch memories</div>';
+  document.getElementById('branchList').innerHTML=tree.nodes.size+' nodes · '+(path[0]?path[0].branchLabel||'main':'');
+}
+function memItem(x,kind){
+  const m=x.mem;const tags=(m.tags||[]).slice(0,3).map(t=>`<span class="tag">${t}</span>`).join('');
+  return `<div class="mem-item ${kind}"><span class="src">${kind==='path'?'path':'cross'}</span>${escapeHtml(m.text)}${tags}</div>`;
+}
+
+/* ===== Interactions ===== */
+async function boot(){
+  try{const s=await API.state();installState(s);await refreshMem();selectedNode=tree.currentId;renderAll();fitView();}
+  catch(e){console.error(e)}
+  connectEventStream();  // B2: 订阅任务事件流, 实时更新节点状态徽标 (替代轮询)
+}
+/* ===== B2: 事件流订阅 (对应 herdr events.subscribe) ===== */
+function connectEventStream(){
+  if(typeof EventSource==='undefined')return;
+  try{
+    const es=new EventSource('/api/events');
+    es.onmessage=ev=>{
+      let d;try{d=JSON.parse(ev.data);}catch(_){return;}
+      if(d&&d.type==='node.exec_state_changed')applyExecEvent(d.data||{});
+    };
+    es.onerror=()=>{/* 连接断开时浏览器会自动重连 */};
+  }catch(e){console.warn('EventSource init failed',e);}
+}
+function applyExecEvent(d){
+  if(!tree||!d.node_id)return;
+  const n=tree.nodes.get(d.node_id);
+  if(!n)return;
+  n.execState=d.exec_state||n.execState;
+  if(typeof d.progress==='number')n.execProgress=d.progress;
+  if(d.detail!=null)n.execDetail=d.detail;
+  // 定向更新该卡片的徽标 (不重渲整棵树, 避免打断拖拽)
+  const card=document.querySelector('.node-card[data-id="'+CSS.escape(d.node_id)+'"]');
+  if(!card)return;
+  let wrap=card.querySelector('.exec-state-wrap');
+  if(!wrap){wrap=document.createElement('div');wrap.className='exec-state-wrap';card.appendChild(wrap);}
+  wrap.setAttribute('data-state',n.execState);
+  wrap.innerHTML=execInner(n);
+}
+async function refreshMem(){currentMem=tree?(await API.memory(tree.currentId)):{path:[],cross:[]}}
+async function refresh(){const s=await API.state();installState(s);await refreshMem();renderAll()}
+async function doJump(id){await API.jumpTo(id);await refresh()}
+function focusInput(){document.getElementById('inputField').focus()}
+
+async function sendMessage(){
+  const f=document.getElementById('inputField');const text=f.value.trim();if(!text)return;
+  const branchLabel=tree.current?(tree.current.branchLabel||'main'):'main';
+  const parentId=branchParentId||undefined;
+  optimisticThinking(text,branchLabel,parentId);
+  let result;
+  try{result=await API.chat({message:text,parent_id:parentId,branch_label:branchLabel})}
+  catch(e){result={error:e.message||String(e)}}
+  if(result.error){
+    const tt=document.getElementById('thinkingTurn');
+    if(tt)tt.querySelector('.card-body').innerHTML='<p style="color:#ef4444">[LLM 不可用] '+escapeHtml(result.error)+'</p>';
+    return;
+  }
+  branchParentId=null;f.value='';f.style.height='auto';
+  if(f.placeholder.indexOf('Fork')>=0)f.placeholder='从当前节点继续，或点树中节点跳转…';
+  installState(result.state);selectedNode=tree.currentId;
+  await refreshMem();renderAll();fitView();
+}
+function optimisticThinking(text,branchLabel,parentId){
+  const area=document.getElementById('messagesArea');
+  const depth=tree.current?tree.current.depth+1:1;
+  const div=document.createElement('div');div.className='turn';div.id='thinkingTurn';
+  div.innerHTML=`<div class="turn-head"><span class="turn-badge">#${depth} ${branchLabel||'main'}</span></div>
+    <div class="bubble bubble-user">${escapeHtml(text)}</div>
+    <div class="ai-card" style="border-style:dashed"><div class="card-body"><div class="dot-flashing"><span></span><span></span><span></span></div></div></div>`;
+  area.appendChild(div);area.scrollTop=area.scrollHeight;
+}
+async function branchFromCurrent(){
+  const cur=tree.current;
+  branchParentId=cur.children.length===0&&cur.parentId?cur.parentId:cur.id;
+  document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(cur)+'…';focusInput();
+}
+async function pruneCurrent(){
+  if(tree.currentId===tree.rootId){alert('Cannot prune root');return}
+  await API.prune(tree.currentId);await refresh();
+}
+async function resetAll(){branchParentId=null;Object.keys(manualPositions).forEach(k=>delete manualPositions[k]);await API.reset();await refresh();fitView()}
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}}
+function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px'}
+function escapeHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function copyCard(e){const b=e.currentTarget;b.innerHTML='✓ Copied';setTimeout(()=>b.innerHTML='⧉ Copy',1600)}
+function favoriteCard(btn){const card=btn.closest('.ai-card');
+  if(card){card.classList.add('streaming-border-effect','favorite')}
+  btn.innerHTML='★ Favorited';setTimeout(()=>btn.innerHTML='★ Favorite',1600)}
+function switchTheme(t){document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'warm');
+  document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===t))}
+
+/* Streaming animations (from reference) */
+const style=document.createElement('style');
+style.textContent=`
+@keyframes spin{0%{transform:rotate(0deg)}to{transform:rotate(1turn)}}
+@keyframes dotFlashing{0%{background-color:var(--text-tertiary)}50%,to{background-color:var(--brand-opposite)}}
+@keyframes highlight-fade{0%{background-color:transparent;color:inherit}10%{background-color:rgba(19,228,37,.3);color:var(--brand)}80%{background-color:rgba(19,228,37,.3);color:var(--brand)}to{background-color:transparent;color:inherit}}
+.streaming-border-effect{position:relative}
+.streaming-border-effect:before{content:"";position:absolute;top:0;left:0;right:0;bottom:0;border-radius:inherit;padding:2px;
+background:conic-gradient(from 0deg,transparent 30%,var(--text-primary) 40%,var(--text-primary) 60%,transparent 70%);
+-webkit-mask:linear-gradient(var(--text-primary) 0 0) content-box,linear-gradient(var(--text-primary) 0 0);
+-webkit-mask-composite:xor;mask-composite:exclude;animation:spin 3s linear infinite;pointer-events:none}
+.streaming-border-effect.favorite:before{background:conic-gradient(from 0deg,transparent 30%,var(--brand) 40%,var(--brand) 60%,transparent 70%)}
+.highlight-text-flash{animation:highlight-fade 3s ease-in-out;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.dot-flashing{display:inline-flex;gap:4px;padding:4px 0}
+.dot-flashing span{width:5px;height:5px;border-radius:50%;background:var(--text-tertiary);animation:dotFlashing 1s linear infinite alternate}
+.dot-flashing span:nth-child(2){animation-delay:.5s}.dot-flashing span:nth-child(3){animation-delay:1s}
+
+/* ── B2: 执行状态徽标 (herdr exec_state 内化) ── */
+.exec-state-wrap{margin-top:5px;display:flex;flex-direction:column;gap:3px}
+.exec-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:1px 7px;border-radius:999px;line-height:1.5}
+.badge-idle{display:none}
+.badge-pending{background:rgba(120,120,120,.18);color:var(--text-secondary)}
+.badge-working{background:rgba(19,228,37,.18);color:var(--brand);animation:pulseBadge 1.2s ease-in-out infinite}
+.badge-blocked{background:rgba(245,158,11,.22);color:#f59e0b}
+.badge-done{background:rgba(19,228,37,.14);color:var(--brand)}
+.badge-unknown{background:rgba(120,120,120,.18);color:var(--text-secondary)}
+@keyframes pulseBadge{0%,100%{opacity:1}50%{opacity:.4}}
+.exec-progress{height:4px;border-radius:3px;background:rgba(120,120,120,.22);overflow:hidden}
+.exec-progress-fill{height:100%;border-radius:3px;background:var(--brand);transition:width .25s ease}
+.exec-detail{font-size:9px;color:var(--text-tertiary);opacity:.85;word-break:break-word}
+`;
+document.head.appendChild(style);
+
+boot();
+</script>
+</body>
+</html>

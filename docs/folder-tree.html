@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ikaros 文件夹层级图 · 2026-07-27</title>
+<style>
+  :root{--bg:#f5f7fa;--card:#fff;--ink:#1f2933;--muted:#647084;--line:#d6dde6;
+        --blue:#2f6fed;--teal:#0fb5a6;--purple:#8b5cf6;--green:#22a06b;--amber:#f0a020;--red:#e8743b}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"SFMono-Regular",Consolas,"PingFang SC","Microsoft YaHei",monospace;
+       background:var(--bg);color:var(--ink);padding:24px 16px 50px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:22px;font-family:-apple-system,"PingFang SC",sans-serif;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:18px;font-family:-apple-system,sans-serif}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;font-size:11px;font-family:-apple-system,sans-serif}
+  .lg{display:flex;align-items:center;gap:5px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .tree{font-size:13px;line-height:1.7}
+  .node{cursor:pointer;user-select:none}
+  .node>.lbl:hover{background:#eef2f7;border-radius:4px}
+  .lbl{display:inline-block;padding:1px 4px}
+  .dir{color:var(--blue);font-weight:600}
+  .it{color:var(--ink)}
+  .k{color:var(--red);font-weight:600}      /* 关键文件 */
+  .c{color:var(--muted);font-size:11px}      /* 注释/类型 */
+  .badge{font-size:10px;font-weight:700;padding:0 5px;border-radius:5px;margin-left:5px;font-family:-apple-system,sans-serif}
+  .b-blue{background:#e8f0ff;color:var(--blue)} .b-teal{background:#e3faf4;color:var(--teal)}
+  .b-purple{background:#f1ecff;color:var(--purple)} .b-green{background:#effaf3;color:var(--green)}
+  .b-amber{background:#fef3e0;color:var(--amber)}
+  .children{margin-left:18px;border-left:1px dashed var(--line);padding-left:10px}
+  .hidden{display:none}
+  .tog{display:inline-block;width:14px;color:var(--muted)}
+  footer{margin-top:18px;color:var(--muted);font-size:11px;text-align:center;font-family:-apple-system,sans-serif}
+  .note{font-family:-apple-system,sans-serif;font-size:11px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Ikaros 文件夹层级图</h1>
+  <div class="sub">快照 2026-07-27 · 已排除 vendored（runtime/ node_modules/ .git/ __pycache__）· 展开折叠可点击 ▸</div>
+
+  <div class="card">
+    <div class="legend">
+      <span class="lg"><span class="sw" style="background:var(--blue)"></span>目录</span>
+      <span class="lg"><span class="sw" style="background:#647084"></span>普通文件</span>
+      <span class="lg"><span class="sw" style="background:var(--red)"></span>关键文件</span>
+      <span class="lg"><span class="badge b-blue">核心</span><span class="badge b-teal">后端</span>
+        <span class="badge b-purple">基础设施</span><span class="badge b-green">前端</span><span class="badge b-amber">数据</span></span>
+    </div>
+
+    <div class="tree" id="tree"><!-- 由 JS 渲染 --></div>
+
+    <div class="note">说明：<code>core/hermes/</code> 内置完整 Hermes 工程（含 node_modules/venv，未在树中展开）；
+      <code>core/neko/</code> 为独立完整前端工程；<code>data/</code> 含 8.8GB 模型权重（仅在顶层标注）。
+      虚线折叠项可点击展开。</div>
+  </div>
+
+  <footer>Ikaros Folder Tree · WorkBuddy 2026-07-27 · 数据来自实际目录扫描</footer>
+</div>
+
+<script>
+// 结构数据（基于 2026-07-27 真实扫描，关键文件标 k:true）
+const T = {
+  n:"E:\\Ikaros", k:false, open:true, children:[
+    {n:"AGENTS.md", k:true, c:"交接卡"}, {n:"README.md", c:"项目说明"}, {n:"UPSTREAM.md", c:"上游说明"},
+    {n:"requirements.txt"}, {n:"pytest.ini"},
+    {n:"assets/", c:"根目录素材", children:[
+      {n:"ArtificialAngel.ico"}, {n:"Artificialangel.png"}, {n:"Artificialangeljpg.jpg"}, {n:"Artificialangelmini.png"}
+    ]},
+    {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
+      {n:"ikaros-control.bat", k:true, c:"拉控制面板"}, {n:"ikaros-control-panel.bat", c:"Electron 壳"},
+      {n:"cloud_chat.py", k:true, c:"companion 主链"}, {n:"ikaros-memory-watchdog.py", k:true, c:":8080+:8587 看门狗"},
+      {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
+      {n:"ikaros-soul-sync.py", c:"生成 SOUL.md"}, {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
+      {n:"ikaros-fastdl.py", c:"Gopeed 下载"}, {n:"neko-start.bat / neko-stop.bat", c:"Neko 启停"},
+      {n:"rebuild_chroma_v5.py", c:"重建向量库"}, {n:"bootstrap-venvs.py", c:"venv 引导"}, {n:"secret-scan.py", c:"密钥扫描"},
+      {n:"legacy/", c:"旧脚本回滚桶 (13 个)", b:"核心"}
+    ]},
+    {n:"config/", c:"配置文件", children:[
+      {n:"defaults/", c:"默认端口/模型", children:[{n:"ports.yaml"},{n:"panel_models.json"}]},
+      {n:"identity/", c:"身份文件", children:[{n:"axiom / capabilities"}]}
+    ]},
+    {n:"core/", c:"核心系统（8 模块）", b:"核心", open:true, children:[
+      {n:"memory_v5/", k:true, c:"V5 灵魂引擎 (包名 memory_v5)", b:"核心", open:true, children:[
+        {n:"__init__.py", k:true, c:"包根 · __version__"}, {n:"store.py / search.py", k:true, c:"记忆读写/检索"},
+        {n:"affect.py / vitality.py / drivers.py", c:"情感/精力/驱动"},
+        {n:"self_model.py / metacog.py / relationship.py", c:"自我/元认知/关系"},
+        {n:"orchestrator.py / router.py / task_runner.py", c:"编排/路由"},
+        {n:"hermes_provider.py", c:"Hermes 桥"}, {n:"mcp_server.py", c:"40 个 v5_* 工具"},
+        {n:"reflect/", c:"后台整合流水线"}, {n:"cogno_extensions/", c:"认知扩展"},
+        {n:"models/", c:"模型配置"}, {n:"services/", c:"start-*.bat"}, {n:"data/", k:true, c:"运行态记忆", b:"数据", open:true, children:[
+          {n:"v5/", k:true, c:"人格+记忆库", children:[
+            {n:"v5.db", k:true, c:"SQLite 记忆 (契约名不改)"}, {n:"chroma/", c:"向量库 26MB"},
+            {n:"self_model.json / affect.json / relationship.json", c:"人格状态"},
+            {n:"latest_thought.json / profile.json", c:"思考/画像"}
+          ]}
+        ]}
+      ]},
+      {n:"neko/", k:true, c:"Neko 主服务 (独立完整, 不合并 V5)", b:"前端", open:true, children:[
+        {n:"app/", k:true, c:"main_server / memory_server / agent_server", children:[{n:"main_server.py (:48911)"},{n:"memory_server.py (:48912)"},{n:"agent_server.py (:48915)"}]},
+        {n:"memory/", c:"Neko 自有记忆系统"}, {n:"frontend/", c:"React 聊天 UI"}, {n:"assets/", c:"Live2D/VRM/MMD Avatar"},
+        {n:"brain/", c:"智能体逻辑"}, {n:"plugin/ / utils/ / config/ / tests/", c:"其他子模块"}
+      ]},
+      {n:"hermes/", k:true, c:"Hermes Agent (原 hermes-agent, 已搬迁)", b:"基础设施", open:true, children:[
+        {n:"venv/", k:true, c:"Python 虚拟环境 (fastapi 0.140)"}, {n:"plugins/memory/", c:"记忆插件", children:[{n:"ikaros_v5/", k:true, c:"V5 桥 (plugin.yaml)"}]},
+        {n:"hermes_cli/ / agent/ / gateway/ / web/ / skills/ / providers/", c:"核心子模块"},
+        {n:"node_modules/ (vendored, 折叠)", c:"前端依赖"}, {n:".git (独立子仓库)", c:"Hermes 上游"}
+      ]},
+      {n:"dashboard/", k:true, c:"控制面板 Web UI (:9100)", b:"核心"},
+      {n:"control-panel/", c:"Electron 桌面壳", b:"前端"},
+      {n:"env/", c:"环境配置/CLI", children:[{n:"ikaros-cli/ / scripts/ / detect-root/"}]},
+      {n:"conversation-tree/", c:"对话树"},
+      {n:"data/", c:"核心内部日志 (11KB, 遗留)", b:"数据"}
+    ]},
+    {n:"data/", k:true, c:"系统级运行数据 (8.8GB)", b:"数据", open:true, children:[
+      {n:"models/", k:true, c:"模型权重 (GGUF/嵌入)"}, {n:"cache/ / tts-cache/", c:"缓存"},
+      {n:"hermes-agent/", k:true, c:"Hermes 用户态 (契约目录, 不改名)"},
+      {n:"thirdspace-vault/", c:"ThirdSpace 双轨知识库"}, {n:"logs/", c:"运行日志"},
+      {n:"config/", c:"运行期配置"}, {n:"ikaros-coordination/", c:"组件协调"}
+    ]},
+    {n:"docs/", c:"文档", children:[
+      {n:"ARCHITECTURE.md", k:true}, {n:"naming.md / lint.py (漂移守卫)"},
+      {n:"neko-deep-analysis.md (已标作废合并建议)"},
+      {n:"assets/ / examples/ / research/ / scripts/"}
+    ]},
+    {n:"deploy/", c:"部署", children:[{n:"Dockerfile"},{n:"README.md"}]},
+    {n:"runtime/", c:"运行时依赖 (vendored, 未展开)", b:"基础设施"},
+    {n:"scripts/", c:"setup-native.py / fetch-upstreams.py"},
+    {n:"tests/", c:"测试", children:[{n:"hermes/ (子测试)"}]},
+    {n:"tools/", c:"工具", children:[{n:"ikaros-monitor/ / dwg/ / experiments/"}]},
+    {n:"tmp/", c:"临时文件 (gitignored)", b:"数据"},
+    {n:"logs/ / output/", c:"根级日志/输出"}
+  ]
+};
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function render(node, depth){
+  const isDir = node.n.endsWith("/") || node.children;
+  const hasKids = node.children && node.children.length;
+  const cls = isDir ? "dir" : (node.k ? "k" : "it");
+  const badge = node.b ? ` <span class="badge b-${node.b==='核心'?'blue':node.b==='后端'?'teal':node.b==='基础设施'?'purple':node.b==='前端'?'green':'amber'}">${node.b}</span>` : "";
+  const cmt = node.c ? ` <span class="c">— ${esc(node.c)}</span>` : "";
+  let html = `<div class="node">`;
+  const tog = hasKids ? `<span class="tog">${node.open===false?'▸':'▾'}</span>` : `<span class="tog"></span>`;
+  html += `<span class="lbl ${cls}">${tog}${esc(node.n)}</span>${badge}${cmt}</div>`;
+  if(hasKids){
+    html += `<div class="children ${node.open===false?'hidden':''}">`;
+    for(const ch of node.children) html += render(ch, depth+1);
+    html += `</div>`;
+  }
+  return html;
+}
+document.getElementById("tree").innerHTML = render(T, 0);
+// 折叠交互
+document.getElementById("tree").addEventListener("click", e=>{
+  const lbl = e.target.closest(".lbl");
+  if(!lbl) return;
+  const node = lbl.parentElement;
+  const kids = node.querySelector(":scope > .children");
+  if(!kids) return;
+  kids.classList.toggle("hidden");
+  const tog = lbl.querySelector(".tog");
+  if(tog) tog.textContent = kids.classList.contains("hidden") ? "▸" : "▾";
+});
+</script>
+</body>
+</html>

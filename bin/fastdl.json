@@ -1,0 +1,17 @@
+{
+  "_comment": "Ikaros 高速下载器配置。改这里即可，无需动脚本。所有路径可写绝对或相对 ROOT。",
+  "gopeed": {
+    "connections": 32,
+    "max_running": 8,
+    "download_dir": "E:/Ikaros/downloads"
+  },
+  "aria2": {
+    "connections": 16,
+    "split": 16
+  },
+  "mirrors": {
+    "hf":  { "match": "huggingface.co",          "replace": "hf-mirror.com" },
+    "hf2": { "match": "https://huggingface.co",   "replace": "https://hf-mirror.com" },
+    "gh":  { "match": "https://github.com/",      "replace": "https://ghproxy.net/https://github.com/" }
+  }
+}
