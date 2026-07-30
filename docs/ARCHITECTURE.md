@@ -48,9 +48,9 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 | :9100 | 控制面板 Web UI | `core/dashboard/server.py` | `bin/ikaros-control.bat` |
 | :8587 | Embedding (本地) | `bin/ikaros-memory-watchdog.py` | 面板 memory 组件 |
 | :8080 | 本地 LLM (Qwen3-1.7B, **懒加载**) | `bin/ikaros-memory-watchdog.py` | 看门狗**仅被动监测端口**，不主动拉起模型；模型由 agent 首次调用本地 LLM 时经 `ensure_local_llm()` 热载入（`bin/llama-help.py --hotload` 可手动触发） |
-| :48911 | Neko 主前端 | `core/neko/app/main_server.py` | 面板 neko 组件 |
-| :48912 | Neko 记忆服务器 | `core/neko/app/memory_server.py` | 面板 neko_memory |
-| :48915 | Neko Agent 服务器 | `core/neko/app/agent_server.py` | 面板 neko_agent |
+| :48911 | Neko 主前端 | `core/neko/app/main_server/` (包, `python -m app.main_server`) | 面板 neko 组件 |
+| :48912 | Neko 记忆服务器 | `core/neko/app/memory_server/` (包, `python -m app.memory_server`) | 面板 neko_memory |
+| :48915 | Neko Agent 服务器 | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) | 面板 neko_agent |
 | :9119 | Hermes Dashboard | `core/hermes/.../web_server.py` | 面板 hermes_dashboard |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` | 面板 qwenpaw |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 面板 herdr 组件（按需，不随全栈自启） |
@@ -289,9 +289,9 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 服务器 | 端口 | 职责 |
 |--------|------|------|
-| `app/main_server.py` | :48911 | 主 HTTP + WebSocket + 静态文件 |
-| `app/memory_server.py` | :48912 | 持久记忆服务器 |
-| `app/agent_server.py` | :48915 | Agent/Tool 执行服务器 |
+| `app/main_server/` (`python -m app.main_server`) | :48911 | 主 HTTP + WebSocket + 静态文件 |
+| `app/memory_server/` (`python -m app.memory_server`) | :48912 | 持久记忆服务器 |
+| `app/agent_server/` (`python -m app.agent_server`) | :48915 | Agent/Tool 执行服务器 |
 
 集成点: `main_logic/ikaros_integration.py` → 对接 Ikaros V5 orchestrator。
 

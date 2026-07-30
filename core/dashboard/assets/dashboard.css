@@ -396,6 +396,14 @@ body::before {
 .btn.warn { background: #e0a800; border-color: transparent; color: #fff; font-weight: 600; }
 .btn.warn:hover { background: #e0a800; color: #fff; filter: brightness(1.06); transform: translateY(-1px); }
 
+/* 运行时依赖检查卡片 */
+.runtime-box { margin-top: 4px; }
+.dep-row { display: flex; align-items: baseline; gap: 6px; line-height: 1.6; flex-wrap: wrap; }
+.dep-name { font-weight: 600; }
+.dep-hint { color: #c0392b; font-size: 11px; }
+.dep-hint::before { content: "→ "; }
+.btn.sm { font-size: 11px; padding: 1px 8px; margin-left: 2px; }
+
 /* 模型切换下拉 */
 .model-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .model-row label { font-size: 11px; color: var(--muted); flex-shrink: 0; }

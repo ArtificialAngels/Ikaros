@@ -211,15 +211,25 @@ function buildCard(c) {
   if(c.group){
     inner+='<div class="sub-list" id="subs-'+c.id+'"></div>';
   }
-  inner+='<div class="comp-actions">';
-  if(c.group){ inner+='<button class="btn start" data-act="start">一键启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
-  else { inner+='<button class="btn start" data-act="start">启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
-  if(c.panel_url){ inner+='<a class="btn" href="'+esc(c.panel_url)+'" target="_blank" style="text-decoration:none">面板</a>'; }
+  if(!c.check_only){
+    inner+='<div class="comp-actions">';
+    if(c.group){ inner+='<button class="btn start" data-act="start">一键启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
+    else { inner+='<button class="btn start" data-act="start">启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
+    if(c.panel_url){ inner+='<a class="btn" href="'+esc(c.panel_url)+'" target="_blank" style="text-decoration:none">面板</a>'; }
+    inner+='</div>';
+  }
+  if(c.id==='hermes_dashboard' || c.id==='neko_group'){
+    inner+='<div class="hermes-patch" id="repo-'+c.id+'"></div>';
+    inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
+  }
   if(c.id==='hermes_dashboard'){
     inner+='<div class="hermes-patch" id="hermes-patch-'+c.id+'"></div>';
     inner+='<div class="comp-actions hermes-extra"><button class="btn" id="hermes-check-'+c.id+'">检查补丁</button><button class="btn warn" id="hermes-update-'+c.id+'">更新并打补丁</button></div>';
   }
-  inner+='</div>';
+  if(c.id==='runtime'){
+    inner+='<div class="runtime-box" id="runtime-'+c.id+'"></div>';
+    inner+='<div class="comp-actions hermes-extra"><button class="btn" id="runtime-check-'+c.id+'">检查依赖</button></div>';
+  }
   el.innerHTML=inner;
   // 缩放手柄
   el.insertAdjacentHTML('beforeend', '<div class="comp-resize" id="resize-'+c.id+'" title="拖拽缩放"></div>');
@@ -243,6 +253,13 @@ function buildCard(c) {
   if(c.id==='hermes_dashboard'){
     var _hc=el.querySelector('#hermes-check-'+c.id); if(_hc)_hc.addEventListener('click', hermesCheck);
     var _hu=el.querySelector('#hermes-update-'+c.id); if(_hu)_hu.addEventListener('click', hermesUpdate);
+  }
+  if(c.id==='hermes_dashboard' || c.id==='neko_group'){
+    var _rc=el.querySelector('#repo-check-'+c.id); if(_rc)_rc.addEventListener('click', function(){ repoCheck(c.id); });
+    var _rs=el.querySelector('#repo-sync-'+c.id); if(_rs)_rs.addEventListener('click', function(){ repoSync(c.id); });
+  }
+  if(c.id==='runtime'){
+    var _rc2=el.querySelector('#runtime-check-'+c.id); if(_rc2)_rc2.addEventListener('click', function(){ runtimeCheck(c.id); });
   }
   // 关闭 HTML5 原生拖拽(改用 pointer 自由拖拽停靠)
   el.draggable=false;
@@ -343,6 +360,8 @@ function updateCard(c) {
   var isBusy=busy.has(c.id); card.classList.toggle('pending',isBusy);
   card.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.disabled=isBusy; });
   if(c.id==='hermes_dashboard' && c.hermes_patch) updateHermesPatch(c);
+  if((c.id==='hermes_dashboard' || c.id==='neko_group') && c.repo) updateRepoBox(c);
+  if(c.id==='runtime' && c.runtime) updateRuntimeBox(c);
 }
 
 async function doAction(id,act) {
@@ -366,7 +385,7 @@ function updateHermesPatch(c) {
 }
 async function hermesCheck() {
   var box=document.getElementById('hermes-patch-hermes_dashboard');
-  if(box)box.innerHTML='<div class="hp-detail">检查中…</div>';
+  if(box)box.innerHTML='<div class="hp-detail">检查并打补丁中…</div>';
   try{
     var r=await fetch('/api/hermes/check',{method:'POST'});
     var j=await r.json();
@@ -382,6 +401,87 @@ async function hermesUpdate() {
     var j=await r.json();
     var msg=(j.msg||'').toString().slice(-600);
     if(box)box.innerHTML='<div class="hp-detail">'+(j.ok?'✓ 完成':'✗ 失败')+'<pre>'+esc(msg)+'</pre></div>';
+    setTimeout(refreshStatuses,2500);
+  }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
+}
+
+function repoNameOf(cid){ return cid==='hermes_dashboard' ? 'hermes' : 'neko'; }
+function updateRepoBox(c) {
+  var repo=c.repo; if(!repo)return;
+  var box=document.getElementById('repo-'+c.id); if(!box)return;
+  var exist = repo.present ? '<span class="hp-badge ok">已安装</span>' : '<span class="hp-badge bad">未安装</span>';
+  var lv = repo.local_version || '—';
+  var uv = repo.upstream_version || (repo.checking ? '检查中…' : '—');
+  var stb;
+  if(repo.status==='missing') stb='<span class="hp-badge bad">缺失</span>';
+  else if(repo.status==='incomplete') stb='<span class="hp-badge warn">内容不完整</span>';
+  else if(repo.status==='checking') stb='<span class="hp-badge warn">检查中</span>';
+  else if(repo.behind===true) stb='<span class="hp-badge bad">落后</span>';
+  else if(repo.behind===false) stb='<span class="hp-badge ok">最新</span>';
+  else stb='<span class="hp-badge warn">未知</span>';
+  var dirty = repo.dirty ? ' <span class="hp-badge warn">有未跟踪改动</span>' : '';
+  var inc = repo.content_ok===false ? ' 内容不完整（关键入口文件缺失），建议删除后点「克隆/同步」重新拉取' : '';
+  var detail = repo.upstream_error ? ('上游查询失败: '+esc(repo.upstream_error)) : '';
+  box.innerHTML='<div class="hp-line">'+esc(repo.name)+' '+exist+' 本地 '+esc(lv)+' / 远程 '+esc(uv)+' '+stb+dirty+'</div>'
+              + (inc||detail? '<div class="hp-detail">'+esc(inc)+(detail?esc(detail):'')+'</div>':'');
+}
+async function repoCheck(cid) {
+  var box=document.getElementById('repo-'+cid);
+  if(box)box.innerHTML='<div class="hp-detail">检查上游版本中…</div>';
+  try{
+    await fetch('/api/repo/'+repoNameOf(cid)+'/status',{method:'POST'});
+  }catch(e){}
+  setTimeout(refreshStatuses,800);
+}
+async function repoSync(cid) {
+  var box=document.getElementById('repo-'+cid);
+  if(box)box.innerHTML='<div class="hp-detail">克隆/同步中（可能需数十秒）…</div>';
+  try{
+    var r=await fetch('/api/repo/'+repoNameOf(cid)+'/pull',{method:'POST'});
+    var j=await r.json();
+    if(box)box.innerHTML='<div class="hp-detail">'+(j.ok?'✓ ':'✗ ')+esc((j.msg||'').toString().slice(-400))+'</div>';
+    setTimeout(refreshStatuses,2500);
+  }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
+}
+
+function depBadge(ok){ return ok?'<span class="hp-badge ok">✓ 就绪</span>':'<span class="hp-badge bad">✗ 缺失</span>'; }
+function updateRuntimeBox(c) {
+  var box=document.getElementById('runtime-'+c.id); if(!box||!c.runtime)return;
+  var rt=c.runtime;
+  var head = rt.runtime_dir_exists
+    ? ('runtime/ 目录存在 · '+esc(rt.total-rt.missing)+'/'+rt.total+' 依赖就绪')
+    : '<span class="hp-badge bad">runtime/ 目录缺失</span>';
+  var rows = rt.components.map(function(d){
+    var line = '<div class="dep-row"><span class="dep-name">'+esc(d.name)+'</span>'+depBadge(d.ok);
+    if(!d.ok){
+      if(d.type==='fetch'){
+        line += ' <button class="btn sm" data-fetch="'+esc(d.key)+'">拉取</button>';
+      }
+      line += ' <span class="dep-hint">'+esc(d.hint)+'</span>';
+    }
+    line += '</div>';
+    return line;
+  }).join('');
+  box.innerHTML='<div class="hp-line">'+head+'</div><div class="hp-detail">'+rows+'</div>';
+  box.querySelectorAll('button[data-fetch]').forEach(function(b){
+    b.addEventListener('click', function(){ runtimeFetch(b.getAttribute('data-fetch')); });
+  });
+}
+async function runtimeCheck(cid) {
+  var box=document.getElementById('runtime-'+cid);
+  if(box)box.innerHTML='<div class="hp-detail">检查运行时依赖中…</div>';
+  try{
+    await fetch('/api/runtime/status',{method:'POST'});
+  }catch(e){}
+  setTimeout(refreshStatuses,600);
+}
+async function runtimeFetch(key) {
+  var box=document.getElementById('runtime-runtime');
+  if(box)box.innerHTML='<div class="hp-detail">拉取 '+esc(key)+' 中…</div>';
+  try{
+    var r=await fetch('/api/runtime/fetch/'+encodeURIComponent(key),{method:'POST'});
+    var j=await r.json();
+    if(box)box.innerHTML='<div class="hp-detail">'+(j.ok?'✓ ':'✗ ')+esc((j.msg||'').toString().slice(-500))+'</div>';
     setTimeout(refreshStatuses,2500);
   }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
 }

@@ -19,17 +19,17 @@
     "logs": "E:\\Ikaros\\data\\logs"
   },
   "hermes": {
-    "agent": "E:\\Ikaros\\core/hermes",
-    "home": "E:\\Ikaros\\data\\core/hermes",
+    "agent": "E:\\Ikaros\\core\\hermes",
+    "home": "E:\\Ikaros\\data\\hermes-agent",
     "bridge": "E:\\Ikaros\\bridge",
-    "core": "E:\\Ikaros\\hermes"
+    "core": "E:\\Ikaros\\core\\hermes"
   },
   "memory": {
-    "root": "E:\\Ikaros\\core\\v5",
-    "data": "E:\\Ikaros\\core\\v5\\data",
-    "models": "E:\\Ikaros\\core\\v5\\models",
-    "db": "E:\\Ikaros\\core\\v5\\data\\v5\\v5.db",
-    "chromadb": "E:\\Ikaros\\core\\v5\\data\\v5\\chroma"
+    "root": "E:\\Ikaros\\core\\memory_v5",
+    "data": "E:\\Ikaros\\core\\memory_v5\\data",
+    "models": "E:\\Ikaros\\core\\memory_v5\\models",
+    "db": "E:\\Ikaros\\core\\memory_v5\\data\\v5\\v5.db",
+    "chromadb": "E:\\Ikaros\\core\\memory_v5\\data\\v5\\chroma"
   },
   "llama": {
     "version": "b10000-cuda",
@@ -38,13 +38,13 @@
     "cli": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-cli.exe"
   },
   "models": {
-    "embedding": "E:\\Ikaros\\core\\v5\\models\\nomic-embed-text-v2-moe.f32.gguf",
-    "llm": "E:\\Ikaros\\core\\v5\\models\\Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+    "embedding": "E:\\Ikaros\\core\\memory_v5\\models\\nomic-embed-text-v2-moe.f32.gguf",
+    "llm": "E:\\Ikaros\\core\\memory_v5\\models\\Qwen_Qwen3-1.7B-Q4_K_M.gguf"
   },
   "neko": {
     "root": "E:\\Ikaros\\core\\neko",
     "python": "E:\\Ikaros\\core\\neko\\.venv\\Scripts\\python.exe",
-    "server": "E:\\Ikaros\\core\\neko\\app\\main_server.py",
+    "server": "app.main_server",
     "desktop": "E:\\Ikaros\\core\\neko\\N.E.K.O.exe",
     "static": "E:\\Ikaros\\core\\neko\\static",
     "templates": "E:\\Ikaros\\core\\neko\\templates",
@@ -55,10 +55,6 @@
   "mcp": {
     "root": "E:\\Ikaros\\runtime\\MCPServe",
     "codebase_memory_exe": "E:\\Ikaros\\runtime\\MCPServe\\codebase-memory\\package\\bin\\codebase-memory-mcp.exe"
-  },
-  "herdr": {
-    "exe": "E:\\Ikaros\\runtime\\herdr\\herdr.exe",
-    "dir": "E:\\Ikaros\\runtime\\herdr"
   },
   "ports": {
     "embedding": 8587,

@@ -24,7 +24,7 @@ Endpoints:
   POST /api/system/<action>            action in {start,stop}  (all components)
   POST /api/shutdown                     stop this control panel service
   GET  /api/hermes/status              -> hermes HEAD / upstream tip / 补丁状态
-  POST /api/hermes/check               -> 启动前同款预检：缺失则自动补丁
+  POST /api/hermes/check               -> 检查并自动打补丁（cherry-pick 补丁 commit；已打则 no-op）
   POST /api/hermes/update              -> 跑完整脚本（fetch+reset+cherry-pick+LLM兜底）
 """
 
@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -85,7 +86,7 @@ COMPONENTS = [
     {"id": "neko_group", "name": "N.E.K.O 服务组", "category": "Frontend",
      "desc": "N.E.K.O 后端（前端/记忆/Agent）一键启停，亦可分开控制",
      "group": True, "subcomponents": ["neko", "neko_memory", "neko_agent"],
-     "ports": [], "markers": ["main_server.py", "memory_server.py", "agent_server.py"]},
+     "ports": [], "markers": ["main_server", "memory_server", "agent_server"]},
     {"id": "neko_desktop", "name": "N.E.K.O Desktop", "category": "Frontend",
      "desc": "N.E.K.O Electron 桌面壳（独立）", "ports": [],
      "markers": ["N.E.K.O.exe"]},
@@ -106,13 +107,16 @@ COMPONENTS = [
     # ── 隐藏子服务：作为 neko 服务组的独立控制项，不单独出现在面板网格 ──
     {"id": "neko", "name": "N.E.K.O Frontend", "category": "Backend",
      "desc": "N.E.K.O :48911 (Chat + Avatar + Ikaros V5)", "ports": [48911],
-     "markers": ["main_server.py"], "hidden": True, "parent_group": "neko_group"},
+     "markers": ["main_server"], "hidden": True, "parent_group": "neko_group"},
     {"id": "neko_memory", "name": "N.E.K.O Memory", "category": "Backend",
      "desc": "N.E.K.O memory server :48912", "ports": [48912],
-     "markers": ["memory_server.py"], "hidden": True, "parent_group": "neko_group"},
+     "markers": ["memory_server"], "hidden": True, "parent_group": "neko_group"},
     {"id": "neko_agent", "name": "N.E.K.O Agent", "category": "Backend",
      "desc": "Agent server :48915 (keyboard/mouse/browser/OpenClaw)", "ports": [48915],
-     "markers": ["agent_server.py"], "hidden": True, "parent_group": "neko_group"},
+     "markers": ["agent_server"], "hidden": True, "parent_group": "neko_group"},
+    {"id": "runtime", "name": "运行时依赖", "category": "依赖",
+     "desc": "runtime/ 下的必要二进制（Python / Node / llama / 下载器 / MCP / Herdr）；缺失项提示手动获取",
+     "ports": [], "markers": [], "check_only": True},
 ]
 VALID_ACTIONS = {"start", "stop", "restart"}
 KNOWN_IDS = {c["id"] for c in COMPONENTS} | {"all"}
@@ -154,7 +158,7 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_RUST"] = s(root / "runtime" / "rust")
     e["IKAROS_NEKO"] = s(root / "core/neko")
     e["IKAROS_NEKO_PYTHON"] = s(root / "core/neko" / ".venv" / "Scripts" / "python.exe")
-    e["IKAROS_NEKO_SERVER"] = s(root / "core/neko" / "app" / "main_server.py")
+    e["IKAROS_NEKO_SERVER"] = "app.main_server"  # 模块形式（上游已将入口重构为包 app/main_server）
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
     e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
@@ -573,13 +577,13 @@ def start_component_neko(root, env, wait):
         log.error("[neko] core/neko directory not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = str(neko_dir / "app" / "main_server.py")
+    server = "app.main_server"  # 上游已将 main_server.py 重构为包 app/main_server
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     # NEKO_STORAGE_ANCHOR_ROOT: 重定向 Neko 的本地状态目录到项目内可写路径
     # 默认 $LOCALAPPDATA/N.E.K.O/state 被系统反勒索保护拦截
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, [server], neko_env, str(neko_dir),
+    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
                  str(root / "data" / "logs" / "neko.log"))
     if wait:
         wait_for_port(48911, 60)
@@ -588,7 +592,7 @@ def start_component_neko(root, env, wait):
 def stop_component_neko(root, env):
     log.info("[neko] stopping (:48911)...")
     kill_port(48911)
-    kill_by_cmdline("main_server.py")
+    kill_by_cmdline("main_server")
 
 
 
@@ -599,11 +603,11 @@ def start_component_neko_memory(root, env, wait):
         log.error("[neko_memory] core/neko not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = str(neko_dir / "app" / "memory_server.py")
+    server = "app.memory_server"  # 上游已将 memory_server.py 重构为包
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, [server], neko_env, str(neko_dir), str(root / "data" / "logs" / "neko-memory.log"))
+    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir), str(root / "data" / "logs" / "neko-memory.log"))
     if wait:
         wait_for_port(48912, 60)
 
@@ -615,24 +619,24 @@ def start_component_neko_agent(root, env, wait):
         log.error("[neko_agent] core/neko not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = str(neko_dir / "app" / "agent_server.py")
+    server = "app.agent_server"  # 上游已将 agent_server.py 重构为包
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, [server], neko_env, str(neko_dir),
+    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
                  str(root / "data" / "logs" / "neko-agent.log"))
 
 
 def stop_component_neko_agent(root, env):
     log.info("[neko_agent] stopping (:48915)...")
     kill_port(48915)
-    kill_by_cmdline("agent_server.py")
+    kill_by_cmdline("agent_server")
 
 
 def stop_component_neko_memory(root, env):
     log.info("[neko_memory] stopping (:48912)...")
     kill_port(48912)
-    kill_by_cmdline("memory_server.py")
+    kill_by_cmdline("memory_server")
 
 
 def start_component_neko_group(root, env, wait):
@@ -686,7 +690,12 @@ def start_component_hermes_dashboard(root, env, wait):
     if hermes_root_str not in paths:
         paths.insert(0, hermes_root_str)
     child_env["PYTHONPATH"] = ";".join(paths)
-    log.info("[hermes_dashboard] use venv python=%s, PYTHONPATH=%s", venv_py, child_env["PYTHONPATH"])
+    # 让 Hermes 内的 Ikaros V5 记忆提供方准确定位 IKAROS_ROOT
+    # （core/hermes/plugins/memory/ikaros_v5 依赖此变量定位 E:/Ikaros/core/memory_v5）。
+    # 不设时回退到 __file__.parents[5]，但显式设置更稳、避免静默“unavailable”。
+    child_env["IKAROS_ROOT"] = str(root)
+    log.info("[hermes_dashboard] use venv python=%s, PYTHONPATH=%s, IKAROS_ROOT=%s",
+             venv_py, child_env["PYTHONPATH"], child_env["IKAROS_ROOT"])
     spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", "dashboard", "--no-open"], child_env, cwd,
                  str(root / "data" / "logs" / "hermes-dashboard.log"))
     if wait:
@@ -801,6 +810,283 @@ def run_hermes_update_and_patch() -> dict:
     return {"ok": proc.returncode == 0,
             "msg": out,
             "patch_applied": st.get("patch_applied")}
+
+
+# ── 上游仓库：存在性检查 + 浅克隆(最快通道) + 版本落后检测（hermes / neko）──
+# 基础通道统一为浅克隆 git clone --depth 1 --filter blob:none（不拉历史，避免全量包）。
+# 镜像前缀走环境变量 IKAROS_GIT_MIRROR；留空=直连 GitHub。设置示例：
+#   set IKAROS_GIT_MIRROR=https://ghproxy.net/
+GIT_MIRROR = (os.environ.get("IKAROS_GIT_MIRROR") or "").rstrip("/")
+UPSTREAM_REPOS = {
+    "hermes": {
+        "name": "Hermes Agent",
+        "url": "https://github.com/NousResearch/hermes-agent",
+        "branch": "main",
+        "local": HERMES_ROOT / "core" / "hermes",
+    },
+    "neko": {
+        "name": "N.E.K.O",
+        "url": "https://github.com/Project-N-E-K-O/N.E.K.O",
+        "branch": "main",
+        "local": HERMES_ROOT / "core" / "neko",
+    },
+}
+_UPSTREAM_CACHE: dict = {}          # name -> {upstream_version, checked_at, error}
+_UPSTREAM_TTL = 600                # 上游版本缓存 10 分钟（避免每次轮询打 GitHub）
+
+
+def _mirror_url(url: str) -> str:
+    return (GIT_MIRROR + "/" + url) if GIT_MIRROR else url
+
+
+def _git_in(dir_path, args, **kw):
+    return subprocess.run(["git", *args], cwd=str(dir_path),
+                          capture_output=True, text=True,
+                          creationflags=CREATE_NO_WINDOW, **kw)
+
+
+# 内容检查：.git 存在但关键入口文件缺失 → 视为「内容不完整」（空克隆/部分拉取）
+_CONTENT_MARKERS = {
+    "neko": "app/main_server/__main__.py",
+    "hermes": "hermes_cli/web_server.py",
+}
+
+
+def local_repo_version(name: str) -> dict:
+    """本地仓库版本：最新 tag（按版本排序）或短 HEAD；含 dirty 标记与内容完整性。"""
+    d = UPSTREAM_REPOS[name]["local"]
+    if not (d / ".git").is_dir():
+        return {"present": False, "version": None, "tag": None,
+                "commit": None, "dirty": False, "content_ok": False, "error": "未克隆"}
+    # 内容完整性：关键入口文件是否存在
+    marker = _CONTENT_MARKERS.get(name)
+    content_ok = True
+    if marker:
+        content_ok = (d / marker).is_file()
+    out = _git_in(d, ["tag", "--sort=-v:refname"]).stdout.strip()
+    tag = out.splitlines()[0] if out else None
+    commit = _git_in(d, ["rev-parse", "--short", "HEAD"]).stdout.strip() or None
+    # 允许本地 config.yaml 未跟踪（与 hermes_patch_status 一致）
+    st = _git_in(d, ["status", "--porcelain"]).stdout
+    bad = [l for l in st.splitlines() if l.strip()
+           and not (l[:2] == "??" and l[3:].strip() == "config.yaml")]
+    dirty = bool(bad)
+    return {"present": True, "version": tag or commit, "tag": tag,
+            "commit": commit, "dirty": dirty, "content_ok": content_ok, "error": ""}
+
+
+def upstream_latest_tag(name: str) -> dict:
+    """git ls-remote --tags 取上游最新语义版本 tag（仅列引用，网络开销极小）。"""
+    url = _mirror_url(UPSTREAM_REPOS[name]["url"])
+    try:
+        rr = subprocess.run(["git", "ls-remote", "--tags", url],
+                            capture_output=True, text=True, timeout=30,
+                            creationflags=CREATE_NO_WINDOW)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if rr.returncode != 0:
+        return {"ok": False, "error": (rr.stderr or "").strip()[:200] or "ls-remote 失败"}
+    tags = []
+    for line in rr.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        ref = parts[1]
+        if ref.endswith("^{}"):
+            continue
+        tags.append(ref.split("/")[-1])
+    if not tags:
+        return {"ok": True, "tag": None, "tags": []}
+
+    def vkey(t):
+        m = re.search(r"(\d+(?:\.\d+)+)", t)
+        return [int(x) for x in m.group(1).split(".")] if m else [0]
+
+    tags_sorted = sorted(tags, key=vkey)
+    return {"ok": True, "tag": tags_sorted[-1], "tags": tags_sorted}
+
+
+def _ver_tuple(v):
+    if not v:
+        return None
+    m = re.search(r"(\d+(?:\.\d+)+)", v)
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def refresh_upstream_versions(names=None, force=False):
+    """后台刷新上游版本缓存（网络：git ls-remote）。"""
+    names = names or list(UPSTREAM_REPOS)
+    now = time.time()
+    for name in names:
+        cur = _UPSTREAM_CACHE.get(name)
+        if (not force and cur and "checked_at" in cur
+                and (now - cur["checked_at"] < _UPSTREAM_TTL)):
+            continue
+        res = upstream_latest_tag(name)
+        entry = {"checked_at": now}
+        if res.get("ok"):
+            entry["upstream_version"] = res.get("tag")
+            entry["error"] = ""
+        else:
+            entry["upstream_version"] = (cur or {}).get("upstream_version")
+            entry["error"] = res.get("error", "")
+        _UPSTREAM_CACHE[name] = entry
+
+
+def repo_status(name: str) -> dict:
+    """汇总：存在性 + 本地版本 + 缓存的上游版本 + 是否落后。"""
+    spec = UPSTREAM_REPOS[name]
+    local = local_repo_version(name)
+    cache = _UPSTREAM_CACHE.get(name, {})
+    upstream_version = cache.get("upstream_version")
+    checking = "checked_at" not in cache
+    behind = None
+    if local.get("tag") and upstream_version:
+        lt, ut = _ver_tuple(local["tag"]), _ver_tuple(upstream_version)
+        if lt and ut:
+            behind = lt < ut
+    if not local.get("present"):
+        status = "missing"
+    elif not local.get("content_ok", True):
+        status = "incomplete"
+    elif checking:
+        status = "checking"
+    elif behind is True:
+        status = "behind"
+    elif behind is False:
+        status = "latest"
+    else:
+        status = "unknown"
+    return {
+        "name": spec["name"], "present": local.get("present", False),
+        "content_ok": local.get("content_ok", True),
+        "local_version": local.get("version"), "local_tag": local.get("tag"),
+        "local_commit": local.get("commit"), "dirty": local.get("dirty", False),
+        "upstream_version": upstream_version, "behind": behind,
+        "status": status, "checking": checking,
+        "upstream_error": cache.get("error", ""),
+        "url": spec["url"], "branch": spec["branch"],
+    }
+
+
+def clone_repo(name: str) -> dict:
+    """不存在则浅克隆到本地落点（最快通道：浅克隆 + 可选镜像前缀）。"""
+    spec = UPSTREAM_REPOS[name]
+    d = spec["local"]
+    if (d / ".git").is_dir():
+        return {"ok": True, "already": True, "msg": f"{spec['name']} 已克隆，无需重复"}
+    if d.exists() and any(d.iterdir()):
+        return {"ok": False, "already": False,
+                "msg": f"{d} 已存在非 git 目录，为避免覆盖已跳过（请手动清理后重试）"}
+    try:
+        d.parent.mkdir(parents=True, exist_ok=True)
+        cmd = ["git", "clone", "--depth", "1", "--filter", "blob:none",
+               "--tags", "-b", spec["branch"], _mirror_url(spec["url"]), str(d)]
+        rr = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                            creationflags=CREATE_NO_WINDOW)
+        if rr.returncode != 0:
+            return {"ok": False, "already": False,
+                    "msg": "克隆失败：" + ((rr.stderr or rr.stdout)[-500:])}
+        refresh_upstream_versions([name], force=True)
+        return {"ok": True, "already": False, "msg": f"已克隆 {spec['name']} → {d}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "already": False,
+                "msg": "克隆超时（>10min），请检查网络或镜像"}
+    except Exception as e:
+        return {"ok": False, "already": False, "msg": f"克隆异常：{e}"}
+
+
+def pull_repo(name: str) -> dict:
+    """已存在则拉取最新；不存在则克隆。Hermes 含 Ikaros 补丁，不强行 ff 拉取。"""
+    spec = UPSTREAM_REPOS[name]
+    d = spec["local"]
+    if not (d / ".git").is_dir():
+        return clone_repo(name)
+    if name == "hermes":
+        # Hermes 打了 Ikaros 集成补丁，ff-only pull 必冲突；提示走专用更新流程
+        return {"ok": True, "already": True,
+                "msg": "Hermes 已安装且含 Ikaros 补丁；更新请点「更新并打补丁」"}
+    try:
+        rr = subprocess.run(["git", "pull", "--ff-only"], cwd=str(d),
+                            capture_output=True, text=True, timeout=300,
+                            creationflags=CREATE_NO_WINDOW)
+        subprocess.run(["git", "fetch", "--tags"], cwd=str(d),
+                       capture_output=True, text=True, timeout=120,
+                       creationflags=CREATE_NO_WINDOW)
+        refresh_upstream_versions([name], force=True)
+        if rr.returncode != 0:
+            return {"ok": False,
+                    "msg": "拉取失败（非快进，可能本地有改动）："
+                           + ((rr.stderr or rr.stdout)[-400:])}
+        return {"ok": True, "msg": f"{spec['name']} 已拉取最新"}
+    except Exception as e:
+        return {"ok": False, "msg": f"拉取异常：{e}"}
+
+
+# ── 运行时依赖检查（runtime/ 目录下的必要二进制）─────────────────────
+# type:
+#   always  — 核心依赖，缺失必须提示手动获取（仓库无自动下载 URL）
+#   fetch   — 可由 scripts/fetch-upstreams.py 真实拉取（MCP 等）
+#   optional— 可选组件，缺失仅提示
+RUNTIME_DEPS = [
+    {"key": "python",   "name": "Portable Python", "rel": "runtime/portable-python/python.exe",
+     "type": "always",  "hint": "从 Ikaros 发布包解压 portable-python 到 runtime/portable-python/（或运行 scripts/setup-native.py 引导）"},
+    {"key": "node",     "name": "Node.js",         "rel": "runtime/node/node.exe",
+     "type": "always",  "hint": "从发布包解压 node 到 runtime/node/"},
+    {"key": "llama",    "name": "llama.cpp (CUDA)", "rel": "runtime/llama/b10000-cuda/llama-server.exe",
+     "type": "always",  "hint": "从发布包解压 llama/b10000-cuda 到 runtime/llama/"},
+    {"key": "gopeed",   "name": "gopeed 下载器",    "rel": "runtime/gopeed/gopeed-web.exe",
+     "type": "always",  "hint": "从发布包解压 gopeed 到 runtime/gopeed/"},
+    {"key": "aria2",    "name": "aria2 下载器",     "rel": "runtime/aria2/aria2c.exe",
+     "type": "always",  "hint": "从发布包解压 aria2 到 runtime/aria2/"},
+    {"key": "mcpserve", "name": "MCP Serve",        "rel": "runtime/MCPServe",
+     "type": "fetch",   "fetch": "mcp-codebase-memory",
+     "hint": "点「拉取」运行 scripts/fetch-upstreams.py mcp-codebase-memory"},
+    {"key": "herdr",    "name": "Herdr 终端编排",   "rel": "runtime/herdr/herdr.exe",
+     "type": "optional", "hint": "可选：从发布包解压 herdr 到 runtime/herdr/"},
+]
+
+
+def runtime_status() -> dict:
+    """检查 runtime/ 目录与必要二进制是否存在；缺失项给手动提示。"""
+    rt = HERMES_ROOT / "runtime"
+    comps = []
+    missing = 0
+    for d in RUNTIME_DEPS:
+        p = HERMES_ROOT / d["rel"]
+        ok = p.exists()
+        if not ok:
+            missing += 1
+        comps.append({
+            "key": d["key"], "name": d["name"], "rel": d["rel"],
+            "type": d["type"], "ok": ok, "hint": d["hint"],
+            "fetch": d.get("fetch"),
+        })
+    return {
+        "runtime_dir_exists": rt.is_dir(),
+        "components": comps,
+        "missing": missing,
+        "total": len(comps),
+        "fetchable": [c["key"] for c in comps if c["type"] == "fetch"],
+    }
+
+
+def runtime_fetch(key: str) -> dict:
+    """对可由 fetch-upstreams.py 拉取的依赖执行下载。"""
+    dep = next((d for d in RUNTIME_DEPS if d["key"] == key), None)
+    if not dep:
+        return {"ok": False, "msg": f"未知依赖: {key}"}
+    if dep.get("type") != "fetch" or not dep.get("fetch"):
+        return {"ok": False, "msg": "该依赖无自动下载，请手动获取：" + (dep.get("hint") or "")}
+    try:
+        cmd = [sys.executable, str(HERMES_ROOT / "scripts" / "fetch-upstreams.py"), dep["fetch"]]
+        rr = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                            creationflags=CREATE_NO_WINDOW)
+        if rr.returncode != 0:
+            return {"ok": False, "msg": "拉取失败：" + ((rr.stderr or rr.stdout)[-500:])}
+        return {"ok": True, "msg": f"已拉取 {dep['name']} → {dep['rel']}"}
+    except Exception as e:
+        return {"ok": False, "msg": f"拉取异常：{e}"}
 
 
 def neko_desktop_running() -> bool:
@@ -1285,6 +1571,19 @@ def get_component_statuses() -> list[dict]:
                 entry["hermes_patch"] = hermes_patch_status()
             except Exception:
                 log_exception("hermes_patch_status")
+        # 上游仓库存在性 + 版本落后检测（hermes / neko 克隆与版本检查）
+        if c["id"] in ("hermes_dashboard", "neko_group"):
+            try:
+                entry["repo"] = repo_status(
+                    "hermes" if c["id"] == "hermes_dashboard" else "neko")
+            except Exception:
+                log_exception("repo_status")
+        # 运行时依赖检查（runtime/ 目录下的必要二进制）
+        if c["id"] == "runtime":
+            try:
+                entry["runtime"] = runtime_status()
+            except Exception:
+                log_exception("runtime_status")
         result.append(entry)
     return result
 
@@ -1534,16 +1833,49 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
             return
 
-        # /api/hermes/<action>  (status | update | check)
+        # /api/hermes/<action>  (status | check | update)
         if len(parts) >= 3 and parts[0] == "api" and parts[1] == "hermes":
             sub = parts[2]
             if sub == "status":
                 self._send_json(hermes_patch_status()); return
+            if sub == "check":
+                self._send_json(ensure_hermes_patch_applied()); return   # 检查并自动打补丁
             if sub == "update":
                 self._send_json(run_hermes_update_and_patch()); return
-            if sub == "check":
-                self._send_json(ensure_hermes_patch_applied()); return
             self._send_json({"ok": False, "msg": "unknown hermes action"}, status=400)
+            return
+
+        # /api/repo/<name>/<action>  (status | clone | pull)
+        # name ∈ {hermes, neko}；status=强制刷新上游版本, clone=缺失则克隆, pull=拉取/克隆
+        if len(parts) >= 4 and parts[0] == "api" and parts[1] == "repo":
+            name = parts[2]
+            action = parts[3]
+            if name not in UPSTREAM_REPOS:
+                self._send_json({"ok": False, "msg": "unknown repo"}, status=400)
+                return
+            if action == "status":
+                refresh_upstream_versions([name], force=True)
+                self._send_json({"ok": True, **repo_status(name)})
+                return
+            if action == "clone":
+                self._send_json(clone_repo(name))
+                return
+            if action == "pull":
+                self._send_json(pull_repo(name))
+                return
+            self._send_json({"ok": False, "msg": "unknown repo action"}, status=400)
+            return
+
+        # /api/runtime/status          (POST) -> runtime_status()
+        # /api/runtime/fetch/<key>     (POST) -> runtime_fetch(key)
+        if len(parts) >= 3 and parts[0] == "api" and parts[1] == "runtime":
+            if parts[2] == "status":
+                self._send_json(runtime_status())
+                return
+            if parts[2] == "fetch" and len(parts) >= 4:
+                self._send_json(runtime_fetch(parts[3]))
+                return
+            self._send_json({"ok": False, "msg": "unknown runtime action"}, status=400)
             return
 
         self.send_error(404)
@@ -1634,6 +1966,9 @@ def main():
             time.sleep(1.5)
             open_browser(f"http://127.0.0.1:{port}")
         threading.Thread(target=_open, daemon=True).start()
+
+    # 启动即检查 hermes / neko 上游版本（需求：启动时检查版本号是否落后）
+    threading.Thread(target=refresh_upstream_versions, daemon=True).start()
 
     try:
         server.serve_forever()

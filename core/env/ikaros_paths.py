@@ -67,7 +67,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     },
     "neko": {
         "root": "core/neko",
-        "server": "core/neko/app/main_server.py",
+        "server": "app.main_server",   # 上游已将入口重构为包 app/main_server（python -m 形式）
         "desktop": "core/neko/N.E.K.O.exe",
         "static": "core/neko/static",
         "templates": "core/neko/templates",
@@ -395,7 +395,7 @@ class IkarosPaths:
         # Neko
         env["IKAROS_NEKO"] = self.get("neko.root", str(self.root / "core/neko"))
         env["IKAROS_NEKO_PYTHON"] = str(Path(env["IKAROS_NEKO"]) / ".venv" / "Scripts" / "python.exe")
-        env["IKAROS_NEKO_SERVER"] = str(Path(env["IKAROS_NEKO"]) / "app" / "main_server.py")
+        env["IKAROS_NEKO_SERVER"] = "app.main_server"  # 上游已将入口重构为包 app/main_server（python -m 形式）
 
         # PATH 组装
         path_parts = [

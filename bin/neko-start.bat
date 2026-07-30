@@ -24,7 +24,7 @@ if not exist "%ROOT%" (
 )
 
 if defined IKAROS_NEKO_PYTHON (set "PY=%IKAROS_NEKO_PYTHON%") else (set "PY=%ROOT%\.venv\Scripts\python.exe")
-if defined IKAROS_NEKO_SERVER  (set "SRV=%IKAROS_NEKO_SERVER%")  else (set "SRV=%ROOT%\app\main_server.py")
+if defined IKAROS_NEKO_SERVER  (set "SRV=%IKAROS_NEKO_SERVER%")  else (set "SRV=app.main_server")
 if defined IKAROS_NEKO_PORT    (set "PORT=%IKAROS_NEKO_PORT%")    else (set "PORT=48911")
 
 echo [neko] Backend: %ROOT%
@@ -38,9 +38,9 @@ if %errorlevel% equ 0 (
 )
 
 echo [neko] Starting Python backend...
-start "N.E.K.O Backend" /MIN "%PY%" "%SRV%"
+start "N.E.K.O Backend" /MIN "%PY%" -m %SRV%
 echo [neko] Starting Agent Server (:48915)...
-start "N.E.K.O Agent" /MIN "%PY%" "%ROOT%\app\agent_server.py"
+start "N.E.K.O Agent" /MIN "%PY%" -m app.agent_server
 echo [neko] Waiting for backend...
 ping -n 8 127.0.0.1 >nul
 

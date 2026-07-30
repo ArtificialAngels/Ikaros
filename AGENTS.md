@@ -11,9 +11,9 @@
 | :9100 | Control panel Web UI | `core/dashboard/server.py` (start: `bin/ikaros-control.bat`) |
 | :8080 | Local LLM (Qwen3-1.7B, **lazy-loaded**) | watchdog `bin/ikaros-memory-watchdog.py` |
 | :8587 | Embedding (nomic) | watchdog |
-| :48911 | Neko main frontend | `core/neko/app/main_server.py` |
-| :48912 | Neko memory server | `core/neko/app/memory_server.py` |
-| :48915 | Neko agent server | `core/neko/app/agent_server.py` |
+| :48911 | Neko main frontend | `core/neko/app/main_server/` (包, `python -m app.main_server`) |
+| :48912 | Neko memory server | `core/neko/app/memory_server/` (包, `python -m app.memory_server`) |
+| :48915 | Neko agent server | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) |
 | :9119 | Hermes Dashboard (cloud LLM gateway) | `core/hermes/.../web_server.py` |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` |
 

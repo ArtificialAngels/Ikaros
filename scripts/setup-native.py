@@ -84,7 +84,7 @@ def build_paths():
         "neko": {
             "root": resolve("core/neko"),
             "python": resolve("core/neko/.venv/Scripts/python.exe"),
-            "server": resolve("core/neko/app/main_server.py"),
+            "server": "app.main_server",   # 上游已将入口重构为包 app/main_server（python -m 形式）
             "desktop": resolve("core/neko/N.E.K.O.exe"),
             "static": resolve("core/neko/static"),
             "templates": resolve("core/neko/templates"),
@@ -149,7 +149,7 @@ def main():
 
     # 2) neko 落点校验
     neko_dir = resolve("core/neko")
-    neko_ok = os.path.isdir(neko_dir) and os.path.isfile(os.path.join(neko_dir, "app", "main_server.py"))
+    neko_ok = os.path.isdir(neko_dir) and os.path.isfile(os.path.join(neko_dir, "app", "main_server", "__main__.py"))
     log(f"  {'OK ' if neko_ok else 'MISS'} N.E.K.O 落点: core/neko (先跑 fetch-upstreams.py)")
     if not neko_ok:
         log("    提示: 未检测到 N.E.K.O，运行 `python scripts/fetch-upstreams.py neko` 拉取")
