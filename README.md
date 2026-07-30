@@ -67,7 +67,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 ## ✨ 特性
 
-- **零系统依赖** — 自带便携 Python 3.12.10(`runtime\portable-python/`)、llama.cpp Windows 二进制 + DLL(`runtime/`)、N.E.K.O 桌宠(`core/neko`,上游)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
+- **零系统依赖** — 自带两个便携 Python:主运行 **3.12.10**(`runtime\portable-python\`)+ N.E.K.O 专用 **3.11.15**(`runtime\portable-python311\`,捆绑随树,不依赖 uv 缓存 / 系统 Python);llama.cpp Windows 二进制 + DLL(`runtime/`)、N.E.K.O 桌宠(`core/neko`,上游)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
 - **U 盘即插即用** — 项目根路径由控制面板自动解析(`E:\` / `F:\` / `G:\` 自适应),写盘符硬编码立刻挂掉。
 - **N.E.K.O 桌宠** — React 聊天窗 + 多形态 Avatar(Live2D / VRM / MMD)+ 插件系统 + 工具臂(QwenPaw)。Electron 桌面壳一键启动。
 - **控制面板统一调度** — `:9100` Web UI 一键启停全部组件,无需记一堆 `.bat`。
@@ -109,7 +109,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 | 目录 | 上游 | 是否入库 |
 |------|------|---------|
 | `core/neko/` | [Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 否(`.gitignore`) |
-| `hermes-agent/` | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 否 |
+| `core/hermes/` | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 否 |
 | `runtime/` | llama.cpp + CUDA 工具链 | 否 |
 | `data/hermes-agent/skills/...` (MCP) | 各类 MCP 服务器 | 否 |
 
@@ -161,6 +161,7 @@ DEEPSEEK_API_KEY=sk-...
 | 停止全部 | 控制面板 :9100 → 点 `stop` / 各组件 `stop` |
 | 拉取上游 | `python scripts/fetch-upstreams.py` |
 | 落地原生配置 | `python scripts/setup-native.py` |
+| **venv 路径修复(换盘符后)** | `python bin\bootstrap-venvs.py` — 自动重指 neko/hermes venv 的 home 与 editable 源码路径到当前盘符(保留已装依赖,无需联网) |
 | 记忆服务状态 | `bin\llama-help.py --status` |
 | 本地 LLM 热载入 | `bin\llama-help.py --hotload` |
 | 查看模型配置 | `bin\llama-help.py --config` |
@@ -171,17 +172,17 @@ DEEPSEEK_API_KEY=sk-...
 
 ```
 Ikaros\
-├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + llama-help
+├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + llama-help + bootstrap-venvs.py
 ├── core\                 ← 核心系统
-│  ├── v5\                ← ★ V5 灵魂核心 (记忆/情感/认知/反思)
+│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思)  [原 core/v5, 2026-07-26 重命名]
 │  ├── dashboard\         ← 控制面板 Web UI (:9100)
 │  ├── env\               ← 环境配置/CLI/初始化脚本
+│  ├── hermes\            ← Hermes Agent 核心 (上游干净副本, git ignored)  [原 hermes-agent/, 2026-07-26 迁移]
 │  └── neko\              ← N.E.K.O 核心组件 (上游, git ignored)
 ├── config\               ← 配置文件 (identity/ hermes.yaml)
 ├── data\                 ← ★ 运行时数据 (全部 git ignored)
 ├── docs\                 ← 文档
-├── hermes-agent\         ← 上游 Hermes Agent (git ignored)
-├── runtime\              ← 运行时依赖 (git ignored)
+├── runtime\              ← 运行时依赖 (git ignored): portable-python(3.12.10) + portable-python311(3.11.15)
 ├── scripts\              ← 上游拉取 / 原生配置脚本
 ├── tests\                ← 测试
 ├── UPSTREAM.md           ← 上游组件清单
@@ -201,7 +202,7 @@ Ikaros\
 | 本地 LLM 没反应 | `bin\llama-help.py --hotload` 手动热载入 `:8080` |
 | 端口被占 | `netstat -ano \| findstr :8587` / `:8080` / `:48911` |
 | 云端 API 失败 | 检查 `.env` 的 API Key |
-| USB 盘符变了 | `scripts/setup-native.py --check` 重新校验路径 |
+| USB 盘符变了 | `python bin\bootstrap-venvs.py` 重指 neko/hermes venv 路径(首选);必要时 `scripts/setup-native.py --check` 重新校验原生路径 |
 
 ---
 
@@ -233,6 +234,12 @@ Ikaros\
 ---
 
 ## 📈 更新日志
+
+### 2026-07-30 — N.E.K.O venv 便携化 + venv 联动重建
+- 🐍 **N.E.K.O 解释器捆绑** — 将 Python 3.11.15 随树捆绑到 `runtime\portable-python311\`,neko 的 `.venv` 基础解释器（home）指向它,**不再依赖 `%APPDATA%\uv\python` 或系统 Python**,满足 U 盘即插即用(上游 `requires-python` 仍钉 `==3.11.*`,#2516 未修,切勿升 3.12)。
+- 🔧 **venv 联动重建** — `bin\bootstrap-venvs.py` 新增 neko 分支:换盘符后普通运行即自动检测 `pyvenv.cfg` 的 `home` 与 editable `.pth` 是否漂移当前盘符,漂移则重指路径 + 拷解释器 DLL 进 `Scripts\`,**保留已装的 ~200 个 cp311 轮子,无需联网重装**;`--force` 强制重指,venv 完全缺失则 `pip install -e .` 完整创建(需联网)。
+- 🔄 **neko 源码同步** — `core\neko` 同步为最新 `N.E.K.O-main` 快照(保留 `N.E.K.O.exe` 与 CEF 运行库),修复了旧 editable 指针悬空(指向已删的 `exProject`)导致 venv 起不来的问题。
+- 📝 文档同步:本 README 更正 `core/v5`→`core/memory_v5`、`hermes-agent/`→`core/hermes`,并补充 `bootstrap-venvs.py` 用法。
 
 ### 2026-07-26 — 架构收缩 / 去噪音
 - 🗑️ **自思考循环 `think.py` 删除** — 定时自循环产出的都是噪音,组件与定时任务一并剔除;`metacog` 仅保留手动/按需反思。

@@ -1,0 +1,4 @@
+name: ikaros_v5
+description: Ikaros V5 context engine — injects V5 memory (emotion / entity / recall) into compression summaries to preserve continuity across long conversations.
+version: 1.0.0
+author: Ikaros

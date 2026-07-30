@@ -299,9 +299,16 @@ function updateHermesPatch(c) {
   var p=c.hermes_patch;
   var ver=p.head?('HEAD '+p.head):'?';
   var up=p.upstream_tip?('上游 '+p.upstream_tip):'?';
-  var badge = p.patch_applied===true ? '<span class="hp-badge ok">补丁已打</span>'
-           : p.patch_applied===false ? '<span class="hp-badge bad">补丁缺失</span>'
-           : '<span class="hp-badge warn">未知</span>';
+  var badge;
+  if(p.repo_healthy===false){
+    badge='<span class="hp-badge warn">仓库损坏</span>';
+  } else if(p.patch_applied===true){
+    badge='<span class="hp-badge ok">补丁已打</span>';
+  } else if(p.patch_applied===false){
+    badge='<span class="hp-badge bad">补丁缺失</span>';
+  } else {
+    badge='<span class="hp-badge warn">未知</span>';
+  }
   var dirty = p.dirty? ' <span class="hp-badge warn">有未跟踪改动</span>':'';
   box.innerHTML='<div class="hp-line">版本 '+esc(ver)+' / '+esc(up)+' '+badge+dirty+'</div>'
               +'<div class="hp-detail">'+esc(p.detail||'')+'</div>';

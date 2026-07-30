@@ -730,6 +730,24 @@ def _parse_spec_pointers() -> "tuple[str, str] | None":
     return up.group(1), ik.group(1)
 
 
+def _hermes_git_healthy() -> bool:
+    """core/hermes 的 .git 是否健康（有 refs/heads/main 且 rev-parse 不 fallback 到父仓库）。
+
+    当 refs/ 目录被删时，git 会向上爬到父仓库 E:\\Ikaros，导致所有 hermes git
+    命令实际操作的是主仓库——必须提前检测并短路，否则补丁检测会误报。
+    """
+    # 1. refs/heads/main 必须存在（文件或 packed-refs）
+    refs_dir = HERMES_AGENT_DIR / ".git" / "refs" / "heads"
+    packed = HERMES_AGENT_DIR / ".git" / "packed-refs"
+    if not refs_dir.exists() and not packed.exists():
+        return False
+    # 2. rev-parse 返回的 HEAD 不能是主仓库的 commit（用 toplevel 检测）
+    toplevel = _git_hermes(["rev-parse", "--show-toplevel"]).stdout.strip()
+    if toplevel and pathlib.Path(toplevel).resolve() != HERMES_AGENT_DIR.resolve():
+        return False  # git 爬到了父仓库
+    return True
+
+
 def _hermes_patch_present() -> bool:
     """Ikaros 集成补丁是否已就位：grep HEAD 历史里的补丁提交（覆盖原提交 /
     分层 cherry-pick / 重打新提交 三种来源，比 is-ancestor 更稳）。"""
@@ -741,9 +759,23 @@ def _hermes_patch_present() -> bool:
 def hermes_patch_status() -> dict:
     """返回 hermes 版本 / Ikaros 补丁状态，供 9100 面板显示与启动预检共用。"""
     res = {"head": None, "upstream_tip": None, "patch_applied": None,
-           "dirty": False, "detail": ""}
+           "dirty": False, "detail": "", "repo_healthy": True}
+
+    # ── 前置检测：git 仓库完整性 ──
+    if not _hermes_git_healthy():
+        res["repo_healthy"] = False
+        res["patch_applied"] = None
+        res["dirty"] = False
+        res["detail"] = ("hermes git 仓库损坏（refs/ 目录丢失），"
+                         "需等网络恢复后重新 fetch upstream + 重打补丁。"
+                         "工作树文件完好，不影响运行。")
+        log.warning("[hermes] git repo damaged (refs/ missing) — "
+                    "patch detection disabled, working tree intact")
+        return res
+
     head = _git_hermes(["rev-parse", "--short", "HEAD"]).stdout.strip()
     if not head:
+        res["repo_healthy"] = False
         res["detail"] = "无法读取 hermes HEAD（仓库异常？）"
         return res
     res["head"] = head
@@ -766,6 +798,10 @@ def ensure_hermes_patch_applied() -> dict:
     HEAD（轻量、不 fetch / 不 reset，适用「更新把补丁冲掉」常见场景）。
     冲突则 abort 并告警，但不阻塞启动。"""
     st = hermes_patch_status()
+    if not st.get("repo_healthy"):
+        return {"ok": True, "applied": False, "skipped": True,
+                "msg": "hermes git 仓库损坏，跳过补丁检测（工作树完好，不影响运行）",
+                "detail": st["detail"]}
     if st.get("patch_applied"):
         return {"ok": True, "applied": True,
                 "msg": "Ikaros 补丁已就位", "detail": st["detail"]}
@@ -774,6 +810,14 @@ def ensure_hermes_patch_applied() -> dict:
         return {"ok": False, "applied": False,
                 "msg": "找不到 spec 基线指针，无法自动补丁", "detail": st["detail"]}
     ikaros_commit = ptr[1]
+    # 补丁 commit 对象是否存在于当前仓库（refs 损坏后对象可能也被 gc）
+    obj_check = _git_hermes(["cat-file", "-t", ikaros_commit])
+    if obj_check.returncode != 0:
+        return {"ok": True, "applied": False, "skipped": True,
+                "msg": (f"补丁 commit {ikaros_commit[:8]} 不在本地对象库中"
+                        "（仓库历史丢失），需等网络恢复后重新 fetch + 打补丁。"
+                        "工作树文件完好，不影响运行。"),
+                "detail": obj_check.stderr.strip()[-200:]}
     log.info("[hermes_dashboard] 补丁缺失，启动前自动补上（cherry-pick %s）...",
              ikaros_commit[:8])
     rc = _git_hermes(["cherry-pick", ikaros_commit])

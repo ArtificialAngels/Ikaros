@@ -59,6 +59,9 @@ REPO = IKAROS_ROOT / "core" / "hermes"                  # hermes 子仓库
 SPEC = IKAROS_ROOT / "docs" / "hermes-ikaros-patches.md"
 STATE_FILE = IKAROS_ROOT / "tmp" / "hermes-patch-state.json"
 BACKUP_PREFIX = "ikaros-hermes-backup"
+# 补丁源文件目录（被 Ikaros 主仓库 git 跟踪，不依赖 core/hermes 的 git 状态）。
+# hermes reset --hard / git clean 不会影响这里；仓库损坏重建后也能直接恢复。
+PATCH_SOURCE_DIR = IKAROS_ROOT / "patches" / "hermes"
 ALLOWED_UNTracked = {"config.yaml"}                     # 本地运行配置，允许存在、不碰
 
 # allowlist（硬约束，镜像 spec §3）
@@ -88,9 +91,9 @@ def run_git(args, check: bool = True, cwd: Path = REPO):
     return run_cmd(["git", *args], check=check, cwd=cwd)
 
 
-def run_cmd(args, check: bool = True, cwd: Path = REPO):
+def run_cmd(args, check: bool = True, cwd: Path = REPO, env: dict | None = None):
     proc = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True
+        args, cwd=str(cwd), capture_output=True, text=True, env=env
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -197,12 +200,120 @@ def backup_tag() -> str:
     return tag
 
 
+def restore_from_source() -> None:
+    """从 patches/hermes/ 把补丁源文件复制到 core/hermes 工作树。
+
+    轻量降级路径：当 cherry-pick 失败（upstream 大改）且 git 仓库历史不完整
+    （backup tag 不可用 / 仓库重建过）时，直接从 Ikaros 主仓库跟踪的源文件
+    恢复补丁，不依赖 hermes 的 git 历史。
+    """
+    import shutil
+    src = PATCH_SOURCE_DIR
+    if not src.is_dir():
+        raise RuntimeError(f"补丁源文件目录不存在：{src}")
+    log(f"从 {src} 恢复补丁源文件...")
+    for item in src.iterdir():
+        if item.name == "README.md":
+            continue
+        dst = REPO / item.name
+        if item.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(item, dst)
+            log(f"  恢复目录：{item.name}/")
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dst)
+            log(f"  恢复文件：{item.name}")
+    log("补丁源文件恢复完成。")
+
+
 def rollback_to_backup(tag: str) -> None:
     log(f"回滚到备份 tag {tag} ...")
     run_git(["cherry-pick", "--abort"], check=False)
     run_git(["checkout", "-B", "main", tag], check=True)
     run_git(["reset", "--hard", tag], check=True)
     log("已回滚。")
+
+
+# --------------------------------------------------------------------------- #
+# 验证加强（spec §4 增补）：ikaros_v5 记忆提供方是否真的能在 hermes 内运行
+# --------------------------------------------------------------------------- #
+# 子进程内执行的检查：复刻 Hermes Dashboard 的就绪判定（discover + is_available），
+# 并进一步实际 initialize() 载入 V5——这正是「打补丁后是否真能跑」的硬证据，
+# 能直接拦住本次出现的 'Memory provider ikaros_v5 is not ready (unavailable)' 类 400。
+_IKAROS_V5_RUNTIME_CHECK = r'''
+import os, sys
+
+root = os.environ.get("IKAROS_ROOT")
+if not root:
+    print("FAIL: IKAROS_ROOT 未设置")
+    sys.exit(1)
+# 确保可被 import：core/hermes(plugins.*) 与 core(memory_v5 包)
+sys.path.insert(0, os.path.join(root, "core"))
+for p in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+    if p and p not in sys.path:
+        sys.path.insert(0, p)
+
+errors = []
+def check(cond, msg):
+    if not cond:
+        errors.append(msg)
+
+# 1) 记忆提供方被发现且 available
+from plugins.memory import discover_memory_providers
+disc = {n: (d, avail) for n, d, avail in discover_memory_providers()}
+check("ikaros_v5" in disc, "ikaros_v5 未被 discover_memory_providers 发现: %r" % sorted(disc))
+if "ikaros_v5" in disc:
+    check(disc["ikaros_v5"][1] is True,
+          "ikaros_v5 被发现但 available=False（Hermes 会报 unavailable）")
+
+# 2) 直接实例化并 is_available()
+from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
+prov = IkarosV5MemoryProvider()
+check(prov.is_available(),
+      "IkarosV5MemoryProvider.is_available()=False, import_error=%r" % (prov._import_error,))
+
+# 3) 真正载入 V5（这才是「能在 hermes 里运行」的硬证据）
+try:
+    prov.initialize("patch-verify")
+    check(prov._v5_loaded,
+          "initialize() 未真正载入 V5: import_error=%r" % (prov._import_error,))
+except Exception as e:
+    errors.append("initialize() 抛异常: %r" % (e,))
+
+# 4) context engine 同样可用
+from plugins.context_engine import list_context_engine_names
+check("ikaros_v5" in list_context_engine_names(),
+      "ikaros_v5 未出现在 context engine 列表")
+from plugins.context_engine.ikaros_v5 import IkarosV5ContextEngine
+check(IkarosV5ContextEngine().is_available(),
+      "context engine ikaros_v5 is_available()=False")
+
+if errors:
+    print("FAIL")
+    for e in errors:
+        print(" -", e)
+    sys.exit(1)
+print("OK: ikaros_v5 在 hermes 内可用且已成功载入 V5")
+'''
+
+
+def verify_ikaros_v5_runtime(python_exe: Path) -> tuple[bool, str]:
+    """ikaros_v5 记忆提供方是否真的能在 hermes 子进程内运行（硬验证）。"""
+    env = dict(os.environ)
+    env["IKAROS_ROOT"] = str(IKAROS_ROOT)
+    env["PYTHONPATH"] = os.pathsep.join([
+        str(REPO),                   # core/hermes -> plugins.*
+        str(IKAROS_ROOT / "core"),   # memory_v5 包
+    ])
+    proc = run_cmd([str(python_exe), "-c", _IKAROS_V5_RUNTIME_CHECK],
+                   check=False, env=env)
+    if proc.returncode == 0:
+        last = [l for l in proc.stdout.splitlines() if l.strip()][-1:]
+        return True, (last[0] if last else "OK")
+    detail = (proc.stderr.strip()[-600:] or proc.stdout.strip()[-600:] or "(无输出)")
+    return False, detail
 
 
 # --------------------------------------------------------------------------- #
@@ -241,6 +352,13 @@ def verify(python_exe: Path) -> tuple[bool, list[str]]:
     proc = run_cmd([str(python_exe), "-c", probe], check=False)
     check("发现 ikaros_v5 引擎", proc.returncode == 0,
           "" if proc.returncode == 0 else proc.stderr[-300:])
+
+    # 3b) ikaros_v5 记忆提供方真的能在 hermes 内运行（发现 + 可用 + 实际载入 V5）。
+    #     这是本次补丁脚本最关键的健壮性缺口：只检查 context_engine 目录存在，
+    #     却没验证 memory provider 在 hermes 里 available，导致 upstream 改动把
+    #     _resolve_root()/包布局打坏后仍能“验证通过”，上线即 400 unavailable。
+    rt_ok, rt_detail = verify_ikaros_v5_runtime(python_exe)
+    check("ikaros_v5 记忆提供方在 hermes 内可用且可载入 V5", rt_ok, rt_detail)
 
     # 4) scheduler 的 _cron_session_id 为固定 f"cron_{job_id}"
     sched = (REPO / "cron" / "scheduler.py")
@@ -374,10 +492,20 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
         finalize(target_sha, already_committed=True, python_exe=python_exe)
         return 0
 
-    # 冲突 → 升级 LLM 兜底
-    log("cherry-pick 冲突 → 升级 LLM 兜底（§2 第②步）。")
+    # 冲突 → 先尝试从源文件恢复（比 LLM 轻量）
+    log("cherry-pick 冲突 → 尝试从 patches/hermes/ 源文件恢复（§2 第②步轻量降级）。")
     run_git(["cherry-pick", "--abort"], check=False)
-    # 恢复 B 类静态目录（abort 后它们不在树里）
+    # 优先从 patches/hermes/ 恢复（不依赖 git 历史，仓库重建后也可用）
+    try:
+        restore_from_source()
+        log("从源文件恢复成功，进入收尾验证。")
+        if finalize(target_sha, already_committed=False, python_exe=python_exe):
+            return 0
+        log("源文件恢复后验证未通过，升级 LLM 兜底。")
+    except Exception as exc:
+        log(f"源文件恢复失败（{exc}），升级 LLM 兜底。")
+
+    # LLM 兜底路径：恢复 B 类静态目录
     run_git(["checkout", backup_tag_name, "--", *ALLOWLIST_DIRS], check=True)
     log("已恢复 B 类静态插件目录。")
 
@@ -408,7 +536,11 @@ def step_finalize(python_exe: Path) -> int:
     backup_tag_name = state["backup_tag"]
 
     # 确保 B 类目录存在（兜底保险）
-    run_git(["checkout", backup_tag_name, "--", *ALLOWLIST_DIRS], check=False)
+    # 优先从 patches/hermes/ 恢复（不依赖 git 历史），失败则回退到 backup tag
+    try:
+        restore_from_source()
+    except Exception:
+        run_git(["checkout", backup_tag_name, "--", *ALLOWLIST_DIRS], check=False)
 
     if finalize(target_sha, already_committed=False, python_exe=python_exe):
         return 0

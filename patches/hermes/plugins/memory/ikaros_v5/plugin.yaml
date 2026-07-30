@@ -1,0 +1,5 @@
+name: ikaros_v5
+description: >
+  Ikaros V5 memory — injects emotional state, entity relations, and long-term
+  recall into Hermes context compression, so summaries preserve continuity
+  across conversation boundaries.

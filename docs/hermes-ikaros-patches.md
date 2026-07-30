@@ -5,9 +5,16 @@
 > 它解决的核心问题：upstream 大改时，旧 diff 对不上新代码；此时必须把"补丁要达成什么"告诉模型去重写，而不是给原始 diff。
 
 ## 0. 基线指针（每次重打后必须更新）
-- **Upstream tip**（打补丁所基于的 upstream 提交）：`720cdd1`
-- **Ikaros 补丁提交**（单提交，父 = 上述 upstream）：`8edf1ec8f`
+- **Upstream tip**（打补丁所基于的 upstream 提交）：`14db1a9`
+- **Ikaros 补丁提交**（单提交，父 = 上述 upstream）：`e939c80`
 - 更新方式：重打完成后把本段两个值改成新的对应提交（新 Ikaros 提交的父 = 新 upstream tip）。
+
+## 0.5. 补丁源文件位置
+- **补丁源文件目录**：`patches/hermes/`（被 Ikaros 主仓库 git 跟踪）
+- 镜像 hermes-agent 目录结构，存放 7 个 A 类补丁文件 + 3 个 B 类插件/技能目录
+- **不放在 `core/hermes/` 下面**——防止 hermes `git reset --hard` / `git clean` 时被误删
+- `bin/hermes-update-and-patch.py` 的 `restore_from_source()` 从此目录读取，作为 cherry-pick 失败时的轻量降级路径（比 LLM 兜底更快、更可靠）
+- 修改补丁内容时，**必须同时更新 `patches/hermes/` 里的源文件**，否则下次重打会用到旧版本
 
 ## 1. 补丁总览
 Ikaros 对 hermes 的定制分两类：
@@ -17,16 +24,21 @@ Ikaros 对 hermes 的定制分两类：
 > 注：`package-lock.json` **不是** Ikaros 补丁——它直接取 upstream 版本（Ikaros 未改）。
 > `config.yaml` 是本地运行配置（指向 Ikaros `:8080` 本地 LLM + deepseek），不属于补丁、不进提交、每次更新后保留即可。
 
-## 2. 应用协议（两步法）
+## 2. 应用协议（三步法）
 1. `git fetch` → `git checkout <新 upstream tip>`。
-2. **第①步（确定性）**：`git cherry-pick 8edf1ec8f`（即当前 Ikaros 提交）。
+2. **第①步（确定性）**：`git cherry-pick e939c80`（即当前 Ikaros 提交）。
    - 干净通过 → 跳到 §4 验证。
    - 冲突 / 失败 → 视为"相关区域有大改"，升级第②步。
    - （让 git 冲突当"是否大改"的检测器，不要另写启发式。）
-3. **第②步（LLM 兜底）**：派一个**受约束的子 agent**（不是真起 hermes-agent 产品）指向 `core/hermes`，喂入 §7 的提示词模板 + 本文件 §5 的补丁意图。模型只允许改 §3 的 allowlist 文件，按意图在新代码上重实现。
+3. **第②步（源文件恢复）**：从 `patches/hermes/` 直接复制补丁源文件到 `core/hermes/` 工作树（`restore_from_source()`）。
+   - 这是比 LLM 更轻量的降级路径——如果补丁内容本身不需要随 upstream 变化（大多数情况），直接复制即可。
+   - 复制后跑 §4 验证。通过 → 跳到提交 + 更新 §0。
+   - 验证失败（upstream 接口确实变了，旧补丁不兼容）→ 升级第③步。
+4. **第③步（LLM 兜底）**：派一个**受约束的子 agent**（不是真起 hermes-agent 产品）指向 `core/hermes`，喂入 §7 的提示词模板 + 本文件 §5 的补丁意图。模型只允许改 §3 的 allowlist 文件，按意图在新代码上重实现。
    - 完成后必须 §4 验证通过。
    - 验证通过后 **`git commit` 生成新的 Ikaros 单提交**，并把 §0 基线指针更新为新提交（父 = 新 upstream tip），形成可维护循环。
-4. **验证**（见 §4）。任一失败 → 回滚到更新前快照，报告失败。
+   - **同步更新 `patches/hermes/` 源文件**（把 LLM 重实现后的新版本复制回去）。
+5. **验证**（见 §4）。任一失败 → 回滚到更新前快照，报告失败。
 
 ## 3. 允许改动范围（allowlist，硬约束）
 - 文件：`cron/scheduler.py`、`hermes_cli/web_server.py`、`plugins/context_engine/__init__.py`、`scripts/run_tests.sh`、`scripts/run_tests_parallel.py`、`tests/cron/test_scheduler.py`
