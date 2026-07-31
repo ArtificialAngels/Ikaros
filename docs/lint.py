@@ -47,6 +47,11 @@ HISTORICAL_EXEMPT_FILES = {
     "conversation-flow-fix-report-2026-07-25.md",
     "conversation-flow-upgrade-plan.md",
 }
+# historical patch manifest; legitimately references hermes-agent venv paths
+# (it records Ikaros-specific patches against the upstream hermes-agent repo).
+HERMES_PATCH_EXEMPT_FILES = {
+    "hermes-ikaros-patches.md",
+}
 RESEARCH_DIR = "research"
 # lines carrying a 2026-07-2x correction note keep old names for traceability
 CORRECTION_MARK = "2026-07-2"
@@ -122,6 +127,8 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
         if OLD_CORE_PATH in line and "core/memory_v5" in line:
             matched = [m for m in matched if m != OLD_CORE_PATH]
         if OLD_HERMES_CODE in line and "core/hermes" in line:
+            matched = [m for m in matched if m != OLD_HERMES_CODE]
+        if rel in HERMES_PATCH_EXEMPT_FILES:
             matched = [m for m in matched if m != OLD_HERMES_CODE]
         if matched:
             seen = set()

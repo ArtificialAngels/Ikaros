@@ -92,8 +92,8 @@
 ## 6. 模型权重（多 GB，绝不入库）
 | 模型 | 路径 | 来源 |
 |------|------|------|
-| Qwen3-1.7B (本地 LLM) | `core/v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf` | HuggingFace `Qwen/Qwen3-1.7B` (GGUF) |
-| nomic embed v2 MoE | `core/v5/models/nomic-embed-text-v2-moe.{f16,f32}.gguf` | HuggingFace `nomic-ai/nomic-embed-text-v2-moe` |
+| Qwen3-1.7B (本地 LLM) | `core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf` | HuggingFace `Qwen/Qwen3-1.7B` (GGUF) |
+| nomic embed v2 MoE | `core/memory_v5/models/nomic-embed-text-v2-moe.{f16,f32}.gguf` | HuggingFace `nomic-ai/nomic-embed-text-v2-moe` |
 | 其它 `*.gguf` / `*.onnx_data` | 各处 | 见 `*.gguf` / `*.onnx_data` 全局忽略 |
 
 > 下载统一走 `bin/ikaros-fastdl.py`（带 hf-mirror.com / ghproxy 镜像）。

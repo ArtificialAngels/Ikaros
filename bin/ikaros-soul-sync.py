@@ -14,7 +14,24 @@ from datetime import datetime
 from pathlib import Path
 
 # --- Bootstrap paths (portable-python safe) ---
-IKAROS_ROOT = Path(os.environ.get("IKAROS_ROOT", Path(__file__).resolve().parent))
+def _resolve_ikaros_root() -> Path:
+    """定位项目根 (config/identity/axiom.md 所在目录)。
+
+    ikaros-soul-sync.py 位于 bin/ 下, 若直接取 __file__.parent 会得到 bin/ 而非项目根,
+    导致 self_model.json / SOUL.md 路径错位 (读到空 self_model、误写到 bin/data/...)。
+    优先用环境变量, 否则按 axiom.md 的实际位置向上回溯。
+    """
+    env = os.environ.get("IKAROS_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve().parent  # .../bin
+    for cand in (here.parent, here, here.parent.parent):
+        if (cand / "config" / "identity" / "axiom.md").is_file():
+            return cand
+    return here.parent  # 兜底: bin 的上一级当作项目根
+
+
+IKAROS_ROOT = _resolve_ikaros_root()
 IKAROS_MEMORY = IKAROS_ROOT / "core/memory_v5"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", IKAROS_ROOT / "data" / "hermes-agent"))
 
@@ -168,6 +185,69 @@ def _near_dup(a: str, b: str, thr: float = 0.5) -> bool:
     return difflib.SequenceMatcher(None, a, b).ratio() >= 0.85
 
 
+_MEMORY_CTX = re.compile(r"<memory-context>.*", re.DOTALL)
+
+
+def _strip_memory_context(text: str) -> str:
+    """Remove leaked ``<memory-context>`` injection scaffolding (system-note
+    that must never travel into the persona file)."""
+    return _MEMORY_CTX.sub("", text or "").strip()
+
+
+def _split_conversation(c: str) -> list:
+    """Split a ``conversation`` memory row's content into (q, a) pairs.
+
+    v5.db mixes two on-disk formats for ``type='conversation'``:
+      - legacy JSON array:  ``[{"role":"user","content":"..."}, ...]``
+      - newer plain text:   ``"Q: ...\\nA: ..."``
+
+    The legacy JSON used to be dumped verbatim into SOUL (a raw-array leak);
+    here we extract each message's ``content`` and pair adjacent user/assistant,
+    stripping any ``<memory-context>`` scaffolding along the way.
+    """
+    import json
+
+    c = (c or "").strip()
+    if not c:
+        return []
+    # 1) JSON array format (legacy)
+    if c.startswith("["):
+        try:
+            arr = json.loads(c)
+        except (json.JSONDecodeError, ValueError):
+            arr = None
+        if isinstance(arr, list):
+            out: list = []
+            for m in arr:
+                if not isinstance(m, dict):
+                    continue
+                role = (m.get("role") or "").lower()
+                text = _strip_memory_context(m.get("content") or "")
+                if not text:
+                    continue
+                if role in ("user", "human"):
+                    out.append([text, ""])
+                elif role in ("assistant", "ai", "bot"):
+                    if out and out[-1][1] == "":
+                        out[-1][1] = text
+                    else:
+                        out.append(["", text])
+                else:  # system / tool etc. — merge into current q
+                    if out:
+                        out[-1][0] = (out[-1][0] + " " + text).strip()
+                    else:
+                        out.append([text, ""])
+            return [tuple(x) for x in out]
+    # 2) Plain "Q: ... / A: ..." text
+    m = re.search(r"(?:^|\n)\s*A\s*:", c)
+    if m:
+        q = re.sub(r"^\s*(?:Q|Query)\s*:?\s*", "", c[: m.start()], flags=re.I).strip()
+        a = c[m.end():].strip()
+        return [(_strip_memory_context(q), _strip_memory_context(a))]
+    # 3) Fallback: whole thing as one Q (already stripped of mem-ctx)
+    return [(_strip_memory_context(c), "")]
+
+
 def _query_recent_memories(limit: int = 8) -> list:
     """Lightweight cross-session recall for the Dashboard (path B) session hook.
 
@@ -212,14 +292,17 @@ def _query_recent_memories(limit: int = 8) -> list:
             c = (content or "").strip()
             if not c or _recall_is_junk(c):
                 continue
-            m = re.search(r"(?:^|\n)\s*A\s*:", c)
-            if m:
-                q = re.sub(r"^\s*(?:Q|Query)\s*:?\s*", "", c[: m.start()], flags=re.I).strip()
-                a = c[m.end():].strip()
-            else:
-                q, a = c, ""
-            _add("近期", q)
-            _add("近期", a)
+            for q, a in _split_conversation(c):
+                if _recall_is_junk(q):
+                    q = ""
+                if _recall_is_junk(a):
+                    a = ""
+                if q:
+                    _add("近期", q)
+                if a:
+                    _add("近期", a)
+                if len(items) >= _recent_cap:
+                    break
             if len(items) >= _recent_cap:
                 break
 
@@ -383,10 +466,21 @@ def _build_soul_md() -> str:
     return "\n".join(parts).strip() + "\n"
 
 
-def sync_once() -> int:
-    """Sync SOUL.md once. Returns byte count written."""
-    content = _build_soul_md()
+def sync_once(force: bool = False) -> int:
+    """Sync SOUL.md once. Returns byte count written.
+
+    force=False 时: 若现有 SOUL.md 已被 soul_refine 精炼 (含 REFINED 标记), 则跳过覆盖,
+    保护 LLM 精炼成果不被盲抄守护进程冲掉。需强制原始同步时传 --force。
+    """
     soul_path = HERMES_HOME / "SOUL.md"
+    if not force and soul_path.exists():
+        try:
+            if "REFINED by soul_refine" in soul_path.read_text(encoding="utf-8"):
+                logger.info("SOUL.md is LLM-refined; skipping raw overwrite (use --force to override)")
+                return 0
+        except Exception:
+            pass
+    content = _build_soul_md()
     soul_path.parent.mkdir(parents=True, exist_ok=True)
     soul_path.write_text(content, encoding="utf-8")
     logger.info("SOUL.md synced (%d bytes) -> %s", len(content), soul_path)
@@ -406,12 +500,22 @@ def watch(interval: int) -> None:
 
 def main():
     args = sys.argv[1:]
+    if "--refine" in args:
+        # LLM 定时精炼 (pi-reflect 模式); 由 cron/任务计划程序调度, 勿放进 --watch 热循环
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from soul_refine import run_refine  # type: ignore
+            status = run_refine()
+            logger.info("soul_refine status: %s", status)
+        except Exception as e:  # noqa: BLE001
+            logger.error("soul_refine failed: %s", e)
+        return
     if "--watch" in args:
         idx = args.index("--watch")
         interval = int(args[idx + 1]) if idx + 1 < len(args) else 3600
         watch(interval)
     else:
-        sync_once()
+        sync_once(force="--force" in args)
 
 
 if __name__ == "__main__":

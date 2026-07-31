@@ -21,4 +21,4 @@ E:\Ikaros\portable-python\python.exe bin\ikaros-repl.py
 ## 关键实现（内联要点）
 - `_call_llm`：优先 `cloud_chat`（异步转 sync），回退直接打 `:8080` llama-server（`/v1/chat/completions`，local LLM）。
 - `_load_*` 系列：cogno_5d / cloud_chat / goal_contract 均失败静默，返回 dummy，不破坏主链。
-- 路径自举：`_ROOT/bin`、`_ROOT/core/v5`、`_ROOT/core/hermes` 注入 sys.path。
+- 路径自举：`_ROOT/bin`、`_ROOT/core/memory_v5`、`_ROOT/core/hermes` 注入 sys.path。

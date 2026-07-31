@@ -15,7 +15,7 @@ python bin/ikaros-memory-watchdog.py --status # 状态查询
 ```
 
 ## 端点播报
-写入 `data/core/v5/endpoints.json`，供其他组件读取。
+写入 `core/memory_v5/data/endpoints.json`，供其他组件读取。
 
 ## 关键设计点（内联要点）
 - **`_health_ok`**：用 `http.client` 直连 `/health`，不走 urllib（避免 launch-hidden/--detach 下 urllib 误判超时或被代理拦截）。404 = 该 build 无 `/health` → 退化为仅查端口，不误杀；503/500 = 未就绪/已坏 → 触发重启。

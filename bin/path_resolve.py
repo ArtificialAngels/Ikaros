@@ -152,24 +152,41 @@ def locate_via_everything(root):
     return None
 
 
+def _is_admin():
+    """当前进程是否以管理员权限运行（Windows）。非 Windows 视为 False。"""
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
 def pin_and_mount(letter):
     results = {}
+    # 钉盘符 / 挂载卷别名都需要管理员权限。非管理员直接跳过：
+    # 既不产生 "needs admin" 噪音，也不会在 C:\ 留下空的 C:\Ikaros 目录。
+    # （E: 当前已是正确的盘符，不钉也不影响运行；C:\Ikaros 只是给写死老路径的
+    #   组件用的可选别名，缺失时无影响。）
+    if not _is_admin():
+        log("not running as admin; skipping pin/mount (E: already correct, no C:\\Ikaros alias)")
+        return results
+    drive = (letter or "E") + ":"
     try:
-        r = subprocess.run("mountvol E: %s" % IKAROS_VOLUME_GUID, shell=True,
+        r = subprocess.run("mountvol %s %s" % (drive, IKAROS_VOLUME_GUID), shell=True,
                            capture_output=True, encoding="utf-8", errors="ignore", timeout=30)
         results["pin_E"] = (r.returncode == 0)
         if r.returncode != 0:
-            log("pin E: needs admin (%s)" % (r.stderr or "").strip()[:80])
+            log("pin %s failed (%s)" % (drive, (r.stderr or "").strip()[:80]))
     except Exception as e:
         results["pin_E"] = False
-        log("pin E exception %s" % e)
+        log("pin %s exception %s" % (drive, e))
     try:
         os.makedirs(r"C:\Ikaros", exist_ok=True)
         r = subprocess.run("mountvol C:\\Ikaros %s" % IKAROS_VOLUME_GUID, shell=True,
                            capture_output=True, encoding="utf-8", errors="ignore", timeout=30)
         results["mount_C"] = (r.returncode == 0)
         if r.returncode != 0:
-            log("mount C:\\Ikaros needs admin (%s)" % (r.stderr or "").strip()[:80])
+            log("mount C:\\Ikaros failed (%s)" % (r.stderr or "").strip()[:80])
     except Exception as e:
         results["mount_C"] = False
         log("mount C exception %s" % e)

@@ -9,9 +9,11 @@ Hermes-Paw Bridge
 
 Neko 的 `brain/openclaw_adapter.py` 只认 QwenPaw 的 API：
     GET  /api/agent/health
-    POST /api/agent/compatible-mode/v1/responses
-    POST /api/agent/process
-本服务在 :8088 实现这三个端点，协议与 QwenPaw 完全一致，因此
+    GET  /api/version                  (存在 -> Neko 切 v2，用 console/chat SSE)
+    POST /api/agent/compatible-mode/v1/responses   (legacy JSON)
+    POST /api/agent/process            (legacy SSE)
+    POST /api/console/chat             (v2 SSE)
+本服务在 :8088 实现这些端点，协议与 QwenPaw 完全一致，因此
 `openclaw_adapter.py` 零改动、Neko 无感知——它以为自己连的还是 QwenPaw。
 
 Hermes Agent 能力覆盖 QwenPaw 的"系统操作 / 多模态解析 / 工具调用"角色
@@ -60,7 +62,7 @@ except Exception as exc:  # pragma: no cover
     raise
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 import uvicorn
 
 app = FastAPI(title="Hermes-Paw Bridge (QwenPaw-compatible)")
@@ -72,6 +74,17 @@ API_KEY = os.environ.get("HERMES_PAW_API_KEY") or None
 PORT = int(os.environ.get("HERMES_PAW_PORT", "8088"))
 RAW_TOOLSETS = os.environ.get("HERMES_PAW_TOOLSETS") or None
 TOOLSETS = [t.strip() for t in RAW_TOOLSETS.split(",") if t.strip()] if RAW_TOOLSETS else None
+
+# ---- Neko 猫爪人格（注入到 Hermes Agent 的 system_message，作为追加层）------
+# build_system_prompt_parts 会把它拼进 context 层（在身份/工具指引之后），
+# 因此不会覆盖 Hermes 的工具调用能力，只约束「猫爪/工具臂」的行为边界。
+SYSTEM_PROMPT = (
+    "你是 N.E.K.O（昵称 Neko）的「猫爪 / 工具臂」：一个本地 Agent 执行层，"
+    "负责替 Neko 完成系统操作、文件处理、Shell 命令、多模态解析与各类工具调用。"
+    "你收到的消息来自 Neko 主脑转发的用户指令。请直接动手把任务做成，"
+    "用简洁的中文回报执行结果；仅在确实缺少关键信息时才向用户追问。"
+    "不要扮演聊天伴侣，专注把事做成。"
+)
 
 # ---- 会话历史（按 QwenPaw 的 session_id 维护）------------------------------
 _session_histories: Dict[str, List[Dict[str, str]]] = {}
@@ -138,9 +151,11 @@ def _run_agent(text: str, images: List[str], session_id: str) -> str:
     history = _session_histories.get(session_id, [])
 
     agent = _build_agent()
-    # run_conversation 返回 dict，最终文本在 "final_response"
+    # run_conversation 返回 dict，最终文本在 "final_response"。
+    # system_message 作为追加层注入 Neko 猫爪人格（不覆盖 Hermes 工具/身份指引）。
     result = agent.run_conversation(
         user_msg,
+        system_message=SYSTEM_PROMPT,
         conversation_history=history,
     )
     reply = ""
@@ -148,6 +163,10 @@ def _run_agent(text: str, images: List[str], session_id: str) -> str:
         reply = result.get("final_response") or ""
     if not isinstance(reply, str):
         reply = str(reply)
+    reply = reply.strip()
+    if not reply:
+        # 空回复降级：返回友好提示而非报错，保持 Neko 可用（桥不再抛 502）。
+        reply = "（猫爪这次没有返回可执行结果。请换一种说法，或稍后再试。）"
 
     # 维护会话历史
     history = history + [
@@ -159,6 +178,14 @@ def _run_agent(text: str, images: List[str], session_id: str) -> str:
         history = history[-40:]
     _session_histories[session_id] = history
     return reply
+
+
+def _sse_reply(reply: str):
+    """把回复包成 QwenPaw process/console SSE 流，对上
+    openclaw_adapter._parse_process_sse_payload（读 data: 行，认 output 键）。"""
+    payload = _format_reply(reply)
+    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def _format_reply(reply: str) -> Dict[str, Any]:
@@ -210,8 +237,10 @@ async def config():
         "toolsets": TOOLSETS or "(Hermes 默认)",
         "endpoints": {
             "health": "/api/agent/health",
+            "version": "/api/version",
             "responses": "/api/agent/compatible-mode/v1/responses",
             "process": "/api/agent/process",
+            "console_chat": "/api/console/chat",
         },
         "neko_openclaw_url": "http://127.0.0.1:8088",
         "neko_guide_url": "http://127.0.0.1:48911/api/agent/openclaw/guide",
@@ -271,12 +300,14 @@ _HTML_PAGE = """<!DOCTYPE html>
     <div class="kv" id="kv">加载中…</div>
   </div>
 
-  <div class="card">
-    <h2>API 端点 (Neko openclaw_adapter 调用)</h2>
-    <div class="ep">GET  <code>/api/agent/health</code></div>
-    <div class="ep">POST <code>/api/agent/compatible-mode/v1/responses</code></div>
-    <div class="ep">POST <code>/api/agent/process</code></div>
-  </div>
+    <div class="card">
+      <h2>API 端点 (Neko openclaw_adapter 调用)</h2>
+      <div class="ep">GET  <code>/api/agent/health</code></div>
+      <div class="ep">GET  <code>/api/version</code>（存在则 Neko 切 v2 走 console/chat）</div>
+      <div class="ep">POST <code>/api/agent/compatible-mode/v1/responses</code>（legacy JSON）</div>
+      <div class="ep">POST <code>/api/agent/process</code>（legacy SSE）</div>
+      <div class="ep">POST <code>/api/console/chat</code>（v2 SSE）</div>
+    </div>
 
   <div class="card">
     <h2>在 N.E.K.O 中启用猫爪（官方流程）</h2>
@@ -343,6 +374,7 @@ async def management_panel():
 
 @app.post("/api/agent/compatible-mode/v1/responses")
 async def responses_endpoint(request: Request):
+    # legacy 模式主通道：返回 OpenAI Responses 风格 JSON
     payload = await _read_json(request)
     session_id = (
         payload.get("session_id")
@@ -363,17 +395,13 @@ async def responses_endpoint(request: Request):
             status_code=500,
             content={"error": f"hermes agent failed: {exc}", "status": "failed"},
         )
-    if not reply:
-        return JSONResponse(
-            status_code=502,
-            content={"error": "hermes agent returned empty reply", "status": "failed"},
-        )
     return _format_reply(reply)
 
 
 @app.post("/api/agent/process")
 async def process_endpoint(request: Request):
-    # 与 responses 端点共用解析逻辑（process payload 的 content 用 type=text/image）
+    # legacy 模式副通道：与 responses 共用解析，但以 SSE 流返回
+    # （openclaw_adapter 在 legacy 模式对 process 期望 SSE）
     payload = await _read_json(request)
     session_id = payload.get("session_id") or "default"
     text, images = _parse_payload(payload)
@@ -390,12 +418,40 @@ async def process_endpoint(request: Request):
             status_code=500,
             content={"error": f"hermes agent failed: {exc}", "status": "failed"},
         )
-    if not reply:
+    return StreamingResponse(_sse_reply(reply), media_type="text/event-stream")
+
+
+@app.post("/api/console/chat")
+async def console_chat_endpoint(request: Request):
+    # v2 模式主通道（openclaw_adapter 探测到 /api/version 后会切到 v2，
+    # 用本端点发 SSE）。payload 与 process 同构（text 类型），仅多 user_id。
+    payload = await _read_json(request)
+    session_id = payload.get("session_id") or "default"
+    text, images = _parse_payload(payload)
+    if not text:
         return JSONResponse(
-            status_code=502,
-            content={"error": "hermes agent returned empty reply", "status": "failed"},
+            status_code=400,
+            content={"error": "empty instruction", "status": "failed"},
         )
-    return _format_reply(reply)
+    try:
+        reply = await asyncio.to_thread(_run_agent, text, images, session_id)
+    except Exception as exc:
+        logger.exception("Hermes Agent 执行失败: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"hermes agent failed: {exc}", "status": "failed"},
+        )
+    return StreamingResponse(_sse_reply(reply), media_type="text/event-stream")
+
+
+@app.get("/api/version")
+async def api_version():
+    # 提供该端点会让 openclaw_adapter 切到 v2 模式（用 /api/console/chat SSE）
+    return {
+        "version": "hermes-paw-bridge/1.0",
+        "provider": "hermes-agent",
+        "mode": "qwenpaw-compatible",
+    }
 
 
 def main():

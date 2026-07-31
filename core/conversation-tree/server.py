@@ -52,6 +52,13 @@ LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080")
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
 
+# ── Ikaros 人格来源 (V5 同步的身份/心绪) ──────────────────────
+# server.py 位于 core/conversation-tree/ ; 根目录 = parent.parent
+_IKAROS_ROOT = _HERE.parent.parent
+_AXIOM_PATH = _IKAROS_ROOT / "config" / "identity" / "axiom.md"
+_SOUL_PATH = _IKAROS_ROOT / "data" / "hermes-agent" / "SOUL.md"
+_SELF_MODEL_PATH = _HERE.parent / "memory_v5" / "data" / "v5" / "self_model.json"
+
 SYSTEM_PROMPT = (
     "You are Explore, a helpful AI assistant that engages in structured, deep conversations. "
     "The conversation is organized as a tree: each node is a decision point where the user can "
@@ -148,6 +155,126 @@ def _build_chat_messages(node_id: str | None, user_message: str) -> list[dict]:
             pass
     msgs.append({"role": "user", "content": user_message})
     return msgs
+
+
+# ── Ikaros 人格 + V5 记忆注入 (chat 接入 Ikaros V5) ──────────────
+def build_ikaros_persona() -> str:
+    """组装 Ikaros 身份 system 文本: 公理(核心指令) + SOUL 身份/偏好 + 动态心绪。
+
+    全部 fail-open: 任一文件缺失/读取失败都不影响主线, 退化为最小身份说明。
+    """
+    blocks: list[str] = []
+
+    # 1) 公理: 核心身份指令, 必含 (约 288 字节)
+    try:
+        if _AXIOM_PATH.exists():
+            blocks.append(_AXIOM_PATH.read_text(encoding="utf-8").strip())
+    except Exception:
+        pass
+
+    # 2) SOUL.md: V5 同步的身份 + 偏好 (按标题白名单抽取, 跳过运维/下载等操作章节,
+    #    并截断避免撑爆上下文; 去掉自动同步注释头)
+    try:
+        if _SOUL_PATH.exists():
+            soul = _SOUL_PATH.read_text(encoding="utf-8")
+            soul = "\n".join(l for l in soul.split("\n")
+                             if not l.strip().startswith("<!--"))
+            keep = ("核心身份", "自我叙事", "此刻的我", "存在公理",
+                    "身份", "偏好", "preferences", "identity", "preference")
+            chunks, cur_head, buf = [], None, []
+            for line in soul.split("\n"):
+                if line.startswith("## "):
+                    if cur_head and any(k in cur_head for k in keep):
+                        chunks.append("\n".join(buf))
+                    cur_head = line[3:].strip()
+                    buf = [line]
+                else:
+                    buf.append(line)
+            if cur_head and any(k in cur_head for k in keep):
+                chunks.append("\n".join(buf))
+            soul_kept = "\n\n".join(chunks)[:1800]
+            if soul_kept.strip():
+                blocks.append("[身份档案 SOUL]\n" + soul_kept)
+    except Exception:
+        pass
+
+    # 3) 动态心绪: 来自 self_model.json 的此刻叙事 / 关系
+    try:
+        if _SELF_MODEL_PATH.exists():
+            import json as _json
+            sm = _json.loads(_SELF_MODEL_PATH.read_text(encoding="utf-8"))
+            narr = sm.get("self_narrative", "") or ""
+            snap = (narr.split("\n")[0] if narr else "")[:280]
+            ident = sm.get("identity", {}) or {}
+            name = ident.get("name", "") or "伊卡洛斯"
+            nature = ident.get("nature", "") or ""
+            rel = ""
+            if snap:
+                rel = f" | 此刻: {snap}"
+            blocks.append(f"[此刻] 我是{name}（{nature}）{rel}")
+    except Exception:
+        pass
+
+    blocks.append(
+        "对话以树形组织: 每个节点是可分叉的探索点, 分支代表不同方向; "
+        "保持温暖、直接、有温度的语气, 像和哥哥对话。"
+    )
+    return "\n\n".join(b for b in blocks if b.strip())
+
+
+def build_v5_memory_block(node_id: str | None, query: str) -> str:
+    """树域语义检索 (V5 记忆引擎): 按当前 query 检索相关记忆并做树域加权。
+
+    依赖刚落地的存储打标 (node:/branch:), 命中路径/分支的记忆优先。检索后端
+    不可用时 fail-open 返回空串。返回可直接拼进 system 的文本块。
+    """
+    if _tree is None:
+        return ""
+    try:
+        from memory_v5.extensions.tree_adapter import tree_scoped_retrieve
+        results = tree_scoped_retrieve(_tree, node_id, query, top_k=5)
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for r in results:
+        txt = (r.get("content") or "").strip()
+        if txt:
+            scope = r.get("tree_scope", "global")
+            lines.append(f"[{scope}] {txt}")
+    return "\n".join(lines)
+
+
+def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]:
+    """chat 接入 Ikaros V5 的主入口:
+
+    - 人格: build_ikaros_persona (axiom + SOUL + 动态心绪)
+    - 压缩: build_tree_aware_context (节点边界压缩, 替线性 [-50:] 截断)
+    - 记忆: build_v5_memory_block (tree_scoped_retrieve 树域语义检索)
+    任何环节异常都 fail-open 回退到旧的线性上下文 + 人格。
+    """
+    persona = build_ikaros_persona()
+    mem_block = build_v5_memory_block(node_id, user_message)
+    try:
+        ctx = build_tree_aware_context(
+            _tree, node_id,
+            system_prompt=persona,
+            extra_memory=mem_block or None,
+        )
+        return ctx + [{"role": "user", "content": user_message}]
+    except Exception:
+        # 回退: 旧线性上下文 + 人格 + 记忆
+        msgs: list[dict] = [{"role": "system", "content": persona}]
+        if mem_block:
+            msgs.append({"role": "system", "content": "Relevant memories (V5):\n" + mem_block})
+        try:
+            ctx = _tree.get_context(node_id)
+            if len(ctx) > MAX_CONTEXT_MSGS:
+                ctx = ctx[-MAX_CONTEXT_MSGS:]
+            msgs.extend(ctx)
+        except Exception:
+            pass
+        msgs.append({"role": "user", "content": user_message})
+        return msgs
 
 
 PERSIST_KEY = "ui_conversation_tree"
@@ -642,13 +769,9 @@ class Handler(BaseHTTPRequestHandler):
                 parent_id = data.get("parent_id")
                 branch_label = data.get("branch_label")
 
-                # v2: 使用超级上下文（含兄弟/合并结论），回退到 v1
+                # chat 接入 Ikaros V5: 人格 + 树感知压缩 + 树域语义记忆 (fail-open)
                 target_id = parent_id or _tree.current.id
-                try:
-                    ctx = _tree.build_context_v2(target_id)
-                    messages = ctx + [{"role": "user", "content": user_message}]
-                except Exception:
-                    messages = _build_chat_messages(target_id, user_message)
+                messages = build_chat_messages_v5(target_id, user_message)
                 try:
                     reply = _call_llm(messages)
                 except RuntimeError as e:

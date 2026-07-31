@@ -2,7 +2,7 @@
 
 > **目标读者**: 所有接入本项目的 AI Agent
 > **核心原则**: 便携性（零系统依赖）+ 路径统一管理（一处注册，全局可查）
-> **最后更新**: 2026-07-26
+> **最后更新**: 2026-07-30
 
 ---
 
@@ -53,9 +53,10 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 | :48915 | Neko Agent 服务器 | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) | 面板 neko_agent |
 | :9119 | Hermes Dashboard | `core/hermes/.../web_server.py` | 面板 hermes_dashboard |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` | 面板 qwenpaw |
+| :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | 面板 conversation_tree 组件 |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 面板 herdr 组件（按需，不随全栈自启） |
 
-> **端口状态**：上述 8 个端口为当前生效服务。已移除：`Hermes API 网关（原端口 8642）`、语音桥（原端口 7870 / 7871）—— 均于 2026-07-24 删除。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
+> **端口状态**：上述 9 个 TCP 端口为当前生效服务。已移除：`Hermes API 网关（原端口 8642）`、语音桥（原端口 7870 / 7871）—— 均于 2026-07-24 删除。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
 
 ### 1.3 控制面板 9100 重构 (2026-07-26)
 
@@ -65,6 +66,17 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **neko_group 合并**：Neko 原来的 3 个服务（`:48911` / `:48912` / `:48915`）合并为单一 `neko_group`，支持**一键启动**或分别控制。
 - **移除 Hermes API 网关与人设同步**：原 Hermes API 网关（曾用端口 8642）被删除，Person Sync（人设同步脚本）一并删除。
 - **hermes → dashboard 别名**：`cloud_chat` 的 `hermes` 云端 provider 现已**别名指向 `dashboard`**（即 Hermes Dashboard `:9119`）。
+
+### 1.4 对话树面板 (Conversation Tree, :48920)
+
+新增于 2026-07-28，由控制面板 `conversation_tree` 组件管理（启动 `core/conversation-tree/server.py --port 48920`）：
+
+- **定位**：Explore.poker 风格的树形对话面板，把多轮 / 分支对话以可折叠树呈现（卡片 + 贝塞尔连线 + 拖拽 + 缩放 + 右键菜单 + 双主题 + splitter + localStorage）。
+- **后端引擎**：`core/memory_v5/conversation_tree.py`（`ConversationTree`，33 tests）；REST 接口 `fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context`；`build_context_v2`（L0 祖先 + L1 兄弟 + L2 合并，MAX 50）。
+- **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针，真实记忆在 `v5.db`。
+- **与 V5 集成**：`hermes_provider.push_to_conversation_tree()` 在记忆写入后静默推送节点（`core/memory_v5/hermes_provider.py:343`）；`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话（`.hermes_history`）批量导入对话树（需重启服务重载内存树）。
+- **LLM 路由**：`/api/chat` 直连 DeepSeek（`DEEPSEEK_KEY` 已配），不经 Hermes 三层路由（与 V5 companion 的 DeepSeek → Hermes → 本地 `:8080` 不同）。
+- **已知限制**：前端 `/api/chat` 的 system prompt 写死为通用「Explore」助手，**未接入 Ikaros 人格**（SOUL.md / axiom.md / V5 self_model）；`/api/chat` 不记录 `skills_used` / `tool_calls`；`MemoryRetriever._node_memories` 不持久化。Ikaros 人格目前仅由 `cloud_chat.build_system_prompt`（桌宠）与 Hermes（SOUL.md）使用。
 
 ---
 
@@ -85,6 +97,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 │   └── llama-server.exe
 ├── rust\bin\                   ← 便携 Rust 工具
 │   └── cargo.exe
+├── herdr\                      ← Herdr coding-agent 终端多路复用器 (headless, 命名管道)
 └── MCPServe\                   ← MCP 服务套件
     ├── playwright\
     └── codebase-memory\
@@ -122,6 +135,10 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_MODEL_EMBEDDING` | `%IKAROS_ROOT%\core\memory_v5\models\...` | Embedding 模型 |
 | `IKAROS_MEMORY` | `%IKAROS_ROOT%\core\memory_v5` | V5 代码 + 数据根 |
 | `IKAROS_LABEL_EMOTION_PROVIDER` | `local` / `deepseek` | 情感标注 LLM |
+| `IKAROS_MODULES` | `%IKAROS_ROOT%\modules` | 模块目录（扩展挂载点） |
+| `IKAROS_LOGS` | `%IKAROS_ROOT%\data\logs` | 统一日志目录 |
+| `IKAROS_HERMES_AGENT` | `%IKAROS_ROOT%\core\hermes` | Hermes Agent 代码根（relocated from `hermes-agent`） |
+| `IKAROS_HERMES_HOME` | `%IKAROS_ROOT%\data\hermes-agent` | Hermes 用户态数据 / 会话目录 |
 
 ### 2.4 PYTHONHOME 安全门
 
@@ -281,6 +298,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `entity_graph.py` | 实体图谱 (6 张 `eg_*` 表同库): 抽取(Stage A/B)+传播激活(spreading_activation_search)+整合 | `run_episodic_consolidation()` |
 | `validation.py` | 结构化内容守卫 (`V5-0109`): 拦截 LLM 旁白/裸 JSON/栅栏/超长，防污染 v5.db | `is_clean_structured_content()` |
 | `reflect/` | 记忆反射: consolidate/distill/llm_client/registry/scheduler。**全走 DeepSeek 云端 (deepseek-v4-flash)**；本地 :8080 仅 agent 按需懒加载，不参与反思认知 | `registry.run_all()` |
+| `extensions/` | **上下文压缩与检索增强层（骨架，尚未接入主链路）**：`token_compressor.py`（委派 `llmlingua` 现成库 + 离线规则回退，消费闲置的 `token_budget`）、`gated_retrieval.py`（分层门控，TencentDB 思路借鉴）、`temporal_graph.py`（`eg_*` 加 `valid_from/valid_to` + `dissonance` supersede，Graphiti 思路借鉴但 SQLite 原生、不换图库）。详见 §5.2.5 与 `docs/v5-context-compression.md` | `compress_text()` / `gated_retrieve()` / `apply_migration()` |
 | `models/model_config.py` | 本地 LLM 单一配置源: 模型/别名(`local-llm`)/端口(8080)/ctx/gpu_layers，落盘 `model_config.json` | `default_config()` |
 | `cogno_5d.py` | 5D 认知增强 (时间/设备/地理/情绪/上下文) | `enrich_reply()` |
 | `__init__.py` | V5 版本 5.1.0 + CONTROLLED_KINDS 注册表 (12 kinds) | `validate_state_key()` |
@@ -305,6 +323,8 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `ikaros-memory-watchdog.py` | 管理 :8587 embed + :8080 LLM (CFG 退避) |
 | `ikaros-soul-sync.py` | V5 → SOUL.md 同步 |
 | `hermes_paw_bridge.py` | Hermes Agent 驱动的猫爪桥 (:8088) |
+| `import-hermes-to-convtree.py` | Hermes 单会话 → 对话树 (:48920) 导入器 |
+| `conversation-tree/server.py` | 对话树面板后端 (REST, :48920) |
 
 ---
 
@@ -345,7 +365,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 记忆库全部落在 `core/memory_v5/data/v5/`：
 
-- `v5.db`（SQLite + FTS5）：结构化记忆主存储（**唯一真相源**）。`memory` 表存长期记忆条目（含 PAD 情感指纹 `pad_p/a/d`、`character` 角色隔离、`reinforcement/disputation` 证据评分）；另有 `reflections` / `events` / `user_directives` / `anti_repeat` 表；实体图谱 6 张 `eg_*` 表（**已启用**：抽取 + 传播激活 + 整合）。
+- `v5.db`（SQLite + FTS5）：结构化记忆主存储（**唯一真相源**）。`memory` 表存长期记忆条目（含 PAD 情感指纹 `pad_p/a/d`、`character` 角色隔离、`reinforcement/disputation` 证据评分）；另有 `reflections` / `events` / `user_directives` / `anti_repeat` 表；实体图谱 6 张 `eg_*` 表（**已启用**：抽取 + 传播激活 + 整合；**规划中（未迁移）**：拟加 `valid_from`/`valid_to` 时效列，`dissonance.py` 检测矛盾时 `supersede` 旧事实，检索侧 `retrieve_temporal` 过滤过期值，见 §5.2.5，零图库依赖）。
   - ⚠️ `v5.db` 无数字化的 schema-version 守卫，版本演进靠 `store.py` 的**幂等 DDL**（`conn()` 中先 `executescript(SCHEMA)` 再按需 `ALTER TABLE ADD COLUMN`）。schema 版本守卫仅存在于 JSON 状态层（`self_model.json` 等带 `schema_version: 5.1.0`，由 `SelfModel.load` 校验）。
 - `chroma/`（ChromaDB 持久化，768 维 `nomic-embed-text-v2-moe` 向量，由 :8587 嵌入）：记忆向量索引，集合名 `ikaros_v5`（cosine），**纯派生，可由 v5.db 重建**（维护脚本 `tmp/rebuild_chroma.py`；运行时有 `vector_sync` op 做幂等全量 upsert 作为崩溃恢复安全网）。运行时代码无自动 HNSW drop-rebuild。
 - **三路融合阈值**：`memory_retrieval.retrieve` 的 `min_fused_score` 线上生效值 = **0.3**（在 `core/memory_v5/preprocess_config.yaml` 标定，原 0.6 会把有效召回全过滤掉）；权重 `vector 0.7 / fts 0.3`，时间命中给强初始分 1.0。`search.fused_search` 是另一套硬编码双路（fta 0.3/vec 0.7），由 `provider_bridge` 的 Hermes `v5search` 桥调用。
@@ -392,6 +412,28 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 API：`guard_structured_content(content) → list[ValidationError]`、`is_clean_structured_content(content) → bool`，错误码 `ErrorCode.IN_STRUCTURED_MALFORMED = "V5-0109"`。
 消费方：**`consolidate` / `distill` / `reflect` 三条结构化管线**在落库前各调用一次（Task #15）。`store()` 自身另走通用输入校验 `validate_memory`/`check_and_log`，非此守卫。
+
+### 5.2.5 上下文压缩与检索增强层（extensions/，token_compressor 已接入、另两项骨架阶段）
+
+V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`summary.py`，20 轮才触发）、委托 Hermes `ContextCompressor` 压 transcript 中段、以及 `token_budget` 的**硬截断**（该配置此前在 `preprocess_config.yaml` 定义却**未被主检索代码消费**）。为补齐相对 TencentDB / LLMLingua / Graphiti 的差距，`core/memory_v5/extensions/` 下规划了三层增强骨架：**`token_compressor` 已接入 hermes 插件 `on_pre_compress`（guard + 异常回退，替换原 `text[:150]` 硬截断，已通过集成沙箱测试）；`gated_retrieval` / `temporal_graph` 仍为骨架，未并入主链路**：
+
+1. **`token_compressor.py` — token 级压缩（相对 LLMLingua 的硬缺口）**
+   - 核心入口 `compress_text(text, quality="auto")`：装了 `llmlingua` 则委派其 `PromptCompressor.compress_prompt()`（README 实测 11x+ 压缩，对抗 lost-in-the-middle）；未装/离线则回退 `rule_compress`（折叠空白/重复行、删语气 filler、超目标保头尾截中段）。
+   - **导入守护 + 离线回退**：U 盘离线便携，不硬依赖 HF 模型权重；`pip install llmlingua` 到 Ikaros venv 联网一次下模型后离线可用缓存。
+   - 配套 `compress_old_rounds(tail_keep=6)`（保最近 N 轮原样、压旧轮）、`compress_retrieval_block`（高相关原样、低相关先压再裁，避免「要么全要要么全弃」）、`enforce_budget`（按 score/顺序截到预算内）。
+   - **消费此前闲置的 `token_budget` 配置**（min 800 / max 1200 / `char_x` 估算）。
+   - **已接入主链路（2026-07-30 验证）**：`core/hermes/plugins/memory/ikaros_v5/__init__.py` 的 `on_pre_compress` 用 `compress_retrieval_block(max_chars_per_item=150)` 替换原有 `text[:150]` 硬截断，整段用 `try/except` 包裹，压缩器异常时自动回退原始硬截断。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
+
+2. **`gated_retrieval.py` — 分层检索门控（相对 TencentDB 的缺口）**
+   - `gated_retrieve()`：默认**只注入高层**（`self_model.get_self_prompt()` + distill/reflect 层记忆），仅在查询实质化且预算剩余时才**下钻** `retrieve()` 拉低层细节。
+   - 抓 TencentDB L0-L3「默认注高层、按需下钻」模式的精髓，不引入其调度基础设施。
+
+3. **`temporal_graph.py` — 时效图谱（相对 Graphiti 的缺口，SQLite 原生）**
+   - `apply_migration()`：在现有 `eg_*` 表上幂等 `ALTER` 加 `valid_from`/`valid_to`（**不换图库后端**）。
+   - `supersede_memory()` / `resolve_dissonance_supersede()`：接在 `dissonance.py` 检测矛盾之后，把冲突旧事实 `valid_to=now` 失效（Graphiti 的「矛盾即更替」）。
+   - `retrieve_temporal()`：检索优先有效事实、降权/排除已过期。
+
+> ⚠️ **架构决策（2026-07-30 固化）**：V5 **永久留在 SQLite（`v5.db`），不迁移任何图数据库后端**（Neo4j/FalkorDB/Kuzu/Neptune）。`temporal_graph` 仅借鉴 Graphiti 模式（时效窗口 + 自动失效）在 SQLite 上复刻，目标拿下 80%+ 功能、0 架构迁移；精确 relation_type 级 supersede、双时间追踪历史视图可放弃。`token_compressor` 继续使用 `llmlingua` 现成库（导入守护 + 离线回退），与此决策不冲突。详细接入点 / 风险见 `docs/v5-context-compression.md` 与 `core/memory_v5/extensions/EXTENSIONS.md`。
 
 ---
 

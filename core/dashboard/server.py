@@ -699,7 +699,10 @@ def start_component_hermes_dashboard(root, env, wait):
     spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", "dashboard", "--no-open"], child_env, cwd,
                  str(root / "data" / "logs" / "hermes-dashboard.log"))
     if wait:
-        wait_for_port(9119, 40)
+        # Hermes 控制台启动时要自动构建 web UI（npm install + vite），hermes 更新后
+        # 首次构建常 >40s；轮询是端口一通就提前返回，180s 只是上限，避免面板在
+        # 构建完成前误判“启动失败”（进程其实仍在后台构建并随后绑定 9119）。
+        wait_for_port(9119, 180)
 
 
 def stop_component_hermes_dashboard(root, env):
@@ -1196,9 +1199,26 @@ def start_component_qwenpaw(root, env, wait):
                 "[qwenpaw] 桥不存在且 QWENPAW_CMD 未设, 请在宿主机手动启动猫爪服务 (:8088)"
             )
             return
-    # 构造子进程环境: Hermes DeepSeek 网关要求的模型名 + hermes 根 + 端口
+    # 构造子进程环境: Hermes Agent 模型名 + hermes 根 + 端口
+    # 模型名优先级: 环境变量 HERMES_PAW_MODEL > panel_models.json 的 "8088"
+    #             > 默认 deepseek-v4-flash（不再写死，可在面板配置里覆盖）。
     child_env = dict(env or {})
-    child_env.setdefault("HERMES_PAW_MODEL", "deepseek-v4-flash")
+    _panel_models = load_panel_models()
+    resolved_model = (
+        os.environ.get("HERMES_PAW_MODEL")
+        or (isinstance(_panel_models, dict) and _panel_models.get("8088"))
+        or "deepseek-v4-flash"
+    )
+    child_env["HERMES_PAW_MODEL"] = resolved_model
+    # base_url 透传: 默认不设置 -> Hermes Agent 用自身默认 provider；
+    # 若配置了则走指定 OpenAI 兼容网关。
+    resolved_base_url = (
+        os.environ.get("HERMES_PAW_BASE_URL")
+        or (isinstance(_panel_models, dict) and _panel_models.get("8088_base_url"))
+        or ""
+    )
+    if resolved_base_url:
+        child_env["HERMES_PAW_BASE_URL"] = resolved_base_url
     child_env.setdefault("HERMES_AGENT_ROOT", r"E:\Ikaros\core\hermes")
     child_env.setdefault("HERMES_PAW_PORT", "8088")
     parts = cmd.split()

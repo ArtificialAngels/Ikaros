@@ -9,7 +9,7 @@
 
 | 文档 | 日期 | 内容 | 规模 |
 |------|------|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-07-27 | Ikaros 全栈架构（分层/端口/路径/数据流/规则） | 27KB |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-07-30 | Ikaros 全栈架构（分层/端口/路径/数据流/规则） | 27KB |
 | [module-dependency-map.html](module-dependency-map.html) | 2026-07-27 | 模块依赖关系图（交互式 SVG） | — |
 | [neko-deep-analysis.md](neko-deep-analysis.md) | 2026-07-27 | N.E.K.O 模块深度分析（**保持独立，合并 V5 建议已作废**） | 32KB |
 | [neko-chat-architecture.md](neko-chat-architecture.md) | 2026-07-25 | N.E.K.O 前端聊天系统架构（记忆/会话/主动搭话前端实现） | 13KB |

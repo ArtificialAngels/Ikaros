@@ -12,5 +12,5 @@ ikaros-mem decay
 ```
 
 ## 实现
-- 默认 `MEM_SCRIPT=%~dp0..\core\v5\v5\store.py`，转发全部参数。
+- 默认 `MEM_SCRIPT=%~dp0..\core\memory_v5\store.py`，转发全部参数。
 - 先 `call init.bat`（静默），确保 `IKAROS_PYTHON` 已设置。

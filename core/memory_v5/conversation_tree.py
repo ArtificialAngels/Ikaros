@@ -162,6 +162,11 @@ class ConvNode:
     tool_calls: List[ToolCall] = field(default_factory=list)  # 工具调用详情
     conclusions: List[NodeInsight] = field(default_factory=list)  # 提取的结论
 
+    # ── 树域适配 (tree_adapter): node→fact 持久化绑定 ──
+    # 修已知 bug: 原 fact 绑定仅存内存 _node_memories, 重启后路径检索变空。
+    # 此处把绑定持久化进拓扑 JSON, 重启后由 MemoryRetriever.retrieve 优先读取。
+    memory_ids: List[int] = field(default_factory=list)
+
     # ── v2.1 执行状态 (B2: herdr exec_state 内化) ──
     exec_state: str = "idle"        # idle | pending | working | blocked | done | unknown
     exec_progress: float = 0.0      # 0.0 ~ 1.0 进度 (仅 working/blocked 时有意义)
@@ -188,6 +193,8 @@ class ConvNode:
             "skills_used": list(self.skills_used),
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "conclusions": [c.to_dict() for c in self.conclusions],
+            # 树域适配: node→fact 持久化绑定
+            "memory_ids": list(self.memory_ids),
             # v2.1 exec_state
             "exec_state": self.exec_state,
             "exec_progress": self.exec_progress,
@@ -216,6 +223,8 @@ class ConvNode:
             skills_used=list(d.get("skills_used", [])),
             tool_calls=[ToolCall.from_dict(tc) for tc in d.get("tool_calls", [])],
             conclusions=[NodeInsight.from_dict(c) for c in d.get("conclusions", [])],
+            # 树域适配: node→fact 持久化绑定 (缺失时默认空, 向后兼容旧 JSON)
+            memory_ids=list(d.get("memory_ids", [])),
             # v2.1 exec_state (缺失时默认 idle, 向后兼容 v1/v2 JSON)
             exec_state=d.get("exec_state", "idle"),
             exec_progress=d.get("exec_progress", 0.0),
@@ -235,6 +244,22 @@ def _default_store(content: str, type: str = "conversation",
     except Exception as e:
         logger.warning("default store provider failed: %s", e)
         return 0
+
+
+def _tree_tag(node_id: str, branch_label: Optional[str] = None) -> str:
+    """树域标签 (node:/branch:), 供 tree_adapter.tree_scoped_retrieve 做树域过滤。
+
+    优先用 extensions.tree_adapter.tag_for_node 作为单一真源; 不可用时内联构造
+    相同格式, 保证零硬依赖 (extensions 模块缺失/离线也不影响主线存储)。
+    """
+    try:
+        from memory_v5.extensions.tree_adapter import tag_for_node
+        return tag_for_node(node_id, branch_label)
+    except Exception:
+        tags = [f"node:{node_id}"]
+        if branch_label:
+            tags.append(f"branch:{branch_label}")
+        return " ".join(tags)
 
 
 # _load(memory_ids: list[int]) -> dict[int, str]
@@ -373,14 +398,15 @@ class ConversationTree:
              seed_summary: str = "") -> ConvNode:
         with self._lock:
             mid = 0
+            root_id = uid("root")
             if seed_messages:
                 content = json.dumps(seed_messages, ensure_ascii=False)
                 sm = seed_summary or _extract_summary(seed_messages)
-                mid = self._store_fn(content, type="conversation", tags="")
+                mid = self._store_fn(content, type="conversation", tags=_tree_tag(root_id))
             else:
                 sm = seed_summary
             root = ConvNode(
-                id=uid("root"),
+                id=root_id,
                 parent_id=None,
                 depth=0,
                 v5_memory_id=mid,
@@ -566,13 +592,15 @@ class ConversationTree:
             if not parent:
                 raise ValueError(f"parent not found: {pid}")
 
-            # 存储对话内容到 V5 store
+            # 存储对话内容到 V5 store (带 node/branch 树域标签, 供 tree_scoped_retrieve)
             content = json.dumps(messages, ensure_ascii=False)
             sm = _extract_summary(messages)
-            mid = self._store_fn(content, type="conversation", tags=tags)
+            node_id = uid("n")
+            new_tags = f"{tags} {_tree_tag(node_id, branch_label)}".strip()
+            mid = self._store_fn(content, type="conversation", tags=new_tags)
 
             node = ConvNode(
-                id=uid("n"),
+                id=node_id,
                 parent_id=pid,
                 depth=parent.depth + 1,
                 branch_label=branch_label,
@@ -669,10 +697,12 @@ class ConversationTree:
 
         content = json.dumps(messages, ensure_ascii=False)
         sm = _extract_summary(messages)
-        mid = self._store_fn(content, type="conversation", tags=tags)
+        node_id = uid("br")
+        new_tags = f"{tags} {_tree_tag(node_id, branch_label)}".strip()
+        mid = self._store_fn(content, type="conversation", tags=new_tags)
 
         node = ConvNode(
-            id=uid("br"),
+            id=node_id,
             parent_id=fork_point_id,
             depth=fork_node.depth + 1,
             branch_label=branch_label,
@@ -1049,10 +1079,17 @@ class MemoryRetriever:
             path_text = " ".join(branch_labels)
 
         # ── 路径内记忆: 从节点映射表精确查找 ──
+        # 优先读持久化的 node.memory_ids (重启后仍可用), 回退内存 _node_memories
         path: list[dict] = []
         if include_path:
             for nid in path_set:
-                for mid in self._node_memories.get(nid, []):
+                source_ids = list(self._node_memories.get(nid, []))
+                cn = self.tree.get_node(nid)
+                if cn is not None:
+                    for mid in cn.memory_ids:
+                        if mid not in source_ids:
+                            source_ids.append(mid)
+                for mid in source_ids:
                     batch = self.tree._load_fn([mid])
                     content = batch.get(mid, "")
                     if content:
@@ -1112,16 +1149,24 @@ class MemoryRetriever:
     def add_memory(self, mem: Dict[str, Any]) -> Dict[str, Any]:
         """将记忆写入 V5 store (type=fact), 记入节点映射供路径检索."""
         text = mem.get("text", mem.get("content", ""))
-        tags = " ".join(mem.get("tags", [])) if isinstance(mem.get("tags"), list) else mem.get("tags", "")
         node_id = mem.get("node_id", "")
+        node = self.tree.get_node(node_id) if node_id else None
+        branch_label = node.branch_label if node else None
+        base_tags = " ".join(mem.get("tags", [])) if isinstance(mem.get("tags"), list) else mem.get("tags", "")
+        # 带 node/branch 树域标签, 供 tree_scoped_retrieve 做树域过滤 (fact 同样适用)
+        new_tags = f"{base_tags} {_tree_tag(node_id, branch_label)}".strip() if (node_id or base_tags) else base_tags
         try:
-            mid = self.tree._store_fn(text, type="fact", tags=tags)
+            mid = self.tree._store_fn(text, type="fact", tags=new_tags)
         except Exception as e:
             logger.warning("add_memory store failed: %s", e)
             mid = 0
-        # 记入节点映射: add_memory 时显式绑定 node_id → memory_id
+        # 双写: 内存 _node_memories + 持久化 node.memory_ids (修重启后绑定丢失的 bug)
         if node_id and mid > 0:
             self._node_memories.setdefault(node_id, []).append(mid)
+            if node is not None:
+                if mid not in node.memory_ids:
+                    node.memory_ids.append(mid)
+                self.tree.persist()  # 落盘 node→fact 绑定
         return {"id": mid, "text": text, "node_id": node_id, "ts": time.time()}
 
 

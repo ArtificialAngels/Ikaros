@@ -4,7 +4,7 @@
 `:8080` 本地 llama 服务自 2026-07-26 起改为**懒加载 / 按需**：看门狗只检测端口在不，
 不主动拉起模型。本工具是查看其配置逻辑与手动控制的统一入口。
 
-配置逻辑单一事实来源：`core/v5/models/model_config.py`（`resolve_model_config` / `server_args`），
+配置逻辑单一事实来源：`core/memory_v5/models/model_config.py`（`resolve_model_config` / `server_args`），
 经看门狗 `_load_model_cfg` 读取；本工具不重复定义任何启动参数，只做只读展示与控制。
 
 ## 用法

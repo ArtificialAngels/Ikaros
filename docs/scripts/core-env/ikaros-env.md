@@ -36,10 +36,10 @@
 - `HERMES_AGENT_NODE` = `C:\Program Files\nodejs\node.exe`
 
 ### Ikaros Memory 路径
-- `IKAROS_MEMORY` = `%IKAROS_ROOT%\core\v5`
+- `IKAROS_MEMORY` = `%IKAROS_ROOT%\core\memory_v5`
 - `IKAROS_MEMORY_DATA` = `%IKAROS_MEMORY%\data`
 - `IKAROS_MEMORY_MODELS` = `%IKAROS_MEMORY%\models`
-- `IKAROS_MEMORY_SCRIPT` = `%IKAROS_MEMORY%\v4\store.py`
+- `IKAROS_MEMORY_SCRIPT` = `%IKAROS_MEMORY%\store.py`
 
 ### Ikaros Live2D（Tauri 桌宠）
 - `IKAROS_LIVE2D` = `%IKAROS_ROOT%\Ikaros-Live2D`

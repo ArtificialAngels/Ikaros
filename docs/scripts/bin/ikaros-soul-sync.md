@@ -22,4 +22,4 @@ python ikaros-soul-sync.py [--once | --watch N]
 文件头标注 `<!-- AUTO-SYNCED ... DO NOT manually edit -->`。
 
 ## 路径自举
-`IKAROS_ROOT` = env 或 `Path(__file__).resolve().parent.parent`；`IKAROS_MEMORY = IKAROS_ROOT/core/v5`；`HERMES_HOME` = env 或 `IKAROS_ROOT/data/hermes-agent`。`sys.path.insert(0, IKAROS_MEMORY)`。
+`IKAROS_ROOT` = env 或 `Path(__file__).resolve().parent.parent`；`IKAROS_MEMORY = IKAROS_ROOT/core/memory_v5`；`HERMES_HOME` = env 或 `IKAROS_ROOT/data/hermes-agent`。`sys.path.insert(0, IKAROS_MEMORY)`。
