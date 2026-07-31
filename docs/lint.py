@@ -6,8 +6,10 @@ AGENTS.md / README.md for stale references that indicate the docs have drifted
 from the current implementation:
 
   (a) deleted files:  think.py, supervisor_persist.py,
-                      bin/hermes-api-server.py, bin/v5-sync-persona.py
-  (b) deleted ports:  :8642, :7870, :7871
+                      bin/v5-sync-persona.py
+  (b) deleted ports:  :7870, :7871
+  (b2) alive-but-confusable: :8642 Hermes API gateway is ACTIVE again
+       (bin/hermes-api-server.py; used by dashboard + chat-tree) — NOT deleted
   (c) literal core/v5 (should be core/memory_v5)
   (d) hermes-agent/ as a *code* path (should be core/hermes; data/hermes-agent
       user-state dir is allowed and NOT flagged)
@@ -27,10 +29,9 @@ from pathlib import Path
 DELETED_FILES = (
     "think.py",
     "supervisor_persist.py",
-    "bin/hermes-api-server.py",
     "bin/v5-sync-persona.py",
 )
-DELETED_PORTS = (":8642", ":7870", ":7871")
+DELETED_PORTS = (":7870", ":7871")
 OLD_CORE_PATH = "core/v5"  # should now be core/memory_v5
 OLD_HERMES_CODE = "hermes-agent/"  # code path; data/hermes-agent is allowed
 

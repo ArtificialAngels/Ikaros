@@ -20,7 +20,8 @@
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，面板 `herdr` 组件按需启动） |
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
-Removed (do not re-add): Hermes API gateway (was port 8642), voice bridge (ports 7870 / 7871).
+Removed (do not re-add): voice bridge (ports 7870 / 7871).
+Hermes API gateway (:8642) is ACTIVE again via `bin/hermes-api-server.py` (used by dashboard + chat-tree); do not remove.
 
 ## Startup
 - Control panel: `bin/ikaros-control.bat` → opens http://127.0.0.1:9100
@@ -40,7 +41,7 @@ Removed (do not re-add): Hermes API gateway (was port 8642), voice bridge (ports
 ## 9100 panel refactor (2026-07-26)
 - Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable).
 - Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control.
-- Removed Hermes API gateway (port 8642) and Person Sync (sync script deleted).
+- Person Sync removed (sync script deleted). Hermes API gateway (:8642) is ACTIVE again via `bin/hermes-api-server.py` (used by dashboard + chat-tree) — do not remove.
 - `hermes` cloud_chat provider now aliases to `dashboard`.
 
 ## Conversation Tree 面板 (2026-07-28)

@@ -3,10 +3,16 @@
 > **注意**：下文中的 `Ikaros-memory/` 等旧目录名反映条目撰写时的项目结构。
 > 2026-07-24 统一规范化后映射为 `core/v5/`，2026-07-26 进一步**重命名为 `core/memory_v5/`**（包名 `memory_v5`；`v5.db` 文件名与 `v5_*` 工具名作为契约保留）。
 > Hermes Agent 已从仓库根的 `hermes-agent/` **搬迁至 `core/hermes/`**（venv 同步迁移）。 (2026-07-27 校正)
-> 已移除组件：`:8642` Hermes 网关、`:7870`/`:7871` 语音桥、`think.py` 自循环、Persona Sync、Studio 桌面端。
+> 已移除组件：`:7870`/`:7871` 语音桥、`think.py` 自循环、Persona Sync、Studio 桌面端。**`:8642` Hermes API 网关已重新启用**（`bin/hermes-api-server.py`，dashboard + chat-tree 复用；2026-07-31 校正）。
 > 详见 [ARCHITECTURE.md](ARCHITECTURE.md#35-目录映射旧--新) 与 [naming.md](naming.md)。
 
 ---
+
+## [2026-07-31] — 修订 :8642 约定冲突（文档对齐现实）
+
+- **Hermes API 网关（:8642）重新启用确认**：`bin/hermes-api-server.py` 实际在跑，并被 dashboard（:9119）与对话树面板（:48920，chat 的 hermes 模式走其 agent runtime）复用。此前文档 / lint 误标为"已移除 / 勿加回"。
+- `docs/lint.py`：将 `:8642` 从 `DELETED_PORTS` 移除、`bin/hermes-api-server.py` 从 `DELETED_FILES` 移除（二者均为在用组件，不应被漂移检查拦截）。
+- 修订 `AGENTS.md` / `docs/naming.md` / `docs/ARCHITECTURE.md` / `docs/CHANGELOG.md` / `UPSTREAM.md` 与架构图生成器（`tools/gen_architecture_html.py` + 两份生成 HTML），将 `:8642` 由"已删除"改为"在用（请勿删除）"，`:7870`/`:7871` 语音桥维持"已删除"。
 
 ## [2026-07-27] — 架构重构收口 + 文档纠偏
 
@@ -21,7 +27,7 @@
 - `neko-deep-analysis.md` 加 2026-07-27 状态横幅：「迁移到 V5 建议已作废」。
 
 ### 维护约定
-- 文档防漂移：`python docs/lint.py` 检查 `core/v5` / 已删文件 `think.py` / 已删端口 `:8642` `:7870` `:7871`。 (2026-07-27 校正)
+- 文档防漂移：`python docs/lint.py` 检查 `core/v5` / 已删文件 `think.py` / 已删端口 `:7870` `:7871`。（`:8642` Hermes 网关已重新启用，2026-07-31 从删除端口移除。） (2026-07-31 校正)
 
 Ikaros 项目升级日志。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 

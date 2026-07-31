@@ -1,7 +1,7 @@
 # Ikaros 命名字典 (Naming Dictionary)
 
 > 项目历史上出现过多种大小写 / 缩写混用。本文档统一命名，避免文档与代码漂移。
-> 检查实现：`python docs/lint.py` 会扫描 `core/v5` 残留旧名（应已重命名为 `core/memory_v5`）、已删文件 `think.py`、已删端口 `:8642`/`:7870`/`:7871`。
+> 检查实现：`python docs/lint.py` 会扫描 `core/v5` 残留旧名（应已重命名为 `core/memory_v5`）、已删文件 `think.py`、已删端口 `:7870`/`:7871`。（`:8642` Hermes API 网关已重新启用，见 §5，不再列入删除端口。）
 
 ## 1. 品牌 vs 代码标识符
 
@@ -46,6 +46,7 @@
 |------|------|
 | `import v5` | `import memory_v5` |
 | `core/v5/` | `core/memory_v5/` |
-| `:8642` Hermes 网关 / `:7870` `:7871` 语音桥 | 已删除，勿引用 |
+| `:8642` Hermes API 网关 | 在用（`bin/hermes-api-server.py`，dashboard + chat-tree 复用），勿删除 |
+| `:7870` `:7871` 语音桥 | 已删除，勿引用 |
 | 文档写 "Neko" 当品牌 | 品牌写 **N.E.K.O**，代码写 `neko` |
 | 环境变量 `ikaros_root` | `IKAROS_ROOT` |

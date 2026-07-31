@@ -56,7 +56,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 | :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | 面板 conversation_tree 组件 |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 面板 herdr 组件（按需，不随全栈自启） |
 
-> **端口状态**：上述 9 个 TCP 端口为当前生效服务。已移除：`Hermes API 网关（原端口 8642）`、语音桥（原端口 7870 / 7871）—— 均于 2026-07-24 删除。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
+> **端口状态**：上述 9 个 TCP 端口为当前生效服务。已移除：语音桥（原端口 7870 / 7871）—— 于 2026-07-24 删除。**`:8642` Hermes API 网关已重新启用**（`bin/hermes-api-server.py`，dashboard 与 chat-tree 复用），请勿删除。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
 
 ### 1.3 控制面板 9100 重构 (2026-07-26)
 
@@ -64,7 +64,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 
 - **local_model / memory 拆分**：原看门狗统一持有的 `:8080`（本地 LLM）与 `:8587`（Embedding）拆分为两个独立卡片 `local_model` 与 `memory`，**两者均可在面板内切换模型**。
 - **neko_group 合并**：Neko 原来的 3 个服务（`:48911` / `:48912` / `:48915`）合并为单一 `neko_group`，支持**一键启动**或分别控制。
-- **移除 Hermes API 网关与人设同步**：原 Hermes API 网关（曾用端口 8642）被删除，Person Sync（人设同步脚本）一并删除。
+- **Hermes API 网关（:8642）已重新启用**：由 `bin/hermes-api-server.py` 提供，dashboard 与 chat-tree 复用；Person Sync（人设同步脚本）已删除。
 - **hermes → dashboard 别名**：`cloud_chat` 的 `hermes` 云端 provider 现已**别名指向 `dashboard`**（即 Hermes Dashboard `:9119`）。
 
 ### 1.4 对话树面板 (Conversation Tree, :48920)
