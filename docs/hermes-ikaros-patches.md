@@ -6,7 +6,7 @@
 
 ## 0. 基线指针（每次重打后必须更新）
 - **Upstream tip**（打补丁所基于的 upstream 提交）：`14db1a9`
-- **Ikaros 补丁提交**（单提交，父 = 上述 upstream）：`e939c80`
+- **Ikaros 补丁提交**（单提交；包含 e939c80 的 7 个补丁 + 推理透出/token_compressor 增强；父链 = `14db1a9` ← `e939c80` ← 本提交）：`42255841b`
 - 更新方式：重打完成后把本段两个值改成新的对应提交（新 Ikaros 提交的父 = 新 upstream tip）。
 
 ## 0.5. 补丁源文件位置
@@ -26,7 +26,7 @@ Ikaros 对 hermes 的定制分两类：
 
 ## 2. 应用协议（三步法）
 1. `git fetch` → `git checkout <新 upstream tip>`。
-2. **第①步（确定性）**：`git cherry-pick e939c80`（即当前 Ikaros 提交）。
+2. **第①步（确定性）**：`git cherry-pick 42255841b`（即当前 Ikaros 提交，含 e939c80 全部补丁 + 推理透出/token_compressor 增强）。
    - 干净通过 → 跳到 §4 验证。
    - 冲突 / 失败 → 视为"相关区域有大改"，升级第②步。
    - （让 git 冲突当"是否大改"的检测器，不要另写启发式。）

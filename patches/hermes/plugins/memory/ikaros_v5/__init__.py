@@ -354,11 +354,38 @@ class IkarosV5MemoryProvider(MemoryProvider):
                 results = self._v5_search(query_text, top_k=5)
                 if results:
                     mem_lines = []
-                    for r in results[:5]:
-                        text = getattr(r, "content", "") or ""
-                        weight = getattr(r, "weight", 0)
-                        if text:
-                            mem_lines.append(f"  [{weight:.2f}] {str(text)[:150]}")
+                    # V5 token_compressor 增强: 消费 token_budget, 避免 text[:150]
+                    # 硬截断丢信息(高相关原样, 低相关先压再裁)。
+                    # 未装 extension 或异常时回退原始硬截断(guard, 不破坏生产)。
+                    try:
+                        from memory_v5.extensions.token_compressor import (
+                            compress_retrieval_block,
+                        )
+                        dict_results = [
+                            {
+                                "content": getattr(r, "content", "") or "",
+                                "score": float(getattr(r, "weight", 0) or 0),
+                            }
+                            for r in results[:5]
+                        ]
+                        compressed = compress_retrieval_block(
+                            dict_results, max_chars_per_item=150
+                        )
+                        for r in compressed:
+                            mem_lines.append(
+                                f"  [{float(r.get('score', 0)):.2f}] "
+                                f"{r.get('content', '')}"
+                            )
+                    except Exception as _tc_err:
+                        logger.debug(
+                            "on_pre_compress: token_compressor 不可用, 回退硬截断 (%s)",
+                            _tc_err,
+                        )
+                        for r in results[:5]:
+                            text = getattr(r, "content", "") or ""
+                            weight = getattr(r, "weight", 0)
+                            if text:
+                                mem_lines.append(f"  [{weight:.2f}] {str(text)[:150]}")
                     if mem_lines:
                         parts.append(
                             "[Ikaros 相关记忆]\n" + "\n".join(mem_lines) + "\n"
