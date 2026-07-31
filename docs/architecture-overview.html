@@ -126,7 +126,7 @@
         <tr><td>:8088</td><td>Hermes 猫爪</td><td>bin/hermes_paw_bridge.py</td><td>✅</td></tr>
         <tr><td>:48920</td><td>对话树面板</td><td>core/conversation-tree/server.py (后端 conversation_tree 引擎)</td><td>✅</td></tr>
       </table>
-      <p style="font-size:11px;color:var(--muted)">Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），由面板 herdr 组件按需启动。<br>Gopeed 下载 :9999 仅在下载任务时按需启动，<b>不计入常驻服务</b>。<br>已移除（勿加回）：语音桥 :7870/:7871、Person Sync。Hermes API 网关 :8642 已重新启用（bin/hermes-api-server.py，dashboard + chat-tree 复用），请勿删除。</p>
+      <p style="font-size:11px;color:var(--muted)">Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），由面板 herdr 组件按需启动。<br>Gopeed 下载 :9999 仅在下载任务时按需启动，<b>不计入常驻服务</b>。<br>已移除（勿加回）：语音桥 :7870/:7871、Person Sync。Hermes API 网关 :8642 已重新启用（由 hermes_cli gateway run 提供，dashboard + chat-tree 复用；旧 bin/hermes-api-server.py 未启用），请勿删除。</p>
     </details>
   </div>
 

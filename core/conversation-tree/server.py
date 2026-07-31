@@ -50,9 +50,9 @@ DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119").rstrip("/") + "/v1/chat/completions"
 # Hermes agent runtime 端点 (gateway :8642 的 /v1/chat/completions, 会跑完整 tools/skills 循环).
 # 默认指向本地 gateway; 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示.
-# gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 见 bin/hermes-api-server.py:28).
+# gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8642/v1/chat/completions").strip() or None
-# gateway 鉴权 token; 默认 ikaros-gateway-key (bin/hermes-api-server.py:28 / core/dashboard/server.py:165).
+# gateway 鉴权 token; 默认 ikaros-gateway-key (由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 HERMES_AGENT_KEY = os.environ.get("API_SERVER_KEY", "ikaros-gateway-key").strip()
 HERMES_AGENT_MODEL = os.environ.get("HERMES_AGENT_MODEL", "hermes").strip()
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"

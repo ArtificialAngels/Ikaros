@@ -46,7 +46,7 @@
 |------|------|
 | `import v5` | `import memory_v5` |
 | `core/v5/` | `core/memory_v5/` |
-| `:8642` Hermes API 网关 | 在用（`bin/hermes-api-server.py`，dashboard + chat-tree 复用），勿删除 |
+| `:8642` Hermes API 网关 | 在用（由 `hermes_cli.main gateway run` 提供，dashboard + chat-tree 复用）；旧的 `bin/hermes-api-server.py` 为未启用遗留脚本 |
 | `:7870` `:7871` 语音桥 | 已删除，勿引用 |
 | 文档写 "Neko" 当品牌 | 品牌写 **N.E.K.O**，代码写 `neko` |
 | 环境变量 `ikaros_root` | `IKAROS_ROOT` |

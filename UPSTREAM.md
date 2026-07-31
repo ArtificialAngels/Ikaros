@@ -38,7 +38,7 @@
 | 本地落点 | `hermes-agent/` |
 | 状态 | **已在 `.gitignore` 排除**（从未入库）。`hermes-agent/config.yaml` 为本地生成、已忽略。|
 | 是否入库 | **否** |
-| 我们的集成点 | `config/hermes.yaml`(原生配置)、`bin/hermes_paw_bridge.py`(猫爪桥)、`bin/ikaros-soul-sync.py`(SOUL 生成,由 V5 每轮对话自同步重写 `SOUL.md`);独立 `:8642` 网关 `hermes-api-server.py` 仍在使用（dashboard + chat-tree 复用），其 `hermes` provider 在 companion chat 中别名到 Dashboard 是另一回事，不影响网关本身 |
+| 我们的集成点 | `config/hermes.yaml`(原生配置)、`bin/hermes_paw_bridge.py`(猫爪桥)、`bin/ikaros-soul-sync.py`(SOUL 生成,由 V5 每轮对话自同步重写 `SOUL.md`);独立 `:8642` 网关由 `python -m hermes_cli.main gateway run` 提供（dashboard + chat-tree 复用）；旧的 `bin/hermes-api-server.py` 脚本未启用。其 `hermes` provider 在 companion chat 中别名到 Dashboard 是另一回事，不影响网关本身 |
 
 ---
 

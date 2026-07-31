@@ -58,7 +58,7 @@ PORT_TABLE_FOOTNOTE = (
     "Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），"
     "由面板 herdr 组件按需启动。<br>"
     "Gopeed 下载 :9999 仅在下载任务时按需启动，<b>不计入常驻服务</b>。<br>"
-    "已移除（勿加回）：语音桥 :7870/:7871、Person Sync。Hermes API 网关 :8642 已重新启用（bin/hermes-api-server.py，dashboard + chat-tree 复用），请勿删除。"
+    "已移除（勿加回）：语音桥 :7870/:7871、Person Sync。Hermes API 网关 :8642 已重新启用（由 hermes_cli gateway run 提供，dashboard + chat-tree 复用；旧 bin/hermes-api-server.py 未启用），请勿删除。"
 )
 
 CORE_LAYERS = [
@@ -635,7 +635,7 @@ def render_dep_map() -> str:
     <details>
       <summary>已移除（勿引用）</summary>
       <ul>
-        <li>:8642 Hermes 网关（已重新启用，bin/hermes-api-server.py）</li>
+        <li>:8642 Hermes 网关（已重新启用，由 hermes_cli gateway run 提供；旧 bin/hermes-api-server.py 未启用）</li>
         <li>:7870/:7871 语音桥</li>
         <li>think.py 自循环、Persona Sync、Studio 桌面端</li>
         <li>core/v5 旧名 → 现为 core/memory_v5</li>

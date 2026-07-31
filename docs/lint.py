@@ -9,7 +9,8 @@ from the current implementation:
                       bin/v5-sync-persona.py
   (b) deleted ports:  :7870, :7871
   (b2) alive-but-confusable: :8642 Hermes API gateway is ACTIVE again
-       (bin/hermes-api-server.py; used by dashboard + chat-tree) — NOT deleted
+       (served by `python -m hermes_cli.main gateway run`; the legacy
+        bin/hermes-api-server.py script is UNUSED — do not call it "active")
   (c) literal core/v5 (should be core/memory_v5)
   (d) hermes-agent/ as a *code* path (should be core/hermes; data/hermes-agent
       user-state dir is allowed and NOT flagged)

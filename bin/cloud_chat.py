@@ -1286,9 +1286,10 @@ async def cloud_chat(
     #   "openai"   reuse ekko model chain injected remote endpoint (glm / openai / custom provider, etc.)
     #   "dashboard" (default) legacy Dashboard WebSocket -> DeepSeek cloud path,
     #   local :8080 fallback on failure (and vice-versa) — see cross-fallback block below.
-    #   "hermes"   alias of "dashboard" (the standalone :8642 Gateway is ACTIVE again
-    #              via bin/hermes-api-server.py, but companion-chat's hermes provider
-    #              still routes through the Dashboard WebSocket path for its own use).
+    #   "hermes"   alias of "dashboard" (the standalone :8642 Gateway is ACTIVE again,
+    #              served by `python -m hermes_cli.main gateway run`, but companion-chat's
+    #              hermes provider still routes through the Dashboard WebSocket path for its own use).
+    #              NOTE: the legacy bin/hermes-api-server.py script is UNUSED.
     #   User opted for cloud as the primary path (2026-07-23); local :8080 remains the
     #   automatic resilience fallback so neither path being down alone triggers "zoned out".
     backend_provider = (os.environ.get("IKAROS_BACKEND_PROVIDER") or "dashboard").strip().lower()
