@@ -875,6 +875,16 @@ class ConversationTree:
         # 检测到环
         return False
 
+    # ── 深度重算 (delete_node 重挂子树后用) ──
+    def _recompute_depth(self, node_id: str, depth: int) -> None:
+        """递归重设节点及其子树深度 (depth 以父节点深度 +1 推算)."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        node.depth = depth
+        for child_id in node.children:
+            self._recompute_depth(child_id, depth + 1)
+
     # ── 剪枝 ──
     def prune(self, node_id: str) -> None:
         with self._lock:
@@ -886,11 +896,68 @@ class ConversationTree:
                     p.children = [c for c in p.children if c != node_id]
             for nid in del_ids:
                 self.nodes.pop(nid, None)
-            if self.current_id in del_ids:
-                anc = self.nodes.get(target.parent_id) if target else None
-                while anc and anc.id in del_ids:
-                    anc = self.nodes.get(anc.parent_id) if anc.parent_id else None
-                self.current_id = anc.id if anc else self.root_id
+        if self.current_id in del_ids:
+            anc = self.nodes.get(target.parent_id) if target else None
+            while anc and anc.id in del_ids:
+                anc = self.nodes.get(anc.parent_id) if anc.parent_id else None
+            self.current_id = anc.id if anc else self.root_id
+        self.version += 1
+        self._emit()
+        self.persist()
+
+    # ── v2: 重命名节点（UI 标签人工覆盖）──
+    def rename_node(self, node_id: str, title: str) -> "ConvNode":
+        """重命名节点: 写入 ``meta.title`` 作为卡片标签的人工覆盖.
+
+        不影响存储的对话内容 (v5 store 不变); 前端 ``nodeText`` 优先用 ``meta.title``。
+        传入空串视为清除覆盖, 回退到自动摘要。
+        """
+        with self._lock:
+            node = self.nodes.get(node_id)
+            if not node:
+                raise ValueError(f"node not found: {node_id}")
+            clean = (title or "").strip()
+            if not clean:
+                node.meta.pop("title", None)
+            else:
+                node.meta["title"] = clean[:120]
+            self.version += 1
+        self._emit()
+        self.persist()
+        return node
+
+    # ── v2: 删除单节点（子树重挂父节点）──
+    def delete_node(self, node_id: str) -> None:
+        """删除单个节点, 将其所有子节点重挂到父节点 (保留子树其余部分).
+
+        区别于 ``prune``: prune 删除整棵子树; 本方法只删本节点, 子节点上提一级。
+        不删除关联 v5 记忆 (与 prune 一致, 留孤儿记忆, 避免误删对话内容)。
+        根节点不可删。若当前节点被删, current_id 重指父节点 (或 root)。
+        """
+        with self._lock:
+            node = self.nodes.get(node_id)
+            if not node:
+                raise ValueError(f"node not found: {node_id}")
+            if node.depth == 0:
+                raise ValueError("cannot delete root node")
+            parent = self.nodes.get(node.parent_id) if node.parent_id else None
+            # 从父节点的 children 移除本节点
+            if parent:
+                parent.children = [c for c in parent.children if c != node_id]
+                # 子节点重挂父节点
+                for child_id in node.children:
+                    c = self.nodes.get(child_id)
+                    if c:
+                        c.parent_id = parent.id
+                        if child_id not in parent.children:
+                            parent.children.append(child_id)
+                        # 重挂后递归重算子节点及其子树深度 (避免错层)
+                        self._recompute_depth(child_id, parent.depth + 1)
+            # 删除本节点
+            self.nodes.pop(node_id, None)
+            # current 指向被删节点 → 重指父节点 (或 root)
+            if self.current_id == node_id:
+                self.current_id = parent.id if parent else self.root_id
             self.version += 1
         self._emit()
         self.persist()

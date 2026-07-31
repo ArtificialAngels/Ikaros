@@ -712,13 +712,29 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
             elif path == "/api/merge":
-                _tree.merge_branch(
-                    branch_node_id=data["branch_id"],
-                    trunk_target_id=data["trunk_id"],
-                )
+                bid = data.get("branch_id") or data.get("source_id")
+                tid = data.get("trunk_id") or data.get("target_id")
+                if not bid or not tid:
+                    self._send_json({"error": "branch_id and trunk_id required"}, 400)
+                    return
+                # 前端 "Merge to Trunk" 传 '__trunk__' → 沿祖先链找 trunk 节点
+                if tid == "__trunk__":
+                    bnode = _tree.get_node(bid)
+                    cur = bnode.parent_id if bnode else None
+                    tid = None
+                    while cur:
+                        cn = _tree.get_node(cur)
+                        if cn and cn.node_type == "trunk":
+                            tid = cn.id
+                            break
+                        cur = cn.parent_id if cn else None
+                    if not tid:
+                        self._send_json({"error": "no trunk ancestor found"}, 400)
+                        return
+                _tree.merge_branch(branch_node_id=bid, trunk_target_id=tid)
                 self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/unmerge":
-                _tree.unmerge_branch(data["branch_id"])
+                _tree.unmerge_branch(data.get("node_id") or data.get("branch_id"))
                 self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/abandon":
                 _tree.abandon_branch(data["node_id"])
@@ -753,6 +769,15 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/prune":
                 _tree.prune(data["node_id"])
                 self._send_json(state_dict())
+            elif path == "/api/rename":
+                node = _tree.rename_node(
+                    node_id=data["node_id"],
+                    title=data.get("title", ""),
+                )
+                self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
+            elif path == "/api/delete_node":
+                _tree.delete_node(data["node_id"])
+                self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/memory":
                 mem = _retriever.add_memory({
                     "text": data.get("text", ""),

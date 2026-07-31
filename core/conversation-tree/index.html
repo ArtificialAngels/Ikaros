@@ -166,6 +166,20 @@ display:flex;align-items:center;gap:8px;transition:all .1s;font-family:inherit}
 .ctx-menu-item.danger:hover{background:rgba(239,68,68,.12)}
 .ctx-divider{height:1px;background:var(--border-divider);margin:4px 6px}
 
+/* ===== Modal & Toast ===== */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:200}
+.modal-overlay.show{display:flex}
+.modal-box{background:var(--bg-floating);border:1px solid var(--border-std);border-radius:var(--radius);max-width:720px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.6)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-divider);font-weight:600;color:var(--text-primary)}
+.modal-close{background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;line-height:1}
+.modal-close:hover{color:var(--text-primary)}
+.modal-body{padding:16px;overflow:auto;color:var(--text-secondary);font-size:13px;line-height:1.65;white-space:pre-wrap}
+.fc-msg{margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border-divider)}
+.fc-msg:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.fc-role{display:inline-block;font-size:10px;text-transform:uppercase;font-weight:700;color:var(--brand);margin-right:8px;letter-spacing:.03em}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-floating);border:1px solid var(--border-std);color:var(--text-primary);padding:8px 16px;border-radius:var(--radius-sm);font-size:12px;opacity:0;transition:opacity .2s;z-index:300;pointer-events:none;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.toast.show{opacity:1}
+
 /* ===== Main Chat ===== */
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
 .chat-header{height:44px;min-height:44px;display:flex;align-items:center;justify-content:space-between;
@@ -297,6 +311,13 @@ cursor:pointer;display:flex;align-items:center;justify-content:center;transition
         <div class="nodes-layer" id="nodesLayer"></div>
       </div>
       <div class="ctx-menu" id="ctxMenu"></div>
+      <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box">
+          <div class="modal-head"><span id="modalTitle"></span><button class="modal-close" onclick="hideModal()">✕</button></div>
+          <div class="modal-body" id="modalBody"></div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
     </div>
     <div class="tree-info" id="treeInfo"></div>
     <div class="mem-head"><span style="color:var(--brand)">⟡</span> Path Memories</div>
@@ -356,6 +377,10 @@ const API = {
   merge(from,target){return this._post('/api/merge',{source_id:from,target_id:target})},
   unmerge(id){return this._post('/api/unmerge',{node_id:id})},
   abandon(id){return this._post('/api/abandon',{node_id:id})},
+  rename(id,title){return this._post('/api/rename',{node_id:id,title:title})},
+  deleteNode(id){return this._post('/api/delete_node',{node_id:id})},
+  fullContext(id){return this._get('/api/full_context?node_id='+encodeURIComponent(id))},
+  nodeContent(id){return this._get('/api/node_content?node_id='+encodeURIComponent(id))},
   // B2: 设置节点执行状态 (supervisor / 测试)
   setExecState(b){return this._post('/api/node/exec_state',b)}
 };
@@ -488,6 +513,7 @@ function renderNodes(){
 
 function nodeText(n){
   if(n.depth===0)return 'ROOT';
+  if(n.meta&&n.meta.title)return n.meta.title;   // 重命名覆盖
   const um=n.messages.find(m=>m.role==='user');
   let s=um?um.content:'turn '+n.depth;
   if(s.length>18)s=s.slice(0,18)+'...';
@@ -596,22 +622,32 @@ function onNodeContextMenu(e,nodeId){
   ctxMenuNode=nodeId;
   const menu=document.getElementById('ctxMenu');
   const n=tree.nodes.get(nodeId);
+  const isRoot=n.depth===0;
   let items=[
-    {label:'↳ Fork Branch',action:'fork',icon:'⎇'},
-    {label:'✔ Conclude',action:'conclude',icon:'✓'},
+    {label:'设为当前节点',action:'setCurrent',icon:'➤'},
+    {label:'在对话中打开',action:'openInChat',icon:'🗨'},
   ];
+  items.push({divider:true});
+  items.push({label:'重命名',action:'rename',icon:'✎',disabled:isRoot});
+  items.push({label:'复制摘要',action:'copy',icon:'⧉'});
+  items.push({label:'查看完整上下文',action:'fullContext',icon:'👁'});
+  items.push({divider:true});
+  items.push({label:'从此分叉',action:'fork',icon:'⎇'});
   if(n.mergeTarget){
-    items.push({label:'✕ Unmerge',action:'unmerge',icon:'↩',danger:true});
+    items.push({label:'取消合并',action:'unmerge',icon:'↩',danger:true});
   }else{
-    items.push({label:'⊕ Merge to Trunk',action:'merge',icon:'⥂'});
+    items.push({label:'合并到主干',action:'merge',icon:'⥂'});
   }
   items.push({divider:true});
-  items.push({label:'✕ Abandon',action:'abandon',icon:'⊘',danger:true});
-  items.push({label:'✂ Prune Subtree',action:'prune',icon:'🗑',danger:true});
+  items.push({label:'收尾',action:'conclude',icon:'✓'});
+  items.push({label:'舍弃',action:'abandon',icon:'⊘',danger:true});
+  items.push({label:'删除本节点',action:'deleteNode',icon:'🗑',danger:true,disabled:isRoot});
+  items.push({label:'剪枝子树',action:'prune',icon:'⛏',danger:true,disabled:isRoot});
   menu.innerHTML=items.map(it=>{
     if(it.divider)return '<div class="ctx-divider"></div>';
-    return `<div class="ctx-menu-item${it.danger?' danger':''}" data-action="${it.action}">
-      <span style="font-size:13px">${it.icon||''}</span>${it.label}</div>`;
+    const dis=it.disabled?' style="opacity:.4;pointer-events:none"':'';
+    return `<div class="ctx-menu-item${it.danger?' danger':''}"${dis} data-action="${it.action}">
+      <span style="font-size:13px;width:18px;text-align:center;flex:none">${it.icon||''}</span><span>${it.label}</span></div>`;
   }).join('');
   menu.querySelectorAll('.ctx-menu-item').forEach(el=>{
     el.addEventListener('click',()=>handleCtxAction(el.dataset.action));
@@ -631,13 +667,77 @@ async function handleCtxAction(action){
   if(!ctxMenuNode)return;
   const nid=ctxMenuNode;
   switch(action){
+    case 'setCurrent':await API.jumpTo(nid);await refresh();break;
+    case 'openInChat':await openInChat(nid);break;
+    case 'copy':copyNodeSummary(nid);break;
+    case 'rename':await renameNodePrompt(nid);break;
+    case 'fullContext':await showFullContext(nid);break;
     case 'fork': branchParentId=nid;document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(tree.nodes.get(nid))+'…';focusInput();break;
     case 'conclude':await API.conclude(nid);await refresh();break;
     case 'merge':await API.merge(nid,'__trunk__');await refresh();break;
     case 'unmerge':await API.unmerge(nid);await refresh();break;
     case 'abandon':await API.abandon(nid);await refresh();break;
-    case 'prune':if(nid!==tree.rootId){await API.prune(nid);await refresh();}break;
+    case 'deleteNode':if(nid!==tree.rootId){if(confirm('删除该节点？其子节点将重挂到父节点。')){await API.deleteNode(nid);await refresh();}}break;
+    case 'prune':if(nid!==tree.rootId){if(confirm('剪枝该子树？将删除本节点及其全部后代。')){await API.prune(nid);await refresh();}}break;
   }
+}
+
+/* ── 右键菜单动作辅助 ── */
+function copyNodeSummary(nid){
+  const n=tree.nodes.get(nid);if(!n)return;
+  const txt=nodeText(n);
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(()=>toast('已复制：'+txt)).catch(()=>toast('复制失败'));
+  }else{toast('复制不可用');}
+}
+async function renameNodePrompt(nid){
+  const n=tree.nodes.get(nid);if(!n)return;
+  const cur=(n.meta&&n.meta.title)||nodeText(n);
+  const t=prompt('重命名节点：',cur);
+  if(t===null)return;
+  await API.rename(nid,t);await refresh();
+}
+async function showFullContext(nid){
+  try{
+    const r=await API.fullContext(nid);
+    const ctx=r.context||[];
+    const html=ctx.map(m=>`<div class="fc-msg"><span class="fc-role">${escapeHtml(m.role||'')}</span>${escapeHtml(m.content||'')}</div>`).join('')
+      || '<div style="opacity:.6">（空）</div>';
+    showModal('完整上下文 · '+nodeText(tree.nodes.get(nid))+'  ('+ctx.length+' 条)',html);
+  }catch(e){toast('加载失败：'+(e.message||e));}
+}
+async function openInChat(nid){
+  await API.jumpTo(nid);await refresh();
+  const n=tree.nodes.get(nid);if(!n)return;
+  const area=document.getElementById('messagesArea');
+  area.innerHTML='';
+  (n.messages||[]).forEach(m=>{
+    const div=document.createElement('div');div.className='turn';
+    if(m.role==='user'){
+      div.innerHTML=`<div class="turn-head"><span class="turn-badge">#${n.depth} ${n.branchLabel||'main'}</span></div><div class="bubble bubble-user">${escapeHtml(m.content)}</div>`;
+    }else{
+      div.innerHTML=`<div class="turn-head"><span class="turn-badge">${escapeHtml(m.role||'ai')}</span></div><div class="ai-card"><div class="card-body">${escapeHtml(m.content)}</div></div>`;
+    }
+    area.appendChild(div);
+  });
+  area.scrollTop=area.scrollHeight;
+  toast('已在对话中打开：'+nodeText(n));
+}
+
+/* ── Modal & Toast ── */
+function showModal(title,html){
+  document.getElementById('modalTitle').textContent=title;
+  document.getElementById('modalBody').innerHTML=html;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function hideModal(){document.getElementById('modalOverlay').classList.remove('show')}
+document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')hideModal()});
+let _toastTimer=null;
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>t.classList.remove('show'),1800);
 }
 
 /* ===== Canvas Pan & Zoom ===== */
