@@ -159,7 +159,7 @@ margin-bottom:4px;font-size:10.5px;line-height:1.4;color:var(--text-secondary)}
 .mem-item .src{font-size:8px;color:var(--text-quaternary);float:right;text-transform:uppercase}
 
 /* ===== Context Menu ===== */
-.ctx-menu{position:absolute;background:var(--bg-floating);border:1px solid var(--border-std);border-radius:var(--radius-sm);
+.ctx-menu{position:fixed;background:var(--bg-floating);border:1px solid var(--border-std);border-radius:var(--radius-sm);
 box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:100;min-width:140px;padding:4px;display:none}
 .ctx-menu.show{display:block}
 .ctx-menu-item{padding:7px 12px;font-size:12px;color:var(--text-secondary);cursor:pointer;border-radius:4px;
@@ -276,8 +276,9 @@ cursor:pointer;display:flex;align-items:center;justify-content:center;transition
     </nav>
     <div class="sidebar-footer">
       <div class="theme-switcher">
-        <button class="theme-btn active" data-theme="dark" onclick="switchTheme('dark')">Dark</button>
-        <button class="theme-btn" data-theme="warm" onclick="switchTheme('warm')">Warm</button>
+        <button class="theme-btn" data-theme="system" onclick="applyTheme('system')">跟随系统</button>
+        <button class="theme-btn" data-theme="dark" onclick="applyTheme('dark')">Dark</button>
+        <button class="theme-btn" data-theme="warm" onclick="applyTheme('warm')">Warm</button>
       </div>
     </div>
   </aside>
@@ -382,7 +383,7 @@ const API = {
   abandon(id){return this._post('/api/abandon',{node_id:id})},
   rename(id,title){return this._post('/api/rename',{node_id:id,title:title})},
   deleteNode(id){return this._post('/api/delete_node',{node_id:id})},
-  setAgent(id,agent){return this._post('/api/set_agent',{node_id:id,agent:agent})},
+  setAgent(id,agent,cascade=true){return this._post('/api/set_agent',{node_id:id,agent:agent,cascade:cascade})},
   fullContext(id){return this._get('/api/full_context?node_id='+encodeURIComponent(id))},
   nodeContent(id){return this._get('/api/node_content?node_id='+encodeURIComponent(id))},
   // B2: 设置节点执行状态 (supervisor / 测试)
@@ -636,8 +637,8 @@ function onNodeContextMenu(e,nodeId){
   items.push({divider:true});
   // 代理归属 (ekko 模式): 该分支由 Ikaros 伴侣 / Hermes 任务代理作答
   const curAgent=n.agent||'ikaros';
-  items.push({label:'代理：Ikaros（伴侣）',action:'agentIkaros',icon:curAgent==='ikaros'?'✔':' '});
-  items.push({label:'代理：Hermes（任务）',action:'agentHermes',icon:curAgent==='hermes'?'✔':' '});
+  items.push({label:'代理→Ikaros（伴侣）·含子树',action:'agentIkaros',icon:curAgent==='ikaros'?'✔':' '});
+  items.push({label:'代理→Hermes（任务）·含子树',action:'agentHermes',icon:curAgent==='hermes'?'✔':' '});
   items.push({divider:true});
   items.push({label:'重命名',action:'rename',icon:'✎',disabled:isRoot});
   items.push({label:'复制摘要',action:'copy',icon:'⧉'});
@@ -663,20 +664,22 @@ function onNodeContextMenu(e,nodeId){
   menu.querySelectorAll('.ctx-menu-item').forEach(el=>{
     el.addEventListener('click',()=>handleCtxAction(el.dataset.action));
   });
-  const wrap=document.getElementById('canvasWrap');
-  const rect=wrap.getBoundingClientRect();
-  menu.style.left=(e.clientX-rect.left)+'px';
-  menu.style.top=(e.clientY-rect.top)+'px';
   menu.classList.add('show');
+  const mw=menu.offsetWidth, mh=menu.offsetHeight;
+  let x=e.clientX, y=e.clientY;
+  if(x+mw>window.innerWidth) x=Math.max(4,window.innerWidth-mw-4);
+  if(y+mh>window.innerHeight) y=Math.max(4,window.innerHeight-mh-4);
+  menu.style.left=x+'px';
+  menu.style.top=y+'px';
   setTimeout(()=>document.addEventListener('click',hideCtxMenu,{once:true}),50);
 }
 
 function hideCtxMenu(){document.getElementById('ctxMenu').classList.remove('show');ctxMenuNode=null}
 
 async function handleCtxAction(action){
+  const nid=ctxMenuNode;          // 先捕获，避免 hideCtxMenu 将其置空
   hideCtxMenu();
-  if(!ctxMenuNode)return;
-  const nid=ctxMenuNode;
+  if(!nid)return;
   switch(action){
     case 'setCurrent':await API.jumpTo(nid);await refresh();break;
     case 'openInChat':await openInChat(nid);break;
@@ -1095,8 +1098,29 @@ function copyCard(e){const b=e.currentTarget;b.innerHTML='✓ Copied';setTimeout
 function favoriteCard(btn){const card=btn.closest('.ai-card');
   if(card){card.classList.add('streaming-border-effect','favorite')}
   btn.innerHTML='★ Favorited';setTimeout(()=>btn.innerHTML='★ Favorite',1600)}
-function switchTheme(t){document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'warm');
-  document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===t))}
+/* ===== Theme: 跟随系统 / Dark / Warm + 持久化上次选择 ===== */
+const THEME_KEY='conv-tree-theme';
+let _themeMql=null,_themePref='dark';
+function _getMql(){if(!_themeMql)_themeMql=window.matchMedia('(prefers-color-scheme: dark)');return _themeMql}
+function systemTheme(){return _getMql().matches?'dark':'warm'}  // 系统深色→dark, 系统浅色→warm
+function applyTheme(pref){
+  _themePref=pref;
+  try{localStorage.setItem(THEME_KEY,pref)}catch(e){}  // 持久化: 不跟随系统时默认读取此处
+  const resolved=pref==='system'?systemTheme():pref;
+  document.documentElement.setAttribute('data-theme',resolved);
+  document.documentElement.style.colorScheme=resolved==='dark'?'dark':'light';
+  document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===pref));
+}
+function onSystemThemeChange(){if(_themePref==='system')applyTheme('system')}  // 仅跟随系统时才随系统切换
+function switchTheme(t){applyTheme(t)}  // 兼容旧调用
+// 立即应用已保存主题(避免初始闪烁) + 注册系统主题监听
+(function initTheme(){
+  const mql=_getMql();
+  if(typeof mql.addEventListener==='function')mql.addEventListener('change',onSystemThemeChange);
+  else if(typeof mql.addListener==='function')mql.addListener(onSystemThemeChange);  // 旧 Safari
+  let pref=null;try{pref=localStorage.getItem(THEME_KEY)}catch(e){}
+  applyTheme(pref||'dark');  // 无保存记录时默认 dark
+})();
 
 /* Streaming animations (from reference) */
 const style=document.createElement('style');

@@ -608,6 +608,7 @@ class ConversationTree:
             node = ConvNode(
                 id=node_id,
                 parent_id=pid,
+                agent=parent.agent,
                 depth=parent.depth + 1,
                 branch_label=branch_label,
                 v5_memory_id=mid,
@@ -710,6 +711,7 @@ class ConversationTree:
         node = ConvNode(
             id=node_id,
             parent_id=fork_point_id,
+            agent=fork_node.agent,
             depth=fork_node.depth + 1,
             branch_label=branch_label,
             node_type="branch",
@@ -912,11 +914,12 @@ class ConversationTree:
         self.persist()
 
     # ── v2.2: 设置节点代理归属 (ekko-agent 模式) ──
-    def set_agent(self, node_id: str, agent: str) -> "ConvNode":
+    def set_agent(self, node_id: str, agent: str, cascade: bool = False) -> "ConvNode":
         """设置节点由哪个 runtime 作答: 'ikaros' (伴侣人格) 或 'hermes' (任务代理).
 
         非法值归默认 'ikaros'。不影响对话内容与记忆, 仅决定 chat 的 system prompt
         与 LLM 路由 (镜像 rename_node 的轻量元字段语义)。
+        cascade=True 时一并同步其所有后代 (子节点集成父节点代理状态)。
         """
         with self._lock:
             node = self.nodes.get(node_id)
@@ -926,10 +929,22 @@ class ConversationTree:
             if clean not in ("ikaros", "hermes"):
                 clean = "ikaros"
             node.agent = clean
+            if cascade:
+                for child_id in list(node.children):
+                    self._apply_agent_recursive(child_id, clean)
             self.version += 1
         self._emit()
         self.persist()
         return node
+
+    def _apply_agent_recursive(self, node_id: str, agent: str) -> None:
+        """已持有 _lock 时递归同步子树代理 (不可重入加锁, 避免与 set_agent 死锁)."""
+        n = self.nodes.get(node_id)
+        if not n:
+            return
+        n.agent = agent
+        for child_id in n.children:
+            self._apply_agent_recursive(child_id, agent)
 
     # ── v2: 重命名节点（UI 标签人工覆盖）──
     def rename_node(self, node_id: str, title: str) -> "ConvNode":

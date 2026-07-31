@@ -885,6 +885,7 @@ class Handler(BaseHTTPRequestHandler):
                 node = _tree.set_agent(
                     node_id=data["node_id"],
                     agent=data.get("agent", "ikaros"),
+                    cascade=bool(data.get("cascade", False)),
                 )
                 self._send_json({"ok": True, "node_id": node.id,
                                  "agent": node.agent, "state": state_dict()})
