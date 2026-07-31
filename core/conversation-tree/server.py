@@ -48,9 +48,13 @@ for _ep in _ENV_PATHS:
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119").rstrip("/") + "/v1/chat/completions"
-# Hermes agent runtime 端点 (ekko-agent AgentRuntime 的 HTTP 包装). 留空则不走 agent runtime,
-# 仅用 chat 补全并套 Hermes 任务代理 system prompt. 设 HERMES_AGENT_URL 即启用多步 agent 调用.
-HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "").strip() or None
+# Hermes agent runtime 端点 (gateway :8642 的 /v1/chat/completions, 会跑完整 tools/skills 循环).
+# 默认指向本地 gateway; 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示.
+# gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 见 bin/hermes-api-server.py:28).
+HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8642/v1/chat/completions").strip() or None
+# gateway 鉴权 token; 默认 ikaros-gateway-key (bin/hermes-api-server.py:28 / core/dashboard/server.py:165).
+HERMES_AGENT_KEY = os.environ.get("API_SERVER_KEY", "ikaros-gateway-key").strip()
+HERMES_AGENT_MODEL = os.environ.get("HERMES_AGENT_MODEL", "hermes").strip()
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
@@ -90,14 +94,17 @@ def call_hermes_agent(messages: list[dict]) -> str:
         raise RuntimeError("HERMES_AGENT_URL not configured")
     body = json.dumps({
         "messages": messages,
-        "model": "hermes",
+        "model": HERMES_AGENT_MODEL,
         "max_tokens": 2048,
         "temperature": 0.7,
         "stream": False,
     }).encode("utf-8")
     req = urllib.request.Request(
         HERMES_AGENT_URL, data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {HERMES_AGENT_KEY}",
+        },
     )
     with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -310,16 +317,43 @@ def build_system_prompt(mode: str) -> str:
 def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]:
     """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
 
-    - 人格: build_system_prompt(node.agent) —— ikaros 伴侣 / hermes 任务代理
-    - 压缩: build_tree_aware_context (节点边界压缩, 替线性 [-50:] 截断)
-    - 记忆: build_v5_memory_block (tree_scoped_retrieve 树域语义检索, 按分支分域)
-    任何环节异常都 fail-open 回退到旧的线性上下文 + 人格。
+    - ikaros 模式: 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
+    - hermes 模式: 把人格/SOUL/V5 记忆**完全委托**给 Hermes gateway. Hermes 内部会重新注入
+      SOUL.md + 身份 + AGENTS.md + tools/skills 指引 + ikaros_v5 记忆 (已实测: 单句请求
+      prompt_tokens≈10058, 证实 soul+记忆被加载). 若 tree 再注入一遍会双重 SOUL/记忆 + 人格打架,
+      故仅传中性分支说明 + 树感知压缩历史, 让 Hermes 以自身身份(SOUL)应答.
+    任何环节异常都 fail-open 回退到旧的线性上下文。
     """
     mode = "ikaros"
     if _tree is not None:
         n = _tree.get_node(node_id) if node_id else _tree.current
         if n is not None:
             mode = getattr(n, "agent", "ikaros") or "ikaros"
+
+    # ── hermes 模式: 委托 Hermes, 不注入 tree 自身人格/SOUL/V5 记忆 ──
+    if mode == "hermes":
+        neutral = (
+            "This exchange is one branch of a branching conversation tree managed by Ikaros. "
+            "Continue naturally as yourself; the branch context is carried by the preceding turns."
+        )
+        try:
+            ctx = build_tree_aware_context(
+                _tree, node_id, system_prompt=neutral, extra_memory=None,
+            )
+            return ctx + [{"role": "user", "content": user_message}]
+        except Exception:
+            msgs: list[dict] = [{"role": "system", "content": neutral}]
+            try:
+                ctx = _tree.get_context(node_id)
+                if len(ctx) > MAX_CONTEXT_MSGS:
+                    ctx = ctx[-MAX_CONTEXT_MSGS:]
+                msgs.extend(ctx)
+            except Exception:
+                pass
+            msgs.append({"role": "user", "content": user_message})
+            return msgs
+
+    # ── ikaros 模式: 人格(伴侣) + 树域记忆 + 树感知压缩 ──
     persona = build_system_prompt(mode)
     mem_block = build_v5_memory_block(node_id, user_message)
     try:

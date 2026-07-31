@@ -96,10 +96,54 @@ def test_p2_ikaros_prompt_distinct():
             or "公理" in ikaros or "SOUL" in ikaros)
 
 
+# ────────────── D: hermes 模式委托 (防双重灵魂注入) ──────────────
+def test_d1_hermes_mode_delegates_no_soul_or_v5():
+    """hermes 模式必须把人格/SOUL/V5 记忆委托给 Hermes gateway, 不能自行注入,
+    否则会与 Hermes 内部的 SOUL.md + 身份 + ikaros_v5 记忆双重注入."""
+    fake, tree = _new_tree()
+    root = tree.init(seed_messages=[{"role": "user", "content": "hi"}])
+    hermes_node = tree.add_turn([{"role": "user", "content": "task please"}])
+    tree.set_agent(hermes_node.id, "hermes")
+    saved = ct_server._tree
+    ct_server._tree = tree
+    try:
+        msgs = ct_server.build_chat_messages_v5(hermes_node.id, "do the thing")
+    finally:
+        ct_server._tree = saved
+    sys_msgs = [m for m in msgs if m["role"] == "system"]
+    assert sys_msgs, "expected at least one system message"
+    joined = "\n".join(m["content"] for m in sys_msgs)
+    # 含中性分支说明 (告知 Hermes 这是对话树分支)
+    assert "branching conversation tree" in joined
+    # 绝不含 tree 自行注入的 SOUL 身份 / V5 记忆块 / tree 的 Hermes 任务代理提示
+    assert "[身份档案 SOUL]" not in joined
+    assert "Relevant memories (V5)" not in joined
+    assert "autonomous task agent" not in joined
+
+
+def test_d2_ikaros_mode_injects_persona():
+    """对照: ikaros 模式仍自行注入伴侣人格 (SOUL/公理/树形说明)."""
+    fake, tree = _new_tree()
+    root = tree.init(seed_messages=[{"role": "user", "content": "hi"}])
+    ikaros_node = tree.add_turn([{"role": "user", "content": "chat"}])
+    saved = ct_server._tree
+    ct_server._tree = tree
+    try:
+        msgs = ct_server.build_chat_messages_v5(ikaros_node.id, "hey")
+    finally:
+        ct_server._tree = saved
+    sys_msgs = [m for m in msgs if m["role"] == "system"]
+    joined = "\n".join(m["content"] for m in sys_msgs)
+    assert ("伊卡洛斯" in joined or "Ikaros" in joined or "树形" in joined
+            or "公理" in joined or "SOUL" in joined or "身份档案" in joined)
+
+
 if __name__ == "__main__":
     test_a1_set_agent_writes_and_persists()
     test_a2_set_agent_invalid_falls_back()
     test_a3_set_agent_missing_raises()
     test_p1_hermes_prompt()
     test_p2_ikaros_prompt_distinct()
+    test_d1_hermes_mode_delegates_no_soul_or_v5()
+    test_d2_ikaros_mode_injects_persona()
     print("ALL AGENT MODE TESTS PASSED")
