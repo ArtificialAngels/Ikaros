@@ -151,6 +151,10 @@ class ConvNode:
     state: Dict[str, Any] = field(default_factory=dict)
     config: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
+    # v2.2: 代理归属 (ekko-agent 模式借鉴) —— 该分支由哪个 runtime 作答。
+    #   "ikaros" = Ikaros 伴侣人格 (SOUL/公理/心绪); "hermes" = Hermes 任务代理 (runtime+tools)。
+    #   等价于 ekko 的 MemoryRuntimeIdentity/session 的"运行身份", 决定 system prompt 与路由。
+    agent: str = "ikaros"
     created_at: float = 0.0
 
     # ── v2 新增字段 ──
@@ -184,6 +188,7 @@ class ConvNode:
             "state": self.state,
             "config": self.config,
             "meta": self.meta,
+            "agent": self.agent,
             "created_at": self.created_at,
             # v2
             "node_type": self.node_type,
@@ -214,6 +219,7 @@ class ConvNode:
             state=d.get("state", {}) or {},
             config=d.get("config", {}) or {},
             meta=d.get("meta", {}) or {},
+            agent=d.get("agent", "ikaros"),
             created_at=d.get("created_at", 0.0),
             # v2 字段：缺失时使用默认值（向后兼容 v1 JSON）
             node_type=d.get("node_type", "trunk"),
@@ -904,6 +910,26 @@ class ConversationTree:
         self.version += 1
         self._emit()
         self.persist()
+
+    # ── v2.2: 设置节点代理归属 (ekko-agent 模式) ──
+    def set_agent(self, node_id: str, agent: str) -> "ConvNode":
+        """设置节点由哪个 runtime 作答: 'ikaros' (伴侣人格) 或 'hermes' (任务代理).
+
+        非法值归默认 'ikaros'。不影响对话内容与记忆, 仅决定 chat 的 system prompt
+        与 LLM 路由 (镜像 rename_node 的轻量元字段语义)。
+        """
+        with self._lock:
+            node = self.nodes.get(node_id)
+            if not node:
+                raise ValueError(f"node not found: {node_id}")
+            clean = (agent or "ikaros").strip().lower()
+            if clean not in ("ikaros", "hermes"):
+                clean = "ikaros"
+            node.agent = clean
+            self.version += 1
+        self._emit()
+        self.persist()
+        return node
 
     # ── v2: 重命名节点（UI 标签人工覆盖）──
     def rename_node(self, node_id: str, title: str) -> "ConvNode":

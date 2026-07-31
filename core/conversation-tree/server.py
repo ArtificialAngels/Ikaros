@@ -48,9 +48,21 @@ for _ep in _ENV_PATHS:
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119").rstrip("/") + "/v1/chat/completions"
+# Hermes agent runtime 端点 (ekko-agent AgentRuntime 的 HTTP 包装). 留空则不走 agent runtime,
+# 仅用 chat 补全并套 Hermes 任务代理 system prompt. 设 HERMES_AGENT_URL 即启用多步 agent 调用.
+HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "").strip() or None
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
+
+# Hermes 任务代理 base system prompt (与 Ikaros 伴侣人格区分): 偏执行/工具/任务导向.
+HERMES_AGENT_PROMPT = (
+    "You are Hermes, an autonomous task agent operating inside Ikaros. "
+    "You execute tasks decisively: break problems down, use available tools/skills when helpful, "
+    "and prefer concrete results over lengthy exposition. Be precise and concise. "
+    "When the user is exploring ideas rather than requesting action, you may still answer directly, "
+    "but keep a task-oriented, capable tone. Markdown for code/structure when appropriate."
+)
 
 # ── Ikaros 人格来源 (V5 同步的身份/心绪) ──────────────────────
 # server.py 位于 core/conversation-tree/ ; 根目录 = parent.parent
@@ -68,8 +80,48 @@ SYSTEM_PROMPT = (
 )
 
 # ── LLM 调用 ──────────────────────────────────────────────
-def _call_llm(messages: list[dict]) -> str:
+def call_hermes_agent(messages: list[dict]) -> str:
+    """调用 Hermes agent runtime (ekko AgentRuntime 的 HTTP 包装).
+
+    失败抛错, 由 _call_llm 回退到三层 chat 补全. best-effort 解析兼容
+    chat 风格 (choices[].message.content) 与 agent run 风格 (output.content).
+    """
+    if not HERMES_AGENT_URL:
+        raise RuntimeError("HERMES_AGENT_URL not configured")
+    body = json.dumps({
+        "messages": messages,
+        "model": "hermes",
+        "max_tokens": 2048,
+        "temperature": 0.7,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        HERMES_AGENT_URL, data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    content = ""
+    if isinstance(data, dict):
+        content = (data.get("choices", [{}])[0].get("message", {}).get("content")
+                   or (data.get("output") or {}).get("content")
+                   or data.get("content") or "").strip()
+    if content:
+        return content
+    raise RuntimeError("Hermes agent returned empty content")
+
+
+def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
     errors: list[str] = []
+
+    # 0) Hermes agent runtime (仅 hermes 模式且已配置端点); 失败回退三层 chat
+    if agent == "hermes":
+        try:
+            return call_hermes_agent(messages)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, RuntimeError) as e:
+            errors.append(f"Hermes agent: {e}")
+        except Exception as e:
+            errors.append(f"Hermes agent unexpected: {e}")
 
     # 1) DeepSeek API
     if _DEEPSEEK_KEY:
@@ -244,15 +296,31 @@ def build_v5_memory_block(node_id: str | None, query: str) -> str:
     return "\n".join(lines)
 
 
-def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]:
-    """chat 接入 Ikaros V5 的主入口:
+def build_system_prompt(mode: str) -> str:
+    """ekko buildSystemPrompt 的等价: 按代理模式选 base 人格。
 
-    - 人格: build_ikaros_persona (axiom + SOUL + 动态心绪)
+    - "hermes" → Hermes 任务代理提示 (执行/工具/任务导向)
+    - 其他     → Ikaros 伴侣人格 (axiom + SOUL + 动态心绪)
+    """
+    if mode == "hermes":
+        return HERMES_AGENT_PROMPT
+    return build_ikaros_persona()
+
+
+def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]:
+    """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
+
+    - 人格: build_system_prompt(node.agent) —— ikaros 伴侣 / hermes 任务代理
     - 压缩: build_tree_aware_context (节点边界压缩, 替线性 [-50:] 截断)
-    - 记忆: build_v5_memory_block (tree_scoped_retrieve 树域语义检索)
+    - 记忆: build_v5_memory_block (tree_scoped_retrieve 树域语义检索, 按分支分域)
     任何环节异常都 fail-open 回退到旧的线性上下文 + 人格。
     """
-    persona = build_ikaros_persona()
+    mode = "ikaros"
+    if _tree is not None:
+        n = _tree.get_node(node_id) if node_id else _tree.current
+        if n is not None:
+            mode = getattr(n, "agent", "ikaros") or "ikaros"
+    persona = build_system_prompt(mode)
     mem_block = build_v5_memory_block(node_id, user_message)
     try:
         ctx = build_tree_aware_context(
@@ -778,6 +846,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/delete_node":
                 _tree.delete_node(data["node_id"])
                 self._send_json({"ok": True, "state": state_dict()})
+            elif path == "/api/set_agent":
+                # 设置分支归属代理 (ekko 模式): ikaros 伴侣 / hermes 任务代理
+                node = _tree.set_agent(
+                    node_id=data["node_id"],
+                    agent=data.get("agent", "ikaros"),
+                )
+                self._send_json({"ok": True, "node_id": node.id,
+                                 "agent": node.agent, "state": state_dict()})
             elif path == "/api/memory":
                 mem = _retriever.add_memory({
                     "text": data.get("text", ""),
@@ -796,9 +872,11 @@ class Handler(BaseHTTPRequestHandler):
 
                 # chat 接入 Ikaros V5: 人格 + 树感知压缩 + 树域语义记忆 (fail-open)
                 target_id = parent_id or _tree.current.id
+                node = _tree.get_node(target_id)
+                mode = node.agent if node else "ikaros"
                 messages = build_chat_messages_v5(target_id, user_message)
                 try:
-                    reply = _call_llm(messages)
+                    reply = _call_llm(messages, agent=mode)
                 except RuntimeError as e:
                     self._send_json({"error": str(e)}, 503)
                     return

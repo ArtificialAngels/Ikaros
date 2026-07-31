@@ -120,6 +120,9 @@ white-space:nowrap}
 .node-card .tag-merged{background:rgba(236,27,218,.12);color:var(--brand-opposite)}
 .node-card .tag-abandoned{background:rgba(239,68,68,.12);color:var(--brand-danger)}
 .node-card .tag-current{background:rgba(19,228,37,.12);color:var(--brand)}
+/* 代理归属徽标 (ekko 模式): Hermes 用 opposite 品牌色, Ikaros 用低调灰 */
+.node-card .agent-hermes{color:var(--brand-opposite);font-weight:600}
+.node-card .agent-ikaros{color:var(--text-quaternary)}
 
 /* Handle connection points */
 .node-handle{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--border-std);
@@ -379,6 +382,7 @@ const API = {
   abandon(id){return this._post('/api/abandon',{node_id:id})},
   rename(id,title){return this._post('/api/rename',{node_id:id,title:title})},
   deleteNode(id){return this._post('/api/delete_node',{node_id:id})},
+  setAgent(id,agent){return this._post('/api/set_agent',{node_id:id,agent:agent})},
   fullContext(id){return this._get('/api/full_context?node_id='+encodeURIComponent(id))},
   nodeContent(id){return this._get('/api/node_content?node_id='+encodeURIComponent(id))},
   // B2: 设置节点执行状态 (supervisor / 测试)
@@ -393,7 +397,8 @@ class ConvNode{
   this.nodeType=o.nodeType||'trunk';this.isValid=o.isValid!==false;
   this.mergeTarget=o.mergeTarget||null;this.mergedFrom=o.mergedFrom||[];
   this.skillsUsed=o.skillsUsed||[];this.toolCalls=o.toolCalls||[];this.conclusions=o.conclusions||[];
-  this.execState=o.exec_state||'idle';this.execProgress=o.exec_progress||0;this.execDetail=o.exec_detail||'';}
+  this.execState=o.exec_state||'idle';this.execProgress=o.exec_progress||0;this.execDetail=o.exec_detail||'';
+  this.agent=o.agent||'ikaros';}
 }
 class TreeView{
   constructor(nodesMap,rootId,currentId){this.nodes=nodesMap;this.rootId=rootId;this.currentId=currentId;this.version=0}
@@ -416,7 +421,8 @@ function installState(s){
       meta:n.meta,createdAt:n.created_at,nodeType:n.node_type,isValid:n.is_valid,
       mergeTarget:n.merge_target,mergedFrom:n.merged_from,      skillsUsed:n.skills_used,
       toolCalls:n.tool_calls,conclusions:n.conclusions,
-      execState:n.exec_state,execProgress:n.exec_progress,execDetail:n.exec_detail}));
+      execState:n.exec_state,execProgress:n.exec_progress,execDetail:n.exec_detail,
+      agent:n.agent||'ikaros'}));
   });
   tree=new TreeView(m,s.root_id,s.current_id);
 }
@@ -500,7 +506,7 @@ function renderNodes(){
       oncontextmenu="onNodeContextMenu(event,'${n.id}')">
       <div class="node-handle target" data-node="${n.id}" data-side="target"
         onmousedown="onHandleMouseDown(event,'${n.id}','target')"></div>
-      <div class="node-depth">#${n.depth} · ${n.branchLabel||'main'}</div>
+      <div class="node-depth">#${n.depth} · ${n.branchLabel||'main'} · <span class="agent-${n.agent==='hermes'?'hermes':'ikaros'}">${n.agent==='hermes'?'⚙ Hermes':'✦ Ikaros'}</span></div>
       <div class="node-label">${escapeHtml(label)}</div>
       ${tags?`<div class="node-tags">${tags}</div>`:''}
       ${execWrap(n)}
@@ -628,6 +634,11 @@ function onNodeContextMenu(e,nodeId){
     {label:'在对话中打开',action:'openInChat',icon:'🗨'},
   ];
   items.push({divider:true});
+  // 代理归属 (ekko 模式): 该分支由 Ikaros 伴侣 / Hermes 任务代理作答
+  const curAgent=n.agent||'ikaros';
+  items.push({label:'代理：Ikaros（伴侣）',action:'agentIkaros',icon:curAgent==='ikaros'?'✔':' '});
+  items.push({label:'代理：Hermes（任务）',action:'agentHermes',icon:curAgent==='hermes'?'✔':' '});
+  items.push({divider:true});
   items.push({label:'重命名',action:'rename',icon:'✎',disabled:isRoot});
   items.push({label:'复制摘要',action:'copy',icon:'⧉'});
   items.push({label:'查看完整上下文',action:'fullContext',icon:'👁'});
@@ -669,6 +680,8 @@ async function handleCtxAction(action){
   switch(action){
     case 'setCurrent':await API.jumpTo(nid);await refresh();break;
     case 'openInChat':await openInChat(nid);break;
+    case 'agentIkaros':await API.setAgent(nid,'ikaros');await refresh();break;
+    case 'agentHermes':await API.setAgent(nid,'hermes');await refresh();break;
     case 'copy':copyNodeSummary(nid);break;
     case 'rename':await renameNodePrompt(nid);break;
     case 'fullContext':await showFullContext(nid);break;
