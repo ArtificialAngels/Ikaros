@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "3b273006fc30eb62e90e4c00fd8a578901bd6c16",
+    "indexed_at": "2026-07-22T12:34:05Z",
+    "project": "E-Ikaros",
+    "nodes": 136171,
+    "edges": 519237,
+    "original_size": 302841856,
+    "compressed_size": 58762085,
+    "compression_level": 3
+}
