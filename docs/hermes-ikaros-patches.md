@@ -5,8 +5,8 @@
 > 它解决的核心问题：upstream 大改时，旧 diff 对不上新代码；此时必须把"补丁要达成什么"告诉模型去重写，而不是给原始 diff。
 
 ## 0. 基线指针（每次重打后必须更新）
-- **Upstream tip**（打补丁所基于的 upstream 提交）：`14db1a9`
-- **Ikaros 补丁提交**（单提交，父 = upstream 14db1a9）：`61066028a4` — 含 7 个原 Ikaros 补丁 + 推理透出/token_compressor 增强（已重根到 14db1a9，diff 干净无冲突）
+- **Upstream tip**（打补丁所基于的 upstream 提交）：`e444d165807f489b5c1ab8e4a612c8d09c2e67a2`
+- **Ikaros 补丁提交**（单提交，父 = upstream 14db1a9）：`5050c6d5c4061f33d853db49c61da4e8a96f79b5` — 含 7 个原 Ikaros 补丁 + 推理透出/token_compressor 增强（已重根到 14db1a9，diff 干净无冲突）
 - 更新方式：重打完成后把本段两个值改成新的对应提交（新 Ikaros 提交的父 = 新 upstream tip）。
 
 ## 0.5. 补丁源文件位置

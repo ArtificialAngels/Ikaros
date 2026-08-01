@@ -115,6 +115,37 @@ def detect_python() -> Path:
     return Path(sys.executable)
 
 
+def fetch_upstream(remote: str = "origin") -> None:
+    """拉取 upstream 最新提交，使后续 reset --hard origin/main 指向真正的上游 HEAD。
+
+    支持 ``IKAROS_GIT_MIRROR`` 镜像前缀（与 dashboard 的 ``_mirror_url`` 一致），
+    避免直连 GitHub 在弱网环境下长时间挂起（这正是「更新」按钮卡死的根因）。
+
+    - 设置了镜像：读 ``origin`` 真实 URL 拼镜像前缀，直接 fetch 并把结果写入
+      ``refs/remotes/origin/main`` 远程跟踪引用（不修改本地 remote 配置）。
+    - 未设置镜像：退回 ``git fetch origin``（弱网下可能很慢，由调用方超时控制）。
+    """
+    mirror = (os.environ.get("IKAROS_GIT_MIRROR") or "").rstrip("/")
+    fetch_url = None
+    if mirror:
+        try:
+            base = run_git(["remote", "get-url", remote], check=True).stdout.strip()
+            fetch_url = f"{mirror}/{base}"
+        except Exception:
+            fetch_url = None
+    log(f"拉取 upstream（{'镜像 ' + fetch_url if fetch_url else remote}）...")
+    try:
+        if fetch_url:
+            # 直接拉镜像 URL，并把远程 main 写入本地 origin/main 远程跟踪引用
+            run_git(["fetch", fetch_url, "main:refs/remotes/origin/main"], check=True)
+        else:
+            run_git(["fetch", remote], check=True)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"fetch upstream 失败（检查网络 / 设置 IKAROS_GIT_MIRROR 镜像）：{e}"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # spec §0 指针读写
 # --------------------------------------------------------------------------- #
@@ -465,18 +496,23 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
                        apply: bool, python_exe: Path, auto_llm: bool,
                        spec_text: str) -> int:
     if not apply:
-        log(f"[计划] 将 fetch 并 checkout {target}，然后 cherry-pick {ikaros_old[:8]}。")
+        log(f"[计划] 将 fetch upstream 并 checkout {target}，然后 cherry-pick {ikaros_old[:8]}。")
         log(f"[计划] 冲突时{'自动派 LLM' if auto_llm else '写出提示词并暂停'}。")
         return 0
 
-    # 已包含补丁？
-    anc = run_git(["merge-base", "--is-ancestor", ikaros_old, "HEAD"],
-                  check=False)
-    if anc.returncode == 0:
-        log(f"HEAD 已包含 Ikaros 提交 {ikaros_old[:8]}，无需重打。")
-        return 0
+    # 先拉取 upstream 最新（支持镜像加速，避免直连 GitHub 卡死）
+    fetch_upstream()
 
     target_sha = run_git(["rev-parse", "--verify", target], check=True).stdout.strip()
+    # 已是最新？（HEAD 已基于该 upstream 且含 Ikaros 补丁）→ 无需重打
+    at_target = run_git(["merge-base", "--is-ancestor", target_sha, "HEAD"],
+                         check=False).returncode == 0
+    has_patch = run_git(["merge-base", "--is-ancestor", ikaros_old, "HEAD"],
+                         check=False).returncode == 0
+    if at_target and has_patch:
+        log(f"HEAD 已基于 {target_sha[:8]} 且含 Ikaros 提交 {ikaros_old[:8]}，无需重打。")
+        return 0
+
     # 已确认需要重打，此时才打备份 tag（避免 no-op 时产生多余 tag）
     backup_tag_name = backup_tag()
     save_state({"target": target_sha, "ikaros_old": ikaros_old,
