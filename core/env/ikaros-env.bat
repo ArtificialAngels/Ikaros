@@ -62,6 +62,11 @@ set "IKAROS_LLAMA_SERVER=%IKAROS_LLAMA_DIR%\llama-server.exe"
 REM ---- herdr (agent-aware 终端多路复用器，作为受控引擎接入 Ikaros) ----
 set "IKAROS_HERDR=%IKAROS_ROOT%\runtime\herdr\herdr.exe"
 
+REM ---- MCP Servers (runtime\MCPServe 家目录) ----
+set "IKAROS_MCP=%IKAROS_RUNTIME%\MCPServe"
+set "IKAROS_GRAPHIFY=%IKAROS_MCP%\graphify"
+set "IKAROS_GRAPHIFY_SERVE=%IKAROS_GRAPHIFY%\graphify\serve.py"
+
 REM ---- Model paths ----
 set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\nomic-embed-text-v2-moe.f32.gguf"
 REM IKAROS_MODEL_LLM intentionally NOT set here - watchdog picks the default local LLM via resolver

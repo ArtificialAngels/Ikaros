@@ -63,6 +63,11 @@ $env:IKAROS_LLAMA_CLI     = "$env:IKAROS_LLAMA_DIR\llama-cli.exe"
 # ---- herdr (agent-aware 终端多路复用器，作为受控引擎接入 Ikaros) ----
 $env:IKAROS_HERDR        = "$env:IKAROS_ROOT\runtime\herdr\herdr.exe"
 
+# ---- MCP Servers (runtime\MCPServe 家目录) ----
+$env:IKAROS_MCP           = "$env:IKAROS_RUNTIME\MCPServe"
+$env:IKAROS_GRAPHIFY      = "$env:IKAROS_MCP\graphify"
+$env:IKAROS_GRAPHIFY_SERVE = "$env:IKAROS_GRAPHIFY\graphify\serve.py"
+
 # ---- Step 6: 模型路径 ----
 $env:IKAROS_MODEL_EMBEDDING = "$env:IKAROS_MEMORY_MODELS\nomic-embed-text-v2-moe.f32.gguf"
 # IKAROS_MODEL_LLM intentionally NOT set — watchdog picks the default local LLM via resolver

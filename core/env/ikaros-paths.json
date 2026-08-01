@@ -54,7 +54,9 @@
   },
   "mcp": {
     "root": "E:\\Ikaros\\runtime\\MCPServe",
-    "codebase_memory_exe": "E:\\Ikaros\\runtime\\MCPServe\\codebase-memory\\package\\bin\\codebase-memory-mcp.exe"
+    "codebase_memory_exe": "E:\\Ikaros\\runtime\\MCPServe\\codebase-memory\\package\\bin\\codebase-memory-mcp.exe",
+    "graphify": "E:\\Ikaros\\runtime\\MCPServe\\graphify",
+    "graphify_serve": "E:\\Ikaros\\runtime\\MCPServe\\graphify\\graphify\\serve.py"
   },
   "ports": {
     "embedding": 8587,
