@@ -130,9 +130,12 @@ def run_git(args, check: bool = True, cwd: Path = REPO, input_data: str | None =
 
 def run_cmd(args, check: bool = True, cwd: Path = REPO, env: dict | None = None,
             input_data: str | None = None):
+    # 显式 utf-8 解码：本机 Windows locale 为 gbk，git 输出（含中文 / marker 签名行）
+    # 是 UTF-8，text=True 不指定 encoding 会用 gbk 解码 → 后台读线程抛 UnicodeDecodeError，
+    # 进而让 proc.stdout 变为 None、解析崩溃。errors="replace" 保证永不因个别字节中断。
     proc = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True, env=env,
-        input=input_data,
+        args, cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env, input=input_data,
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -180,9 +183,12 @@ def fetch_upstream(remote: str = "origin") -> None:
         else:
             run_git(["fetch", remote], check=True)
     except RuntimeError as e:
-        raise RuntimeError(
-            f"fetch upstream 失败（检查网络 / 设置 IKAROS_GIT_MIRROR 镜像）：{e}"
-        )
+        # 网络不可达 / 镜像不可用时**不致命**：后续 reset 用的是本地已缓存的
+        # origin/main（上次成功 fetch 的快照）。只要 upstream 未推进，离线重放
+        # 完全正确；若 upstream 真有新提交而 fetch 失败，则会在 3-way 重放时因
+        # base 漂移而冲突，届时自然升级 LLM 兜底。故此处仅告警继续。
+        log(f"[warn] fetch upstream 失败（网络/镜像不可达），将使用本地缓存的 "
+            f"origin/main 继续：{e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -429,14 +435,18 @@ def apply_patch_delta(base: str, ikaros: str) -> list:
 
 
 def _sync_tree_from_commit(commit: str, rel_dir: str) -> None:
+    # 注意：git ls-tree <commit>:<dir> 返回的是**相对于该目录**的路径
+    # （如 `__init__.py`），必须拼回 rel_dir 才是仓库根相对全路径，否则
+    # `git show <commit>:__init__.py` 会找不到文件。
     out = run_git(["ls-tree", "-r", "--name-only", f"{commit}:{rel_dir}"],
                   check=True).stdout
     for sub in out.splitlines():
         sub = sub.strip()
         if not sub:
             continue
-        blob = run_git(["show", f"{commit}:{sub}"], check=True).stdout
-        dst = PATCH_SOURCE_DIR / sub
+        full = f"{rel_dir}/{sub}"
+        blob = run_git(["show", f"{commit}:{full}"], check=True).stdout
+        dst = PATCH_SOURCE_DIR / full
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(normalize_lf(blob), encoding="utf-8", newline="\n")
 
@@ -459,6 +469,11 @@ def refresh_patch_source(new_commit: str) -> None:
 def rollback_to_backup(tag: str) -> None:
     log(f"回滚到备份 tag {tag} ...")
     run_git(["cherry-pick", "--abort"], check=False)
+    # 丢弃 apply 阶段已应用的 A 类改动（相对当前 HEAD）
+    run_git(["checkout", "--", "."], check=False)
+    # 删除 apply 阶段复制进来、尚未提交的未跟踪 B 类目录，
+    # 否则后续 checkout -B main <tag> 会因“覆盖未跟踪文件”而中止。
+    run_git(["clean", "-fd", "--", *B_CLASS_DIRS], check=False)
     run_git(["checkout", "-B", "main", tag], check=True)
     run_git(["reset", "--hard", tag], check=True)
     log("已回滚。")
@@ -558,12 +573,17 @@ def verify(python_exe: Path) -> tuple[bool, list[str]]:
         if not passed:
             ok = False
 
-    # 1) 工作树干净（允许 config.yaml）
-    try:
-        ensure_clean_working_tree()
-        check("工作树干净（允许 config.yaml）", True)
-    except RuntimeError as e:
-        check("工作树干净", False, str(e))
+    # 1) 落地判据 marker（A 类签名行 + B 类目录 marker 全部命中 = 补丁真的打上了）。
+    #    注意：应用补丁后工作树必然有改动（A 类 M + B 类未跟踪），不能用“工作树干净”
+    #    判定；正确的“完成定义”是 marker 全部命中（与 derive_markers / markers_missing 一致）。
+    base, ikaros = parse_spec_pointers(SPEC.read_text(encoding="utf-8"))
+    markers = derive_markers(base, ikaros)
+    miss = markers_missing(markers)
+    if not miss:
+        check("落地判据 marker 全部命中", True)
+    else:
+        check("落地判据 marker 全部命中", False,
+              "缺失: " + "; ".join(miss))
 
     # 2) compileall（依赖轻，优先跑）
     proc = run_cmd(
@@ -740,6 +760,11 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
                 "backup_tag": backup_tag_name, "mode": "deterministic"})
 
     run_git(["checkout", "-B", "main"], check=True)
+    # 破坏性 reset 前提示：若工作树有未提交改动，将被丢弃（备份 tag 已在上一步创建）。
+    wt = run_git(["status", "--porcelain"], check=True).stdout.strip()
+    if wt:
+        log(f"[warn] 工作树存在未提交改动，reset --hard 将丢弃它们（备份 tag 已创建）：\n  "
+            + wt[:500])
     run_git(["reset", "--hard", target_sha], check=True)
     log(f"已 reset main → {target_sha[:8]}（新 upstream，旧补丁由备份 tag 保留）")
 
@@ -872,7 +897,10 @@ def main() -> int:
                                   apply=False, python_exe=python_exe,
                                   auto_llm=args.auto_llm, spec_text=spec_text)
 
-    ensure_clean_working_tree()
+    # --apply：脚本会自行 reset --hard 到 upstream 基线，无需预先要求工作树干净。
+    # 破坏性 reset 前已在 step_deterministic 内打备份 tag，可随时回滚；若工作树
+    # 有未提交改动，reset 会丢弃——这里仅交由下方告警处理，不阻断（避免
+    # “上一轮失败残留脏树导致下一轮 --apply 被预检卡死”的陷阱）。
     return step_deterministic(args.target, ikaros_commit, "",
                               apply=True, python_exe=python_exe,
                               auto_llm=args.auto_llm, spec_text=spec_text)
