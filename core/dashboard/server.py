@@ -90,9 +90,12 @@ COMPONENTS = [
     {"id": "neko_desktop", "name": "N.E.K.O Desktop", "category": "Frontend",
      "desc": "N.E.K.O Electron 桌面壳（独立）", "ports": [],
      "markers": ["N.E.K.O.exe"]},
-    {"id": "hermes_dashboard", "name": "Hermes Dashboard", "category": "Frontend",
-     "desc": "Hermes 控制台 :9119（LLM 后端 / web UI）", "ports": [9119],
-     "markers": ["hermes_cli.main"]},
+    {"id": "hermes_service", "name": "Hermes 服务", "category": "Backend",
+     "desc": "Hermes 后端服务 :9119（headless，不拉面板；启动/停止/重启）", "ports": [9119],
+     "markers": ["hermes.exe dashboard"]},
+    {"id": "hermes_dashboard", "name": "Dashboard 面板", "category": "Frontend",
+     "desc": "Hermes Web 面板 :9119（浏览器视图；启动开浏览器，关闭停服务器）", "ports": [9119],
+     "markers": ["hermes.exe dashboard"], "panel": True},
     {"id": "qwenpaw", "name": "Hermes (猫爪)", "category": "Backend",
      "desc": "猫爪服务器 :8088 — Hermes Agent 驱动", "ports": [8088], "markers": [],
      "panel_url": "http://127.0.0.1:48911/api/agent/openclaw/guide"},
@@ -189,6 +192,11 @@ def build_env(root: pathlib.Path) -> dict:
     e["HERMES_PYTHON"] = e["IKAROS_PYTHON"]
     e["HERMES_RUNTIME"] = e["IKAROS_RUNTIME"]
     e["HERMES_AGENT_ROOT"] = e["IKAROS_HERMES_AGENT"]
+    # 让 hermes dashboard 的 /chat 走预构建 bundle (ui-tui/dist/entry.js),
+    # 完全跳过首次启动的 `npm install --workspace ui-tui`。否则在沙箱/离线环境
+    # npm install 会被安全删除闸门拦截 → _make_tui_argv 走 sys.exit(1) →
+    # web chat 报 "Chat unavailable: 1"。dist 与根 node_modules 均已就绪。
+    e["HERMES_TUI_DIR"] = s(root / "core/hermes" / "ui-tui")
 
     # PATH: 把项目目录前置到继承的 PATH 之上
     path_parts = [
@@ -655,30 +663,31 @@ def stop_component_neko_group(root, env):
     stop_component_neko_memory(root, env)
 
 
-def start_component_hermes_dashboard(root, env, wait):
-    """启动 Hermes 控制台 (:9119)。
+def _spawn_hermes_dashboard(root, env, wait, no_open):
+    """用 hermes 控制台脚本拉起 dashboard（:9119，同一端口）。
 
-    必须用 hermes 自有的 venv python（hermes_cli 装在里面），且把 core/hermes
-    顶层目录加进 PYTHONPATH —— hermes_cli 是 editable 安装外独立存在的顶层包，
-    仅靠 venv site-packages 还解析不到它（之前用 portable-python 跑直接
-    ModuleNotFoundError）。core/hermes/venv/Scripts/hermes.exe 是 uv 生成的废脚本
-    （canonicalize script path 失败），同样不能用。
+    必须用 hermes 自有的 venv 里的 hermes.exe（hermes_cli 装在里面），且把
+    core/hermes 顶层目录加进 PYTHONPATH。不加 --skip-build —— 按需求从
+    `hermes --help` 取原生命令（`hermes dashboard [--no-open]`）；若环境离线导致
+    npm 构建失败，9119 起不来，需先在有网处预构建 web_dist 或显式加回 --skip-build。
     """
     # ── 启动前补丁预检（需求 §9：没打就补上）──
     try:
         pre = ensure_hermes_patch_applied()
         if pre["ok"]:
-            log.info("[hermes_dashboard] 启动前补丁预检：%s", pre["msg"])
+            log.info("[hermes] 启动前补丁预检：%s", pre["msg"])
         else:
-            log.warning("[hermes_dashboard] 启动前补丁预检未自动完成：%s（仍继续启动）",
-                        pre["msg"])
+            log.warning("[hermes] 启动前补丁预检未自动完成：%s（仍继续启动）", pre["msg"])
     except Exception:
         log_exception("hermes patch precheck")
-    log.info("[hermes_dashboard] starting Hermes console (:9119)...")
     hermes_dir = root / "core" / "hermes"
     venv_py = hermes_dir / "venv" / "Scripts" / "python.exe"
+    hermes_bin = hermes_dir / "venv" / "Scripts" / "hermes.exe"
     if not venv_py.exists():
-        log.error("[hermes_dashboard] venv python not found: %s", venv_py)
+        log.error("[hermes] venv python not found: %s", venv_py)
+        return
+    if not hermes_bin.exists():
+        log.error("[hermes] hermes console script not found: %s", hermes_bin)
         return
     cwd = str(root)
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
@@ -694,13 +703,12 @@ def start_component_hermes_dashboard(root, env, wait):
     # （core/hermes/plugins/memory/ikaros_v5 依赖此变量定位 E:/Ikaros/core/memory_v5）。
     # 不设时回退到 __file__.parents[5]，但显式设置更稳、避免静默“unavailable”。
     child_env["IKAROS_ROOT"] = str(root)
-    log.info("[hermes_dashboard] use venv python=%s, PYTHONPATH=%s, IKAROS_ROOT=%s",
+    log.info("[hermes] use venv python=%s, PYTHONPATH=%s, IKAROS_ROOT=%s",
              venv_py, child_env["PYTHONPATH"], child_env["IKAROS_ROOT"])
-    # --skip-build: web UI 已构建在 hermes_cli/web_dist（index.html + assets），
-    # 无需每次启动都跑 npm install（受限/离线环境下 npm install 会失败，导致
-    # 启动直接 sys.exit，9119 起不来）。web_dist 缺失时 hermes 会自动回退到
-    # 一次重建（main.py --skip-build 分支），不阻塞正常路径。
-    spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", "dashboard", "--no-open", "--skip-build"], child_env, cwd,
+    args = ["dashboard"]
+    if no_open:
+        args.append("--no-open")
+    spawn_hidden(str(hermes_bin), args, child_env, cwd,
                 str(root / "data" / "logs" / "hermes-dashboard.log"))
     if wait:
         # Hermes 控制台启动时要自动构建 web UI（npm install + vite），hermes 更新后
@@ -709,10 +717,36 @@ def start_component_hermes_dashboard(root, env, wait):
         wait_for_port(9119, 180)
 
 
-def stop_component_hermes_dashboard(root, env):
-    log.info("[hermes_dashboard] stopping (:9119)...")
+def start_component_hermes_service(root, env, wait):
+    """Hermes 服务：headless 后端（不拉面板）。等价于 `hermes dashboard --no-open`。"""
+    log.info("[hermes_service] starting headless Hermes service (:9119)...")
+    _spawn_hermes_dashboard(root, env, wait, no_open=True)
+
+
+def start_component_hermes_dashboard(root, env, wait):
+    """Dashboard 面板：确保 9119 服务在跑，再开浏览器。不另起第二个服务器。
+
+    - 服务未起：等价于 `hermes dashboard`（绑 9119 + 自动开浏览器）。
+    - 服务已起（如先开了 Hermes 服务）：只开浏览器访问同一服务。
+    """
+    if tcp_probe(9119):
+        log.info("[hermes_dashboard] 9119 已在运行，直接开浏览器")
+        open_browser("http://127.0.0.1:9119")
+        return
+    log.info("[hermes_dashboard] starting Hermes dashboard + browser (:9119)...")
+    _spawn_hermes_dashboard(root, env, wait, no_open=False)
+
+
+def stop_component_hermes_service(root, env):
+    log.info("[hermes_service] stopping (:9119)...")
     kill_port(9119)
-    kill_by_cmdline("hermes_cli.main")
+    kill_by_cmdline("hermes.exe dashboard")
+
+
+def stop_component_hermes_dashboard(root, env):
+    log.info("[hermes_dashboard] closing panel / stopping server (:9119)...")
+    kill_port(9119)
+    kill_by_cmdline("hermes.exe dashboard")
 
 
 # ── Hermes 版本 / Ikaros 补丁 控制（需求 §9）──────────────────────────
@@ -1319,6 +1353,8 @@ def comp_already_up(name: str) -> bool:
         return tcp_probe(48915)
     if name == "hermes_dashboard":
         return tcp_probe(9119)
+    if name == "hermes_service":
+        return tcp_probe(9119)
     if name == "neko_desktop":
         return neko_desktop_running()
     if name == "qwenpaw":
@@ -1347,6 +1383,8 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_neko_memory(root, env, wait)
     elif name == "neko_agent":
         start_component_neko_agent(root, env, wait)
+    elif name == "hermes_service":
+        start_component_hermes_service(root, env, wait)
     elif name == "hermes_dashboard":
         start_component_hermes_dashboard(root, env, wait)
     elif name == "neko_desktop":
@@ -1361,7 +1399,7 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_local_model(root, ENV, wait)
         start_component_memory(root, ENV, wait)
         start_component_neko_group(root, ENV, wait)
-        start_component_hermes_dashboard(root, ENV, wait)
+        start_component_hermes_service(root, ENV, wait)
         start_component_neko_desktop(root, ENV, wait)
         start_component_qwenpaw(root, ENV, wait)
     else:
@@ -1383,6 +1421,8 @@ def component_stop(name: str, env: dict) -> None:
         stop_component_neko_memory(root, env)
     elif name == "neko_agent":
         stop_component_neko_agent(root, env)
+    elif name == "hermes_service":
+        stop_component_hermes_service(root, env)
     elif name == "hermes_dashboard":
         stop_component_hermes_dashboard(root, env)
     elif name == "neko_desktop":
@@ -1396,7 +1436,7 @@ def component_stop(name: str, env: dict) -> None:
     elif name == "all":
         stop_component_neko_group(root, env)
         stop_component_neko_desktop(root, env)
-        stop_component_hermes_dashboard(root, env)
+        stop_component_hermes_service(root, env)
         stop_component_memory(root, env)
         stop_component_local_model(root, env)
         stop_component_qwenpaw(root, env)
@@ -1630,6 +1670,7 @@ def get_component_statuses() -> list[dict]:
             "subcomponents": c.get("subcomponents", []),
             "hidden": bool(c.get("hidden", False)),
             "parent_group": c.get("parent_group", ""),
+            "panel": bool(c.get("panel", False)),
         }
         # 模型切换信息（local_model / memory）
         if c.get("model_kind"):
@@ -1647,16 +1688,16 @@ def get_component_statuses() -> list[dict]:
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
         # Hermes 版本 / 补丁状态（需求 §9）
-        if c["id"] == "hermes_dashboard":
+        if c["id"] in ("hermes_dashboard", "hermes_service"):
             try:
                 entry["hermes_patch"] = hermes_patch_status()
             except Exception:
                 log_exception("hermes_patch_status")
         # 上游仓库存在性 + 版本落后检测（hermes / neko 克隆与版本检查）
-        if c["id"] in ("hermes_dashboard", "neko_group"):
+        if c["id"] in ("hermes_dashboard", "hermes_service", "neko_group"):
             try:
                 entry["repo"] = repo_status(
-                    "hermes" if c["id"] == "hermes_dashboard" else "neko")
+                    "hermes" if c["id"] in ("hermes_dashboard", "hermes_service") else "neko")
             except Exception:
                 log_exception("repo_status")
         # 运行时依赖检查（runtime/ 目录下的必要二进制）

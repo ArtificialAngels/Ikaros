@@ -96,10 +96,11 @@ def test_p2_ikaros_prompt_distinct():
             or "公理" in ikaros or "SOUL" in ikaros)
 
 
-# ────────────── D: hermes 模式委托 (防双重灵魂注入) ──────────────
+# ────────────── D: hermes 模式委托 (树域上下文 + 树域记忆, 不重复注入完整 SOUL) ──────────────
 def test_d1_hermes_mode_delegates_no_soul_or_v5():
-    """hermes 模式必须把人格/SOUL/V5 记忆委托给 Hermes gateway, 不能自行注入,
-    否则会与 Hermes 内部的 SOUL.md + 身份 + ikaros_v5 记忆双重注入."""
+    """hermes 模式注入树域上下文(分支脉络) + 树域记忆, **不注入完整 SOUL**:
+    gateway 的 core system 已含 SOUL.md + AGENTS.md + ikaros_v5 记忆, 外部 system 消息
+    会叠加在 core 之后 (不替换), 故树端只补它没有的: 分支位置 + 树域记忆, 人格不重复注入."""
     fake, tree = _new_tree()
     root = tree.init(seed_messages=[{"role": "user", "content": "hi"}])
     hermes_node = tree.add_turn([{"role": "user", "content": "task please"}])
@@ -113,11 +114,12 @@ def test_d1_hermes_mode_delegates_no_soul_or_v5():
     sys_msgs = [m for m in msgs if m["role"] == "system"]
     assert sys_msgs, "expected at least one system message"
     joined = "\n".join(m["content"] for m in sys_msgs)
-    # 含中性分支说明 (告知 Hermes 这是对话树分支)
-    assert "branching conversation tree" in joined
-    # 绝不含 tree 自行注入的 SOUL 身份 / V5 记忆块 / tree 的 Hermes 任务代理提示
+    # 含树域上下文: 告知 Hermes 这是对话树分支 + 当前分支脉络 (路径摘要 + agent 归属)
+    assert "conversation tree" in joined
+    assert "Current branch path" in joined
+    assert "Current node agent: hermes" in joined
+    # 绝不含 tree 自行注入的完整 SOUL 身份 / Hermes 任务代理提示 (人格由 gateway core 提供)
     assert "[身份档案 SOUL]" not in joined
-    assert "Relevant memories (V5)" not in joined
     assert "autonomous task agent" not in joined
 
 

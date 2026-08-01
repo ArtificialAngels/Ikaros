@@ -145,12 +145,13 @@ class V5MemoryAPI:
             except Exception:  # noqa: BLE001
                 return []
 
-        # 2) semantic fuse path
+        # 2) semantic fuse path (统一路由层: auto scope = 三路融合 + 图补路 + Vault)
         if fuse:
             try:
-                from memory_v5.memory_retrieval import retrieve
+                from memory_v5.memory_retrieval import unified_retrieve
                 tr = tuple(time_range) if time_range else None
-                fused = retrieve(query, top_k=top_k, time_range=tr, min_weight=0.0)
+                fused = unified_retrieve(query, top_k=top_k, scope="auto",
+                                         time_range=tr, min_weight=0.0)
 # 内联说明见 docs/scripts/core/memory_v5/v5/memory_api.md（见“内联注释摘录”）
                 if fused:
                     return fused

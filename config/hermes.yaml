@@ -254,7 +254,7 @@ mcp_servers:
   ikaros-v5:
     command: ${IKAROS_PYTHON}
     args:
-      - ${IKAROS_MEMORY}/v5/mcp_server.py
+      - ${IKAROS_MEMORY}/mcp_server.py
     env:
       IKAROS_ROOT: ${IKAROS_ROOT}
       HERMES_ROOT: ${IKAROS_ROOT}

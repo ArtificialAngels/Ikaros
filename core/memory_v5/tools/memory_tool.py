@@ -121,7 +121,7 @@ def v5_memory_get(memory_id: int) -> str:
     m = api.get(int(memory_id))
     if m is None:
         return dumps({"ok": False, "error": "not_found", "id": memory_id})
-        return dumps({"ok": False, "error": "not_found", "id": memory_id})
+    return answer(f"记忆 #{memory_id} 读取成功", m)
 
 
 @safe_tool

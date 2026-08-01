@@ -87,6 +87,8 @@ def supersede_memory(old_id: str, now: Optional[float] = None) -> bool:
         ).fetchone()
         if cur and cur["valid_to"] is None:
             c.execute("UPDATE memory SET valid_to=? WHERE id=?", (now, old_id))
+            # store.conn() 退出时默认 rollback, 必须显式提交写事务
+            c.commit()
             ok = True
     if ok:
         logger.info("temporal_graph: superseded memory %s @ %.0f", old_id, now)
@@ -140,7 +142,11 @@ def resolve_dissonance_supersede(
 # ─── 3) 时效感知检索 (过滤 / 降权过期事实) ─────────────────────
 
 def _valid_to_map(ids: list[str], conn_fn) -> dict:
-    """批量取 valid_to。conn_fn 返回 (conn, 表名)。"""
+    """批量取 valid_to。conn_fn 返回 (conn, 表名)。
+
+    返回 {str(id): valid_to} —— 键统一为 str, 与检索结果 dict 的 id 字段对齐
+    (SQLite 行返回 int id, 不转换会导致 get() 失配、过期过滤静默失效).
+    """
     if not ids:
         return {}
     table, col = conn_fn
@@ -157,7 +163,7 @@ def _valid_to_map(ids: list[str], conn_fn) -> dict:
             rows = c.execute(
                 f"SELECT id, valid_to FROM {table} WHERE id IN ({ph})", ids
             ).fetchall()
-    return {r["id"]: r["valid_to"] for r in rows}
+    return {str(r["id"]): r["valid_to"] for r in rows}
 
 
 def retrieve_temporal(query: str, *, now: Optional[float] = None,

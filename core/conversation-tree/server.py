@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,6 +27,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
 import memory_v5.conversation_tree as ct  # noqa: E402
+from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
 from memory_v5 import store as v5s     # noqa: E402
 # B2: 任务事件总线 (herdr events.subscribe 语义内化); core/ 已在 sys.path
 from taskbus import EventBus, exec_state_event  # noqa: E402
@@ -217,6 +219,49 @@ def _build_chat_messages(node_id: str | None, user_message: str) -> list[dict]:
 
 
 # ── Ikaros 人格 + V5 记忆注入 (chat 接入 Ikaros V5) ──────────────
+
+def _warn(collector: "dict | None", message: str) -> None:
+    """降级可见化: 把一条 warn 消息记进 collector, 由 /api/chat 以 SSE warn 事件透出前端.
+
+    collector 为 None (纯函数被测试直接调用) 时静默丢弃, 不破坏 fail-open 语义.
+    """
+    if collector is not None:
+        collector.setdefault("warns", []).append(message)
+
+
+# 树感知压缩 (TreePathCompressor): 模块级守卫导入. 旧代码漏 import 导致 NameError 被
+# except 静默吞掉, "树感知压缩"实际从未生效 (一直跑线性回退) —— 本次修复并加 warn 透出.
+try:
+    from memory_v5.extensions.tree_adapter import build_tree_aware_context  # noqa: F401
+except Exception:  # 零硬依赖: tree_adapter 缺失/离线时降级为 None, 调用点走回退
+    build_tree_aware_context = None
+
+
+def build_branch_context_block(tree, node_id: "str | None") -> str:
+    """当前分支脉络块: 根→当前节点路径 (每节点 #depth branch_label: summary) + agent 归属.
+
+    供 hermes 模式注入 gateway 的树域上下文 (复用 branch_overview 工具的路径摘要逻辑).
+    fail-open: 树缺失/异常返回空串, 不阻塞主线.
+    """
+    try:
+        if tree is None:
+            return ""
+        nid = node_id or getattr(tree, "current_id", None)
+        path = tree.get_path(nid) if nid else []
+        if not path:
+            return "(empty branch)"
+        lines = []
+        for n in path:
+            s = (n.summary or "").strip() or "(no summary)"
+            lines.append(f"#{n.depth} {n.branch_label or 'main'}: {s[:200]}")
+        cur = path[-1]
+        agent = getattr(cur, "agent", "ikaros") or "ikaros"
+        return ("Current branch path (root → current):\n" + "\n".join(lines)
+                + f"\nCurrent node agent: {agent}")
+    except Exception:
+        return ""
+
+
 def build_ikaros_persona() -> str:
     """组装 Ikaros 身份 system 文本: 公理(核心指令) + SOUL 身份/偏好 + 动态心绪。
 
@@ -281,18 +326,20 @@ def build_ikaros_persona() -> str:
     return "\n\n".join(b for b in blocks if b.strip())
 
 
-def build_v5_memory_block(node_id: str | None, query: str) -> str:
+def build_v5_memory_block(node_id: str | None, query: str, collector: "dict | None" = None) -> str:
     """树域语义检索 (V5 记忆引擎): 按当前 query 检索相关记忆并做树域加权。
 
     依赖刚落地的存储打标 (node:/branch:), 命中路径/分支的记忆优先。检索后端
-    不可用时 fail-open 返回空串。返回可直接拼进 system 的文本块。
+    不可用时 fail-open 返回空串, 并向 collector 记一条 warn (降级可见化)。
+    返回可直接拼进 system 的文本块。
     """
     if _tree is None:
         return ""
     try:
         from memory_v5.extensions.tree_adapter import tree_scoped_retrieve
         results = tree_scoped_retrieve(_tree, node_id, query, top_k=5)
-    except Exception:
+    except Exception as e:
+        _warn(collector, f"树域记忆检索不可用，已跳过记忆注入（{e}）")
         return ""
     lines: list[str] = []
     for r in results:
@@ -314,15 +361,16 @@ def build_system_prompt(mode: str) -> str:
     return build_ikaros_persona()
 
 
-def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]:
+def build_chat_messages_v5(node_id: str | None, user_message: str,
+                           collector: "dict | None" = None) -> list[dict]:
     """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
 
     - ikaros 模式: 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
-    - hermes 模式: 把人格/SOUL/V5 记忆**完全委托**给 Hermes gateway. Hermes 内部会重新注入
-      SOUL.md + 身份 + AGENTS.md + tools/skills 指引 + ikaros_v5 记忆 (已实测: 单句请求
-      prompt_tokens≈10058, 证实 soul+记忆被加载). 若 tree 再注入一遍会双重 SOUL/记忆 + 人格打架,
-      故仅传中性分支说明 + 树感知压缩历史, 让 Hermes 以自身身份(SOUL)应答.
-    任何环节异常都 fail-open 回退到旧的线性上下文。
+    - hermes 模式: 树域上下文(分支脉络) + 树域记忆, **不注入完整 SOUL** —— gateway
+      的 core system 已含 SOUL.md 身份 + AGENTS.md + ikaros_v5 记忆, 外部 system 消息
+      会**叠加**在 core 之后 (chat_completion_helpers 追加, 不替换), 故树端只补它
+      没有的: 当前分支在树里的位置 + 树域语义记忆, 人格不重复注入。
+    任何环节异常都 fail-open 回退到旧的线性上下文, 并向 collector 记 warn (降级可见化)。
     """
     mode = "ikaros"
     if _tree is not None:
@@ -330,19 +378,28 @@ def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]
         if n is not None:
             mode = getattr(n, "agent", "ikaros") or "ikaros"
 
-    # ── hermes 模式: 委托 Hermes, 不注入 tree 自身人格/SOUL/V5 记忆 ──
+    # ── hermes 模式: 树域上下文 + 树域记忆, 人格/工具/技能全由 gateway 提供 ──
     if mode == "hermes":
-        neutral = (
-            "This exchange is one branch of a branching conversation tree managed by Ikaros. "
-            "Continue naturally as yourself; the branch context is carried by the preceding turns."
-        )
+        # 树域上下文: 分支说明 (路径摘要 + 当前分支标签 + 分支归属)
+        branch_ctx = build_branch_context_block(_tree, node_id)
+        # 树域记忆: 复用现有 tree_scoped_retrieve (fail-open)
+        mem_block = build_v5_memory_block(node_id, user_message, collector=collector)
+        system_text = "\n\n".join(filter(None, [
+            "You are speaking inside Ikaros' conversation tree. "
+            "The branch context below is authoritative for this exchange.",
+            branch_ctx,
+            ("Relevant tree-scoped memories (V5):\n" + mem_block) if mem_block else "",
+        ]))
         try:
+            if build_tree_aware_context is None:
+                raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
             ctx = build_tree_aware_context(
-                _tree, node_id, system_prompt=neutral, extra_memory=None,
+                _tree, node_id, system_prompt=system_text, extra_memory=None,
             )
             return ctx + [{"role": "user", "content": user_message}]
-        except Exception:
-            msgs: list[dict] = [{"role": "system", "content": neutral}]
+        except Exception as e:
+            _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
+            msgs: list[dict] = [{"role": "system", "content": system_text}]
             try:
                 ctx = _tree.get_context(node_id)
                 if len(ctx) > MAX_CONTEXT_MSGS:
@@ -355,16 +412,19 @@ def build_chat_messages_v5(node_id: str | None, user_message: str) -> list[dict]
 
     # ── ikaros 模式: 人格(伴侣) + 树域记忆 + 树感知压缩 ──
     persona = build_system_prompt(mode)
-    mem_block = build_v5_memory_block(node_id, user_message)
+    mem_block = build_v5_memory_block(node_id, user_message, collector=collector)
     try:
+        if build_tree_aware_context is None:
+            raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
         ctx = build_tree_aware_context(
             _tree, node_id,
             system_prompt=persona,
             extra_memory=mem_block or None,
         )
         return ctx + [{"role": "user", "content": user_message}]
-    except Exception:
+    except Exception as e:
         # 回退: 旧线性上下文 + 人格 + 记忆
+        _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
         msgs: list[dict] = [{"role": "system", "content": persona}]
         if mem_block:
             msgs.append({"role": "system", "content": "Relevant memories (V5):\n" + mem_block})
@@ -391,6 +451,87 @@ _lock = threading.RLock()
 # B2: 共享任务事件总线 —— 所有订阅方 (SSE / 9100 面板 / supervisor) 共用同一实例
 _bus = EventBus()
 
+# ── 多会话 (session) 支持: 每个 session = 一棵独立对话树 ──────────────
+# 会话注册表 (sessions.json) 记录所有会话元数据; 每棵树的拓扑 JSON 仍以各自
+# persist_key 存放在同一 V5_DATA_DIR, 互不影响. 活动会话的树始终挂在全局 _tree.
+SESSIONS_FILE = V5_DATA_DIR / "sessions.json"
+SESSION_DEFAULT_PER = "ui_conversation_tree"
+
+_sessions: list[dict] = []
+_active_session_id: str | None = None
+
+
+def _new_session_id() -> str:
+    return "sess_" + time.strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
+
+
+def _tree_kwargs() -> dict:
+    return dict(_store=v5s.store, _load=_load_str, _search=_search_dicts)
+
+
+def _load_sessions() -> list[dict]:
+    if SESSIONS_FILE.exists():
+        try:
+            data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return []
+
+
+def _save_sessions(sessions: list[dict]) -> None:
+    SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SESSIONS_FILE.write_text(json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _active_session() -> "dict | None":
+    if _active_session_id is None:
+        return _sessions[0] if _sessions else None
+    for s in _sessions:
+        if s["id"] == _active_session_id:
+            return s
+    return _sessions[0] if _sessions else None
+
+
+def _active_persist_key() -> str:
+    s = _active_session()
+    return s["persist_key"] if s else SESSION_DEFAULT_PER
+
+
+def _touch_active_session() -> None:
+    """活动会话元数据打时间戳 + 记录当前节点摘要, 便于侧栏排序/展示."""
+    s = _active_session()
+    if s is None:
+        return
+    try:
+        s["updated_at"] = time.time()
+        if _tree is not None and _tree.current_id:
+            n = _tree.get_node(_tree.current_id)
+            if n and n.summary:
+                s["current_title"] = n.summary[:80]
+        _save_sessions(_sessions)
+    except Exception:
+        pass
+
+
+def _make_tree_for(persist_key: str) -> "ct.ConversationTree":
+    """创建注入 V5 store 后端的 ConversationTree (指定 persist_key)."""
+    return ct.ConversationTree(persist_key=persist_key, **_tree_kwargs())
+
+
+def _load_tree_for(persist_key: str) -> "ct.ConversationTree | None":
+    return ct.ConversationTree.load(persist_key=persist_key, **_tree_kwargs())
+
+
+def _bind_active_tree(t: "ct.ConversationTree") -> None:
+    """把给定树挂为活动树, 并重建 retriever + 注入共享事件总线."""
+    global _tree, _retriever
+    _tree = t
+    _retriever = ct.MemoryRetriever(t)
+    t.event_bus = _bus
+
+
 
 # ───────────────────────── 树初始化 / 恢复 ─────────────────────────
 
@@ -405,20 +546,15 @@ def _search_dicts(query: str, top_k: int = 10) -> list[dict]:
     return [{"id": r.id, "content": r.content} for r in results]
 
 def _make_tree() -> ct.ConversationTree:
-    """创建注入 V5 store 后端的 ConversationTree."""
-    return ct.ConversationTree(
-        persist_key=PERSIST_KEY,
-        _store=v5s.store,
-        _load=_load_str,
-        _search=_search_dicts,
-    )
+    """向后兼容: 用默认 persist_key 创建树."""
+    return _make_tree_for(PERSIST_KEY)
 
 
 def build_demo() -> None:
-    """初始化一棵 poker Demo 树 (对话内容走 V5 store)."""
+    """初始化一棵 poker Demo 树 (对话内容走 V5 store). 使用当前活动会话的 persist_key."""
     global _tree, _retriever
     with _lock:
-        t = _make_tree()
+        t = _make_tree_for(_active_persist_key())
         t.init([{"role": "system", "content": "Explore conversation started."}])
         a = t.add_turn([
             {"role": "user", "content": "What is GTO strategy in poker?"},
@@ -503,23 +639,42 @@ def _migrate_if_needed() -> None:
 
 
 def ensure_tree() -> None:
-    """进程启动 / 首次请求时恢复或初始化树 + 迁移旧格式."""
-    global _tree, _retriever
+    """进程启动 / 首次请求时恢复或初始化会话 + 迁移旧格式 + 加载活动会话的树."""
+    global _tree, _retriever, _sessions, _active_session_id
     with _lock:
         if _tree is not None:
             return
-        t = ct.ConversationTree.load(
-            persist_key=PERSIST_KEY,
-            _store=v5s.store, _load=_load_str, _search=_search_dicts,
-        )
+        _sessions = _load_sessions()
+        if not _sessions:
+            # 首次运行: 若已有旧版单树 (ui_conversation_tree.json) 则就地包装为第一个会话;
+            # 否则用 poker Demo 初始化默认会话.
+            default_per = SESSION_DEFAULT_PER
+            _sessions = [{
+                "id": "default", "title": "默认会话", "persist_key": default_per,
+                "created_at": time.time(), "updated_at": time.time(), "archived": False,
+            }]
+            _save_sessions(_sessions)
+            _active_session_id = "default"
+            if (V5_DATA_DIR / f"{default_per}.json").exists():
+                t = _load_tree_for(default_per)
+                if t is None:
+                    build_demo()
+                else:
+                    _bind_active_tree(t)
+            else:
+                build_demo()
+            return
+        # 会话已存在: 校正活动会话, 加载其树
+        if _active_session_id is None or not any(s["id"] == _active_session_id for s in _sessions):
+            _active_session_id = _sessions[0]["id"]
+        s = _active_session()
+        t = _load_tree_for(s["persist_key"]) if s else None
         if t is None:
-            build_demo()
-        else:
-            _tree = t
-            _retriever = ct.MemoryRetriever(t)
-            t.event_bus = _bus  # B2: 注入共享事件总线
-            # 迁移: 检测旧格式 (节点含 messages 字段但 v5_memory_id=0)
-            _migrate_if_needed()
+            # 拓扑文件缺失 (被手动删), 重建空树避免整体崩溃
+            t = _make_tree_for((s or {}).get("persist_key", SESSION_DEFAULT_PER))
+            t.init([{"role": "system", "content": "会话已恢复。"}])
+        _bind_active_tree(t)
+        _migrate_if_needed()
 
 
 def state_dict() -> dict:
@@ -568,6 +723,405 @@ def _get_supervisor() -> "CodingAgentSupervisor":
 
 # ───────────────────────── HTTP 处理 ─────────────────────────
 
+# ── B6: 流式 chat (SSE) + 只读工具回路 (chat 面板思考/工具可视化) ──
+# 默认 deepseek-v4-flash (与 V5 认知管线一致; thinking 默认 disabled); 仅影响本地降级路径,
+# gateway 正常时无关. 设 CT_DEEPSEEK_MODEL=deepseek-reasoner 可开启思考可视化.
+CT_DEEPSEEK_MODEL = os.environ.get("CT_DEEPSEEK_MODEL", "deepseek-v4-flash")
+# 上下文窗口 (用于"上下文用量"进度条). DeepSeek API 默认 64K; 可用 env 覆盖 (如 128000).
+CT_CONTEXT_WINDOW = int(os.environ.get("CT_CONTEXT_WINDOW", "64000"))
+
+# chat 专用只读/安全工具集 (hermes 模式启用). 全部不写磁盘/不执行命令.
+CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "description": "在 Ikaros 长期记忆(V5)中做语义检索, 找回与查询相关的过去对话/事实/洞察. "
+                           "当用户提到过去的事、需要回忆上下文、或问题依赖已知信息时调用.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "语义检索查询词"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "获取当前本地日期与时间. 当用户问'现在几点''今天几号''距离某事件还有多久'等时间相关问题时调用.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "branch_overview",
+            "description": "总结当前对话分支脉络: 返回从根到当前节点的路径摘要, 帮助把握对话走向. "
+                           "当用户问'我们聊到哪了''之前说了什么'时调用.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+MAX_TOOL_ITER = 5
+
+
+def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
+    """执行 chat 只读工具, 返回 {ok, result}. 所有工具均为只读/安全."""
+    try:
+        args = json.loads(arguments) if arguments else {}
+    except Exception:
+        args = {}
+    if name == "memory_search":
+        q = (args.get("query") or "").strip()
+        if not q:
+            return {"ok": False, "result": "缺少 query 参数"}
+        try:
+            from memory_v5 import memory_retrieval
+            # 统一检索路由: tree scope 让结果按当前对话分支/路径加权 (依赖 node:/branch: 打标)
+            hits = memory_retrieval.unified_retrieve(
+                q, top_k=5, scope="tree", node_id=node_id, tree=_tree,
+            )
+            if not hits:
+                return {"ok": True, "result": "(无相关记忆)"}
+            lines = []
+            for h in hits[:5]:
+                txt = (h.get("content") or "").strip().replace("\n", " ")
+                lines.append(f"- [{float(h.get('score', h.get('raw', 0))):.2f}] {txt[:300]}")
+            return {"ok": True, "result": "\n".join(lines)}
+        except Exception as e:
+            return {"ok": False, "result": f"检索失败: {e}"}
+    if name == "get_current_time":
+        return {"ok": True, "result": time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime())}
+    if name == "branch_overview":
+        try:
+            if _tree is None:
+                return {"ok": False, "result": "树未初始化"}
+            nid = node_id or _tree.current_id
+            path = _tree.get_path(nid) if nid else []
+            if not path:
+                return {"ok": True, "result": "(空分支)"}
+            lines = []
+            for n in path:
+                s = (n.summary or "").strip() or "(无摘要)"
+                lines.append(f"#{n.depth} {n.branch_label or 'main'}: {s[:200]}")
+            return {"ok": True, "result": "\n".join(lines)}
+        except Exception as e:
+            return {"ok": False, "result": f"概览失败: {e}"}
+    return {"ok": False, "result": f"未知工具: {name}"}
+
+
+def _deepseek_stream(messages: list[dict], tools):
+    """逐行解析 DeepSeek SSE, yield 归一化 delta: {reasoning}|{content}|{tool_calls}."""
+    body = {
+        "model": CT_DEEPSEEK_MODEL,
+        "messages": messages,
+        "max_tokens": 2048,
+        "temperature": 0.7,
+        "stream": True,
+        # DeepSeek 在最后一个空 choices 块返回 usage; 需显式开启才能拿到 token/缓存统计.
+        "stream_options": {"include_usage": True},
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        DEEPSEEK_CHAT_URL, data=data,
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
+    )
+    buf = b""
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        for chunk in resp:
+            buf += chunk
+            while True:
+                idx = buf.find(b"\n")
+                if idx < 0:
+                    break
+                line = buf[:idx].decode("utf-8", "replace").strip()
+                buf = buf[idx + 1:]
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    return
+                try:
+                    obj = json.loads(payload)
+                except Exception:
+                    continue
+                # 用量块 (最后一块, choices 可能为空): 透传给 chat 面板做上下文/缓存可视化
+                if obj.get("usage"):
+                    yield {"usage": obj["usage"]}
+                try:
+                    delta = obj["choices"][0]["delta"]
+                except Exception:
+                    continue
+                if delta.get("reasoning_content"):
+                    yield {"reasoning": delta["reasoning_content"]}
+                if delta.get("content"):
+                    yield {"content": delta["content"]}
+                if delta.get("tool_calls"):
+                    yield {"tool_calls": delta["tool_calls"]}
+
+
+def _stream_hermes_gateway(messages: list[dict], collector: dict):
+    """委托 Hermes gateway (:8642) 跑完整 tools/skills 循环, 代理其 SSE 到前端 chat 面板.
+
+    gateway 用 OpenAI 兼容 SSE 流式:
+    - 正文走普通 ``data:`` 行 (delta.content / delta.reasoning_content / usage)
+    - 工具生命周期走命名事件 ``event: hermes.tool.progress``
+      (payload: tool / emoji / label / toolCallId / status="running"|"completed")
+    - 模型推理思考走命名事件 ``event: hermes.reasoning`` (payload: text)
+      —— 由 gateway 从模型 reasoning 字段透出, 让 hermes 模式也能显示思考块
+
+    这里解析这些帧: 把 ``hermes.tool.progress`` 翻译为 chat 面板的
+    ``tool_call``(running) / ``tool_result``(completed) 事件, 把 ``hermes.reasoning``
+    翻译为 ``thinking`` 事件. 网关不在线透出工具结果文本 (被 agent 内部消费并并入
+    最终正文), 故卡片"结果"用占位说明. 若 gateway 不可达/报错会在 urlopen 阶段立即
+    抛出, 由 _chat_stream_events 回退到本地循环 (此时尚未 yield 任何内容, 不会污染前端).
+    """
+    if not HERMES_AGENT_URL:
+        raise RuntimeError("HERMES_AGENT_URL not configured")
+    body = json.dumps({
+        "model": HERMES_AGENT_MODEL,
+        "messages": messages,
+        "max_tokens": 2048,
+        "temperature": 0.7,
+        "stream": True,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        HERMES_AGENT_URL, data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {HERMES_AGENT_KEY}",
+        },
+    )
+    # urlopen 在网关不可达时立即抛 URLError/HTTPError → 调用方回退本地循环 (尚未 yield 内容)
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        buf = b""
+        evt = None
+        data_lines: list[str] = []
+
+        def _flush():
+            nonlocal evt, data_lines
+            raw = "\n".join(data_lines)
+            data_lines = []
+            this_evt = evt
+            evt = None
+            if not raw:
+                return
+            # 命名事件: 工具生命周期 (hermes.tool.progress)
+            if this_evt == "hermes.tool.progress":
+                try:
+                    p = json.loads(raw)
+                except Exception:
+                    return
+                status = (p.get("status") or "").lower()
+                tcid = p.get("toolCallId") or p.get("tool_call_id") or ""
+                tool = p.get("tool") or "tool"
+                label = p.get("label") or ""
+                emoji = p.get("emoji") or "🔧"
+                # 过滤 Hermes 内部元步骤 (调用前的 "describe tool" 等), 避免噪音卡片
+                if tool.startswith("tool_describe") or tool == "tool_describe":
+                    return
+                if status == "running" or (not status and label):
+                    # 工具开始: 注册卡片 (前端 ok:null → 待执行态)
+                    collector["tool_calls"].append({
+                        "name": tool,
+                        "params": {"input": label, "emoji": emoji},
+                        "result_summary": "",
+                        "success": True,
+                        "timestamp": time.time(),
+                    })
+                    yield {
+                        "type": "tool_call", "id": tcid, "name": tool,
+                        "args": {"input": label, "emoji": emoji},
+                    }
+                else:
+                    # completed / failed / 其它: 终结卡片. gateway 现随事件透出结果文本
+                    # (阶段 2: api_server._on_tool_complete 携带 result, 截断 2000),
+                    # 实时卡片显示真实结果; 同时回填 collector 供持久化 (阶段 3).
+                    ok = (status != "failed")
+                    result_txt = p.get("result", "") if ok else "（执行失败）"
+                    if ok:
+                        for _tc in reversed(collector["tool_calls"]):
+                            if _tc.get("name") == tool:
+                                _tc["result_summary"] = str(result_txt)[:500]
+                                _tc["success"] = True
+                                break
+                    yield {
+                        "type": "tool_result", "id": tcid, "ok": ok,
+                        "result": result_txt,
+                    }
+                return
+            # 命名事件: 模型推理思考流 (hermes.reasoning) — gateway 从模型 reasoning 字段透出
+            if this_evt == "hermes.reasoning":
+                try:
+                    p = json.loads(raw)
+                except Exception:
+                    return
+                text = p.get("text") or ""
+                if text:
+                    collector["thinking"] += text
+                    yield {"type": "thinking", "delta": text}
+                return
+            # 其它命名事件 (hermes.token 等) 不处理
+            if this_evt is not None:
+                return
+            # 普通 OpenAI data: 行 (正文 / usage / [DONE])
+            if not raw.startswith("{"):
+                return
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                return
+            # 末块 usage (gateway 把 usage 放在 finish_reason 同块)
+            if obj.get("usage"):
+                collector["usage"] = obj["usage"]
+                yield {"type": "usage", "usage": obj["usage"],
+                       "model": HERMES_AGENT_MODEL, "context_window": CT_CONTEXT_WINDOW}
+            try:
+                delta = obj["choices"][0]["delta"]
+            except Exception:
+                return
+            if delta.get("reasoning_content"):
+                collector["thinking"] += delta["reasoning_content"]
+                yield {"type": "thinking", "delta": delta["reasoning_content"]}
+            if delta.get("content"):
+                collector["content"] += delta["content"]
+                yield {"type": "content", "delta": delta["content"]}
+
+        for chunk in resp:
+            buf += chunk
+            while True:
+                idx = buf.find(b"\n")
+                if idx < 0:
+                    break
+                line = buf[:idx].decode("utf-8", "replace").rstrip("\r")
+                buf = buf[idx + 1:]
+                if line == "":
+                    yield from _flush()
+                    continue
+                if line.startswith("event:"):
+                    evt = line[6:].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[5:].strip())
+                # retry: / id: 等其它 SSE 字段忽略
+        yield from _flush()  # 收尾: 处理缓冲区中最后一个未以空行结束的帧
+
+
+def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, collector: dict):
+    """生成 chat SSE 事件字典. collector 累积 {content, thinking, tool_calls, usage} 供持久化.
+
+    得兼架构: **ikaros / hermes 两种模式都优先委托 8642 gateway** 跑完整 tools/skills 循环;
+    区别只在 messages 的 system 注入内容 (ikaros=完整 persona, hermes=树域上下文+树域记忆,
+    gateway core 的 SOUL 即人格). 网关不可达/空响应时回退本地 DeepSeek + 3 只读工具回路,
+    并向前端发 warn 事件 (降级可见化).
+    ikaros 模式: 本地 DeepSeek 伴侣补全 (无工具, 纯对话).
+    """
+    # ── gateway 优先 (ikaros + hermes) ──
+    if agent in ("hermes", "ikaros") and HERMES_AGENT_URL:
+        gw_yielded = False
+        try:
+            # 必须迭代才会真正驱动生成器 (否则只是惰性对象, collector 不会被填充)
+            for _ev in _stream_hermes_gateway(messages, collector):
+                gw_yielded = True
+                yield _ev
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
+            yield {"type": "warn", "message": f"已降级: Hermes gateway 不可达（{e}），改用本地模型"}
+            sys.stderr.write(f"[ct] Hermes gateway unreachable ({e}); fallback local loop\n")
+        except Exception as e:  # 其它异常: 若已产出内容则保留残响应避免重复, 否则回退
+            if gw_yielded:
+                sys.stderr.write(f"[ct] Hermes gateway mid-stream error ({e}); keep partial\n")
+                return
+            yield {"type": "warn", "message": f"已降级: Hermes gateway 错误（{e}），改用本地模型"}
+            sys.stderr.write(f"[ct] Hermes gateway error ({e}); fallback local loop\n")
+        else:
+            # 网关跑通: 有内容则结束; 空响应(异常空)也回退本地循环
+            if collector["content"].strip():
+                return
+            yield {"type": "warn", "message": "Hermes gateway 返回空响应，改用本地模型"}
+            sys.stderr.write("[ct] Hermes gateway returned empty; fallback local loop\n")
+
+    # ── 本地循环 (ikaros 模式, 或 hermes 网关失败回退) ──
+    if not _DEEPSEEK_KEY:
+        # 无 DeepSeek key: 回退到既有非流式补全 (无思考/工具, 仅透传正文)
+        try:
+            reply = _call_llm(messages, agent=agent)
+            collector["content"] = reply
+            yield {"type": "content", "delta": reply}
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}
+        return
+
+    # 本地循环工具集: 仅 hermes (含网关回退) 启用 3 个只读工具, ikaros 纯伴侣无工具
+    tools = CHAT_TOOLS if (agent == "hermes" and _DEEPSEEK_KEY) else None
+    loop_messages = list(messages)
+    for _ in range(MAX_TOOL_ITER):
+        tc_acc: dict = {}
+        try:
+            for d in _deepseek_stream(loop_messages, tools):
+                if "reasoning" in d and d["reasoning"]:
+                    collector["thinking"] += d["reasoning"]
+                    yield {"type": "thinking", "delta": d["reasoning"]}
+                if "content" in d and d["content"]:
+                    collector["content"] += d["content"]
+                    yield {"type": "content", "delta": d["content"]}
+                if "usage" in d and d["usage"]:
+                    collector["usage"] = d["usage"]
+                    yield {"type": "usage", "usage": d["usage"],
+                           "model": CT_DEEPSEEK_MODEL, "context_window": CT_CONTEXT_WINDOW}
+                if "tool_calls" in d:
+                    for tc in d["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        slot = tc_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function", {}) or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["arguments"] += fn["arguments"]
+        except Exception as e:
+            yield {"type": "error", "message": f"LLM 流失败: {e}"}
+            return
+        calls = [v for v in tc_acc.values() if v["name"]]
+        if not calls:
+            break
+        assistant_tc = []
+        for c in calls:
+            cid = c["id"] or f"call_{len(assistant_tc)}"
+            assistant_tc.append({
+                "id": cid, "type": "function",
+                "function": {"name": c["name"], "arguments": c["arguments"]},
+            })
+        loop_messages.append({
+            "role": "assistant", "content": None, "tool_calls": assistant_tc,
+        })
+        for c in calls:
+            cid = c["id"] or f"call_{calls.index(c)}"
+            try:
+                args_parsed = json.loads(c["arguments"]) if c["arguments"] else {}
+            except Exception:
+                args_parsed = {}
+            yield {"type": "tool_call", "id": cid, "name": c["name"], "args": args_parsed}
+            res = _execute_chat_tool(c["name"], c["arguments"], node_id)
+            ok = bool(res.get("ok", False))
+            yield {"type": "tool_result", "id": cid, "ok": ok,
+                   "result": str(res.get("result", ""))[:2000]}
+            loop_messages.append({
+                "role": "tool", "tool_call_id": cid,
+                "content": str(res.get("result", ""))[:4000],
+            })
+            collector["tool_calls"].append({
+                "name": c["name"], "params": args_parsed,
+                "result_summary": str(res.get("result", ""))[:300],
+                "success": ok, "timestamp": time.time(),
+            })
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConversationTreeServer/2.0"
     # B2: SSE 事件流需要长连接 + 分块流; 升级到 HTTP/1.1 (其他端点都带 Content-Length,
@@ -606,15 +1160,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_sse(self, generator):
+        """以 SSE (text/event-stream) 分块推送生成器产出的字符串."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            for chunk in generator:
+                if not chunk:
+                    continue
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _send_html(self, path: Path):
         if not path.exists():
             self._send_text("index.html not found", 404)
             return
+        body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
+        # 必须带 Content-Length, 否则 HTTP/1.1 keep-alive 下客户端只能等连接
+        # 关闭才能判定 HTML 结束 —— 浏览器标签页会因此一直转圈。
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(path.read_bytes())
+        self.wfile.write(body)
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -696,6 +1272,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"context": ctx, "count": len(ctx)})
             elif path == "/api/mermaid":
                 self._send_json({"mermaid": _tree.to_mermaid()})
+            elif path == "/api/sessions":
+                self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             elif path == "/api/events":
                 self._stream_events()
             else:
@@ -773,6 +1351,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        global _sessions, _active_session_id
         ensure_tree()
         path = self.path.split("?", 1)[0]
         try:
@@ -789,6 +1368,7 @@ class Handler(BaseHTTPRequestHandler):
                     config=data.get("config"),
                     title=data.get("title"),
                 )
+                _touch_active_session()
                 self._send_json(state_dict())
             elif path == "/api/branch_from":
                 _tree.branch_from(
@@ -909,25 +1489,149 @@ class Handler(BaseHTTPRequestHandler):
                 target_id = parent_id or _tree.current.id
                 node = _tree.get_node(target_id)
                 mode = node.agent if node else "ikaros"
-                messages = build_chat_messages_v5(target_id, user_message)
-                try:
-                    reply = _call_llm(messages, agent=mode)
-                except RuntimeError as e:
-                    self._send_json({"error": str(e)}, 503)
-                    return
+                collector = {"content": "", "thinking": "", "tool_calls": [],
+                             "usage": {}, "warns": []}
 
-                _tree.add_turn(
-                    messages=[
-                        {"role": "user", "content": user_message},
-                        {"role": "assistant", "content": reply},
-                    ],
-                    parent_id=parent_id,
-                    branch_label=branch_label,
-                )
-                self._send_json({"reply": reply, "state": state_dict()})
+                def _gen():
+                    errored = False
+                    try:
+                        messages = build_chat_messages_v5(target_id, user_message, collector=collector)
+                    except Exception as e:
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'build messages failed: {e}'}, ensure_ascii=False)}\n\n"
+                        return
+                    # 降级可见化: 组装阶段记录的 warn 先透出 (黄色提示条, 不中断流)
+                    for w in collector.get("warns", []):
+                        yield f"data: {json.dumps({'type': 'warn', 'message': w}, ensure_ascii=False)}\n\n"
+                    try:
+                        for ev in _chat_stream_events(messages, mode, target_id, collector):
+                            if ev.get("type") == "error":
+                                errored = True
+                            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                        # 持久化本轮对话 (含思考/工具), 再推送 done (出错则不落库, 避免空节点)
+                        if not errored and collector["content"].strip():
+                            try:
+                                # skills_used 近似: gateway 无 skill 专属事件, 用本轮工具名列表
+                                # (阶段 3.2 降级方案; 精确 skill 元数据待 gateway 侧补事件源)
+                                skills_used = list(dict.fromkeys(
+                                    tc.get("name", "") for tc in collector["tool_calls"] if tc.get("name")
+                                ))
+                                _tree.add_turn(
+                                    messages=[
+                                        {"role": "user", "content": user_message},
+                                        {"role": "assistant", "content": collector["content"]},
+                                    ],
+                                    parent_id=parent_id,
+                                    branch_label=branch_label,
+                                    thinking=collector["thinking"],
+                                    tool_calls=[ct.ToolCall(**tc) for tc in collector["tool_calls"]],
+                                    usage=collector["usage"],
+                                    skills_used=skills_used,
+                                )
+                                _touch_active_session()
+                            except Exception as e:
+                                sys.stderr.write(f"[ct] chat persist error: {e}\n")
+                        yield f"data: {json.dumps({'type': 'done', 'state': state_dict()}, ensure_ascii=False)}\n\n"
+                    except Exception as e:
+                        sys.stderr.write(f"[ct] chat stream error: {e}\n")
+                        yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+                self._send_sse(_gen())
+                return
             elif path == "/api/reset":
                 build_demo()
                 self._send_json(state_dict())
+            # ── 多会话管理 (左侧栏 新建 / 切换 / 删除 / 归档 / 重命名) ──
+            elif path == "/api/sessions/create":
+                sid = _new_session_id()
+                per = f"ui_conversation_tree_{sid}"
+                with _lock:
+                    t = _make_tree_for(per)
+                    t.init([{"role": "system", "content": "新会话已开始。"}])
+                    _bind_active_tree(t)
+                sess = {"id": sid, "title": "新会话", "persist_key": per,
+                        "created_at": time.time(), "updated_at": time.time(), "archived": False}
+                _sessions.append(sess)
+                _active_session_id = sid
+                _save_sessions(_sessions)
+                self._send_json({"sessions": _sessions, "active_id": sid, "state": state_dict()})
+            elif path == "/api/sessions/switch":
+                sid = data.get("id")
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                with _lock:
+                    t = _load_tree_for(sess["persist_key"])
+                    if t is None:
+                        t = _make_tree_for(sess["persist_key"])
+                        t.init([{"role": "system", "content": "会话已恢复。"}])
+                    _bind_active_tree(t)
+                    _migrate_if_needed()
+                _active_session_id = sid
+                _touch_active_session()
+                self._send_json({"active_id": sid, "state": state_dict()})
+            elif path == "/api/sessions/delete":
+                sid = data.get("id")
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                if len(_sessions) <= 1:
+                    self._send_json({"error": "至少保留一个会话，无法删除"}, 400)
+                    return
+                per = sess["persist_key"]
+                # 1) 删除拓扑 JSON
+                topo = V5_DATA_DIR / f"{per}.json"
+                try:
+                    if topo.exists():
+                        topo.unlink()
+                except Exception:
+                    pass
+                # 2) 尽力清理该会话占用的 V5 记忆行 (避免孤儿行堆积)
+                try:
+                    old = _load_tree_for(per)
+                    if old is not None:
+                        for n in old.nodes.values():
+                            if n.v5_memory_id:
+                                try:
+                                    v5s.delete(n.v5_memory_id)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                _sessions = [s for s in _sessions if s["id"] != sid]
+                _save_sessions(_sessions)
+                # 若删除的是活动会话, 自动切到下一个未归档会话
+                if _active_session_id == sid:
+                    nxt = next((s for s in _sessions if not s["archived"]), _sessions[0])
+                    _active_session_id = nxt["id"]
+                    with _lock:
+                        t = _load_tree_for(nxt["persist_key"])
+                        if t is None:
+                            t = _make_tree_for(nxt["persist_key"])
+                            t.init([{"role": "system", "content": "会话已恢复。"}])
+                        _bind_active_tree(t)
+                        _migrate_if_needed()
+                self._send_json({"sessions": _sessions, "active_id": _active_session_id, "state": state_dict()})
+            elif path == "/api/sessions/archive":
+                sid = data.get("id")
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                sess["archived"] = not sess.get("archived", False)
+                _save_sessions(_sessions)
+                self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            elif path == "/api/sessions/rename":
+                sid = data.get("id")
+                title = (data.get("title") or "").strip() or "未命名会话"
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                sess["title"] = title[:60]
+                _save_sessions(_sessions)
+                self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             # ── B5: supervisor 编排端点 (9100 面板 herdr 卡片驱动) ──
             elif path == "/api/supervisor/run":
                 # 在 herdr pane 里跑一个外部 coding agent; 后台线程执行, 结果经 exec_state 回流
@@ -988,11 +1692,36 @@ def main():
     args = ap.parse_args()
 
     ensure_tree()
-    # Prevent SO_REUSEADDR from allowing multiple processes to bind the same port
-    # (Windows quirk — without SO_EXCLUSIVEADDRUSE, taskkill/kill_port races can
-    # leave zombie listeners that block the new process's traffic).
+    # 阶段 4.3: 启动健康检查 —— 三行状态打印, 帮助运维快速判断链路
+    try:
+        import memory_v5.extensions.tree_adapter  # noqa: F401
+        sys.stderr.write("[ct] health: tree_adapter OK (树域记忆可用)\n")
+    except Exception as e:
+        sys.stderr.write(f"[ct] health: tree_adapter UNAVAILABLE ({e}); 树域记忆将降级为空\n")
+    if HERMES_AGENT_URL:
+        try:
+            probe = urllib.request.Request(HERMES_AGENT_URL, method="GET")
+            with urllib.request.urlopen(probe, timeout=3) as _pr:
+                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} reachable (主通道 OK)\n")
+        except urllib.error.HTTPError as _he:
+            # 405 Method Not Allowed = 端点存在且只接受 POST → gateway 在线
+            if _he.code == 405:
+                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} reachable (主通道 OK, HTTP 405=POST-only)\n")
+            else:
+                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} HTTP {_he.code}; chat 可能降级\n")
+        except Exception as e:
+            sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} unreachable ({e}); chat 将降级本地模型\n")
+    else:
+        sys.stderr.write("[ct] health: HERMES_AGENT_URL 未配置; chat 走本地 DeepSeek 直连\n")
+    if _DEEPSEEK_KEY:
+        sys.stderr.write("[ct] health: DeepSeek key present (降级链可用)\n")
+    else:
+        sys.stderr.write("[ct] health: DeepSeek key MISSING; 本地直连将不可用\n")
+    # 阶段 5.3: ThreadingHTTPServer 连接上限 + 单请求超时, 防 SSE 长连接线程堆积
     class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
         allow_reuse_address = False
+        request_queue_size = 128      # 监听队列上限 (防大量短连接打满 backlog)
+        timeout = 60                  # 单连接空闲/读超时 (SSE 心跳由应用层负责, 不会误断)
         def server_bind(self):
             import socket as _socket
             self.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_EXCLUSIVEADDRUSE, 1)

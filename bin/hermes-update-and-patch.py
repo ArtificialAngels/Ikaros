@@ -48,6 +48,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -144,6 +145,19 @@ def run_cmd(args, check: bool = True, cwd: Path = REPO, env: dict | None = None,
             f"stderr: {proc.stderr}"
         )
     return proc
+
+
+def _resolve_npm() -> str | None:
+    """解析 npm 可执行文件（Windows 上为 npm.cmd）。
+
+    ``subprocess.run([\"npm\", ...])`` 在某些环境下 CreateProcess 直接解析不到
+    ``npm``（npm 实为 ``npm.cmd``），故显式 ``shutil.which`` 取全路径，保证稳定调用。
+    """
+    for cand in ("npm", "npm.cmd", "npm.ps1"):
+        p = shutil.which(cand)
+        if p:
+            return p
+    return None
 
 
 def detect_python() -> Path:
@@ -697,6 +711,68 @@ def dispatch_llm(prompt_file: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# TUI 重建（hermes update 后刷新 ui-tui/dist/entry.js，配合 HERMES_TUI_DIR 预构建路径）
+# --------------------------------------------------------------------------- #
+def rebuild_tui() -> tuple[bool, str]:
+    """hermes update 后重建 TUI bundle（ui-tui/dist/entry.js）。
+
+    背景：9100 面板用 ``HERMES_TUI_DIR`` 指向 ``ui-tui/dist/entry.js`` 走 Hermes 官方
+    「预构建路径」，让 Hermes 跳过 ``npm install``（避免沙箱删除闸门拦截导致的
+    ``Chat unavailable: 1``）。但 ``hermes update`` 把 ``ui-tui`` 源码切到新 upstream 后，
+    旧的 ``entry.js`` 会变成**陈旧 bundle**——若 upstream 改了 TUI 接口，陈旧 bundle
+    会让 9119 chat 在运行时行为异常。故每次重打补丁收尾（finalize）时重建一次，
+    确保预构建 bundle 与源码一致。
+
+    命令对齐 Hermes 自身逻辑：
+      - 安装：``npm install --workspace ui-tui --include=dev``（reconcile，不批量删 node_modules）
+      - 构建：``npm run build -w ui-tui``（esbuild 单文件输出 ``dist/entry.js``，
+        dist 仅 1 文件，通常不触发沙箱 SAFE_DELETE 删除闸门）
+
+    **非阻断**：本步是运行时就绪性维护，不是补丁本身（补丁 = 8 个 A 类 + 3 个 B 类）。
+    沙箱环境可能拦截删除、或 Node 缺失 → 仅告警并给出手动命令，绝不阻断补丁提交。
+    """
+    log("重建 TUI bundle（ui-tui/dist/entry.js）…")
+    tui_dir = REPO / "ui-tui"
+    if not tui_dir.is_dir():
+        return False, ("ui-tui/ 缺失（hermes update 可能误删 tracked 文件）；"
+                       "请先 `cd core/hermes && git restore -- ui-tui` 后重试")
+    env = dict(os.environ)
+    npm = _resolve_npm()
+    if not npm:
+        return False, ("找不到 npm（Node 未安装或未在 PATH）；"
+                       f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev "
+                       f"&& npm run build -w ui-tui")
+    try:
+        # 1) 安装 ui-tui 依赖（reconcile，尽量避开沙箱批量删除闸门）
+        proc = run_cmd(
+            [npm, "install", "--workspace", "ui-tui", "--include=dev",
+             "--no-fund", "--no-audit", "--progress=false"],
+            check=False, env=env,
+        )
+        if proc.returncode != 0:
+            tail = proc.stderr.strip()[-400:]
+            return False, (f"npm install --workspace ui-tui 失败(rc={proc.returncode})：{tail}；"
+                           f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev")
+        # 2) 用 esbuild 构建单文件 bundle（dist 仅 1 文件，不触发批量删除闸门）
+        proc = run_cmd(
+            [npm, "run", "build", "-w", "ui-tui"],
+            check=False, env=env,
+        )
+        if proc.returncode != 0:
+            tail = proc.stderr.strip()[-400:]
+            return False, (f"npm run build -w ui-tui 失败(rc={proc.returncode})：{tail}；"
+                           f"手动：cd core/hermes && npm run build -w ui-tui")
+    except Exception as e:  # 含沙箱删除闸门抛出的 RuntimeError
+        return False, (f"TUI 重建异常：{e!r}；"
+                       f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev "
+                       f"&& npm run build -w ui-tui")
+    entry = tui_dir / "dist" / "entry.js"
+    if not entry.is_file() or entry.stat().st_size == 0:
+        return False, "构建流程结束但未生成 ui-tui/dist/entry.js"
+    return True, f"ui-tui/dist/entry.js 已重建（{entry.stat().st_size} bytes）"
+
+
+# --------------------------------------------------------------------------- #
 # 收尾：验证 + 提交（兜底时）+ 更新 §0
 # --------------------------------------------------------------------------- #
 def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool:
@@ -723,6 +799,13 @@ def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool
     update_spec_pointers(SPEC, target_sha, new_commit)
     # 同步 patches/hermes/ 源文件，保持事实源与提交一致
     refresh_patch_source(new_commit)
+    # TUI 重建（best-effort，非阻断）：刷新 ui-tui/dist/entry.js 配合 HERMES_TUI_DIR
+    # 预构建路径，避免 hermes update 后陈旧 bundle 让 9119 chat 行为异常。
+    ok_tui, msg_tui = rebuild_tui()
+    if ok_tui:
+        log(f"TUI 重建：{msg_tui}")
+    else:
+        log(f"[warn] TUI 重建未完成（不影响补丁提交；9119 chat 仍可用既有 bundle）：{msg_tui}")
     clear_state()
     log(f"完成。新 Ikaros 提交 = {new_commit[:8]}（基于 upstream {target_sha[:8]}）")
     log("注意：未自动 push（本地 main 是 Ikaros 修补分支，push 会污染 origin/main）。")
@@ -866,6 +949,9 @@ def main() -> int:
                     help="冲突时尝试自动派 LLM（需 HERMES_PATCH_LLM_CMD 环境变量）")
     ap.add_argument("--finalize", action="store_true",
                     help="LLM 改完后：验证 + 提交 + 更新 §0 指针")
+    ap.add_argument("--rebuild-tui", action="store_true",
+                    help="仅重建 TUI bundle（ui-tui/dist/entry.js），不碰补丁；"
+                         "配合 HERMES_TUI_DIR 预构建路径刷新陈旧 bundle")
     ap.add_argument("--python", default=None,
                     help="验证用的 python 解释器（默认自动探测 hermes venv）")
     args = ap.parse_args()
@@ -883,6 +969,11 @@ def main() -> int:
 
     log(f"spec §0：upstream={upstream_tip[:8]}  ikaros={ikaros_commit[:8]}")
     log(f"验证用 python：{python_exe}")
+
+    if args.rebuild_tui:
+        ok, msg = rebuild_tui()
+        log(msg)
+        return 0 if ok else 1
 
     if args.finalize:
         return step_finalize(python_exe)

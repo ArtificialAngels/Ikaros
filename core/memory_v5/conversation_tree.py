@@ -164,6 +164,8 @@ class ConvNode:
     merged_from: List[str] = field(default_factory=list)  # 合并到此节点的分支
     skills_used: List[str] = field(default_factory=list)   # 调用的技能名
     tool_calls: List[ToolCall] = field(default_factory=list)  # 工具调用详情
+    thinking: str = ""  # 模型思考过程 (reasoning), 供 chat 面板回显
+    usage: Dict[str, Any] = field(default_factory=dict)  # 本轮 LLM 用量(token/缓存), 供 chat 面板回显
     conclusions: List[NodeInsight] = field(default_factory=list)  # 提取的结论
 
     # ── 树域适配 (tree_adapter): node→fact 持久化绑定 ──
@@ -197,6 +199,8 @@ class ConvNode:
             "merged_from": list(self.merged_from),
             "skills_used": list(self.skills_used),
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
+            "thinking": self.thinking,
+            "usage": self.usage,
             "conclusions": [c.to_dict() for c in self.conclusions],
             # 树域适配: node→fact 持久化绑定
             "memory_ids": list(self.memory_ids),
@@ -228,6 +232,8 @@ class ConvNode:
             merged_from=list(d.get("merged_from", [])),
             skills_used=list(d.get("skills_used", [])),
             tool_calls=[ToolCall.from_dict(tc) for tc in d.get("tool_calls", [])],
+            thinking=d.get("thinking", "") or "",
+            usage=d.get("usage", {}) or {},
             conclusions=[NodeInsight.from_dict(c) for c in d.get("conclusions", [])],
             # 树域适配: node→fact 持久化绑定 (缺失时默认空, 向后兼容旧 JSON)
             memory_ids=list(d.get("memory_ids", [])),
@@ -591,6 +597,10 @@ class ConversationTree:
         config: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         tags: str = "",
+        thinking: str = "",
+        tool_calls: Optional[List["ToolCall"]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        skills_used: Optional[List[str]] = None,
     ) -> ConvNode:
         with self._lock:
             pid = parent_id or self.current_id
@@ -616,6 +626,10 @@ class ConversationTree:
                 state=_clone(state) if state is not None else _clone(parent.state),
                 config=_clone(config) if config is not None else _clone(parent.config),
                 meta={"created_at": time.time(), "title": title},
+                thinking=thinking,
+                tool_calls=list(tool_calls) if tool_calls else [],
+                usage=usage or {},
+                skills_used=list(skills_used) if skills_used else [],
                 created_at=time.time(),
             )
             self.nodes[node.id] = node

@@ -6,7 +6,7 @@
 
 ## 0. 基线指针（每次重打后自动更新）
 - **Upstream tip**（打补丁所基于的 upstream 提交，即 §0.2 中 `base`）：`e444d165807f489b5c1ab8e4a612c8d09c2e67a2`
-- **Ikaros 补丁提交**（单提交）：`5050c6d5c4061f33d853db49c61da4e8a96f79b5` — 其父即上面的 upstream tip `e444d165`（**不是** 14db1a9；14db1a9 只是历史早期重根点，请勿再写入本段）。
+- **Ikaros 补丁提交**（单提交）：`fb35be65771c657a24d85c7133ed030fa0ed3fdb` — 其父即上面的 upstream tip `e444d165`（**不是** 14db1a9；14db1a9 只是历史早期重根点，请勿再写入本段）。
 - **自动 rebase 基准**：`bin/hermes-update-and-patch.py` 在每次 `finalize`（干净重打完成）时，把本段 `Upstream tip` 改写为当次重打所基于的 `target_sha`（= 当前真实 upstream），把 `Ikaros 补丁提交` 改写为新生成的单提交。于是**下次 delta 永远以最新 upstream 为基准**（`git diff base ikaros` 漂移最小 → 3-way 冲突面最小、最稳）。本段两个值是引擎运行的事实来源，不要手工改错。
 
 ## 0.5. 补丁源文件位置
@@ -36,7 +36,7 @@ Ikaros 对 hermes 的定制分两类：
 2. 打备份 tag → `git checkout -B main` → `git reset --hard <target>`（新 upstream，旧补丁由备份 tag 保留）。
 3. `derive_markers` + `apply_patch_delta(base, ikaros)`（逐文件 3-way 重放到新 upstream）。
 4. 有冲突标记（`scan_conflicts`）→ 升级 §2.3 LLM 兜底；无冲突则 `markers_missing` 复查。
-5. markers 全在 → `finalize()`：跑 §4 验证 → 提交 A 类文件 + B 类目录为**新的 Ikaros 单提交** → `update_spec_pointers` 把 §0 改成（新 upstream, 新提交）→ `refresh_patch_source` 同步 `patches/hermes/` → 不 push。
+5. markers 全在 → `finalize()`：跑 §4 验证 → 提交 A 类文件 + B 类目录为**新的 Ikaros 单提交** → `update_spec_pointers` 把 §0 改成（新 upstream, 新提交）→ `refresh_patch_source` 同步 `patches/hermes/` → **重建 TUI bundle**（`rebuild_tui()` 刷新 `ui-tui/dist/entry.js`，配合 `HERMES_TUI_DIR` 预构建路径，best-effort 非阻断）→ 不 push。
 
 ### 2.2 轻量路径（`--light-patch`：启动预检 / 检查补丁）
 - **不 fetch / 不 reset**，仅当 `markers_missing` 才把 Ikaros delta 3-way 重放到**当前 HEAD**（专为"更新把补丁冲掉"的常见场景设计）。
@@ -62,6 +62,7 @@ Ikaros 对 hermes 的定制分两类：
 - [ ] `scripts/run_tests.sh` 同时探测 `bin/activate`（MSYS）与 `Scripts/activate`（Windows）
 - [ ] 至少 `py_compile` 全过：`python -m compileall -q cron hermes_cli plugins scripts tests`
 - [ ] 行尾：提交后 `git diff` 无意外 CRLF/LF 翻转（hermes `.gitattributes` 强制 CRLF）
+- [ ] TUI bundle 新鲜度（**信息项，非阻断**）：`ui-tui/dist/entry.js` 存在且与当前 `ui-tui` 源码一致。`hermes update` 把 `ui-tui` 切到新 upstream 后，旧的 `entry.js` 会变成**陈旧 bundle**——若 upstream 改了 TUI 接口，陈旧 bundle 会让 9119 chat 运行时行为异常。补丁 `finalize` 会自动 `rebuild_tui()` 刷新；也可手动 `python bin/hermes-update-and-patch.py --rebuild-tui`。该 bundle 经 9100 面板的 `HERMES_TUI_DIR` 预构建路径被 Hermes 直接加载（跳过 `npm install`，避免沙箱删除闸门导致的 `Chat unavailable: 1`）。
 
 ## 5. 逐补丁细节（A 类：tracked 文件）
 
@@ -307,6 +308,7 @@ marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这
   - 缺失 → **调用 `bin/hermes-update-and-patch.py --light-patch`**（轻量、**不 fetch / 不 reset**，仅当 markers 缺失时把 Ikaros delta 3-way 重放到当前 HEAD 并提交），成功即启动。
   - 轻量补丁冲突（upstream 大改）→ `git reset --hard HEAD` 回滚并告警，**但仍继续启动**（未打补丁的 hermes 仍可运行，仅缺 Ikaros 集成）；后续由人工跑「更新并打补丁」走 LLM 兜底。
 - 预检**绝不阻塞** 9119 启动；完整 fetch/reset/LLM 兜底只在手动按钮触发。
+- **TUI bundle 新鲜度**：`hermes update` 后 `finalize` 会自动 `rebuild_tui()` 刷新 `ui-tui/dist/entry.js`（best-effort，失败仅告警不阻断）。9100 面板通过 `HERMES_TUI_DIR` 指向该 bundle 走 Hermes 官方「预构建路径」，跳过 `npm install` 以避免 `Chat unavailable: 1`。若你**不经面板**直接 `hermes dashboard`，须自行 `set HERMES_TUI_DIR=E:\Ikaros\core\hermes\ui-tui`；独立刷新命令：`python bin/hermes-update-and-patch.py --rebuild-tui`。
 
 ### 9.3 补丁检测判据（重要）
 - **落地判据用 marker，不用 commit 哈希**：`markers_missing(derive_markers(base, ikaros))` —— 只要 8 个 A 类文件的签名行 + 3 个 B 类的代表 marker 在工作树即证明补丁就位，与"重打新提交 / 新 HEAD"解耦，永不误报「缺失」。

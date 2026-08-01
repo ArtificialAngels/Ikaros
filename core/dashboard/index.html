@@ -413,11 +413,12 @@ function buildCard(c) {
   if(!c.check_only){
     inner+='<div class="comp-actions">';
     if(c.group){ inner+='<button class="btn start" data-act="start">一键启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
+    else if(c.panel){ inner+='<button class="btn start" data-act="start">启动</button><button class="btn stop" data-act="stop">关闭</button>'; }
     else { inner+='<button class="btn start" data-act="start">启动</button><button class="btn stop" data-act="stop">停止</button><button class="btn restart" data-act="restart">重启</button>'; }
     if(c.panel_url){ inner+='<a class="btn" href="'+esc(c.panel_url)+'" target="_blank" style="text-decoration:none">面板</a>'; }
     inner+='</div>';
   }
-  if(c.id==='hermes_dashboard' || c.id==='neko_group'){
+  if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
     inner+='<div class="hermes-patch" id="repo-'+c.id+'"></div>';
     inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
   }
@@ -451,7 +452,7 @@ function buildCard(c) {
     var _hc=el.querySelector('#hermes-check-'+c.id); if(_hc)_hc.addEventListener('click', hermesCheck);
     var _hu=el.querySelector('#hermes-update-'+c.id); if(_hu)_hu.addEventListener('click', hermesUpdate);
   }
-  if(c.id==='hermes_dashboard' || c.id==='neko_group'){
+  if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
     var _rc=el.querySelector('#repo-check-'+c.id); if(_rc)_rc.addEventListener('click', function(){ repoCheck(c.id); });
     var _rs=el.querySelector('#repo-sync-'+c.id); if(_rs)_rs.addEventListener('click', function(){ repoSync(c.id); });
   }
@@ -507,7 +508,7 @@ function updateCard(c) {
   var isBusy=busy.has(c.id); card.classList.toggle('pending',isBusy);
   card.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.disabled=isBusy; });
   if(c.id==='hermes_dashboard' && c.hermes_patch) updateHermesPatch(c);
-  if((c.id==='hermes_dashboard' || c.id==='neko_group') && c.repo) updateRepoBox(c);
+  if(((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group') && c.repo) updateRepoBox(c);
   if(c.id==='runtime' && c.runtime) updateRuntimeBox(c);
 }
 

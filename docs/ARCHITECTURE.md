@@ -82,8 +82,8 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **后端引擎**：`core/memory_v5/conversation_tree.py`（`ConversationTree`，33 tests）；REST 接口 `fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context`；`build_context_v2`（L0 祖先 + L1 兄弟 + L2 合并，MAX 50）。
 - **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针，真实记忆在 `v5.db`。
 - **与 V5 集成**：`hermes_provider.push_to_conversation_tree()` 在记忆写入后静默推送节点（`core/memory_v5/hermes_provider.py:343`）；`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话（`.hermes_history`）批量导入对话树（需重启服务重载内存树）。
-- **LLM 路由**：`/api/chat` 直连 DeepSeek（`DEEPSEEK_KEY` 已配），不经 Hermes 三层路由（与 V5 companion 的 DeepSeek → Hermes → 本地 `:8080` 不同）。
-- **已知限制**：前端 `/api/chat` 的 system prompt 写死为通用「Explore」助手，**未接入 Ikaros 人格**（SOUL.md / axiom.md / V5 self_model）；`/api/chat` 不记录 `skills_used` / `tool_calls`；`MemoryRetriever._node_memories` 不持久化。Ikaros 人格目前仅由 `cloud_chat.build_system_prompt`（桌宠）与 Hermes（SOUL.md）使用。
+- **LLM 路由（2026-08-01 得兼改造）**：`/api/chat` 的 **ikaros / hermes 两种模式统一走 Hermes gateway :8642**（`/v1/chat/completions`，跑完整 tools/skills 循环）。区别只在 tree 端注入的 system 内容：hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（gateway core 的 SOUL 即人格，不重复注入）；ikaros 模式注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。gateway 不可达/空响应时降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ 3 只读工具回路，并通过 SSE `warn` 事件向前端提示降级。gateway 的 SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果由 `api_server._on_tool_complete` 截断 2000 透出。
+- **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `cloud_chat.build_system_prompt`（桌宠）/ Hermes（SOUL.md）/ chat tree 三处使用。
 
 ---
 
@@ -385,7 +385,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 - 清理后 chroma 剩余 **2020 条**真实记忆；`v5.db` 的 `memory` 表测试行（`id=1` "test memory"）已移除，仅余 1 条合法 `activity_reflection`。
 - 清理前已整库备份至 `tmp/mem_backup_20260724/`（chroma 全目录 + `v5.db.bak`），误删可恢复。
 
-### 5.2.2 三路融合检索（`memory_retrieval.retrieve`）
+### 5.2.2 三路融合检索 + 统一路由层（`memory_retrieval.retrieve` / `unified_retrieve`）
 
 入口 `retrieve(query, time_range?, character?, top_k?, ...)`，三路按 `memory_id` 去重合并、累加分量：
 
@@ -393,10 +393,12 @@ setlocal 不可用（被 call 的子批中会丢失）
 2. **Chroma 向量** — `get_vector_index().search(query)`（`:8587` 的 `nomic-embed-text-v2-moe` 嵌入，`search_query:` / `search_document:` 任务前缀）。
 3. **时间范围** — 仅当传入 `time_range` 时 `store.search_by_time_range`，命中给强初始分 `1.0`（确保过阈值）。
 
-融合计分：`fused = fts*w_fts + vec*w_vec + time*1.0` → 乘时间衰减（下限 0.2）→ 乘类型 boost → `exclude` 已知信息置 `-1` → **过滤 `score >= min_fused_score`**（线上 = `0.3`，yaml 标定）。
+融合计分：`fused = fts*w_fts + vec*w_vec + time*1.0` → 乘时间衰减（下限 0.2）→ 乘类型 boost → 乘频率/反馈 boost（阶段 4：`frequency_weight` log2 加权 / `reinforcement_weight` / `freshness_weight` 7 天新鲜度 / `long_term_boost` 永久记忆，config 可关）→ `exclude` 已知信息置 `-1` → **过滤 `score >= min_fused_score`**（线上 = `0.3`，yaml 标定）。
 附加：20s TTL 短缓存（高频短句跳过 embedding）；Vault 兜底（结果 <3 条时回退搜 ThirdSpace `03-知识/`、`02-日记/`）。
 
 > 注：`search.fused_search` 是**另一套**硬编码双路（fts 0.3 / vec 0.7），由 `provider_bridge` 的 Hermes `v5search` 桥调用，与 `retrieve` 不是同一份代码。
+
+**统一路由层（2026-08-01 新增，借鉴 cognee recall auto-scope）**：`unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)` 是统一检索入口，`scope="auto"` 语义不足时自动补图扩散路（`entity_graph_search`，`graph_min_score` 过滤）；`scope="tree"` 走树域加权（`tree_scoped_retrieve`，需注入 tree+node_id，缺失降级 auto）；`scope="temporal"` 走 `retrieve_temporal` 过滤已失效事实。调用方（`memory_api` fuse 路径、conversation-tree 的 `memory_search` 工具）已切换；`rules_retriever` 保持独立意图通道不动。
 
 ### 5.2.3 LLM 后端与懒加载
 
@@ -439,6 +441,7 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
    - `apply_migration()`：在现有 `eg_*` 表上幂等 `ALTER` 加 `valid_from`/`valid_to`（**不换图库后端**）。
    - `supersede_memory()` / `resolve_dissonance_supersede()`：接在 `dissonance.py` 检测矛盾之后，把冲突旧事实 `valid_to=now` 失效（Graphiti 的「矛盾即更替」）。
    - `retrieve_temporal()`：检索优先有效事实、降权/排除已过期。
+   - **已接入主链路（2026-08-01）**：`dissonance._record_dissonance` 末尾接 `resolve_dissonance_supersede`（supersede 闭环生效）+ 对冲突旧记忆 `reinforcement -= 0.5` 降权；`unified_retrieve(scope="temporal")` 路由到 `retrieve_temporal`；新增 `reflect/registry.py` 的 `temporal_extract` op（24h，LLM 抽时间戳写 `valid_from`，fail-open）与 `memory_promote` op（6h，两档记忆桥接）。
 
 > ⚠️ **架构决策（2026-07-30 固化）**：V5 **永久留在 SQLite（`v5.db`），不迁移任何图数据库后端**（Neo4j/FalkorDB/Kuzu/Neptune）。`temporal_graph` 仅借鉴 Graphiti 模式（时效窗口 + 自动失效）在 SQLite 上复刻，目标拿下 80%+ 功能、0 架构迁移；精确 relation_type 级 supersede、双时间追踪历史视图可放弃。`token_compressor` 继续使用 `llmlingua` 现成库（导入守护 + 离线回退），与此决策不冲突。详细接入点 / 风险见 `docs/v5-context-compression.md` 与 `core/memory_v5/extensions/EXTENSIONS.md`。
 

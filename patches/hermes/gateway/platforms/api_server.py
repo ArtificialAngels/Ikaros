@@ -1815,6 +1815,7 @@ class APIServerAdapter(BasePlatformAdapter):
             ("GET", "/v1/capabilities", self._handle_capabilities),
             ("GET", "/v1/skills", self._handle_skills),
             ("GET", "/v1/toolsets", self._handle_toolsets),
+            ("POST", "/v1/reload-mcp", self._handle_reload_mcp),
             ("GET", "/api/sessions", self._handle_list_sessions),
             ("POST", "/api/sessions", self._handle_create_session),
             ("GET", "/api/sessions/{session_id}", self._handle_get_session),
@@ -3002,6 +3003,114 @@ class APIServerAdapter(BasePlatformAdapter):
             "platform": "api_server",
             "data": data,
         })
+
+    async def _handle_reload_mcp(self, request: "web.Request") -> "web.Response":
+        """POST /v1/reload-mcp — reconnect MCP servers from fresh config.yaml.
+
+        Mirrors the native gateway's ``/reload-mcp`` (``_execute_mcp_reload``)
+        for the api_server platform. The api_server builds a **fresh AIAgent
+        per request** and re-reads ``enabled_toolsets`` from config each time,
+        so — unlike the native gateway, which caches per-session agents — it
+        does not need to mutate cached agent tool lists. The only stale state
+        is the process-global MCP ``_servers`` registry (populated once at
+        startup by ``start_background_mcp_discovery``). Re-running discovery
+        here refreshes that registry, so an **existing** session
+        (e.g. ``api-d3a2b233ec1db332``) automatically picks up newly added /
+        reconnected MCP tools on its next message — without ``/new`` discarding
+        the conversation.
+
+        Optional JSON body: ``{"session_id": "..."}`` appends a best-effort
+        "MCP reloaded" note to that session's transcript so the model knows
+        its tool list changed on the next turn.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        body, body_err = await self._read_json_body(request)
+        if body_err:
+            return body_err
+        session_id = (body or {}).get("session_id")
+
+        loop = asyncio.get_running_loop()
+        try:
+            from tools.mcp_tool import (
+                shutdown_mcp_servers,
+                discover_mcp_tools,
+                _servers,
+                _lock,
+            )
+
+            # Snapshot old server names, then reconnect from fresh config.
+            with _lock:
+                old_servers = set(_servers.keys())
+            await loop.run_in_executor(None, shutdown_mcp_servers)
+            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
+            with _lock:
+                connected_servers = set(_servers.keys())
+
+            added = connected_servers - old_servers
+            removed = old_servers - connected_servers
+            reconnected = connected_servers & old_servers
+
+            # Defensive: if this platform ever gains a per-session agent cache,
+            # refresh those cached agents too (same contract as native gateway).
+            try:
+                from tools.mcp_tool import refresh_agent_mcp_tools
+
+                _cache = getattr(self, "_agent_cache", None)
+                _cache_lock = getattr(self, "_agent_cache_lock", None)
+                if _cache_lock is not None and _cache:
+                    with _cache_lock:
+                        for _entry in list(_cache.values()):
+                            _agent = _entry[0] if isinstance(_entry, tuple) else _entry
+                            if _agent is not None:
+                                refresh_agent_mcp_tools(_agent, quiet_mode=True)
+            except Exception:
+                logger.debug("No cached agents to refresh after MCP reload (api_server builds fresh per request).")
+
+            # Best-effort: notify the targeted existing session that tools changed.
+            if session_id:
+                try:
+                    db = await self._ensure_session_db_async()
+                    if db is not None:
+                        parts = []
+                        if added:
+                            parts.append(f"Added servers: {', '.join(sorted(added))}")
+                        if removed:
+                            parts.append(f"Removed servers: {', '.join(sorted(removed))}")
+                        if reconnected:
+                            parts.append(f"Reconnected servers: {', '.join(sorted(reconnected))}")
+                        tool_summary = (
+                            f"{len(new_tools)} MCP tool(s) now available"
+                            if new_tools else "No MCP tools available"
+                        )
+                        detail = (". ".join(parts) + ". ") if parts else ""
+                        note = (
+                            f"[IMPORTANT: MCP servers have been reloaded. "
+                            f"{detail}{tool_summary}. The tool list for this "
+                            f"conversation has been updated accordingly.]"
+                        )
+                        await asyncio.to_thread(
+                            db.append_message, session_id, "user", content=note
+                        )
+                except Exception as _note_exc:
+                    logger.debug("Failed to append MCP-reload note to session %s: %s",
+                                 session_id, _note_exc)
+
+            return web.json_response({
+                "object": "hermes.mcp_reload",
+                "reconnected": sorted(reconnected),
+                "added": sorted(added),
+                "removed": sorted(removed),
+                "tools_available": len(new_tools) if new_tools else 0,
+                "servers_connected": len(connected_servers),
+            })
+        except Exception as e:
+            logger.warning("MCP reload failed: %s", e)
+            return web.json_response(
+                _openai_error(f"MCP reload failed: {e}", err_type="server_error"),
+                status=500,
+            )
 
     # ------------------------------------------------------------------
     # /api/sessions — thin client/session resource API

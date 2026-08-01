@@ -422,6 +422,73 @@ def _require_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+@app.post("/api/mcp/reload")
+async def _api_mcp_reload(request: Request):
+    """Ikaros: reconnect MCP servers from a fresh config.yaml read.
+
+    The dashboard platform (unlike ``gateway run``) has no ``/v1/reload-mcp``:
+    MCP servers are discovered once at process startup into the process-global
+    registry, so adding a server to config.yaml previously required a dashboard
+    restart. This endpoint re-runs discovery in-process — a newly configured
+    MCP server is picked up on the NEXT turn of the SAME session (the
+    between-turns refresh in ``agent/turn_context`` re-syncs the agent's tool
+    snapshot from the registry every turn), no ``/new`` and no restart needed.
+
+    Auth: same dashboard session token as every other /api endpoint.
+    Optional JSON body: ``{"session_id": "..."}`` appends a best-effort
+    "MCP reloaded" note to that session's transcript so the model knows its
+    tool list changed on the next turn.
+    """
+    _require_token(request)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    session_id = (body or {}).get("session_id")
+
+    from fastapi.responses import JSONResponse as _JSONResponse
+    from tools.mcp_tool import (
+        shutdown_mcp_servers,
+        discover_mcp_tools,
+        _servers,
+        _lock,
+    )
+
+    with _lock:
+        old_servers = set(_servers.keys())
+    await asyncio.to_thread(shutdown_mcp_servers)
+    new_tools = await asyncio.to_thread(discover_mcp_tools)
+    with _lock:
+        connected = set(_servers.keys())
+
+    added = connected - old_servers
+    removed = old_servers - connected
+    reconnected = connected & old_servers
+
+    if session_id:
+        try:
+            db = _open_session_db_for_profile(None)
+            note = (
+                f"[IMPORTANT: MCP servers have been reloaded. "
+                f"Added: {', '.join(sorted(added)) or 'none'}; "
+                f"reconnected: {', '.join(sorted(reconnected)) or 'none'}; "
+                f"{len(new_tools) if new_tools else 0} MCP tool(s) now available.]"
+            )
+            db.append_message(session_id, "user", content=note)
+        except Exception:
+            _log.debug("MCP-reload session note failed", exc_info=True)
+
+    return _JSONResponse({
+        "object": "hermes.mcp_reload",
+        "reconnected": sorted(reconnected),
+        "added": sorted(added),
+        "removed": sorted(removed),
+        "tools_available": len(new_tools) if new_tools else 0,
+        "servers_connected": len(connected),
+    })
+
+
 # Accepted Host header values for loopback binds. DNS rebinding attacks
 # point a victim browser at an attacker-controlled hostname (evil.test)
 # which resolves to 127.0.0.1 after a TTL flip — bypassing same-origin
@@ -17791,6 +17858,20 @@ def _resolve_chat_argv(
     so a profile-scoped chat must spawn its own gateway subprocess.
     """
     from hermes_cli.main import PROJECT_ROOT, _apply_tui_python_env, _make_tui_argv
+
+    # Ikaros (thorough fix for "Chat unavailable: 1"): guarantee the prebuilt
+    # TUI bundle is used even when HERMES_TUI_DIR was not propagated into this
+    # process (e.g. the control panel that spawned us was started before the
+    # env var was added to its env builder). Without this the dashboard falls
+    # into `npm install --workspace ui-tui` on every chat connection, and when
+    # that install fails (offline / sandbox delete gate / lockfile skew) the
+    # web server reports the cryptic "Chat unavailable: 1" — a SystemExit(1)
+    # from _make_tui_argv. If the prebuilt bundle exists, force it; never npm
+    # install from the dashboard chat path.
+    if not os.environ.get("HERMES_TUI_DIR"):
+        _ikaros_prebuilt = PROJECT_ROOT / "ui-tui" / "dist" / "entry.js"
+        if _ikaros_prebuilt.is_file():
+            os.environ["HERMES_TUI_DIR"] = str(PROJECT_ROOT / "ui-tui")
 
     profile_dir: Optional[Path] = None
     requested = (profile or "").strip()
