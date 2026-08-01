@@ -48,6 +48,10 @@ import urllib.parse
 # Windows: 隐藏子进程控制台窗口
 CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_CONSOLE = 0x00000010
+# 让子进程脱离父进程控制台会话：关闭父进程(面板/PowerShell)不影响子进程存活。
+# DETACHED_PROCESS 与 CREATE_NEW_CONSOLE 互斥，需单独标志位。
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
 DEVNULL = subprocess.DEVNULL
 
 # ── config ─────────────────────────────────────────────────────────────
@@ -91,10 +95,10 @@ COMPONENTS = [
      "desc": "N.E.K.O Electron 桌面壳（独立）", "ports": [],
      "markers": ["N.E.K.O.exe"]},
     {"id": "hermes_service", "name": "Hermes 服务", "category": "Backend",
-     "desc": "Hermes 后端服务 :9119（headless，不拉面板；启动/停止/重启）", "ports": [9119],
+     "desc": "Hermes 后端服务 :9119（headless，不拉面板；独立进程不依赖窗口，关终端不影响）", "ports": [9119],
      "markers": ["hermes.exe dashboard"]},
     {"id": "hermes_dashboard", "name": "Dashboard 面板", "category": "Frontend",
-     "desc": "Hermes Web 面板 :9119（浏览器视图；启动开浏览器，关闭停服务器）", "ports": [9119],
+     "desc": "Hermes Web 面板 :9119（浏览器视图；启动开浏览器，关闭只关面板不停服务）", "ports": [9119],
      "markers": ["hermes.exe dashboard"], "panel": True},
     {"id": "qwenpaw", "name": "Hermes (猫爪)", "category": "Backend",
      "desc": "猫爪服务器 :8088 — Hermes Agent 驱动", "ports": [8088], "markers": [],
@@ -233,11 +237,17 @@ def _ensure_env() -> dict:
 
 def spawn_hidden(cmd: str, args: list, env: dict, cwd: str | None = None,
                  logfile: str | None = None,
-                 flags: int = CREATE_NO_WINDOW) -> subprocess.Popen | None:
+                 flags: int = CREATE_NO_WINDOW,
+                 detached: bool = False) -> subprocess.Popen | None:
     """隐藏窗口启动子进程；logfile 非空则把输出重定向到该文件。
 
     flags 默认为 CREATE_NO_WINDOW。对于需要控制台句柄的进程（如某些后台
     服务初始化时依赖 TTY），可传入 CREATE_NEW_CONSOLE。
+
+    detached=True 时用 CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP 启动：
+    隐藏窗口 + 独立进程组。父进程（9100 面板 / 启动它的 PowerShell）关闭后
+    子进程照常存活。**不要用 DETACHED_PROCESS**——它只对第一层进程生效，
+    目标进程内部再 spawn 的 console 子进程会因无父 console 新建窗口弹窗。
     """
     stdout = stderr = DEVNULL
     if logfile:
@@ -247,6 +257,15 @@ def spawn_hidden(cmd: str, args: list, env: dict, cwd: str | None = None,
             stdout = stderr = f
         except Exception:
             log_exception("spawn_hidden open logfile")
+    effective_flags = flags
+    if detached:
+        # detached: CREATE_NO_WINDOW 隐藏窗口 + CREATE_NEW_PROCESS_GROUP 独立进程组。
+        # 2026-08-01 23:3x 修正：此前用 DETACHED_PROCESS 只对第一层进程生效——
+        # hermes_cli 内部再 spawn 的子进程(console 程序)因父无 console 会新建 console
+        # 弹窗(白窗标题=python.exe 路径)。CREATE_NO_WINDOW 是"隐藏窗口"语义，整棵
+        # 进程树都继承无窗口属性，不再弹窗；配合 CREATE_NEW_PROCESS_GROUP 使子进程
+        # 独立于父进程组，父进程(面板/pythonw)退出不影响服务存活。
+        effective_flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     try:
         p = subprocess.Popen(
             [cmd, *args],
@@ -255,9 +274,9 @@ def spawn_hidden(cmd: str, args: list, env: dict, cwd: str | None = None,
             stdin=DEVNULL,
             stdout=stdout,
             stderr=stderr,
-            creationflags=flags,
+            creationflags=effective_flags,
         )
-        log.debug("spawn: pid=%s cmd=%s flags=%s", p.pid, cmd, flags)
+        log.debug("spawn: pid=%s cmd=%s flags=%s detached=%s", p.pid, cmd, effective_flags, detached)
         return p
     except Exception as exc:
         log.error("spawn_hidden failed: %s %s -> %s", cmd, args, exc)
@@ -532,11 +551,12 @@ def start_component_memory(root, env, wait):
     spawn_llama_model(8587, model, "embed")
     log.info("[memory] embed model=%s, waiting for :8587...", model)
 
-    # 后台启动 watchdog 做巡查
+    # 后台启动 watchdog 做巡查（detached: 脱离面板控制台，关面板/PowerShell 不带走）
     py = str(root / "runtime" / "portable-python" / "python.exe")
     wds = str(root / "bin" / "ikaros-memory-watchdog.py")
     spawn_hidden(py, [wds], env, str(root / "bin"),
-                 str(root / "data" / "logs" / "memory-watchdog.log"))
+                 str(root / "data" / "logs" / "memory-watchdog.log"),
+                 detached=True)
 
     if wait:
         if wait_for_port(8587, 80):
@@ -592,7 +612,7 @@ def start_component_neko(root, env, wait):
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
     spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
-                 str(root / "data" / "logs" / "neko.log"))
+                 str(root / "data" / "logs" / "neko.log"), detached=True)
     if wait:
         wait_for_port(48911, 60)
 
@@ -615,7 +635,7 @@ def start_component_neko_memory(root, env, wait):
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir), str(root / "data" / "logs" / "neko-memory.log"))
+    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir), str(root / "data" / "logs" / "neko-memory.log"), detached=True)
     if wait:
         wait_for_port(48912, 60)
 
@@ -632,7 +652,7 @@ def start_component_neko_agent(root, env, wait):
     neko_env = dict(env)
     neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
     spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
-                 str(root / "data" / "logs" / "neko-agent.log"))
+                 str(root / "data" / "logs" / "neko-agent.log"), detached=True)
 
 
 def stop_component_neko_agent(root, env):
@@ -661,6 +681,52 @@ def stop_component_neko_group(root, env):
     stop_component_neko(root, env)
     stop_component_neko_agent(root, env)
     stop_component_neko_memory(root, env)
+
+
+def _sync_hermes_web_stamp(root):
+    """让 hermes dashboard 跳过 npm 构建：dist 完整时把 stamp 对齐当前源码。
+
+    背景（2026-08-01 根治 "npm 老是 bug"）：
+    hermes dashboard 启动时会调用 _web_ui_build_needed() 对比 web 源码 contentHash
+    与 stamp(web-ui-build-stamp.json)；hermes update 拉新代码后源码 hash 变 → 判定
+    "需要重建" → 执行 npm install + vite build。在 U 盘/离线/受限环境 npm 构建经常
+    失败（网络、SAFE_DELETE 闸门等），于是 9119 起不来，误以为 npm 坏了。
+
+    本函数在启动前做一次"stamp 对齐"：若 web_dist 已存在且非空（说明有可用构建产物，
+    哪怕是旧版本），就用 hermes 自己的 _write_web_ui_build_stamp() 把 stamp 重写为
+    匹配当前源码 hash → _web_ui_build_needed() 返回 False → hermes 完全跳过 npm 构建，
+    直接服务现有 dist。效果：hermes update 后 stamp 失效也能自动恢复，9119 秒起。
+
+    仅当 dist 缺失时才不干预（此时 hermes 必须真构建，让 npm 正常流程走）。
+    返回 True 表示已对齐（跳过构建），False 表示不干预。
+    """
+    try:
+        hermes_dir = root / "core" / "hermes"
+        web_dir = hermes_dir / "web"
+        dist_dir = hermes_dir / "hermes_cli" / "web_dist"
+        stamp_file = root / "data" / "hermes-agent" / "web-ui-build-stamp.json"
+        # dist 必须存在且非空（index.html 是 Vite 输出 sentinel）
+        if not (web_dir / "package.json").exists():
+            return False
+        if not (dist_dir / "index.html").exists():
+            return False
+        if not stamp_file.parent.exists():
+            return False
+        # 用 hermes 自己的函数重写 stamp（对齐源码 hash）
+        import importlib.util
+        sys.path.insert(0, str(hermes_dir))
+        spec = importlib.util.find_spec("hermes_cli.main")
+        if spec is None:
+            return False
+        import hermes_cli.main as _hm
+        _hm._write_web_ui_build_stamp(hermes_dir, web_dir)
+        # 验证对齐成功
+        needed = _hm._web_ui_build_needed(web_dir)
+        log.info("[hermes] web stamp 已对齐（dist 存在），build_needed=%s —— 跳过 npm 构建", needed)
+        return not needed
+    except Exception:
+        log_exception("hermes web stamp sync")
+        return False
 
 
 def _spawn_hermes_dashboard(root, env, wait, no_open):
@@ -708,8 +774,18 @@ def _spawn_hermes_dashboard(root, env, wait, no_open):
     args = ["dashboard"]
     if no_open:
         args.append("--no-open")
-    spawn_hidden(str(hermes_bin), args, child_env, cwd,
-                str(root / "data" / "logs" / "hermes-dashboard.log"))
+    # ── 启动前 stamp 对齐：dist 完整则跳过 npm 构建（根治 "npm 老是 bug"）──
+    _sync_hermes_web_stamp(root)
+    # ── 用 venv python 直接跑 hermes_cli，绕过 hermes.exe console-script shim ──
+    # 2026-08-01 23:2x 根治"点面板按钮弹出空白 cmd 窗口(标题=hermes.exe 路径)"：
+    # hermes.exe 是 pip 生成的 console-script launcher，DETACHED_PROCESS 只作用于
+    # launcher 本身；launcher 内部 CreateProcess 再拉 python.exe 时，python(console 程序)
+    # 因父无 console 会新建一个 console → 弹窗。直接 `venv python -m hermes_cli.main
+    # dashboard` 则无此 shim 层，detached 后彻底无窗口。
+    # detached=True: 脱离面板进程的控制台会话，关闭面板/其 PowerShell 不影响 9119 存活
+    spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", *args], child_env, cwd,
+                str(root / "data" / "logs" / "hermes-dashboard.log"),
+                detached=True)
     if wait:
         # Hermes 控制台启动时要自动构建 web UI（npm install + vite），hermes 更新后
         # 首次构建常 >40s；轮询是端口一通就提前返回，180s 只是上限，避免面板在
@@ -744,9 +820,16 @@ def stop_component_hermes_service(root, env):
 
 
 def stop_component_hermes_dashboard(root, env):
-    log.info("[hermes_dashboard] closing panel / stopping server (:9119)...")
-    kill_port(9119)
-    kill_by_cmdline("hermes.exe dashboard")
+    """关闭 Dashboard 面板：只关浏览器视图，不停 9119 服务。
+
+    2026-08-01 语义调整：Hermes 服务现在是 detached 独立进程（不依赖窗口），
+    「面板」的关闭不应连带停掉后端——停服务请用「Hermes 服务」组件的关闭。
+    浏览器标签无法安全精确定位关闭（共享浏览器进程），故只记日志提示，
+    服务保持运行；若用户确实想停整个 9119，走 hermes_service 的关闭。
+    """
+    log.info("[hermes_dashboard] closing panel view (browser tab), :9119 服务保持运行")
+    # 不 kill_port(9119)、不 kill_by_cmdline —— 服务是 detached 独立进程，继续存活。
+    # 浏览器标签由用户手动关闭（无法安全精确关单个标签）。
 
 
 # ── Hermes 版本 / Ikaros 补丁 控制（需求 §9）──────────────────────────
@@ -1292,7 +1375,8 @@ def start_component_conversation_tree(root, env, wait):
         return
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     spawn_hidden(py, [str(server), "--port", "48920"], env, cwd=str(root),
-                 logfile=str(root / "data" / "logs" / "conversation-tree.log"))
+                 logfile=str(root / "data" / "logs" / "conversation-tree.log"),
+                 detached=True)
     if wait:
         wait_for_port(48920, 30)
 
@@ -1312,7 +1396,8 @@ def start_component_herdr(root, env, wait):
         return
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     spawn_hidden(str(binp), ["server"], env, cwd=str(root / "data" / "logs"),
-                 logfile=str(root / "data" / "logs" / "herdr.log"))
+                 logfile=str(root / "data" / "logs" / "herdr.log"),
+                 detached=True)
     if wait:
         time.sleep(3)
         if _marker_up("herdr.exe"):
