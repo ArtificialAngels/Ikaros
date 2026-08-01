@@ -8,12 +8,15 @@ hermes-update-and-patch.py
 
 实现 ``docs/hermes-ikaros-patches.md`` §2「两步法」协议：
 
-  ① 确定性：``git cherry-pick <当前 Ikaros 提交>`` —— 把补丁 diff 直接重放到新 upstream。
-     干净通过 → 验证 → 完成（新 HEAD = 新 upstream + 补丁）。
-     冲突 / 失败 → 视为「相关区域有大改」，升级 ②。
+  ① 确定性（3-way 重放）：以 §0 的 ``Upstream tip`` 为基准、``Ikaros 补丁提交`` 为目标，
+     生成 ``base -> ikaros`` 的 A 类 diff，用 ``git apply --3way`` 重放到新 upstream。
+     ``--3way`` 用 base 的 blob 作共同祖先，自动并入 upstream 自身改动，只把冲突
+     聚焦到 Ikaros 与 upstream 改了同一行的地方 → 上游推进时冲突面最小、最稳。
+     干净通过 → marker 校验 → 验证 → 提交 → 更新 §0（新 base = 新 upstream）。
+     冲突 / marker 缺失 → 视为「相关区域有大改」，升级 ②。
 
-  ② LLM 兜底：把补丁意图（spec §5）+ allowlist（§3）+ 提示词模板（§7）写成提示词，
-     交给受约束子 agent 在新代码上重实现，再验证、提交、更新 §0 基线指针。
+  ② LLM 兜底：把补丁意图（spec §5）+ allowlist（§3）+ 提示词模板（§7）+ 冲突文件
+     写成提示词，交给受约束子 agent 在新代码上重实现，再验证、提交、更新 §0 基线指针。
 
 安全约束（来自 spec §8 / AGENTS.md）：
   - 绝不裸跑 ``llama-server.exe``。
@@ -79,6 +82,40 @@ ALLOWLIST_DIRS = [
     "skills/creative/tldraw-skill",
 ]
 
+# --------------------------------------------------------------------------- #
+# A / B 类补丁定义 + 3-way 重放核心
+# --------------------------------------------------------------------------- #
+# A 类：需随 upstream 重打的 tracked 文件（以 upstream 为基准做 3-way 重放）。
+#   注意：web_server.py / test_scheduler.py 等改动量较大（并非 3 行小补丁），
+#   因此必须用 3-way（git apply --3way）而非整文件覆盖——这样 upstream 推进时
+#   能自动并入 upstream 自身改动，只把冲突聚焦到真正重叠的行。
+A_CLASS_FILES = [
+    "plugins/context_engine/__init__.py",
+    "hermes_cli/web_server.py",
+    "cron/scheduler.py",
+    "scripts/run_tests.sh",
+    "scripts/run_tests_parallel.py",
+    "tests/cron/test_scheduler.py",
+    "agent/conversation_loop.py",
+    "gateway/platforms/api_server.py",
+]
+# B 类：Ikaros 自有静态目录（原样复制；upstream 不碰，缺失即补、存在即跳过）。
+B_CLASS_DIRS = [
+    "plugins/context_engine/ikaros_v5",
+    "plugins/memory/ikaros_v5",
+    "skills/creative/tldraw-skill",
+]
+B_CLASS_REPR = {
+    "plugins/context_engine/ikaros_v5": "plugins/context_engine/ikaros_v5/__init__.py",
+    "plugins/memory/ikaros_v5": "plugins/memory/ikaros_v5/__init__.py",
+    "skills/creative/tldraw-skill": "skills/creative/tldraw-skill/SKILL.md",
+}
+B_CLASS_MARKERS = {
+    "plugins/context_engine/ikaros_v5": "class IkarosV5ContextEngine",
+    "plugins/memory/ikaros_v5": "class IkarosV5MemoryProvider",
+    "skills/creative/tldraw-skill": "tldraw",
+}
+
 
 # --------------------------------------------------------------------------- #
 # 小工具
@@ -87,13 +124,15 @@ def log(msg: str) -> None:
     print(f"[hermes-patch] {msg}", flush=True)
 
 
-def run_git(args, check: bool = True, cwd: Path = REPO):
-    return run_cmd(["git", *args], check=check, cwd=cwd)
+def run_git(args, check: bool = True, cwd: Path = REPO, input_data: str | None = None):
+    return run_cmd(["git", *args], check=check, cwd=cwd, input_data=input_data)
 
 
-def run_cmd(args, check: bool = True, cwd: Path = REPO, env: dict | None = None):
+def run_cmd(args, check: bool = True, cwd: Path = REPO, env: dict | None = None,
+            input_data: str | None = None):
     proc = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True, env=env
+        args, cwd=str(cwd), capture_output=True, text=True, env=env,
+        input=input_data,
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -231,32 +270,190 @@ def backup_tag() -> str:
     return tag
 
 
-def restore_from_source() -> None:
-    """从 patches/hermes/ 把补丁源文件复制到 core/hermes 工作树。
+# --------------------------------------------------------------------------- #
+# 3-way 重放核心
+# --------------------------------------------------------------------------- #
+def normalize_lf(text: str) -> str:
+    """归一换行符为 LF（hermes 仓库 .py 以 LF 存储，避免 CRLF 造成脏树 / 假 diff）。"""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
-    轻量降级路径：当 cherry-pick 失败（upstream 大改）且 git 仓库历史不完整
-    （backup tag 不可用 / 仓库重建过）时，直接从 Ikaros 主仓库跟踪的源文件
-    恢复补丁，不依赖 hermes 的 git 历史。
+
+def patch_present_via_grep() -> bool:
+    """Ikaros 集成补丁是否已就位：grep HEAD 历史里的补丁提交（覆盖 原提交 /
+    分层 cherry-pick / 重打新提交 三种来源，比 is-ancestor 更稳）。"""
+    out = run_git(["log", "--oneline", "--grep",
+                   "apply Ikaros integration patches", "HEAD"],
+                  check=False).stdout
+    return bool(out.strip())
+
+
+def derive_markers(base: str, ikaros: str) -> dict:
+    """从 base->ikaros 的 diff 自动抽取每个 A 类文件的「签名行」作为 marker。
+
+    这些签名行是 Ikaros 修改引入、upstream 不会删除的内容；校验时只要它们
+    存在于工作树文件，即可证明该文件补丁已落地（与 commit 哈希解耦，稳定）。
     """
-    import shutil
-    src = PATCH_SOURCE_DIR
-    if not src.is_dir():
-        raise RuntimeError(f"补丁源文件目录不存在：{src}")
-    log(f"从 {src} 恢复补丁源文件...")
-    for item in src.iterdir():
-        if item.name == "README.md":
-            continue
-        dst = REPO / item.name
-        if item.is_dir():
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(item, dst)
-            log(f"  恢复目录：{item.name}/")
+    markers: dict = {}
+    for f in A_CLASS_FILES:
+        proc = run_git(["diff", base, ikaros, "--", f], check=True)
+        sig: list[str] = []
+        for line in proc.stdout.splitlines():
+            if not line.startswith("+") or line.startswith("+++"):
+                continue
+            s = line[1:].rstrip()
+            if not s.strip():
+                continue
+            if any(k in s for k in ("def ", "class ", "import ", "f\"", "f'",
+                                    "= \"", "= '", "merge(")):
+                sig.append(s)
+            if len(sig) >= 2:
+                break
+        if not sig:
+            for line in proc.stdout.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    s = line[1:].rstrip()
+                    if s.strip():
+                        sig = [s]
+                        break
+        markers[f] = sig
+    for d in B_CLASS_DIRS:
+        markers[d] = [B_CLASS_MARKERS[d]]
+    return markers
+
+
+def markers_missing(markers: dict) -> list:
+    """返回缺失的 marker 描述（空列表 = 全部就位）。"""
+    missing: list = []
+    for f, ms in markers.items():
+        if f in B_CLASS_REPR:
+            repr_path = REPO / B_CLASS_REPR[f]
+            if not repr_path.exists():
+                missing.append(f"{f} (目录/代表文件缺失)")
+                continue
+            txt = normalize_lf(repr_path.read_text(encoding="utf-8", errors="ignore"))
+            if not any(m in txt for m in ms):
+                missing.append(f"{f} (marker 缺失: {ms})")
         else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, dst)
-            log(f"  恢复文件：{item.name}")
-    log("补丁源文件恢复完成。")
+            p = REPO / f
+            if not p.exists():
+                missing.append(f"{f} (文件缺失)")
+                continue
+            txt = normalize_lf(p.read_text(encoding="utf-8", errors="ignore"))
+            if not any(m in txt for m in ms):
+                missing.append(f"{f} (marker 缺失: {ms})")
+    return missing
+
+
+def _copytree_lf(src: Path, dst: Path) -> None:
+    """复制目录并归一为 LF（防止 patches/hermes/ 的 CRLF 文件污染 hermes 工作树）。"""
+    import shutil
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.rglob("*"):
+        rel = item.relative_to(src)
+        target = dst / rel
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            data = normalize_lf(item.read_text(encoding="utf-8", errors="ignore"))
+            target.write_text(data, encoding="utf-8", newline="\n")
+
+
+def ensure_b_class(d: str) -> None:
+    """B 类目录：代表文件存在且含 marker 即跳过；否则从 patches/hermes/ 复制（LF）。"""
+    repr_path = REPO / B_CLASS_REPR[d]
+    need = True
+    if repr_path.exists():
+        txt = normalize_lf(repr_path.read_text(encoding="utf-8", errors="ignore"))
+        if B_CLASS_MARKERS[d] in txt:
+            need = False
+    if not need:
+        return
+    src = PATCH_SOURCE_DIR / d
+    if not src.exists():
+        log(f"  [warn] B 类源缺失，跳过 {d}")
+        return
+    _copytree_lf(src, REPO / d)
+    log(f"  补 B 类目录：{d}/")
+
+
+def scan_conflicts() -> list:
+    """扫描 A 类文件与 B 类代表文件中的 git 冲突标记（<<<<<<<）。"""
+    conflicts: list = []
+    candidates = list(A_CLASS_FILES) + [B_CLASS_REPR[d] for d in B_CLASS_DIRS]
+    for f in candidates:
+        p = REPO / f
+        if not p.exists():
+            continue
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"^<<<<<<< ", txt, re.M):
+            conflicts.append(f)
+    return conflicts
+
+
+def apply_patch_delta(base: str, ikaros: str) -> list:
+    """3-way 重放 Ikaros delta (base->ikaros) 到当前工作树（= 当前 upstream）。
+
+    返回冲突文件列表（空 = 干净应用）。A 类**逐文件**走 ``git apply --3way``
+    （不合并成单 patch——单 patch 是原子的，任一文件失败会连累其它文件全部不落地）；
+    B 类按需复制。``--3way`` 用 base 的 blob 作为共同祖先，自动并入 upstream
+    自身改动，只在 Ikaros 与 upstream 改了同一行时才留下冲突标记 → 冲突面最小、最稳。
+
+    注意：patch 必须以**字节**喂给 git apply（二进制 stdin），否则 Windows 上
+    text 模式会把 \\n 翻成 \\r\\n，破坏 unified diff 的 context 行导致匹配失败。
+    """
+    failed: list = []
+    for f in A_CLASS_FILES:
+        proc = run_git(["diff", base, ikaros, "--", f], check=True)
+        patch = proc.stdout
+        if not patch.strip():
+            continue
+        # 字节 stdin：避免 Windows text 模式换行翻译破坏 diff
+        p = subprocess.run(
+            ["git", "apply", "--3way", "--whitespace=nowarn", "-"],
+            cwd=str(REPO), input=patch.encode("utf-8"),
+            capture_output=True,
+        )
+        if p.returncode != 0:
+            log(f"  [warn] git apply --3way 失败于 {f}（rc={p.returncode}）；"
+                f"stderr={p.stderr.decode('utf-8','replace').strip()[:200]}")
+            failed.append(f)
+    for d in B_CLASS_DIRS:
+        ensure_b_class(d)
+    # 真正留下冲突标记的（极少），优先上报；其余靠 markers_missing 兜底
+    conflicts = scan_conflicts()
+    if failed and not conflicts:
+        log(f"  [warn] 以下文件 3-way 未落地（将触发 LLM 兜底）：{failed}")
+    return conflicts
+
+
+def _sync_tree_from_commit(commit: str, rel_dir: str) -> None:
+    out = run_git(["ls-tree", "-r", "--name-only", f"{commit}:{rel_dir}"],
+                  check=True).stdout
+    for sub in out.splitlines():
+        sub = sub.strip()
+        if not sub:
+            continue
+        blob = run_git(["show", f"{commit}:{sub}"], check=True).stdout
+        dst = PATCH_SOURCE_DIR / sub
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(normalize_lf(blob), encoding="utf-8", newline="\n")
+
+
+def refresh_patch_source(new_commit: str) -> None:
+    """把新 Ikaros 提交里的 A 类文件与 B 类目录同步回 patches/hermes/（LF 归一），
+    保持源文件与提交一致 —— 这是后续兜底与人工审阅的事实源，也确保下次 delta
+    以最新 upstream 为基准（最小化漂移 → 最大化 3-way 成功率）。"""
+    log("刷新 patches/hermes/ 源文件（与新提交保持一致）...")
+    for f in A_CLASS_FILES:
+        txt = run_git(["show", f"{new_commit}:{f}"], check=True).stdout
+        dst = PATCH_SOURCE_DIR / f
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(normalize_lf(txt), encoding="utf-8", newline="\n")
+    for d in B_CLASS_DIRS:
+        _sync_tree_from_commit(new_commit, d)
+    log("patches/hermes/ 已刷新。")
 
 
 def rollback_to_backup(tag: str) -> None:
@@ -438,8 +635,28 @@ def build_llm_prompt(spec_text: str, target_sha: str) -> str:
     return prompt
 
 
-def write_llm_prompt(spec_text: str, target_sha: str) -> Path:
+def write_llm_prompt(spec_text: str, target_sha: str, problems: list | None = None,
+                     problem_kind: str = "需修复项") -> Path:
+    """写出 LLM / 人工 兜底提示词，并**动态注入落地判据（marker）**，
+    让任何接手修复的智能体都有自包含的"定义完成"清单，无需读源码即可核对。"""
     prompt = build_llm_prompt(spec_text, target_sha)
+    base, ikaros = parse_spec_pointers(spec_text)
+    markers = derive_markers(base, ikaros)
+    miss = markers_missing(markers)
+    # 本次需优先处理的清单（3-way 冲突文件 或 marker 缺失项）
+    if problems:
+        prompt += f"\n\n【本次{problem_kind}】（请优先处理这些）：\n"
+        prompt += "\n".join(f"  - {p}" for p in problems)
+        prompt += "\n"
+    # 落地判据：由脚本动态注入，权威（与 derive_markers / markers_missing 完全一致）
+    prompt += "\n\n【落地判据 marker（改完必须全部命中，否则 --finalize 不会提交）】:\n"
+    for f, ms in markers.items():
+        status = "OK" if f not in miss else "MISSING"
+        sig = " / ".join(ms) if ms else "(无签名行)"
+        prompt += f"  - {f}: {sig}  [{status}]\n"
+    prompt += (f"\n（3-way 上下文：base={base[:8]}  ours=当前 upstream 工作树  "
+               f"theirs={ikaros[:8]}。A 类文件须含其签名行；"
+               f"B 类目录须存在且含代表 marker。全部 OK 后才能 --finalize。）\n")
     out = IKAROS_ROOT / "tmp" / f"hermes-llm-patch-{datetime.now():%Y%m%d-%H%M%S}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(prompt, encoding="utf-8")
@@ -472,9 +689,8 @@ def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool
         return False
 
     if not already_committed:
-        # LLM 兜底分支：把 allowlist 改动提交为新 Ikaros 单提交
-        paths = [p for p in ALLOWLIST_FILES if (REPO / p).exists()]
-        paths += ALLOWLIST_DIRS
+        # 把 A 类文件 + B 类目录作为新 Ikaros 单提交（不碰 config.yaml 等本地文件）
+        paths = list(A_CLASS_FILES) + list(B_CLASS_DIRS)
         run_git(["add", "--", *paths], check=True)
         run_git(["commit", "-m",
                  f"feat(hermes): apply Ikaros integration patches on upstream {target_sha[:8]}"],
@@ -482,7 +698,11 @@ def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool
         log("已提交新的 Ikaros 单提交。")
 
     new_commit = run_git(["rev-parse", "HEAD"], check=True).stdout.strip()
+    # §0 指针：新 base = 当前 upstream（target_sha），新 Ikaros 提交 = new_commit。
+    # 下次更新时 delta 将以 target_sha 为基准重放 → 自动 rebase、漂移最小。
     update_spec_pointers(SPEC, target_sha, new_commit)
+    # 同步 patches/hermes/ 源文件，保持事实源与提交一致
+    refresh_patch_source(new_commit)
     clear_state()
     log(f"完成。新 Ikaros 提交 = {new_commit[:8]}（基于 upstream {target_sha[:8]}）")
     log("注意：未自动 push（本地 main 是 Ikaros 修补分支，push 会污染 origin/main）。")
@@ -490,13 +710,15 @@ def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool
 
 
 # --------------------------------------------------------------------------- #
-# 确定性路径
+# 确定性路径（完整更新：fetch + reset + 3-way 重放 + 提交 + 更新 §0）
 # --------------------------------------------------------------------------- #
 def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
                        apply: bool, python_exe: Path, auto_llm: bool,
                        spec_text: str) -> int:
+    base, ikaros = parse_spec_pointers(spec_text)
     if not apply:
-        log(f"[计划] 将 fetch upstream 并 checkout {target}，然后 cherry-pick {ikaros_old[:8]}。")
+        log(f"[计划] 将 fetch upstream，reset 到 {target}，再以 3-way 重放 "
+            f"Ikaros delta (base={base[:8]} -> ikaros={ikaros[:8]})。")
         log(f"[计划] 冲突时{'自动派 LLM' if auto_llm else '写出提示词并暂停'}。")
         return 0
 
@@ -504,79 +726,99 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
     fetch_upstream()
 
     target_sha = run_git(["rev-parse", "--verify", target], check=True).stdout.strip()
-    # 已是最新？（HEAD 已基于该 upstream 且含 Ikaros 补丁）→ 无需重打
+    # 已是最新？（HEAD 已基于该 upstream 且补丁已就位）→ 无需重打
     at_target = run_git(["merge-base", "--is-ancestor", target_sha, "HEAD"],
                          check=False).returncode == 0
-    has_patch = run_git(["merge-base", "--is-ancestor", ikaros_old, "HEAD"],
-                         check=False).returncode == 0
-    if at_target and has_patch:
-        log(f"HEAD 已基于 {target_sha[:8]} 且含 Ikaros 提交 {ikaros_old[:8]}，无需重打。")
+    present = patch_present_via_grep()
+    if at_target and present:
+        log(f"HEAD 已基于 {target_sha[:8]} 且 Ikaros 补丁就位，无需重打。")
         return 0
 
     # 已确认需要重打，此时才打备份 tag（避免 no-op 时产生多余 tag）
     backup_tag_name = backup_tag()
-    save_state({"target": target_sha, "ikaros_old": ikaros_old,
+    save_state({"target": target_sha, "base": base, "ikaros_old": ikaros,
                 "backup_tag": backup_tag_name, "mode": "deterministic"})
 
     run_git(["checkout", "-B", "main"], check=True)
     run_git(["reset", "--hard", target_sha], check=True)
     log(f"已 reset main → {target_sha[:8]}（新 upstream，旧补丁由备份 tag 保留）")
 
-    proc = run_git(["cherry-pick", ikaros_old], check=False)
-    if proc.returncode == 0:
-        log("cherry-pick 干净通过 → 确定性打补丁成功。")
-        finalize(target_sha, already_committed=True, python_exe=python_exe)
+    markers = derive_markers(base, ikaros)
+    conflicts = apply_patch_delta(base, ikaros)
+    if conflicts:
+        log(f"3-way 重放冲突于：{', '.join(conflicts)} → 升级 LLM 兜底。")
+        prompt_file = write_llm_prompt(spec_text, target_sha, problems=conflicts,
+                                       problem_kind="3-way 冲突文件")
+        save_state({"target": target_sha, "base": base, "ikaros_old": ikaros,
+                    "backup_tag": backup_tag_name, "mode": "need-llm",
+                    "prompt_file": str(prompt_file)})
+        if auto_llm and dispatch_llm(prompt_file):
+            if finalize(target_sha, already_committed=False, python_exe=python_exe):
+                return 0
+            return 1
+        log("=== 需要人工 / agent 步骤 ===")
+        log(f"提示词已写入：{prompt_file}；改完后运行 --finalize")
+        return 2
+
+    # 干净应用 → 校验 markers（证明每个文件补丁真的落地）
+    miss = markers_missing(markers)
+    if miss:
+        log(f"3-way 重放完成，但 markers 缺失：{miss} → 升级 LLM 兜底。")
+        run_git(["reset", "--hard", target_sha], check=True)
+        prompt_file = write_llm_prompt(spec_text, target_sha, problems=miss,
+                                       problem_kind="marker 缺失项")
+        save_state({"target": target_sha, "base": base, "ikaros_old": ikaros,
+                    "backup_tag": backup_tag_name, "mode": "need-llm",
+                    "prompt_file": str(prompt_file)})
+        return 2
+
+    log("3-way 重放干净通过，验证中...")
+    if finalize(target_sha, already_committed=False, python_exe=python_exe):
         return 0
+    log("验证未通过，回滚到备份。")
+    rollback_to_backup(backup_tag_name)
+    return 1
 
-    # 冲突 → 先尝试从源文件恢复（比 LLM 轻量）
-    log("cherry-pick 冲突 → 尝试从 patches/hermes/ 源文件恢复（§2 第②步轻量降级）。")
-    run_git(["cherry-pick", "--abort"], check=False)
-    # 优先从 patches/hermes/ 恢复（不依赖 git 历史，仓库重建后也可用）
-    try:
-        restore_from_source()
-        log("从源文件恢复成功，进入收尾验证。")
-        if finalize(target_sha, already_committed=False, python_exe=python_exe):
-            return 0
-        log("源文件恢复后验证未通过，升级 LLM 兜底。")
-    except Exception as exc:
-        log(f"源文件恢复失败（{exc}），升级 LLM 兜底。")
 
-    # LLM 兜底路径：恢复 B 类静态目录
-    run_git(["checkout", backup_tag_name, "--", *ALLOWLIST_DIRS], check=True)
-    log("已恢复 B 类静态插件目录。")
-
-    prompt_file = write_llm_prompt(spec_text, target_sha)
-    save_state({"target": target_sha, "ikaros_old": ikaros_old,
-                "backup_tag": backup_tag_name, "mode": "need-llm",
-                "prompt_file": str(prompt_file)})
-
-    if auto_llm and dispatch_llm(prompt_file):
-        log("LLM 派发完成，进入收尾验证。")
-        if finalize(target_sha, already_committed=False, python_exe=python_exe):
-            return 0
-        return 1
-
-    log("=== 需要人工 / agent 步骤 ===")
-    log(f"提示词已写入：{prompt_file}")
-    log("请让受约束子 agent 按提示词在 core/hermes 上重实现补丁（仅改 allowlist），")
-    log("改完后运行：python bin/hermes-update-and-patch.py --finalize")
-    return 2
+def step_light_patch(base: str, ikaros: str, python_exe: Path, spec_text: str) -> int:
+    """轻量补丁（启动预检 / 检查补丁用）：不 fetch / 不 reset，
+    仅当 markers 缺失时才把 Ikaros delta 3-way 重放到「当前 HEAD」。
+    冲突则回滚，且不阻塞启动。"""
+    markers = derive_markers(base, ikaros)
+    miss = markers_missing(markers)
+    if not miss:
+        log("Ikaros 补丁已就位（markers 全在），无需操作。")
+        return 0
+    log(f"检测到 markers 缺失：{miss} → 轻量补丁（3-way 重放到当前 HEAD）...")
+    conflicts = apply_patch_delta(base, ikaros)
+    if conflicts:
+        log(f"轻量补丁冲突：{conflicts} → 回滚，不阻塞启动（建议手动 更新并打补丁）。")
+        run_git(["reset", "--hard", "HEAD"], check=False)
+        return 2
+    if markers_missing(markers):
+        log("轻量补丁后仍缺失，回滚。")
+        run_git(["reset", "--hard", "HEAD"], check=False)
+        return 2
+    # 在当前 HEAD 上提交（本地 Ikaros 修补分支，不 push）
+    paths = list(A_CLASS_FILES) + list(B_CLASS_DIRS)
+    run_git(["add", "--", *paths], check=True)
+    run_git(["commit", "-m",
+             "feat(hermes): apply Ikaros integration patches (auto, light)"],
+            check=True)
+    log("轻量补丁已提交到当前 HEAD。")
+    return 0
 
 
 def step_finalize(python_exe: Path) -> int:
     state = load_state()
     if state.get("mode") != "need-llm":
         log("状态显示并非处于 LLM 兜底待收尾阶段；若确需收尾请确认流程。")
-        # 仍允许：直接用当前 HEAD 父作为 target 猜测
     target_sha = state["target"]
-    backup_tag_name = state["backup_tag"]
+    backup_tag_name = state.get("backup_tag")
 
-    # 确保 B 类目录存在（兜底保险）
-    # 优先从 patches/hermes/ 恢复（不依赖 git 历史），失败则回退到 backup tag
-    try:
-        restore_from_source()
-    except Exception:
-        run_git(["checkout", backup_tag_name, "--", *ALLOWLIST_DIRS], check=False)
+    # 仅确保 B 类目录存在（A 类已由 LLM/人工改好，勿用旧源覆盖）
+    for d in B_CLASS_DIRS:
+        ensure_b_class(d)
 
     if finalize(target_sha, already_committed=False, python_exe=python_exe):
         return 0
@@ -589,7 +831,10 @@ def step_finalize(python_exe: Path) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Hermes × Ikaros 补丁稳定重打工具")
     ap.add_argument("--apply", action="store_true",
-                    help="执行实际 git 操作（默认仅计划模式，只读）")
+                    help="完整更新：fetch + reset + 3-way 重放 + 提交 + 更新 §0")
+    ap.add_argument("--light-patch", action="store_true",
+                    help="轻量补丁：不 fetch/不 reset，仅当 markers 缺失时 3-way "
+                         "重放到当前 HEAD（启动预检用，冲突则回滚且不阻塞）")
     ap.add_argument("--target", default="origin/main",
                     help="要更新到的 upstream 提交/分支/标签（默认 origin/main）")
     ap.add_argument("--auto-llm", action="store_true",
@@ -616,6 +861,9 @@ def main() -> int:
 
     if args.finalize:
         return step_finalize(python_exe)
+
+    if args.light_patch:
+        return step_light_patch(upstream_tip, ikaros_commit, python_exe, spec_text)
 
     if not args.apply:
         ensure_clean_working_tree()

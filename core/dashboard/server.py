@@ -24,8 +24,8 @@ Endpoints:
   POST /api/system/<action>            action in {start,stop}  (all components)
   POST /api/shutdown                     stop this control panel service
   GET  /api/hermes/status              -> hermes HEAD / upstream tip / 补丁状态
-  POST /api/hermes/check               -> 检查并自动打补丁（cherry-pick 补丁 commit；已打则 no-op）
-  POST /api/hermes/update              -> 跑完整脚本（fetch+reset+cherry-pick+LLM兜底）
+  POST /api/hermes/check               -> 检查并自动打补丁（light-patch：3-way 重放；已打则 no-op）
+  POST /api/hermes/update              -> 跑完整脚本（fetch+reset+3-way 重放+LLM兜底）
 """
 
 from __future__ import annotations
@@ -753,7 +753,7 @@ def _hermes_git_healthy() -> bool:
 
 def _hermes_patch_present() -> bool:
     """Ikaros 集成补丁是否已就位：grep HEAD 历史里的补丁提交（覆盖原提交 /
-    分层 cherry-pick / 重打新提交 三种来源，比 is-ancestor 更稳）。"""
+    重打新提交两种来源，比 is-ancestor 更稳）。真正的落地判据是引擎里的 marker 校验。"""
     out = _git_hermes(["log", "--oneline", "--grep",
                        "apply Ikaros integration patches", "HEAD"]).stdout
     return bool(out.strip())
@@ -797,9 +797,13 @@ def hermes_patch_status() -> dict:
 
 
 def ensure_hermes_patch_applied() -> dict:
-    """启动 9119 前调用：若 Ikaros 补丁未打，直接把补丁 commit cherry-pick 到当前
-    HEAD（轻量、不 fetch / 不 reset，适用「更新把补丁冲掉」常见场景）。
-    冲突则 abort 并告警，但不阻塞启动。"""
+    """启动 9119 前调用：若 Ikaros 补丁未打，调用补丁脚本做「轻量补丁」——
+    以 3-way 把 Ikaros delta 重放到当前 HEAD（不 fetch / 不 reset，适用
+    「更新把补丁冲掉」常见场景）。冲突则回滚并告警，但不阻塞启动。
+
+    委托 bin/hermes-update-and-patch.py --light-patch 执行，复用同一套
+    3-way + marker 校验逻辑，保证启动预检与手动「更新并打补丁」行为一致。
+    """
     st = hermes_patch_status()
     if not st.get("repo_healthy"):
         return {"ok": True, "applied": False, "skipped": True,
@@ -808,37 +812,37 @@ def ensure_hermes_patch_applied() -> dict:
     if st.get("patch_applied"):
         return {"ok": True, "applied": True,
                 "msg": "Ikaros 补丁已就位", "detail": st["detail"]}
-    ptr = _parse_spec_pointers()
-    if not ptr:
+    if not HERMES_PATCH_SCRIPT.exists():
         return {"ok": False, "applied": False,
-                "msg": "找不到 spec 基线指针，无法自动补丁", "detail": st["detail"]}
-    ikaros_commit = ptr[1]
-    # 补丁 commit 对象是否存在于当前仓库（refs 损坏后对象可能也被 gc）
-    obj_check = _git_hermes(["cat-file", "-t", ikaros_commit])
-    if obj_check.returncode != 0:
-        return {"ok": True, "applied": False, "skipped": True,
-                "msg": (f"补丁 commit {ikaros_commit[:8]} 不在本地对象库中"
-                        "（仓库历史丢失），需等网络恢复后重新 fetch + 打补丁。"
-                        "工作树文件完好，不影响运行。"),
-                "detail": obj_check.stderr.strip()[-200:]}
-    log.info("[hermes_dashboard] 补丁缺失，启动前自动补上（cherry-pick %s）...",
-             ikaros_commit[:8])
-    rc = _git_hermes(["cherry-pick", ikaros_commit])
-    if rc.returncode == 0:
+                "msg": "找不到 bin/hermes-update-and-patch.py"}
+    py = HERMES_AGENT_DIR / "venv" / "Scripts" / "python.exe"
+    if not py.exists():
+        py = pathlib.Path(sys.executable)
+    log.info("[hermes_dashboard] 补丁缺失，启动前自动补上（3-way 轻量补丁）...")
+    try:
+        proc = subprocess.run(
+            [str(py), str(HERMES_PATCH_SCRIPT), "--light-patch"],
+            cwd=str(HERMES_ROOT), capture_output=True, text=True,
+            creationflags=CREATE_NO_WINDOW, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "applied": False, "msg": "轻量补丁超时（>5min）"}
+    # 重新检测补丁状态（marker 校验，最稳）
+    st2 = hermes_patch_status()
+    if st2.get("patch_applied"):
         log.info("[hermes_dashboard] 已自动补上 Ikaros 补丁")
-        return {"ok": True, "applied": True,
-                "msg": "已自动补上 Ikaros 补丁", "detail": ""}
-    _git_hermes(["cherry-pick", "--abort"])
+        return {"ok": True, "applied": True, "msg": "已自动补上 Ikaros 补丁",
+                "detail": (proc.stdout or "")[-300:]}
     msg = ("自动补丁冲突（upstream 大改），请手动运行 "
            "bin/hermes-update-and-patch.py --apply")
     log.warning("[hermes_dashboard] %s", msg)
-    tail = (rc.stderr or rc.stdout)[-400:]
+    tail = (proc.stderr or proc.stdout or "")[-400:]
     return {"ok": False, "applied": False, "msg": msg, "detail": tail}
 
 
 def run_hermes_update_and_patch() -> dict:
-    """9100「更新并打补丁」按钮：跑完整脚本（fetch+reset+cherry-pick+LLM兜底+
-    验证+更新§0）。"""
+    """9100「更新并打补丁」按钮：跑完整脚本（fetch+reset+3-way重放+LLM兜底+
+    验证+提交+更新§0）。"""
     if not HERMES_PATCH_SCRIPT.exists():
         return {"ok": False, "msg": "找不到 bin/hermes-update-and-patch.py"}
     py = HERMES_AGENT_DIR / "venv" / "Scripts" / "python.exe"
