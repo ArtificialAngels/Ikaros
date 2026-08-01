@@ -8,6 +8,13 @@
 
 ---
 
+## [2026-08-01] — 9100 面板：自我思考卡片对齐真实数据 + 整页自由画布
+
+- **自我思考卡片（替代"内心独白"）**：9100 面板原「内心独白」读 `pending_thought.json`（磁盘不存在、无写入者）已废弃；现改读 metacog 真实产出的 `latest_thought.json`，经 `core/dashboard/server.py` 的 `/api/state` 暴露 `state.thought`；`index.html` 新增「自我思考」卡片（text + kind + 好奇度 + 时间，3s 轮询）。metacog 模块本体保留（事件驱动，详见 ARCHITECTURE §1.3.1）。
+- **整页统一自由画布**：`index.html` 把原 `.main` 左右分栏（grid-col / side / dash-strip）重构为单个 `#canvas` 绝对定位画布；新增 `PanelManager`（Pointer Events 统一鼠标+触摸）实现：标题拖拽移动、八向 `.rz` 手柄缩放、拖拽/缩放时吸附对齐容器边与其他面板（8px 阈值 + 高亮参考线）、`localStorage['ikaros-control-panels']` 记忆布局、刷新自动恢复；「重置布局」清记忆恢复默认。`dashboard.css` 同步新增画布/手柄/吸附线样式与 ≤720px 移动端降级（堆叠流、隐藏手柄）。纯前端改动，`server.py` 无需改动。
+- **相关文档同步**：ARCHITECTURE §1.3.1 新增面板布局与 self-thinking 说明；hermes-agent-full-survey 第 70 行"每 45min 内心独白循环"更正为事件驱动（无定时循环）。
+- 改动文件：`core/dashboard/index.html`、`core/dashboard/assets/dashboard.css`（均未提交，待主仓 commit；hermes/neko 照例不碰）。
+
 ## [2026-07-31] — 修订 :8642 约定冲突（文档对齐现实）
 
 - **Hermes API 网关（:8642）重新启用确认**：`:8642` 实际在跑，由 `python -m hermes_cli.main gateway run` 提供（**非**旧的 `bin/hermes-api-server.py` 脚本），被 dashboard（:9119）与对话树面板（:48920，chat 的 hermes 模式走其 agent runtime）复用。此前文档 / lint 误标为"已移除 / 勿加回"。

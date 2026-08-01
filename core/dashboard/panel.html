@@ -57,6 +57,15 @@
         </div>
       </div>
 
+      <div class="thought-card" style="--gi:2">
+        <div class="card-title">自我思考 <span class="thought-live"><span class="thought-live-dot"></span>实时</span></div>
+        <div class="thought-body">
+          <div class="thought-empty" id="thoughtEmpty">暂无自我思考</div>
+          <div class="thought-text" id="thoughtText"></div>
+        </div>
+        <div class="thought-meta" id="thoughtMeta"></div>
+      </div>
+
       <div class="memory-panel" id="memPanel">
         <div class="mem-head">
           <span class="mem-title-text">V5 记忆</span>
@@ -80,13 +89,6 @@
           <div class="mem-tile"><div class="mem-tile-num" id="memActive">0</div><div class="mem-tile-label">激活中</div></div>
         </div>
       </div>
-    </div>
-
-    <div class="monologue-card">
-      <div class="card-title">内心独白</div>
-      <div class="monologue-empty" id="monoEmpty">暂无</div>
-      <div class="monologue-text" id="monoText" style="display:none"></div>
-      <div class="monologue-meta" id="monoMeta" style="display:none"></div>
     </div>
 
     <div class="stream-wrap">
@@ -441,32 +443,47 @@ var statusText=document.getElementById('statusText'), thinkingEl=document.getEle
 var barP=document.getElementById('barP'),barA=document.getElementById('barA'),barD=document.getElementById('barD');
 var valP=document.getElementById('valP'),valA=document.getElementById('valA'),valD=document.getElementById('valD');
 var barV=document.getElementById('barV'),valV=document.getElementById('valV');
-var monoText=document.getElementById('monoText'),monoEmpty=document.getElementById('monoEmpty'),monoMeta=document.getElementById('monoMeta');
-var msgCount=0,lastThoughtTs=0;
+var msgCount=0;
 
 function addMessage(entry) {
   var dk=entry.display_kind||entry.kind||'other', text=entry.text||'', ts=entry.ts||Date.now()/1000, mood=entry.mood||'';
   emptyMsg.style.display='none';
-  var el=document.createElement('div'), kindClass=['user_msg','assistant_msg','thought'].indexOf(dk)>=0?dk:'other';
+  var el=document.createElement('div'), kindClass=['user_msg','assistant_msg'].indexOf(dk)>=0?dk:'other';
   el.className='msg msg-'+kindClass;
-  var label=dk; if(dk==='user_msg')label='用户'; else if(dk==='assistant_msg')label='伊卡洛斯'; else if(dk==='thought')label='内心';
+  var label=dk; if(dk==='user_msg')label='用户'; else if(dk==='assistant_msg')label='伊卡洛斯';
   var moodHtml=mood?'<span class="mood-tag">'+esc(mood)+'</span>':'';
   el.innerHTML='<div class="head"><span class="label">'+label+'</span><span class="time">'+fmtTime(ts)+'</span></div><div class="body">'+esc(text||'...')+moodHtml+'</div>';
   stream.appendChild(el); stream.scrollTop=stream.scrollHeight;
   msgCount++; eventCount.textContent=msgCount+' 事件';
-  if(dk==='thought'&&text&&ts>lastThoughtTs){lastThoughtTs=ts;updateMonologue(entry);}
   if(dk==='user_msg'){thinkingEl.classList.add('active');statusText.textContent='思考中...';}
   else if(dk==='assistant_msg'){thinkingEl.classList.remove('active');statusText.textContent='就绪';}
 }
 
 function updateAffect(state) { var a=state&&state.affect; if(!a)return; var p=a.pleasure,ar=a.arousal,d=a.dominance; barP.style.width=affectWidth(p)+'%';barA.style.width=affectWidth(ar)+'%';barD.style.width=affectWidth(d)+'%'; valP.textContent=fmtAffect(p);valA.textContent=fmtAffect(ar);valD.textContent=fmtAffect(d); }
-function updateVitality(state) { var v=null; if(state&&state.thought&&state.thought.vitality!=null)v=state.thought.vitality; else if(state&&state.affect&&state.affect.vitality!=null)v=state.affect.vitality; if(v!=null){var pct=clamp(Math.round(v*100),0,100);barV.style.width=pct+'%';valV.textContent=pct+'%';} else{barV.style.width='0%';valV.textContent='-';} }
-function updateMonologue(entry) { var text=entry.text||''; if(!text)return; monoEmpty.style.display='none';monoText.style.display='block';monoMeta.style.display='flex'; monoText.textContent=text; var mp=[]; if(entry.intensity!=null)mp.push('强度:'+entry.intensity.toFixed(2)); if(entry.mood)mp.push(entry.mood); if(entry.ts)mp.push(fmtTime(entry.ts)); monoMeta.innerHTML=mp.join(' \u00b7 '); }
-var TYPE_LABELS = { philosophy:'哲学', lesson:'教训', fact:'事实', identity:'自我认知', inner_monologue:'内心独白', conversation:'对话', reference:'参考', thought_marker:'思考标记', activity_reflection:'活动反思', emotional_event:'情绪事件', self_reflection:'自我反思', self_discovery:'自我发现', narrative:'叙事', emotion_label:'情绪标签', dissonance:'认知失调', test:'测试', decision:'决策', audit:'审计', milestone:'里程碑', repair_test:'修复测试', technological_discovery:'技术发现' };
+function updateVitality(state) { var v=null; if(state&&state.affect&&state.affect.vitality!=null)v=state.affect.vitality; if(v!=null){var pct=clamp(Math.round(v*100),0,100);barV.style.width=pct+'%';valV.textContent=pct+'%';} else{barV.style.width='0%';valV.textContent='-';} }
+function updateThought(state){
+  var t = state && state.thought;
+  var empty = document.getElementById('thoughtEmpty');
+  var txt = document.getElementById('thoughtText');
+  var meta = document.getElementById('thoughtMeta');
+  if(!t || !t.text){
+    if(empty) empty.style.display='';
+    if(txt) txt.textContent='';
+    if(meta) meta.textContent='';
+    return;
+  }
+  if(empty) empty.style.display='none';
+  if(txt) txt.textContent = t.text;
+  var kindLabel = ({'observation':'用户观察','mood':'心绪','activity':'活动','self':'自我','philosophy':'哲学','thought':'思考'})[t.kind] || (t.kind||'思考');
+  var cu = (t.curiosity!=null && t.curiosity!==undefined) ? (' · 好奇 '+Math.round(Number(t.curiosity)*100)+'%') : '';
+  var ts = t.ts ? (' · '+fmtTime(t.ts)) : '';
+  if(meta) meta.textContent = kindLabel + cu + ts;
+}
+var TYPE_LABELS = { philosophy:'哲学', lesson:'教训', fact:'事实', identity:'自我认知', conversation:'对话', reference:'参考', thought_marker:'思考标记', activity_reflection:'活动反思', emotional_event:'情绪事件', self_reflection:'自我反思', self_discovery:'自我发现', narrative:'叙事', emotion_label:'情绪标签', dissonance:'认知失调', test:'测试', decision:'决策', audit:'审计', milestone:'里程碑', repair_test:'修复测试', technological_discovery:'技术发现' };
 var _numCache = {};
 var DEMO_STATE = {
   memory:{ total:3604, long_term:1203, avg_weight:0.62,
-    by_type:{ philosophy:1109, lesson:426, fact:425, identity:371, inner_monologue:368, conversation:331, reference:155, thought_marker:70, activity_reflection:64, emotional_event:60, self_reflection:58, self_discovery:57, narrative:49 } },
+    by_type:{ philosophy:1109, lesson:426, fact:425, identity:371, conversation:331, reference:155, thought_marker:70, activity_reflection:64, emotional_event:60, self_reflection:58, self_discovery:57, narrative:49 } },
   entity_graph:{ entities:312, edges:540, episodic_memories:88, active_memories:12 }
 };
 var _memBooted=false;
@@ -509,7 +526,7 @@ function applyMemory(state){
   tickTo('memActive', eg.active_memories||0);
 }
 function updateMemory(state){ applyMemory(state); }
-function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s); if(s.thought&&s.thought.text)updateMonologue({text:s.thought.text,intensity:s.thought.intensity,mood:s.thought.mood,ts:s.thought.created||s.thought.ts}); }).catch(function(){ memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
+function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
 function connectSSE() { var evt=new EventSource('/api/events'); evt.addEventListener('connected',function(){connDot.className='conn-dot on';connLabel.textContent='已连接';}); evt.addEventListener('monitor',function(e){try{addMessage(JSON.parse(e.data))}catch(_){}}); evt.onerror=function(){connDot.className='conn-dot off';connLabel.textContent='重连中...';evt.close();setTimeout(connectSSE,3000);}; }
 
 /* ── herdr 监督卡片 (B5) ─────────────────────────────────────── */
@@ -615,7 +632,7 @@ function attachHerdrPanel(el){
 
 initGrid(); loadInitial(); connectSSE();
 if(/\bdemo\b/.test(location.search)){ memoryBootFallback(); }
-setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s); if(s.thought&&s.thought.text){var t=s.thought;if((t.created||t.ts||0)>=lastThoughtTs)updateMonologue({text:t.text,intensity:t.intensity,mood:t.mood,ts:t.created||t.ts});} }).catch(function(){ memoryBootFallback(); }); },3000);
+setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); },3000);
 
 })();
 </script>

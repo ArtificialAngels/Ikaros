@@ -29,71 +29,71 @@
 </div>
 
 <div class="main">
-  <!-- 左: 组件 Bento 网格 -->
-  <div class="grid-col">
+  <div class="canvas-toolbar">
     <div class="grid-header">
       组件
       <span class="summary" id="summary">-</span>
       <span class="spacer"></span>
-      <span class="hint">拖拽卡片移动 · 右下角缩放</span>
+      <span class="hint">拖拽标题移动 · 拖边缘/角落缩放 · 自动吸附对齐 · 布局自动记忆</span>
     </div>
-    <div class="grid" id="grid"></div>
   </div>
 
-  <!-- 右: 仪表带 + 事件流 -->
-  <div class="side">
-    <div class="dash-strip">
-      <div class="affect-card" style="--gi:0">
-        <div class="card-title">情感 (PAD)</div>
-        <div id="affectPanel">
-          <div class="affect-row"><span class="affect-label">愉悦</span><div class="affect-track"><div class="affect-fill P" id="barP" style="width:50%"></div></div><span class="affect-value" id="valP">-</span></div>
-          <div class="affect-row"><span class="affect-label">唤醒</span><div class="affect-track"><div class="affect-fill A" id="barA" style="width:50%"></div></div><span class="affect-value" id="valA">-</span></div>
-          <div class="affect-row"><span class="affect-label">支配</span><div class="affect-track"><div class="affect-fill D" id="barD" style="width:50%"></div></div><span class="affect-value" id="valD">-</span></div>
-        </div>
-      </div>
-      <div class="vitality-card" style="--gi:1">
-        <div class="card-title">生命活力</div>
-        <div class="vitality-row">
-          <span class="vitality-label">V5 活力</span>
-          <div class="vitality-track"><div class="vitality-fill" id="barV" style="width:0%"></div></div>
-          <span class="vitality-num" id="valV">-</span>
-        </div>
-      </div>
+  <!-- 统一自由画布: 左组件卡 + 右仪表/事件流, 均绝对定位、可任意移动/缩放/吸附/记忆 -->
+  <div class="canvas" id="canvas">
 
-      <div class="memory-panel" id="memPanel">
-        <div class="mem-head">
-          <span class="mem-title-text">V5 记忆</span>
-          <span class="mem-live"><span class="mem-live-dot"></span>实时</span>
-        </div>
-        <div class="mem-hero">
-          <span class="mem-hero-num" id="memTotal">0</span>
-          <span class="mem-hero-label">条记忆沉淀</span>
-        </div>
-        <div class="mem-subline">
-          <span>长期记忆 <b id="memLongterm">0</b></span>
-          <span class="mem-dot-sep">·</span>
-          <span>平均权重 <b id="memAvgWeight">0.00</b></span>
-        </div>
-        <div class="mem-section-label">记忆类型分布</div>
-        <div class="mem-types" id="memTypes"></div>
-        <div class="mem-grid">
-          <div class="mem-tile"><div class="mem-tile-num" id="memEntities">0</div><div class="mem-tile-label">实体节点</div></div>
-          <div class="mem-tile"><div class="mem-tile-num" id="memEdges">0</div><div class="mem-tile-label">关系边</div></div>
-          <div class="mem-tile"><div class="mem-tile-num" id="memEpisodic">0</div><div class="mem-tile-label">情景记忆</div></div>
-          <div class="mem-tile"><div class="mem-tile-num" id="memActive">0</div><div class="mem-tile-label">激活中</div></div>
-        </div>
+    <div class="affect-card panel" data-pid="affect">
+      <div class="card-title" data-handle>情感 (PAD)</div>
+      <div id="affectPanel">
+        <div class="affect-row"><span class="affect-label">愉悦</span><div class="affect-track"><div class="affect-fill P" id="barP" style="width:50%"></div></div><span class="affect-value" id="valP">-</span></div>
+        <div class="affect-row"><span class="affect-label">唤醒</span><div class="affect-track"><div class="affect-fill A" id="barA" style="width:50%"></div></div><span class="affect-value" id="valA">-</span></div>
+        <div class="affect-row"><span class="affect-label">支配</span><div class="affect-track"><div class="affect-fill D" id="barD" style="width:50%"></div></div><span class="affect-value" id="valD">-</span></div>
       </div>
     </div>
 
-    <div class="monologue-card">
-      <div class="card-title">内心独白</div>
-      <div class="monologue-empty" id="monoEmpty">暂无</div>
-      <div class="monologue-text" id="monoText" style="display:none"></div>
-      <div class="monologue-meta" id="monoMeta" style="display:none"></div>
+    <div class="vitality-card panel" data-pid="vitality">
+      <div class="card-title" data-handle>生命活力</div>
+      <div class="vitality-row">
+        <span class="vitality-label">V5 活力</span>
+        <div class="vitality-track"><div class="vitality-fill" id="barV" style="width:0%"></div></div>
+        <span class="vitality-num" id="valV">-</span>
+      </div>
     </div>
 
-    <div class="stream-wrap">
-      <div class="stream-header">实时事件流</div>
+    <div class="thought-card panel" data-pid="thought">
+      <div class="card-title" data-handle>自我思考 <span class="thought-live"><span class="thought-live-dot"></span>实时</span></div>
+      <div class="thought-body">
+        <div class="thought-empty" id="thoughtEmpty">暂无自我思考</div>
+        <div class="thought-text" id="thoughtText"></div>
+      </div>
+      <div class="thought-meta" id="thoughtMeta"></div>
+    </div>
+
+    <div class="memory-panel panel" data-pid="memory" id="memPanel">
+      <div class="mem-head" data-handle>
+        <span class="mem-title-text">V5 记忆</span>
+        <span class="mem-live"><span class="mem-live-dot"></span>实时</span>
+      </div>
+      <div class="mem-hero">
+        <span class="mem-hero-num" id="memTotal">0</span>
+        <span class="mem-hero-label">条记忆沉淀</span>
+      </div>
+      <div class="mem-subline">
+        <span>长期记忆 <b id="memLongterm">0</b></span>
+        <span class="mem-dot-sep">·</span>
+        <span>平均权重 <b id="memAvgWeight">0.00</b></span>
+      </div>
+      <div class="mem-section-label">记忆类型分布</div>
+      <div class="mem-types" id="memTypes"></div>
+      <div class="mem-grid">
+        <div class="mem-tile"><div class="mem-tile-num" id="memEntities">0</div><div class="mem-tile-label">实体节点</div></div>
+        <div class="mem-tile"><div class="mem-tile-num" id="memEdges">0</div><div class="mem-tile-label">关系边</div></div>
+        <div class="mem-tile"><div class="mem-tile-num" id="memEpisodic">0</div><div class="mem-tile-label">情景记忆</div></div>
+        <div class="mem-tile"><div class="mem-tile-num" id="memActive">0</div><div class="mem-tile-label">激活中</div></div>
+      </div>
+    </div>
+
+    <div class="stream-wrap panel" data-pid="stream">
+      <div class="stream-header" data-handle>实时事件流</div>
       <div class="stream" id="stream">
         <div class="stream-empty" id="emptyMsg">
           <span class="icon">🪶</span>
@@ -101,6 +101,7 @@
         </div>
       </div>
     </div>
+
   </div>
 </div>
 
@@ -135,10 +136,206 @@ function clamp(v,min,max) { return Math.max(min,Math.min(max,v)); }
   });
 })();
 
+/* ── 统一自由面板: 拖拽移动 / 八向缩放 / 吸附对齐 / 记忆 ──
+   所有交互基于 Pointer Events, 桌面(鼠标)与移动端(触摸)通用。 */
+var PANEL_KEY = 'ikaros-control-panels';
+var canvas = document.getElementById('canvas');
+var panels = {};                 // pid -> { el, handle, minW, minH, def }
+var SNAP = 8;                    // 吸附阈值(px)
+
+function loadPanels() { try { return JSON.parse(localStorage.getItem(PANEL_KEY)) || {}; } catch (_) { return {}; } }
+function savePanels(s) { try { localStorage.setItem(PANEL_KEY, JSON.stringify(s)); } catch (_) {} }
+function isMobile() { return window.matchMedia('(max-width: 720px)').matches; }
+function getRect(el) { return { x: parseFloat(el.style.left) || 0, y: parseFloat(el.style.top) || 0, w: parseFloat(el.style.width) || el.offsetWidth, h: parseFloat(el.style.height) || el.offsetHeight }; }
+function setRect(el, r) { el.style.left = r.x + 'px'; el.style.top = r.y + 'px'; el.style.width = r.w + 'px'; el.style.height = r.h + 'px'; }
+function persist(pid, r) { var s = loadPanels(); s[pid] = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) }; savePanels(s); }
+
+/* 吸附目标线: 容器四边 + 中线, 以及其它已注册面板的四边 + 中线 */
+function snapTargets(selfEl) {
+  var W = canvas.clientWidth, H = canvas.clientHeight || canvas.scrollHeight;
+  var lines = { v: [0, W, W / 2], h: [0, H, H / 2] };
+  Object.keys(panels).forEach(function (pid) {
+    var p = panels[pid]; if (p.el === selfEl) return;
+    var r = getRect(p.el);
+    lines.v.push(r.x, r.x + r.w, r.x + r.w / 2);
+    lines.h.push(r.y, r.y + r.h, r.y + r.h / 2);
+  });
+  return lines;
+}
+/* 单轴吸附: 在 activeEdges(被吸附边集合) 中找最接近 target 的, 返回 {d, t} 或 null */
+function snapAxis(activeEdges, targets, threshold) {
+  var best = null;
+  activeEdges.forEach(function (a) {
+    targets.forEach(function (t) {
+      var d = t - a;
+      if (Math.abs(d) <= threshold && (best === null || Math.abs(d) < Math.abs(best.d))) best = { d: d, t: t };
+    });
+  });
+  return best;
+}
+function ensureSnapLines() {
+  if (!canvas.querySelector('.snap-v')) { var v = document.createElement('div'); v.className = 'snap-line snap-v'; canvas.appendChild(v); }
+  if (!canvas.querySelector('.snap-h')) { var h = document.createElement('div'); h.className = 'snap-line snap-h'; canvas.appendChild(h); }
+}
+function hideSnapLines() { var v = canvas.querySelector('.snap-v'), h = canvas.querySelector('.snap-h'); if (v) v.style.display = 'none'; if (h) h.style.display = 'none'; }
+function showSnapLine(orient, pos) {
+  ensureSnapLines();
+  var el = canvas.querySelector(orient === 'v' ? '.snap-v' : '.snap-h'); if (!el) return;
+  el.style.display = 'block';
+  if (orient === 'v') { el.style.left = pos + 'px'; el.style.top = '0'; el.style.width = '1px'; el.style.height = canvas.clientHeight + 'px'; }
+  else { el.style.top = pos + 'px'; el.style.left = '0'; el.style.height = '1px'; el.style.width = canvas.clientWidth + 'px'; }
+}
+function hideSnapLine(orient) { var el = canvas.querySelector(orient === 'v' ? '.snap-v' : '.snap-h'); if (el) el.style.display = 'none'; }
+
+/* ── 拖拽移动(按住标题柄) ── */
+function startDrag(el, pid, ev) {
+  ev.preventDefault();
+  var r = getRect(el), sx = ev.clientX, sy = ev.clientY;
+  el.classList.add('moving'); el.style.zIndex = 60;
+  function move(e) {
+    var rect = { x: r.x + (e.clientX - sx), y: r.y + (e.clientY - sy), w: r.w, h: r.h };
+    var t = snapTargets(el), snapped = false;
+    var sv = snapAxis([rect.x, rect.x + rect.w, rect.x + rect.w / 2], t.v, SNAP);
+    if (sv) { rect.x += sv.d; showSnapLine('v', sv.t); snapped = true; } else hideSnapLine('v');
+    var sh = snapAxis([rect.y, rect.y + rect.h, rect.y + rect.h / 2], t.h, SNAP);
+    if (sh) { rect.y += sh.d; showSnapLine('h', sh.t); snapped = true; } else hideSnapLine('h');
+    rect.x = Math.max(0, rect.x); rect.y = Math.max(0, rect.y);
+    if (!snapped) hideSnapLines();
+    setRect(el, rect);
+    maybeGrowCanvas(rect);
+  }
+  function up() {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    el.classList.remove('moving'); el.style.zIndex = '';
+    hideSnapLines();
+    persist(pid, getRect(el));
+  }
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+}
+
+/* ── 八向缩放(边缘/角落手柄) ── */
+function startResize(el, pid, dir, ev) {
+  ev.preventDefault(); ev.stopPropagation();
+  var r = getRect(el), sx = ev.clientX, sy = ev.clientY;
+  var minW = panels[pid].minW, minH = panels[pid].minH;
+  el.classList.add('resizing'); el.style.zIndex = 60;
+  function move(e) {
+    var dx = e.clientX - sx, dy = e.clientY - sy;
+    var rect = { x: r.x, y: r.y, w: r.w, h: r.h };
+    if (dir.indexOf('e') >= 0) rect.w = r.w + dx;
+    if (dir.indexOf('s') >= 0) rect.h = r.h + dy;
+    if (dir.indexOf('w') >= 0) { rect.w = r.w - dx; rect.x = r.x + dx; }
+    if (dir.indexOf('n') >= 0) { rect.h = r.h - dy; rect.y = r.y + dy; }
+    if (rect.w < minW) { if (dir.indexOf('w') >= 0) rect.x -= (minW - rect.w); rect.w = minW; }
+    if (rect.h < minH) { if (dir.indexOf('n') >= 0) rect.y -= (minH - rect.h); rect.h = minH; }
+    hideSnapLines();
+    var t = snapTargets(el);
+    if (dir.indexOf('e') >= 0) { var se = snapAxis([rect.x + rect.w], t.v, SNAP); if (se) { rect.w += se.d; showSnapLine('v', se.t); } }
+    if (dir.indexOf('w') >= 0) { var sw = snapAxis([rect.x], t.v, SNAP); if (sw) { rect.x += sw.d; rect.w -= sw.d; showSnapLine('v', sw.t); } }
+    if (dir.indexOf('s') >= 0) { var ss = snapAxis([rect.y + rect.h], t.h, SNAP); if (ss) { rect.h += ss.d; showSnapLine('h', ss.t); } }
+    if (dir.indexOf('n') >= 0) { var sn = snapAxis([rect.y], t.h, SNAP); if (sn) { rect.y += sn.d; rect.h -= sn.d; showSnapLine('h', sn.t); } }
+    setRect(el, rect);
+    maybeGrowCanvas(rect);
+  }
+  function up() {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    el.classList.remove('resizing'); el.style.zIndex = '';
+    hideSnapLines();
+    persist(pid, getRect(el));
+  }
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+}
+
+/* ── 注册一个面板: 生成八向手柄 + 绑定拖拽/缩放 + 应用记忆或默认 ── */
+function registerPanel(el, pid, handleSel, def, opts) {
+  opts = opts || {};
+  panels[pid] = { el: el, minW: opts.minW || 160, minH: opts.minH || 80, def: def };
+  ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].forEach(function (d) {
+    var h = document.createElement('div'); h.className = 'rz rz-' + d; h.dataset.dir = d;
+    h.addEventListener('pointerdown', function (ev) { if (isMobile()) return; startResize(el, pid, d, ev); });
+    el.appendChild(h);
+  });
+  var handle = handleSel ? el.querySelector(handleSel) : el;
+  if (handle) {
+    handle.setAttribute('data-handle', '');
+    panels[pid].handle = handle;
+    handle.addEventListener('pointerdown', function (ev) {
+      if (isMobile()) return;
+      if (ev.target.closest('button, a, select, input, textarea')) return;
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      startDrag(el, pid, ev);
+    });
+  }
+  relayoutOne(pid);
+}
+function relayoutOne(pid) {
+  var p = panels[pid]; if (!p) return;
+  if (isMobile()) {
+    p.el.classList.remove('panel-abs');
+    p.el.style.position = ''; p.el.style.left = ''; p.el.style.top = '';
+    p.el.style.width = ''; p.el.style.height = '';
+    return;
+  }
+  p.el.classList.add('panel-abs');
+  p.el.style.position = 'absolute';
+  var saved = loadPanels()[pid];
+  setRect(p.el, saved || p.def);
+}
+function relayoutAll() { Object.keys(panels).forEach(relayoutOne); updateCanvasHeight(); }
+function updateCanvasHeight() {
+  if (isMobile()) { canvas.style.minHeight = ''; return; }
+  var maxB = 0;
+  Object.keys(panels).forEach(function (pid) { var r = getRect(panels[pid].el); maxB = Math.max(maxB, r.y + r.h); });
+  canvas.style.minHeight = (maxB + 24) + 'px';
+}
+/* 拖拽/缩放时若面板底部超出画布, 撑高画布以免面板被拖出可视区后丢失(只增不减) */
+function maybeGrowCanvas(rect) {
+  if (isMobile()) return;
+  var need = rect.y + rect.h + 24;
+  var cur = parseFloat(canvas.style.minHeight) || 0;
+  if (need > cur) canvas.style.minHeight = need + 'px';
+}
+
+/* 右侧仪表带 + 事件流: 固定在画布右侧区域的默认停靠 */
+function registerSidePanels() {
+  var W = canvas.clientWidth || (window.innerWidth - 40);
+  var pad = 12, gap = 14;
+  var sideW = Math.max(300, Math.min(400, Math.round(W * 0.34)));
+  var leftW = Math.max(320, W - sideW - gap * 3 - pad * 2);
+  var rx = pad + leftW + gap, ry = pad;
+  var defs = {
+    affect:   { w: sideW, h: 150, minH: 120, minW: sideW },
+    vitality: { w: sideW, h: 74,  minH: 60,  minW: sideW },
+    thought:  { w: sideW, h: 130, minH: 90,  minW: sideW },
+    memory:   { w: sideW, h: 360, minH: 240, minW: sideW },
+    stream:   { w: sideW, h: 320, minH: 200, minW: sideW }
+  };
+  var specs = [
+    ['.affect-card', 'affect', '.card-title'],
+    ['.vitality-card', 'vitality', '.card-title'],
+    ['.thought-card', 'thought', '.card-title'],
+    ['.memory-panel', 'memory', '.mem-head'],
+    ['.stream-wrap', 'stream', '.stream-header']
+  ];
+  specs.forEach(function (s) {
+    var el = document.querySelector(s[0]); if (!el) return;
+    var d = defs[s[1]];
+    registerPanel(el, s[1], s[2], { x: rx, y: ry, w: d.w, h: d.h }, { minW: d.minW, minH: d.minH });
+    ry += d.h + gap;
+  });
+}
+
+var _mq = window.matchMedia('(max-width: 720px)');
+(_mq.addEventListener ? _mq.addEventListener('change', relayoutAll) : _mq.addListener(relayoutAll));
+
 /* 关键组件 -> bento 大卡 (非对称, 固定不随状态抖动) */
 var FEATURED = { control_panel:1, local_model:1, memory:1, neko_group:1, neko:1, hermes_dashboard:1, conversation_tree:1, herdr:1 };
 
-var grid=document.getElementById('grid');
+/* 组件卡片现统一挂在 #canvas 内(见 PanelManager) */
 var connDot=document.getElementById('connDot');
 var connLabel=document.getElementById('connLabel');
 var summaryEl=document.getElementById('summary');
@@ -151,10 +348,13 @@ function loadSizes() { try{return JSON.parse(localStorage.getItem(SIZE_KEY))||{}
 function saveSizes(s) { localStorage.setItem(SIZE_KEY, JSON.stringify(s)); }
 function saveLayout(id, rect) { var s=loadSizes(); s[id]=rect; saveSizes(s); }
 
-/* 默认打包布局 (12 栏 shelf 算法) —— 仅在无持久化时用作初始停靠位置 */
+/* 默认打包布局 (12 栏 shelf 算法) —— 仅计算左侧组件区停靠, 仅在无持久化时用作初始位置 */
 function computeDefaults(ids) {
-  var pad=8, gap=14, cols=12, rowH=116;
-  var cw = Math.max(120, grid.clientWidth - pad*2);
+  var pad=12, gap=14, cols=12, rowH=116;
+  var W = canvas.clientWidth || (window.innerWidth - 40);
+  var sideW = Math.max(300, Math.min(400, Math.round(W * 0.34)));
+  var leftW = Math.max(320, W - sideW - gap * 3 - pad * 2);
+  var cw = Math.max(120, leftW);
   var colW = (cw - (cols-1)*gap) / cols;
   if(colW < 48) colW = 48;
   var map={}, cursorX=pad, rowTop=pad, rowH_max=0;
@@ -168,8 +368,6 @@ function computeDefaults(ids) {
     map[id]={x:Math.round(cursorX), y:Math.round(rowTop), w:w, h:h};
     cursorX += w+gap; rowH_max=Math.max(rowH_max, h);
   });
-  var maxBottom=pad; ids.forEach(function(id){ var p=map[id]; maxBottom=Math.max(maxBottom, p.y+p.h); });
-  grid.style.minHeight=(maxBottom+pad)+'px';
   return map;
 }
 
@@ -184,20 +382,21 @@ function connOff() { connDot.className='conn-dot off'; connLabel.textContent='�
 
 async function initGrid() {
   var list;
-  try { list = await fetch('/api/components').then(function(r){return r.json()}); } catch(_) { connOff(); grid.innerHTML='<div class="stream-empty">无法连接</div>'; return; }
+  try { list = await fetch('/api/components').then(function(r){return r.json()}); } catch(_) { connOff(); return; }
   var meta={}; list.forEach(function(c){meta[c.id]=c});
   var order=loadOrder().filter(function(id){return meta[id]&&!meta[id].hidden});
   list.forEach(function(c){ if(!c.hidden && order.indexOf(c.id)<0) order.push(c.id); });
-  grid.innerHTML=''; cardEls={};
+  canvas.querySelectorAll('.comp').forEach(function(n){ n.remove(); }); cardEls={};
   var defaults=computeDefaults(order);
   order.forEach(function(id, idx){
     var el=buildCard(meta[id]);
     el.style.setProperty('--i', idx);
     if(FEATURED[id]) el.classList.add('featured');
-    applyLayout(el, id, defaults);
-    cardEls[id]=el; grid.appendChild(el);
+    registerPanel(el, id, '.comp-head', defaults[id], {minW:160, minH:110});
+    cardEls[id]=el; canvas.appendChild(el);
     if(id==='herdr') attachHerdrPanel(el);
   });
+  updateCanvasHeight();
   refreshStatuses(); setInterval(refreshStatuses,2000);
 }
 
@@ -231,8 +430,6 @@ function buildCard(c) {
     inner+='<div class="comp-actions hermes-extra"><button class="btn" id="runtime-check-'+c.id+'">检查依赖</button></div>';
   }
   el.innerHTML=inner;
-  // 缩放手柄
-  el.insertAdjacentHTML('beforeend', '<div class="comp-resize" id="resize-'+c.id+'" title="拖拽缩放"></div>');
   // 模型下拉填充
   if(c.model_kind){
     var sel=el.querySelector('#model-'+c.id);
@@ -261,58 +458,8 @@ function buildCard(c) {
   if(c.id==='runtime'){
     var _rc2=el.querySelector('#runtime-check-'+c.id); if(_rc2)_rc2.addEventListener('click', function(){ runtimeCheck(c.id); });
   }
-  // 关闭 HTML5 原生拖拽(改用 pointer 自由拖拽停靠)
+  // 关闭 HTML5 原生拖拽(改用 PanelManager 的 pointer 自由拖拽 / 八向缩放)
   el.draggable=false;
-  // ── 自由拖拽停靠: 按住卡片主体(非手柄/按钮)移动 ──
-  el.addEventListener('pointerdown',function(e){
-    if(e.target.closest('.comp-resize')) return;        // 缩放手柄单独处理
-    if(e.target.closest('button, a, select, input')) return;  // 不打断控件交互
-    if(e.button!==0) return;
-    e.preventDefault();
-    el.classList.add('moving'); el.style.zIndex=50;
-    var startX=e.clientX, startY=e.clientY;
-    var ox=parseFloat(el.style.left)||0, oy=parseFloat(el.style.top)||0;
-    function move(ev){
-      var nx=Math.max(0, ox+(ev.clientX-startX));
-      var ny=Math.max(0, oy+(ev.clientY-startY));
-      el.style.left=nx+'px'; el.style.top=ny+'px';
-    }
-    function up(){
-      document.removeEventListener('pointermove',move);
-      document.removeEventListener('pointerup',up);
-      el.classList.remove('moving'); el.style.zIndex='';
-      var p={x:parseFloat(el.style.left)||0, y:parseFloat(el.style.top)||0,
-             w:parseFloat(el.style.width)||el.offsetWidth, h:parseFloat(el.style.height)||el.offsetHeight};
-      saveLayout(c.id, p);
-    }
-    document.addEventListener('pointermove',move);
-    document.addEventListener('pointerup',up);
-  });
-  // ── 无级缩放: 右下角手柄实时改变宽高(px) ──
-  var handle=el.querySelector('#resize-'+c.id);
-  if(handle){
-    handle.addEventListener('pointerdown',function(e){
-      e.preventDefault(); e.stopPropagation();
-      el.classList.add('resizing'); el.style.zIndex=50;
-      var startX=e.clientX, startY=e.clientY;
-      var ow=parseFloat(el.style.width)||el.offsetWidth, oh=parseFloat(el.style.height)||el.offsetHeight;
-      function move(ev){
-        var nw=Math.max(160, ow+(ev.clientX-startX));
-        var nh=Math.max(110, oh+(ev.clientY-startY));
-        el.style.width=nw+'px'; el.style.height=nh+'px';
-      }
-      function up(){
-        document.removeEventListener('pointermove',move);
-        document.removeEventListener('pointerup',up);
-        el.classList.remove('resizing'); el.style.zIndex='';
-        var p={x:parseFloat(el.style.left)||0, y:parseFloat(el.style.top)||0,
-               w:parseFloat(el.style.width)||ow, h:parseFloat(el.style.height)||oh};
-        saveLayout(c.id, p);
-      }
-      document.addEventListener('pointermove',move);
-      document.addEventListener('pointerup',up);
-    });
-  }
   return el;
 }
 
@@ -530,7 +677,7 @@ var dragId=null; // 已弃用(自由停靠不再需要排序)
 
 document.getElementById('btnStartAll').addEventListener('click',function(){systemAction('start')});
 document.getElementById('btnStopAll').addEventListener('click',function(){systemAction('stop')});
-document.getElementById('btnReset').addEventListener('click',function(){localStorage.removeItem(LS_KEY);localStorage.removeItem(SIZE_KEY);grid.style.minHeight='';location.reload()});
+document.getElementById('btnReset').addEventListener('click',function(){localStorage.removeItem(LS_KEY);localStorage.removeItem(PANEL_KEY);canvas.style.minHeight='';location.reload()});
 document.getElementById('btnShutdown').addEventListener('click',shutdownPanel);
 document.getElementById('btnRestart').addEventListener('click',restartPanel);
 
@@ -539,32 +686,47 @@ var statusText=document.getElementById('statusText'), thinkingEl=document.getEle
 var barP=document.getElementById('barP'),barA=document.getElementById('barA'),barD=document.getElementById('barD');
 var valP=document.getElementById('valP'),valA=document.getElementById('valA'),valD=document.getElementById('valD');
 var barV=document.getElementById('barV'),valV=document.getElementById('valV');
-var monoText=document.getElementById('monoText'),monoEmpty=document.getElementById('monoEmpty'),monoMeta=document.getElementById('monoMeta');
-var msgCount=0,lastThoughtTs=0;
+var msgCount=0;
 
 function addMessage(entry) {
   var dk=entry.display_kind||entry.kind||'other', text=entry.text||'', ts=entry.ts||Date.now()/1000, mood=entry.mood||'';
   emptyMsg.style.display='none';
-  var el=document.createElement('div'), kindClass=['user_msg','assistant_msg','thought'].indexOf(dk)>=0?dk:'other';
+  var el=document.createElement('div'), kindClass=['user_msg','assistant_msg'].indexOf(dk)>=0?dk:'other';
   el.className='msg msg-'+kindClass;
-  var label=dk; if(dk==='user_msg')label='用户'; else if(dk==='assistant_msg')label='伊卡洛斯'; else if(dk==='thought')label='内心';
+  var label=dk; if(dk==='user_msg')label='用户'; else if(dk==='assistant_msg')label='伊卡洛斯';
   var moodHtml=mood?'<span class="mood-tag">'+esc(mood)+'</span>':'';
   el.innerHTML='<div class="head"><span class="label">'+label+'</span><span class="time">'+fmtTime(ts)+'</span></div><div class="body">'+esc(text||'...')+moodHtml+'</div>';
   stream.appendChild(el); stream.scrollTop=stream.scrollHeight;
   msgCount++; eventCount.textContent=msgCount+' 事件';
-  if(dk==='thought'&&text&&ts>lastThoughtTs){lastThoughtTs=ts;updateMonologue(entry);}
   if(dk==='user_msg'){thinkingEl.classList.add('active');statusText.textContent='思考中...';}
   else if(dk==='assistant_msg'){thinkingEl.classList.remove('active');statusText.textContent='就绪';}
 }
 
 function updateAffect(state) { var a=state&&state.affect; if(!a)return; var p=a.pleasure,ar=a.arousal,d=a.dominance; barP.style.width=affectWidth(p)+'%';barA.style.width=affectWidth(ar)+'%';barD.style.width=affectWidth(d)+'%'; valP.textContent=fmtAffect(p);valA.textContent=fmtAffect(ar);valD.textContent=fmtAffect(d); }
-function updateVitality(state) { var v=null; if(state&&state.thought&&state.thought.vitality!=null)v=state.thought.vitality; else if(state&&state.affect&&state.affect.vitality!=null)v=state.affect.vitality; if(v!=null){var pct=clamp(Math.round(v*100),0,100);barV.style.width=pct+'%';valV.textContent=pct+'%';} else{barV.style.width='0%';valV.textContent='-';} }
-function updateMonologue(entry) { var text=entry.text||''; if(!text)return; monoEmpty.style.display='none';monoText.style.display='block';monoMeta.style.display='flex'; monoText.textContent=text; var mp=[]; if(entry.intensity!=null)mp.push('强度:'+entry.intensity.toFixed(2)); if(entry.mood)mp.push(entry.mood); if(entry.ts)mp.push(fmtTime(entry.ts)); monoMeta.innerHTML=mp.join(' \u00b7 '); }
-var TYPE_LABELS = { philosophy:'哲学', lesson:'教训', fact:'事实', identity:'自我认知', inner_monologue:'内心独白', conversation:'对话', reference:'参考', thought_marker:'思考标记', activity_reflection:'活动反思', emotional_event:'情绪事件', self_reflection:'自我反思', self_discovery:'自我发现', narrative:'叙事', emotion_label:'情绪标签', dissonance:'认知失调', test:'测试', decision:'决策', audit:'审计', milestone:'里程碑', repair_test:'修复测试', technological_discovery:'技术发现' };
+function updateVitality(state) { var v=null; if(state&&state.affect&&state.affect.vitality!=null)v=state.affect.vitality; if(v!=null){var pct=clamp(Math.round(v*100),0,100);barV.style.width=pct+'%';valV.textContent=pct+'%';} else{barV.style.width='0%';valV.textContent='-';} }
+function updateThought(state){
+  var t = state && state.thought;
+  var empty = document.getElementById('thoughtEmpty');
+  var txt = document.getElementById('thoughtText');
+  var meta = document.getElementById('thoughtMeta');
+  if(!t || !t.text){
+    if(empty) empty.style.display='';
+    if(txt) txt.textContent='';
+    if(meta) meta.textContent='';
+    return;
+  }
+  if(empty) empty.style.display='none';
+  if(txt) txt.textContent = t.text;
+  var kindLabel = ({'observation':'用户观察','mood':'心绪','activity':'活动','self':'自我','philosophy':'哲学','thought':'思考'})[t.kind] || (t.kind||'思考');
+  var cu = (t.curiosity!=null && t.curiosity!==undefined) ? (' · 好奇 '+Math.round(Number(t.curiosity)*100)+'%') : '';
+  var ts = t.ts ? (' · '+fmtTime(t.ts)) : '';
+  if(meta) meta.textContent = kindLabel + cu + ts;
+}
+var TYPE_LABELS = { philosophy:'哲学', lesson:'教训', fact:'事实', identity:'自我认知', conversation:'对话', reference:'参考', thought_marker:'思考标记', activity_reflection:'活动反思', emotional_event:'情绪事件', self_reflection:'自我反思', self_discovery:'自我发现', narrative:'叙事', emotion_label:'情绪标签', dissonance:'认知失调', test:'测试', decision:'决策', audit:'审计', milestone:'里程碑', repair_test:'修复测试', technological_discovery:'技术发现' };
 var _numCache = {};
 var DEMO_STATE = {
   memory:{ total:3604, long_term:1203, avg_weight:0.62,
-    by_type:{ philosophy:1109, lesson:426, fact:425, identity:371, inner_monologue:368, conversation:331, reference:155, thought_marker:70, activity_reflection:64, emotional_event:60, self_reflection:58, self_discovery:57, narrative:49 } },
+    by_type:{ philosophy:1109, lesson:426, fact:425, identity:371, conversation:331, reference:155, thought_marker:70, activity_reflection:64, emotional_event:60, self_reflection:58, self_discovery:57, narrative:49 } },
   entity_graph:{ entities:312, edges:540, episodic_memories:88, active_memories:12 }
 };
 var _memBooted=false;
@@ -607,7 +769,7 @@ function applyMemory(state){
   tickTo('memActive', eg.active_memories||0);
 }
 function updateMemory(state){ applyMemory(state); }
-function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s); if(s.thought&&s.thought.text)updateMonologue({text:s.thought.text,intensity:s.thought.intensity,mood:s.thought.mood,ts:s.thought.created||s.thought.ts}); }).catch(function(){ memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
+function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
 function connectSSE() { var evt=new EventSource('/api/events'); evt.addEventListener('connected',function(){connDot.className='conn-dot on';connLabel.textContent='已连接';}); evt.addEventListener('monitor',function(e){try{addMessage(JSON.parse(e.data))}catch(_){}}); evt.onerror=function(){connDot.className='conn-dot off';connLabel.textContent='重连中...';evt.close();setTimeout(connectSSE,3000);}; }
 
 /* ── herdr 监督卡片 (B5) ─────────────────────────────────────── */
@@ -711,9 +873,9 @@ function attachHerdrPanel(el){
   herdrConnect();
 }
 
-initGrid(); loadInitial(); connectSSE();
+registerSidePanels(); initGrid(); loadInitial(); connectSSE();
 if(/\bdemo\b/.test(location.search)){ memoryBootFallback(); }
-setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s); if(s.thought&&s.thought.text){var t=s.thought;if((t.created||t.ts||0)>=lastThoughtTs)updateMonologue({text:t.text,intensity:t.intensity,mood:t.mood,ts:t.created||t.ts});} }).catch(function(){ memoryBootFallback(); }); },3000);
+setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); },3000);
 
 })();
 </script>

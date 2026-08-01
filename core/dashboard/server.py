@@ -18,7 +18,7 @@ Endpoints:
   GET  /                  -> index.html (control panel UI)
   GET  /api/components    -> all component live status (JSON)
   GET  /api/log           -> last 200 ikaros-monitor.jsonl events (JSON)
-  GET  /api/state         -> V5 affect.json + pending_thought.json (JSON)
+  GET  /api/state         -> V5 affect.json + 自我思考 latest_thought (JSON)
   GET  /api/events        -> SSE real-time event stream
   POST /api/components/<id>/<action>   action in {start,stop,restart}
   POST /api/system/<action>            action in {start,stop}  (all components)
@@ -59,7 +59,7 @@ HERMES_ROOT = pathlib.Path(
 ).resolve()
 MONITOR_FILE = HERMES_ROOT / "data" / "logs" / "ikaros-monitor.jsonl"
 AFFECT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "affect.json"
-PENDING_THOUGHT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "pending_thought.json"
+LATEST_THOUGHT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "latest_thought.json"
 HERE = pathlib.Path(__file__).resolve().parent
 INDEX_HTML = HERE / "index.html"
 ASSETS_DIR = HERE / "assets"
@@ -1455,7 +1455,6 @@ def _normalize(entry: dict) -> dict:
     kind_map = {
         "user_msg": "user_msg",
         "assistant_msg": "assistant_msg",
-        "thought": "thought",
         "status": "status",
         "state": "state",
         "stt": "stt",
@@ -1513,9 +1512,9 @@ def _read_tail(count: int = 200) -> list[dict]:
 _v5_modules: dict = {}
 
 def _read_v5_state() -> dict:
-    """Read affect.json + latest_thought.json + Ikaros memory stats."""
+    """Read affect.json + Ikaros memory stats."""
     state: dict = {}
-    for path, key in [(AFFECT_FILE, "affect"), (PENDING_THOUGHT_FILE, "thought")]:
+    for path, key in [(AFFECT_FILE, "affect")]:
         if path.exists():
             try:
                 with open(str(path), "r", encoding="utf-8") as f:
@@ -1524,6 +1523,16 @@ def _read_v5_state() -> dict:
                 state[key] = None
         else:
             state[key] = None
+
+    # 自我思考（metacog 实时产出 latest_thought.json；替代已废弃的 pending_thought.json）
+    if LATEST_THOUGHT_FILE.exists():
+        try:
+            with open(str(LATEST_THOUGHT_FILE), "r", encoding="utf-8") as f:
+                state["thought"] = json.load(f)
+        except Exception:
+            state["thought"] = None
+    else:
+        state["thought"] = None
 
     # Ikaros V5 memory stats — 首次导入后缓存
     try:

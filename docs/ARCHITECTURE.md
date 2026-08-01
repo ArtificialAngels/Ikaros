@@ -67,6 +67,13 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **Hermes API 网关（:8642）已重新启用**：由 `python -m hermes_cli.main gateway run` 提供，dashboard 与 chat-tree 复用；Person Sync（人设同步脚本）已删除。旧的 `bin/hermes-api-server.py` 脚本未启用。
 - **hermes → dashboard 别名**：`cloud_chat` 的 `hermes` 云端 provider 现已**别名指向 `dashboard`**（即 Hermes Dashboard `:9119`）。
 
+### 1.3.1 面板布局与自我思考卡片 (2026-08-01)
+
+- **整页统一自由画布**：左侧组件卡（local_model / memory / neko_group / hermes_dashboard / conversation_tree / herdr 等）与右侧仪表带（情感 PAD / 生命活力 / 自我思考 / V5 记忆 + 实时事件流）合并进同一个 `#canvas` 绝对定位画布。所有面板可**自由拖拽移动、八向缩放、拖拽时吸附对齐（容器四边+中线、其他面板四边+中线）、localStorage 记忆布局**；刷新/重载自动恢复上次布局。「重置布局」按钮清记忆恢复默认停靠。
+- **自我思考卡片（替代原"内心独白"）**：原读 `pending_thought.json`（不存在、无写入者）的「内心独白」卡片已废弃；现改为读 metacog 真实产出的 `latest_thought.json`（经 `/api/state` 的 `state.thought` 暴露），显示伊卡洛斯最近一次元认知反思（text + kind + 好奇度 + 时间）。
+- **metacog 仍为事件驱动、无定时循环**：`core/memory_v5/metacog.py` 保留并运行，但**不再有后台定时 think 线程**；其实际触发点为：① agent 调 `v5_self_reflect` MCP 工具（唯一会写 `latest_thought.json` 的活路径）；② 用户问"你在想什么"时只读注入；③ 每轮对话后 `mark_interaction()` 降探索欲；④ 手动 CLI。旧文档中"25min / 45min 自动内省循环"已不存在。
+- **桌面 + 移动端**：PanelManager 用 Pointer Events 统一鼠标与触摸；≤720px 画布自动降级为纵向堆叠流（面板 `static`、隐藏缩放手柄、关闭拖拽），保证可读可滚动不误触。
+
 ### 1.4 对话树面板 (Conversation Tree, :48920)
 
 新增于 2026-07-28，由控制面板 `conversation_tree` 组件管理（启动 `core/conversation-tree/server.py --port 48920`）：

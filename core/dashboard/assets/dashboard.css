@@ -271,10 +271,10 @@ body::before {
 /* ── 主区: 左组件 bento + 右仪表/事件流 ─────────────────────────────── */
 .main {
   flex: 1; min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 372px;
-  gap: 16px; padding: 16px;
+  position: relative; overflow: auto; padding: 16px;
 }
+.canvas-toolbar { margin-bottom: 10px; }
+.canvas { position: relative; min-height: 600px; }
 
 /* 左: 组件 bento 网格 */
 .grid-col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -303,7 +303,7 @@ body::before {
   border: 1px solid var(--border);
   border-radius: var(--radius-card); padding: 14px 16px;
   display: flex; flex-direction: column; gap: 8px;
-  cursor: grab; position: absolute; overflow: hidden;
+  cursor: default; position: absolute; overflow: visible; box-sizing: border-box;
   box-shadow: var(--shadow-1);
   transition: border-color var(--t-fast), box-shadow var(--t-mid) var(--ease-out),
               transform var(--t-fast) var(--ease-out), background var(--t-mid);
@@ -348,7 +348,37 @@ body::before {
 .comp.resizing:hover { transform: none; box-shadow: var(--shadow-1); }
 .comp.pending { box-shadow: 0 0 0 2px var(--accent) inset; }
 
-.comp-head { display: flex; align-items: center; gap: 9px; }
+/* ── 统一自由面板: 绝对定位 + 八向缩放手柄 + 吸附线 ── */
+.panel { box-sizing: border-box; }
+[data-handle] { cursor: move; user-select: none; }
+.panel.moving, .panel.moving:hover { opacity: 0.85; cursor: grabbing; box-shadow: var(--shadow-2); }
+.panel.resizing { user-select: none; }
+
+/* 八向缩放手柄(边缘 + 四角) */
+.rz { position: absolute; z-index: 5; opacity: 0; transition: opacity var(--t-fast); }
+.panel:hover .rz, .comp:hover .rz,
+.panel.moving .rz, .comp.moving .rz,
+.panel.resizing .rz, .comp.resizing .rz { opacity: 0.8; }
+.rz-n { top: -5px; left: 12px; right: 12px; height: 10px; cursor: n-resize; }
+.rz-s { bottom: -5px; left: 12px; right: 12px; height: 10px; cursor: s-resize; }
+.rz-e { right: -5px; top: 12px; bottom: 12px; width: 10px; cursor: e-resize; }
+.rz-w { left: -5px; top: 12px; bottom: 12px; width: 10px; cursor: w-resize; }
+.rz-ne { top: -6px; right: -6px; width: 16px; height: 16px; cursor: ne-resize; }
+.rz-nw { top: -6px; left: -6px; width: 16px; height: 16px; cursor: nw-resize; }
+.rz-se { bottom: -6px; right: -6px; width: 16px; height: 16px; cursor: se-resize; }
+.rz-sw { bottom: -6px; left: -6px; width: 16px; height: 16px; cursor: sw-resize; }
+
+/* 拖拽/缩放时的吸附对齐参考线 */
+.snap-line { position: absolute; background: var(--accent); opacity: 0.85; z-index: 9999; pointer-events: none; display: none; }
+.snap-v { width: 1px; top: 0; }
+.snap-h { height: 1px; left: 0; }
+
+/* 桌面/平板: 触摸拖拽手柄时不触发页面滚动 */
+@media (min-width: 721px) {
+  [data-handle], .rz { touch-action: none; }
+}
+
+.comp-head { display: flex; align-items: center; gap: 9px; cursor: move; }
 .comp-dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--muted); flex-shrink: 0;
@@ -460,8 +490,6 @@ body::before {
 
 /* 记忆面板 (覆盖 gauge 区域, 占满 strip 宽度视觉更重) */
 .memory-panel {
-  grid-column: span 2;
-  position: relative; overflow: hidden;
   background: linear-gradient(135deg, var(--surface), var(--surface-2));
   border: 1px solid var(--border); border-radius: var(--radius-card);
   padding: 16px 18px; box-shadow: var(--shadow-2);
@@ -525,6 +553,23 @@ body::before {
   animation-delay: calc(0.18s + var(--gi, 0) * 60ms);
 }
 .card-title { font-size: 11px; font-weight: 700; color: var(--accent); margin-bottom: 10px; letter-spacing: 0.3px; text-transform: uppercase; }
+
+/* 自我思考 小卡 (在 strip 内) */
+.thought-card {
+  background: var(--surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  padding: 14px 16px; box-shadow: var(--shadow-1);
+  animation: cardIn 0.5s var(--ease-out) both;
+  animation-delay: calc(0.18s + var(--gi, 0) * 60ms);
+}
+.thought-live { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); text-transform: none; font-weight: 400; letter-spacing: 0; }
+.thought-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: memPulse 2.4s ease-out infinite; }
+.thought-body { min-height: 38px; margin: 2px 0 6px; }
+.thought-empty { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.thought-text { font-size: 12.5px; color: var(--text); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.thought-meta { font-size: 10.5px; color: var(--muted); letter-spacing: 0.2px; }
 .affect-row { display: flex; align-items: center; margin-bottom: 8px; gap: 8px; }
 .affect-row:last-child { margin-bottom: 0; }
 .affect-label { width: 56px; font-size: 12px; color: var(--text-soft); flex-shrink: 0; }
@@ -540,17 +585,6 @@ body::before {
 .vitality-fill { height: 100%; border-radius: var(--radius-track); background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.6s var(--ease-out); }
 .vitality-num { font-size: 12px; font-family: var(--font-mono); color: var(--text); }
 
-/* 内心独白 */
-.monologue-card {
-  background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius-card);
-  padding: 14px 16px; box-shadow: var(--shadow-1);
-  flex-shrink: 0;
-  animation: cardIn 0.5s var(--ease-out) both; animation-delay: 0.42s;
-}
-.monologue-text { font-size: 13px; line-height: 1.7; color: var(--violet); font-style: italic; word-break: break-word; }
-.monologue-empty { font-size: 12px; color: var(--muted); font-style: italic; }
-.monologue-meta { font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* 事件流 */
 .stream-wrap {
@@ -581,13 +615,11 @@ body::before {
 @keyframes msgIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
 .msg-user_msg { border-left: 3px solid var(--accent); }
 .msg-assistant_msg { border-left: 3px solid var(--green); }
-.msg-thought { border-left: 3px solid var(--violet); background: color-mix(in srgb, var(--violet) 8%, var(--surface-2)); font-style: italic; }
 .msg-other { border-left: 3px solid var(--border-strong); color: var(--muted); font-size: 12px; }
 .msg .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; gap: 8px; }
 .msg .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
 .msg-user_msg .label { color: var(--accent); }
 .msg-assistant_msg .label { color: var(--green); }
-.msg-thought .label { color: var(--violet); }
 .msg .time { font-size: 11px; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; }
 .msg .body { word-break: break-word; white-space: pre-wrap; }
 .mood-tag {
@@ -615,16 +647,12 @@ body::before {
 .shutdown-msg { padding: 80px 20px; text-align: center; color: var(--muted); font-size: 15px; }
 
 /* ── 响应式 ─────────────────────────────────────────────────────────── */
-@media (max-width: 1100px) {
-  .main { grid-template-columns: 1fr; }
-  .side { flex-direction: row; flex-wrap: wrap; overflow: visible; }
-  .dash-strip { flex: 1 1 320px; }
-  .stream-wrap { flex: 1 1 100%; min-height: 300px; }
-}
 @media (max-width: 720px) {
-  /* 窄屏: 取消绝对定位, 退回自然堆叠流 */
-  .grid { overflow-y: auto; }
-  .comp, .comp.featured { position: static !important; width: auto !important; height: auto !important; left: auto !important; top: auto !important; }
+  /* 窄屏: 自由画布退化为纵向堆叠流, 保证可读与可滚动; 关闭拖拽/缩放 */
+  .main { overflow: visible; }
+  .canvas { min-height: 0 !important; display: flex; flex-direction: column; gap: 12px; }
+  .comp, .panel, .comp.featured { position: static !important; width: auto !important; height: auto !important; left: auto !important; top: auto !important; }
+  .rz { display: none !important; }
   .comp.featured .comp-name { font-size: 14px; }
 }
 
@@ -632,7 +660,7 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-delay: 0ms !important; transition-duration: 0.001ms !important; }
   body::before { animation: none; }
-  .comp, .gauge, .memory-panel, .affect-card, .vitality-card, .monologue-card { opacity: 1; transform: none; }
+  .comp, .gauge, .memory-panel, .affect-card, .vitality-card { opacity: 1; transform: none; }
 }
 
 /* ── herdr 监督卡片 (B5) ─────────────────────────────────────────────── */

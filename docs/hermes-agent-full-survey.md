@@ -67,7 +67,7 @@
 |------|---------|------|
 | LLM 路由 | `config.yaml` `model.provider: deepseek` | cloud_chat 的 LLM 后端 |
 | 记忆系统 | `config.yaml` `memory.provider: ikaros_v4` | v4.db 作为 Hermes 记忆源 |
-| 定时任务 | `cron` — `ikaros-v5-think`（每 45min） | V5 内心独白循环 |
+| 定时任务 | ~~`cron` — `ikaros-v5-think`（每 45min，**已删除**）~~ | 原 V5 内心独白循环；现 metacog 为**事件驱动**（`v5_self_reflect` MCP 工具 / 每轮对话 `mark_interaction()` / 手动 CLI 触发 `metacog.cycle()`），无独立定时循环（详见 ARCHITECTURE §1.3.1） |
 | MCP 服务器 | gitnexus, context7, playwright, codebase-memory | 代码分析、文档查询、浏览器自动化 |
 | 代理子流程 | `delegate_task` tool | 重活委派、并行子代理 |
 | chat 子命令 | `hermes chat -q` | task_runner 执行后端 |
