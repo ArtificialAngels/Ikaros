@@ -696,8 +696,12 @@ def start_component_hermes_dashboard(root, env, wait):
     child_env["IKAROS_ROOT"] = str(root)
     log.info("[hermes_dashboard] use venv python=%s, PYTHONPATH=%s, IKAROS_ROOT=%s",
              venv_py, child_env["PYTHONPATH"], child_env["IKAROS_ROOT"])
-    spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", "dashboard", "--no-open"], child_env, cwd,
-                 str(root / "data" / "logs" / "hermes-dashboard.log"))
+    # --skip-build: web UI 已构建在 hermes_cli/web_dist（index.html + assets），
+    # 无需每次启动都跑 npm install（受限/离线环境下 npm install 会失败，导致
+    # 启动直接 sys.exit，9119 起不来）。web_dist 缺失时 hermes 会自动回退到
+    # 一次重建（main.py --skip-build 分支），不阻塞正常路径。
+    spawn_hidden(str(venv_py), ["-m", "hermes_cli.main", "dashboard", "--no-open", "--skip-build"], child_env, cwd,
+                str(root / "data" / "logs" / "hermes-dashboard.log"))
     if wait:
         # Hermes 控制台启动时要自动构建 web UI（npm install + vite），hermes 更新后
         # 首次构建常 >40s；轮询是端口一通就提前返回，180s 只是上限，避免面板在
