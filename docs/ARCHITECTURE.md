@@ -33,7 +33,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 ├─────────────────────────────────────────────────────────────┤
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
 │  runtime/portable-python/ — Python 3.12.10                  │
-│  runtime/llama/ — llama.cpp (b10000-cuda)                   │
+│  runtime/llama/ — llama.cpp（b10000-cuda / b10000-cuda-12.4，按设备 CUDA 自动选择）                   │
 │  runtime/node/ — Node.js                                    │
 │  core/env/ — 环境引导 (路径发现 + 变量注入)                   │
 └─────────────────────────────────────────────────────────────┘
@@ -100,7 +100,9 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 │   └── Scripts\                ← pip 安装的可执行脚本
 ├── node\                       ← Node.js
 │   └── node.exe
-├── llama\b10000-cuda\          ← llama.cpp
+├── llama\b10000-cuda\          ← llama.cpp (CUDA 13.x)
+│   ├── llama-server.exe
+├── llama\b10000-cuda-12.4\     ← llama.cpp (CUDA 12.4，低版本驱动设备)
 │   └── llama-server.exe
 ├── rust\bin\                   ← 便携 Rust 工具
 │   └── cargo.exe
@@ -138,7 +140,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_BIN` | `%IKAROS_ROOT%\bin` | 启动脚本 |
 | `IKAROS_CONFIG` | `%IKAROS_ROOT%\config` | 配置 |
 | `IKAROS_DATA` | `%IKAROS_ROOT%\data` | 数据 |
-| `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\b10000-cuda` | llama.cpp |
+| `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\<版本>` | llama.cpp（版本按设备 CUDA 自动选择：13.x→b10000-cuda，12.x→b10000-cuda-12.4；`core/env/llama_resolver.py`） |
 | `IKAROS_MODEL_EMBEDDING` | `%IKAROS_ROOT%\core\memory_v5\models\...` | Embedding 模型 |
 | `IKAROS_MEMORY` | `%IKAROS_ROOT%\core\memory_v5` | V5 代码 + 数据根 |
 | `IKAROS_LABEL_EMOTION_PROVIDER` | `local` / `deepseek` | 情感标注 LLM |
@@ -253,7 +255,7 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 | `ikaros-env.bat` | `IKAROS_BIN` | `bin/` |
 | `ikaros-env.bat` | `IKAROS_DATA` | `data/` |
 | `ikaros-env.bat` | `IKAROS_CONFIG` | `config/` |
-| `ikaros-env.bat` | `IKAROS_LLAMA_DIR` | `runtime/llama/b10000-cuda` |
+| `ikaros-env.bat` | `IKAROS_LLAMA_DIR` | `runtime/llama/<按 CUDA 自动选择>` |
 | `ikaros-env.bat` | `IKAROS_MEMORY` | `core/memory_v5/` |
 | `ikaros-paths.json` | 全部 IKAROS_* 变量 | 同上 + 子路径 |
 | `__file__` 推导 | `V5_ROOT` | `core/memory_v5/` (仅 V5 内部) |

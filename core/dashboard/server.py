@@ -56,15 +56,16 @@ DEVNULL = subprocess.DEVNULL
 
 # ── config ─────────────────────────────────────────────────────────────
 PORT = 9100
+# 项目根：环境变量优先，兜底用脚本位置推导（可整体迁移盘符，不依赖 E:/F: 硬编码）
+HERE = pathlib.Path(__file__).resolve().parent
 HERMES_ROOT = pathlib.Path(
     os.environ.get("IKAROS_ROOT")
     or os.environ.get("HERMES_ROOT")
-    or "E:\\Ikaros"
+    or HERE.parent.parent
 ).resolve()
 MONITOR_FILE = HERMES_ROOT / "data" / "logs" / "ikaros-monitor.jsonl"
 AFFECT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "affect.json"
 LATEST_THOUGHT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "latest_thought.json"
-HERE = pathlib.Path(__file__).resolve().parent
 INDEX_HTML = HERE / "index.html"
 ASSETS_DIR = HERE / "assets"
 
@@ -171,11 +172,29 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
     e["API_SERVER_KEY"] = os.environ.get("API_SERVER_KEY", "ikaros-gateway-key")
 
-    llama_ver = os.environ.get("IKAROS_LLAMA_VERSION", "b10000-cuda")
-    e["IKAROS_LLAMA_VERSION"] = llama_ver
-    llama_dir = root / "runtime" / "llama" / llama_ver
+    llama_ver = os.environ.get("IKAROS_LLAMA_VERSION")
+    if not llama_ver:
+        # 默认按设备 CUDA 能力解析（12.x → b10000-cuda-12.4；13.x → b10000-cuda）
+        # 仅当 resolver 判定可安全使用 CUDA build 时才写入子进程环境；
+        # 否则留空，让子进程（watchdog）自行兜底（-ngl 0 / CPU build）。
+        try:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "llama_resolver", str(HERE.parent.parent / "core" / "env" / "llama_resolver.py"))
+            _lr = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_lr)
+            _res = _lr.resolve_llama_dir(root)
+            if not _res.get("cpu_fallback"):
+                llama_ver = _res["version"]
+        except Exception:
+            llama_ver = None
+    e["IKAROS_LLAMA_VERSION"] = llama_ver or ""
+    llama_dir = root / "runtime" / "llama" / (llama_ver or "b10000-cuda")
     e["IKAROS_LLAMA_DIR"] = s(llama_dir)
-    e["IKAROS_LLAMA_SERVER"] = s(llama_dir / "llama-server.exe")
+    if llama_ver:
+        e["IKAROS_LLAMA_SERVER"] = s(llama_dir / "llama-server.exe")
+    # CPU 兜底场景（llama_ver 为空）：不写 IKAROS_LLAMA_SERVER，
+    # 让子进程（watchdog）自行 resolver 选择可用 build / -ngl 0。
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
 
     e["IKAROS_PORT_EMBEDDING"] = "8587"

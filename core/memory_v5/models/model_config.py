@@ -145,13 +145,29 @@ def server_args() -> list[str]:
 
 
 def _llama_bin() -> str:
-    """llama-server 二进制路径：优先环境变量，否则按项目约定推导。"""
+    """llama-server 二进制路径：优先环境变量，否则按设备 CUDA 能力自动选择。
+
+    自动选择委托 core/env/llama_resolver.py（CUDA 13.x → b10000-cuda，
+    CUDA 12.x → b10000-cuda-12.4；无匹配 build 时给出 CPU 兜底提示）。
+    """
     env = os.environ.get("IKAROS_LLAMA_SERVER")
     if env:
         return env
-    root = MODELS_DIR.parent.parent  # Ikaros-memory -> Ikaros
-    default = root / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe"
-    return str(default)
+    # 项目根向上探测：主仓 core/memory_v5/models → Ikaros；
+    # 发行版 v5-memory/models → v5-memory（MODELS_DIR.parent.parent 在两结构下层级不同，不能写死）
+    root = MODELS_DIR
+    while root.parent != root and not (root / "runtime" / "llama").is_dir():
+        root = root.parent
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "llama_resolver", str(root / "core" / "env" / "llama_resolver.py"))
+        _lr = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_lr)
+        return str(_lr.resolve_llama_dir(root)["dir"] / "llama-server.exe")
+    except Exception:
+        # resolver 失败（如缺文件）回退旧默认
+        return str(root / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe")
 
 
 def emit_bat() -> str:

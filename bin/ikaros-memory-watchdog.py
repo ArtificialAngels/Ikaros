@@ -19,15 +19,29 @@ _SUBPROC_DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0)
 # CREATE_NO_WINDOW 隐藏控制台窗口但仍提供 CRT 正常运行所需的控制台基础设施。
 _SUBPROC_SERVICE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-ROOT = Path(os.environ.get("HERMES_ROOT", "E:\\Ikaros"))
+# 项目根：优先环境变量，其次脚本位置推导（可整体迁移盘符，不依赖 E:/F: 硬编码）
+_SCRIPT_DIR = Path(__file__).resolve().parent          # bin/
+ROOT = Path(os.environ.get("HERMES_ROOT") or os.environ.get("IKAROS_ROOT")
+            or (_SCRIPT_DIR.parent)).resolve()
+if not (ROOT / "core" / "env").is_dir() and ( _SCRIPT_DIR.parent / "core" / "env").is_dir():
+    ROOT = _SCRIPT_DIR.parent
 PID_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.pid"
 LOG_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.log"
 ENDPOINTS_FILE = ROOT / "core/memory_v5" / "data" / "endpoints.json"
 HEARTBEAT_FILE = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
 
-# llama-server binary (from env var or default)
-LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER",
-    str(ROOT / "runtime" / "llama" / "b10000-cuda" / "llama-server.exe")))
+# llama-server 二进制：按设备 CUDA 能力自动选择（llama_resolver 统一解析）
+try:
+    sys.path.insert(0, str(ROOT / "core"))
+    from core.env import llama_resolver as _llama_resolver
+    _LLAMA_RES = _llama_resolver.resolve_llama_dir(ROOT)
+except Exception as _e:  # resolver 失败不致命：回退旧逻辑
+    _LLAMA_RES = {"dir": ROOT / "runtime" / "llama" / "b10000-cuda",
+                  "version": "b10000-cuda", "cuda": None,
+                  "cpu_fallback": False, "reason": f"resolver failed: {_e}"}
+LLAMA_BIN = Path(os.environ.get("IKAROS_LLAMA_SERVER", str(_LLAMA_RES["dir"] / "llama-server.exe")))
+LLAMA_CPU_FALLBACK = _LLAMA_RES.get("cpu_fallback", False)
+LLAMA_SELECT_REASON = _LLAMA_RES.get("reason", "")
 
 # Embedding model (dedicated; never auto-scanned as a chat LLM)
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
@@ -78,13 +92,17 @@ def _build_llm_argv() -> list[str]:
 
     配置逻辑统一来自 core/memory_v5/models/model_config.py (经 _load_model_cfg 读取)。
     """
+    ngl = str(_LLM_CFG.get("gpu_layers", "auto"))
+    if LLAMA_CPU_FALLBACK:
+        # 设备无匹配 CUDA build：强制 CPU 层数，避免 CUDA 初始化崩溃
+        ngl = "0"
     return [
         str(LLAMA_BIN),
         "-m", str(LLM_MODEL),
         "--host", _LLM_CFG.get("host", "127.0.0.1"),
         "--port", str(LLM_PORT),
         "-c", str(_LLM_CFG.get("ctx_size", 8192)),
-        "-ngl", str(_LLM_CFG.get("gpu_layers", "auto")),
+        "-ngl", ngl,
         "--flash-attn", _LLM_CFG.get("flash_attn", "auto"),
         "--alias", _LLM_CFG.get("alias", "local-llm"),
         "--cont-batching",
@@ -99,7 +117,9 @@ def _spawn_llm_server() -> subprocess.Popen:
     父进程退出后服务仍常驻, 由看门狗做端口巡检。不追踪到 self._procs。
     """
     if not LLAMA_BIN.exists():
-        raise FileNotFoundError(f"llama-server not found: {LLAMA_BIN}")
+        raise FileNotFoundError(
+            f"llama-server not found: {LLAMA_BIN} "
+            f"(选择原因: {LLAMA_SELECT_REASON or 'env/默认'})")
     if not LLM_MODEL.exists():
         raise FileNotFoundError(f"local LLM model not found: {LLM_MODEL}")
     return subprocess.Popen(

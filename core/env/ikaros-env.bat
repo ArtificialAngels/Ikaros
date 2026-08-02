@@ -3,7 +3,11 @@ REM See docs/scripts/core/env/ikaros-env.md
 REM No setlocal: all vars exported to caller.
 
 REM ---- IKAROS_ROOT: auto-detect from script location ----
-if defined IKAROS_ROOT goto :root_ok
+REM 已定义的 IKAROS_ROOT 若指向不存在的目录（如旧盘符残留），强制重新推导。
+if defined IKAROS_ROOT (
+    if exist "%IKAROS_ROOT%\core\env\ikaros-env.bat" goto :root_ok
+    set "IKAROS_ROOT="
+)
 set "IKAROS_ENV_DIR=%~dp0"
 if "%IKAROS_ENV_DIR:~-1%"=="\" set "IKAROS_ENV_DIR=%IKAROS_ENV_DIR:~0,-1%"
 for %%I in ("%IKAROS_ENV_DIR%\..") do set "IKAROS_ROOT=%%~fI"
@@ -55,7 +59,13 @@ REM ---- Portable Rust (standalone, no rustup) ----
 set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
 
 REM ---- llama-server (llama.cpp) ----
-if not defined IKAROS_LLAMA_VERSION set "IKAROS_LLAMA_VERSION=b10000-cuda"
+REM 默认版本按设备 CUDA 能力选择：驱动支持 CUDA 12.x → b10000-cuda-12.4，
+REM 其余（13.x/未知）→ b10000-cuda。用户可用 IKAROS_LLAMA_VERSION 显式覆盖。
+if not defined IKAROS_LLAMA_VERSION (
+    set "IKAROS_LLAMA_VERSION=b10000-cuda"
+    nvidia-smi 2>nul | findstr /C:"CUDA Version: 12." >nul 2>&1 && set "IKAROS_LLAMA_VERSION=b10000-cuda-12.4"
+    nvidia-smi 2>nul | findstr /C:"CUDA UMD Version: 12." >nul 2>&1 && set "IKAROS_LLAMA_VERSION=b10000-cuda-12.4"
+)
 set "IKAROS_LLAMA_DIR=%IKAROS_RUNTIME%\llama\%IKAROS_LLAMA_VERSION%"
 set "IKAROS_LLAMA_SERVER=%IKAROS_LLAMA_DIR%\llama-server.exe"
 

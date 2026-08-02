@@ -1,62 +1,62 @@
 {
-  "_comment": "Ikaros 路径配置 - 由 scripts/setup-native.py 生成 (相对 IKAROS_ROOT)。",
-  "_version": "1.1",
-  "ikaros_root": "E:\\Ikaros",
+  "_comment": "Ikaros 路径配置 - 全部为相对 IKAROS_ROOT 的相对路径（可整体迁移盘符/目录）。ikaros_root 置空表示由加载方动态探测。",
+  "_version": "2.0",
+  "ikaros_root": "",
   "core": {
-    "python": "E:\\Ikaros\\runtime\\portable-python\\python.exe",
-    "portable_python": "E:\\Ikaros\\runtime\\portable-python\\python.exe",
-    "runtime": "E:\\Ikaros\\runtime",
-    "node": "E:\\Ikaros\\runtime\\node\\node.exe",
-    "npm": "E:\\Ikaros\\runtime\\node\\npm.cmd",
-    "node_modules": "E:\\Ikaros\\runtime\\node\\node_modules",
-    "aria2": "E:\\Ikaros\\runtime\\aria2",
-    "gopeed": "E:\\Ikaros\\runtime\\gopeed",
-    "rpc_server": "E:\\Ikaros\\runtime\\rpc-server",
-    "data": "E:\\Ikaros\\data",
-    "data_models": "E:\\Ikaros\\data\\models",
-    "bin": "E:\\Ikaros\\bin",
-    "config": "E:\\Ikaros\\config",
-    "logs": "E:\\Ikaros\\data\\logs"
+    "python": "runtime/portable-python/python.exe",
+    "portable_python": "runtime/portable-python/python.exe",
+    "runtime": "runtime",
+    "node": "runtime/node/node.exe",
+    "npm": "runtime/node/npm.cmd",
+    "node_modules": "runtime/node/node_modules",
+    "aria2": "runtime/aria2",
+    "gopeed": "runtime/gopeed",
+    "rpc_server": "runtime/rpc-server",
+    "data": "data",
+    "data_models": "data/models",
+    "bin": "bin",
+    "config": "config",
+    "logs": "data/logs"
   },
   "hermes": {
-    "agent": "E:\\Ikaros\\core\\hermes",
-    "home": "E:\\Ikaros\\data\\hermes-agent",
-    "bridge": "E:\\Ikaros\\bridge",
-    "core": "E:\\Ikaros\\core\\hermes"
+    "agent": "core/hermes",
+    "home": "data/hermes-agent",
+    "bridge": "bridge",
+    "core": "core/hermes"
   },
   "memory": {
-    "root": "E:\\Ikaros\\core\\memory_v5",
-    "data": "E:\\Ikaros\\core\\memory_v5\\data",
-    "models": "E:\\Ikaros\\core\\memory_v5\\models",
-    "db": "E:\\Ikaros\\core\\memory_v5\\data\\v5\\v5.db",
-    "chromadb": "E:\\Ikaros\\core\\memory_v5\\data\\v5\\chroma"
+    "root": "core/memory_v5",
+    "data": "core/memory_v5/data",
+    "models": "core/memory_v5/models",
+    "db": "core/memory_v5/data/v5/v5.db",
+    "chromadb": "core/memory_v5/data/v5/chroma"
   },
   "llama": {
     "version": "b10000-cuda",
-    "dir": "E:\\Ikaros\\runtime\\llama\\b10000-cuda",
-    "server": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-server.exe",
-    "cli": "E:\\Ikaros\\runtime\\llama\\b10000-cuda\\llama-cli.exe"
+    "dir": "runtime/llama/b10000-cuda",
+    "server": "runtime/llama/b10000-cuda/llama-server.exe",
+    "cli": "runtime/llama/b10000-cuda/llama-cli.exe"
   },
   "models": {
-    "embedding": "E:\\Ikaros\\core\\memory_v5\\models\\nomic-embed-text-v2-moe.f32.gguf",
-    "llm": "E:\\Ikaros\\core\\memory_v5\\models\\Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+    "embedding": "core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf",
+    "llm": "core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf"
   },
   "neko": {
-    "root": "E:\\Ikaros\\core\\neko",
-    "python": "E:\\Ikaros\\core\\neko\\.venv\\Scripts\\python.exe",
+    "root": "core/neko",
+    "python": "core/neko/.venv/Scripts/python.exe",
     "server": "app.main_server",
-    "desktop": "E:\\Ikaros\\core\\neko\\N.E.K.O.exe",
-    "static": "E:\\Ikaros\\core\\neko\\static",
-    "templates": "E:\\Ikaros\\core\\neko\\templates",
-    "venv": "E:\\Ikaros\\core\\neko\\.venv",
-    "start_script": "E:\\Ikaros\\bin\\neko-start.bat",
-    "stop_script": "E:\\Ikaros\\bin\\neko-stop.bat"
+    "desktop": "core/neko/N.E.K.O.exe",
+    "static": "core/neko/static",
+    "templates": "core/neko/templates",
+    "venv": "core/neko/.venv",
+    "start_script": "bin/neko-start.bat",
+    "stop_script": "bin/neko-stop.bat"
   },
   "mcp": {
-    "root": "E:\\Ikaros\\runtime\\MCPServe",
-    "codebase_memory_exe": "E:\\Ikaros\\runtime\\MCPServe\\codebase-memory\\package\\bin\\codebase-memory-mcp.exe",
-    "graphify": "E:\\Ikaros\\runtime\\MCPServe\\graphify",
-    "graphify_serve": "E:\\Ikaros\\runtime\\MCPServe\\graphify\\graphify\\serve.py"
+    "root": "runtime/MCPServe",
+    "codebase_memory_exe": "runtime/MCPServe/codebase-memory/package/bin/codebase-memory-mcp.exe",
+    "graphify": "runtime/MCPServe/graphify",
+    "graphify_serve": "runtime/MCPServe/graphify/graphify/serve.py"
   },
   "ports": {
     "embedding": 8587,
