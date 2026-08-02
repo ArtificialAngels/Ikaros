@@ -79,12 +79,17 @@ def guid_to_letter():
 
 
 def venv_matches_root(root):
-    finder = os.path.join(root, "core", "hermes", "venv", "Lib", "site-packages",
-                          "__editable___hermes_agent_0_19_0_finder.py")
-    if not os.path.isfile(finder):
+    # finder 文件名带 hermes 版本号(0.19.0→0.19.1 会变)，不能硬编码——用 glob 匹配
+    site_pkgs = os.path.join(root, "core", "hermes", "venv", "Lib", "site-packages")
+    try:
+        import glob as _glob
+        finders = _glob.glob(os.path.join(site_pkgs, "__editable___hermes_agent_*_finder.py"))
+    except Exception:
+        finders = []
+    if not finders:
         return False
     try:
-        with open(finder, "r", encoding="utf-8", errors="ignore") as f:
+        with open(finders[0], "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
     except Exception:
         return False
@@ -112,6 +117,7 @@ def rebuild_venv(root):
             log("venv rebuild OK")
             return True
         log("venv rebuild failed rc=%s: %s" % (r.returncode, (r.stderr or "")[-500:]))
+        log("venv rebuild stdout tail: %s" % (r.stdout or "")[-500:])
         return False
     except Exception as e:
         log("venv rebuild exception: %s" % e)
