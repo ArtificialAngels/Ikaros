@@ -218,7 +218,10 @@ data/ikaros-coordination/*.md
 # These are Ikaros' visual identity. Treat as design tokens, not throwaway.
 bin/favicon.ico
 bin/logo.png
-ArtificialAngel.ico
+# ArtificialAngel.ico 已 tracked（2026-08-02）：ignore 规则会挡住「误删后
+# 重新恢复」的同名 untracked 文件（须 git add -f 才恢复）。用 ! 显式白名单解除，
+# 让删后重现能直接被 git 感知，防止再次被误删后推不上远端。
+!ArtificialAngel.ico
 
 # --- GitNexus external (installed in user HOME, not in repo) ---
 .claude/
