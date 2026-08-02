@@ -99,6 +99,7 @@ A_CLASS_FILES = [
     "tests/cron/test_scheduler.py",
     "agent/conversation_loop.py",
     "gateway/platforms/api_server.py",
+    "tools/mcp_tool.py",  # 08-02: _inject_ikaros_root_paths() — MCP ${IKAROS_*} 从 HERMES_HOME 自推导
 ]
 # B 类：Ikaros 自有静态目录（原样复制；upstream 不碰，缺失即补、存在即跳过）。
 B_CLASS_DIRS = [

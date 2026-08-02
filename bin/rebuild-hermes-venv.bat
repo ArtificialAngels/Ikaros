@@ -21,7 +21,10 @@ echo Creating fresh venv...
 "%UV%" venv --clear --python "%PY%" --system-site-packages "%VENV%"
 
 echo Installing hermes-agent (editable)...
-"%UV%" pip install --python "%VENV%\Scripts\python.exe" -e "%HERMES%"
+rem [web,mcp] 必须一起装: 2026-08-02 踩坑 — 只装 -e . (或 [web]) 会漏掉 mcp SDK
+rem (pyproject 里 mcp 是 extra), 导致 dashboard 里 12 个 MCP server 全部
+rem "requires the 'mcp' Python SDK" 连不上。web=fastapi/uvicorn, mcp=mcp==1.28.1。
+"%UV%" pip install --python "%VENV%\Scripts\python.exe" -e "%HERMES%[web,mcp]"
 
 echo.
 echo Done. Verify with: %VENV%\Scripts\hermes.exe --help

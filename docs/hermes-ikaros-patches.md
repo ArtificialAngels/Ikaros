@@ -11,14 +11,14 @@
 
 ## 0.5. 补丁源文件位置
 - **补丁源文件目录**：`patches/hermes/`（被 Ikaros 主仓库 git 跟踪）
-- 镜像 hermes-agent 目录结构，存放 8 个 A 类补丁文件 + 3 个 B 类插件/技能目录
+- 镜像 hermes-agent 目录结构，存放 9 个 A 类补丁文件 + 3 个 B 类插件/技能目录
 - **不放在 `core/hermes/` 下面**——防止 hermes `git reset --hard` / `git clean` 时被误删
 - 它是**补丁事实源**，供两处使用：① B 类目录缺失时 `_copytree_lf()` 从它复制（LF 归一，不污染脏树）；② LLM 兜底时作为内容参考（`refresh_patch_source()` 每次 finalize 会把新提交里的 A/B 类同步回这里，保持与提交一致）。
 - 修改补丁内容时，**必须同时更新 `patches/hermes/` 里的源文件**，否则下次重打会用到旧版本。
 
 ## 1. 补丁总览
 Ikaros 对 hermes 的定制分两类：
-- **A 类：8 个 tracked 文件补丁**（动态，需随 upstream 重打）
+- **A 类：9 个 tracked 文件补丁**（动态，需随 upstream 重打）
 - **B 类：3 个插件 / 技能目录**（静态，原样复制，不打补丁）
 
 > 注：`package-lock.json` **不是** Ikaros 补丁——它直接取 upstream 版本（Ikaros 未改）。
@@ -27,7 +27,7 @@ Ikaros 对 hermes 的定制分两类：
 ## 2. 应用协议（3-way delta 重放，两步 + 兜底）
 核心思路：不再 `git cherry-pick` 一个"重根提交"（父被钉死在旧 upstream，上游一推进即爆炸），而是以 **§0 的 `base`（= 当前 upstream tip）为起点、`§0 的 Ikaros 提交` 为终点**，每次重打实时生成 `base -> ikaros` 的 diff，用 **`git apply --3way`** 重放到**当前 upstream 工作树**。`--3way` 以 base 的 blob 作共同祖先，自动并入 upstream 自身改动，**只在 Ikaros 与 upstream 改了同一行时才冲突**——冲突面最小、最稳。
 
-**A 类逐文件重放**（关键稳定性细节）：8 个 A 类文件**不合并成一个 patch**——单 patch 是原子的，任一文件失败会连累其它文件全部不落地。改为**逐文件** `git apply --3way`，单文件失败仅该文件告警、其余正常落地。**patch 必须以字节喂给 stdin**（`input=patch.encode("utf-8")`），否则 Windows 上 text 模式会把 `\n` 翻成 `\r\n`，破坏 unified diff 的 context 行导致匹配失败。
+**A 类逐文件重放**（关键稳定性细节）：9 个 A 类文件**不合并成一个 patch**——单 patch 是原子的，任一文件失败会连累其它文件全部不落地。改为**逐文件** `git apply --3way`，单文件失败仅该文件告警、其余正常落地。**patch 必须以字节喂给 stdin**（`input=patch.encode("utf-8")`），否则 Windows 上 text 模式会把 `\n` 翻成 `\r\n`，破坏 unified diff 的 context 行导致匹配失败。
 
 **marker 校验（与 commit 哈希解耦）**：`derive_markers(base, ikaros)` 从 `base->ikaros` diff 自动抽取每个 A 类文件的"签名行"（def/class/import/f-string/merge 等）；B 类用代表文件 + 关键词 marker。`markers_missing()` 只要 marker 在**工作树**即证明补丁落地，不依赖历史 commit，避免"重打新提交后误报缺失"。
 
@@ -50,7 +50,7 @@ Ikaros 对 hermes 的定制分两类：
 - 验证（§4）任一失败 → 回滚备份 tag，报告失败。
 
 ## 3. 允许改动范围（allowlist，硬约束）
-- 文件（A 类，8 个，与引擎 `A_CLASS_FILES` 严格一致）：`cron/scheduler.py`、`hermes_cli/web_server.py`、`plugins/context_engine/__init__.py`、`scripts/run_tests.sh`、`scripts/run_tests_parallel.py`、`tests/cron/test_scheduler.py`、`agent/conversation_loop.py`、`gateway/platforms/api_server.py`
+- 文件（A 类，9 个，与引擎 `A_CLASS_FILES` 严格一致）：`cron/scheduler.py`、`hermes_cli/web_server.py`、`plugins/context_engine/__init__.py`、`scripts/run_tests.sh`、`scripts/run_tests_parallel.py`、`tests/cron/test_scheduler.py`、`agent/conversation_loop.py`、`gateway/platforms/api_server.py`、`tools/mcp_tool.py`
 - 目录（B 类，3 个）：`plugins/context_engine/ikaros_v5/`、`plugins/memory/ikaros_v5/`、`skills/creative/tldraw-skill/`
 - **除以上外，任何文件都不得改动。** LLM 兜底时必须显式声明此 allowlist，防止模型"热心"重写其他代码。
 
@@ -193,6 +193,13 @@ done
 - **参考实现**：两处均改为 `assert kwargs["session_id"] == "cron_test-job"` / `assert sid == "cron_test-job"`。
 - **约束**：必须与 5.3 同步；若上游测试结构大改，按新结构等价断言，不要删其他测试。
 
+### 5.7 `tools/mcp_tool.py`
+- **意图（2026-08-02）**：MCP 配置 `${IKAROS_*}` 占位符**从 HERMES_HOME 结构自推导**，去掉对启动入口注入的依赖，并防止 `.env` 写死盘符覆盖动态值——项目换盘符后 MCP 零配置跟随。
+- **实现**：新增模块级函数 `_inject_ikaros_root_paths()`，并在 `_load_mcp_config()` 中 `load_hermes_dotenv()` 之后、`_filter_suspicious_mcp_servers` 循环之前调用。
+- **锚点**：`_inject_ikaros_root_paths` 定义在 `_load_mcp_config` 之前；调用插在 `load_hermes_dotenv()` 的 `except Exception: pass` 块之后。
+- **逻辑**：布局守卫（`HERMES_HOME` 必须是 `<root>/data/hermes-agent` 且 `<root>/runtime/node/node.exe` 存在）→ 推导 `IKAROS_ROOT/IKAROS_RUNTIME/IKAROS_NODE/IKAROS_PYTHON/IKAROS_MEMORY/IKAROS_HERMES_HOME` → `os.environ[k] = v` **强制覆盖**（防 `.env` 旧盘符污染）。
+- **约束**：守卫失败（非 Ikaros 结构）必须静默返回，不影响 hermes 原生部署。
+
 ## 6. B 类：静态插件目录（原样复制，不打补丁）
 以下目录是 Ikaros 自有资产，**不随 upstream 变化**，每次更新后由引擎的 `ensure_b_class()` 自动补（代表文件存在且含 marker 即跳过，否则从 `patches/hermes/` 复制并 LF 归一；LLM 兜底也无需修改内容）：
 - `plugins/context_engine/ikaros_v5/` — Ikaros V5 上下文引擎插件（`name: ikaros_v5`，把 V5 记忆注入压缩摘要以保留长对话连续性）。
@@ -213,9 +220,9 @@ done
 marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这些文件，而不是照搬旧 diff。
 
 【硬约束】只允许修改以下文件/目录，其他任何文件都不要碰：
-- A 类（8 个）：cron/scheduler.py, hermes_cli/web_server.py, plugins/context_engine/__init__.py,
+- A 类（9 个）：cron/scheduler.py, hermes_cli/web_server.py, plugins/context_engine/__init__.py,
   scripts/run_tests.sh, scripts/run_tests_parallel.py, tests/cron/test_scheduler.py,
-  agent/conversation_loop.py, gateway/platforms/api_server.py
+  agent/conversation_loop.py, gateway/platforms/api_server.py, tools/mcp_tool.py
 - B 类（3 个，已存在且正确就不要动）：plugins/context_engine/ikaros_v5/,
   plugins/memory/ikaros_v5/, skills/creative/tldraw-skill/
 （若这些目录已存在且内容正确，不要改动它们，只确保存在。）
@@ -311,7 +318,7 @@ marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这
 - **TUI bundle 新鲜度**：`hermes update` 后 `finalize` 会自动 `rebuild_tui()` 刷新 `ui-tui/dist/entry.js`（best-effort，失败仅告警不阻断）。9100 面板通过 `HERMES_TUI_DIR` 指向该 bundle 走 Hermes 官方「预构建路径」，跳过 `npm install` 以避免 `Chat unavailable: 1`。若你**不经面板**直接 `hermes dashboard`，须自行 `set HERMES_TUI_DIR=E:\Ikaros\core\hermes\ui-tui`；独立刷新命令：`python bin/hermes-update-and-patch.py --rebuild-tui`。
 
 ### 9.3 补丁检测判据（重要）
-- **落地判据用 marker，不用 commit 哈希**：`markers_missing(derive_markers(base, ikaros))` —— 只要 8 个 A 类文件的签名行 + 3 个 B 类的代表 marker 在工作树即证明补丁就位，与"重打新提交 / 新 HEAD"解耦，永不误报「缺失」。
+- **落地判据用 marker，不用 commit 哈希**：`markers_missing(derive_markers(base, ikaros))` —— 只要 9 个 A 类文件的签名行 + 3 个 B 类的代表 marker 在工作树即证明补丁就位，与"重打新提交 / 新 HEAD"解耦，永不误报「缺失」。
 - 是否存在补丁提交历史用 `patch_present_via_grep()`（`git log --grep "apply Ikaros integration patches" HEAD`），仅作辅助展示。
 - 状态接口：`GET /api/hermes/status` 返回 `{head, upstream_tip, patch_applied, dirty, detail}`，供前端轮询。
 
