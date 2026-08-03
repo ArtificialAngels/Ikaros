@@ -546,6 +546,8 @@ class ConversationTree:
                 if sibs:
                     entries = []
                     for s in sibs:
+                        if not s.is_valid:
+                            continue  # F3: 废弃分支不注入兄弟上下文
                         label = s.branch_label or "branch"
                         summary = s.summary[:60] if s.summary else ""
                         conclusions = "; ".join(c.text[:40] for c in s.conclusions[:2])
@@ -566,7 +568,7 @@ class ConversationTree:
             for a in ancestors:
                 for bf in a.merged_from:
                     branch = self.nodes.get(bf)
-                    if branch:
+                    if branch and branch.is_valid:  # F3: 废弃分支的结论不注入
                         for c in branch.conclusions:
                             insights.append(
                                 f"[merged:{branch.branch_label}] {c.text}"
@@ -616,6 +618,9 @@ class ConversationTree:
             node_id = uid("n")
             new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
             mid = self._store_fn(content, type="conversation", tags=new_tags)
+            if mid == 0:
+                # F5: store 失败 (返回 0) 时显式告警, 不再无声丢内容 (节点仍创建, UI 可见)
+                logger.warning("add_turn: V5 store failed for node %s (content not persisted)", node_id)
 
             node = ConvNode(
                 id=node_id,
@@ -623,9 +628,17 @@ class ConversationTree:
                 agent=parent.agent,
                 depth=parent.depth + 1,
                 branch_label=branch_label,
-                # M2: 首个子节点=主线(trunk), 后续兄弟=分支(branch); 让 __trunk__ 合并
-                # 命中"分叉点之上的主线"而非恒为根, 修复 node_type 全 trunk 的语义失效.
-                node_type=("branch" if parent.children else "trunk"),
+                # M2 + F1: node_type 继承父节点语义:
+                #   - 父为 branch → 子必为 branch (分支延续, 修复"分支下继续对话被误标 trunk")
+                #   - 父为 trunk 且已有子 → branch (旁系分叉)
+                #   - 父为 trunk 且首子 → trunk (主线延续)
+                # 旧逻辑只看 parent.children, 导致 branch 下的首个后代被标 trunk,
+                # merge_target/is_valid_branch/__trunk__ 查找全部错乱 (实证: 线上 23 节点全 trunk)。
+                node_type=(
+                    "branch"
+                    if (parent.node_type == "branch" or parent.node_type != "trunk" or parent.children)
+                    else "trunk"
+                ),
                 v5_memory_id=mid,
                 summary=sm,
                 state=_clone(state) if state is not None else _clone(parent.state),
@@ -711,6 +724,11 @@ class ConversationTree:
         config: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         tags: str = "",
+        # F4: 与 add_turn 对齐的元数据参数 (fork 节点也应能携带思考/工具/用量)
+        thinking: str = "",
+        tool_calls: Optional[List["ToolCall"]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        skills_used: Optional[List[str]] = None,
     ) -> ConvNode:
         """从任意节点分叉出新分支。
 
@@ -726,6 +744,9 @@ class ConversationTree:
         node_id = uid("br")
         new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
         mid = self._store_fn(content, type="conversation", tags=new_tags)
+        if mid == 0:
+            # F5: store 失败 (返回 0) 时显式告警, 不再无声丢内容
+            logger.warning("fork_branch: V5 store failed for node %s (content not persisted)", node_id)
 
         node = ConvNode(
             id=node_id,
@@ -739,6 +760,10 @@ class ConversationTree:
             state=_clone(state) if state is not None else _clone(fork_node.state),
             config=_clone(config) if config is not None else _clone(fork_node.config),
             meta={"created_at": time.time(), "title": title},
+            thinking=thinking,
+            tool_calls=list(tool_calls) if tool_calls else [],
+            usage=usage or {},
+            skills_used=list(skills_used) if skills_used else [],
             created_at=time.time(),
         )
         self.nodes[node.id] = node
@@ -926,6 +951,9 @@ class ConversationTree:
                     p.children = [c for c in p.children if c != node_id]
             for nid in del_ids:
                 self.nodes.pop(nid, None)
+            # F2: 清理其它节点对已删节点的 merge 引用 (merged_from/merge_target/
+            # merged_insights/conclusions.source_ids), 避免 unmerge 静默失效 + 数据残留
+            self._cleanup_merge_refs(del_ids)
         if self.current_id in del_ids:
             anc = self.nodes.get(target.parent_id) if target else None
             while anc and anc.id in del_ids:
@@ -934,6 +962,32 @@ class ConversationTree:
         self.version += 1
         self._emit()
         self.persist()
+
+    def _cleanup_merge_refs(self, deleted_ids: "set[str]") -> None:
+        """删除节点后清理 DAG merge 引用 (需已持有 _lock)。
+
+        - trunk.merged_from 移除已删 branch id
+        - 其他节点的 merge_target 指向已删节点 → 置 None
+        - trunk.state.merged_insights 移除对应条目
+        - trunk.conclusions 移除 source_ids 含已删节点的注入结论 (仅限注入的)
+        """
+        if not deleted_ids:
+            return
+        for other in self.nodes.values():
+            if deleted_ids & set(other.merged_from):
+                other.merged_from = [b for b in other.merged_from if b not in deleted_ids]
+            if other.merge_target in deleted_ids:
+                other.merge_target = None
+            insights = other.state.get("merged_insights")
+            if isinstance(insights, list):
+                other.state["merged_insights"] = [
+                    m for m in insights if m.get("branch_id") not in deleted_ids
+                ]
+            # 只清"注入的"结论: source_ids 含已删节点且 text 带 [merged from 标记
+            other.conclusions = [
+                c for c in other.conclusions
+                if not (deleted_ids & set(c.source_ids) and c.text.startswith("[merged from"))
+            ]
 
     # ── v2.2: 设置节点代理归属 (ekko-agent 模式) ──
     def set_agent(self, node_id: str, agent: str, cascade: bool = False) -> "ConvNode":
@@ -1018,6 +1072,8 @@ class ConversationTree:
                         self._recompute_depth(child_id, parent.depth + 1)
             # 删除本节点
             self.nodes.pop(node_id, None)
+            # F2: 清理其它节点对已删节点的 merge 引用
+            self._cleanup_merge_refs({node_id})
             # current 指向被删节点 → 重指父节点 (或 root)
             if self.current_id == node_id:
                 self.current_id = parent.id if parent else self.root_id

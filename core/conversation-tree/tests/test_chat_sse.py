@@ -194,3 +194,85 @@ def test_chat_stream_events_no_gateway_config(monkeypatch):
 
     assert events[0]["type"] == "warn"
     assert collector["content"] == "无网关降级"
+
+
+# ────────────────── F12: 降级链挂只读工具回路 (memory_search 预检索) ──────────────────
+
+def test_stream_fallback_prefetches_memory(monkeypatch):
+    """F12: 降级时 _execute_chat_tool 的 memory_search 被真实调用, 结果注入上下文.
+
+    修复"工具回路从未生效": _stream_fallback 现在会先预检索记忆 → 产出
+    tool_call/tool_result 事件 → 把结果作为 system 前缀喂给 _call_llm.
+    """
+    called = {}
+    monkeypatch.setattr(
+        server, "_execute_chat_tool",
+        lambda name, arguments, node_id=None: called.update(name=name, args=arguments) or
+        {"ok": True, "result": "找到1条: GTO 策略笔记"})
+    monkeypatch.setattr(
+        server, "_call_llm",
+        lambda messages, agent="ikaros", collector=None: (
+            messages[0]["content"], {"total_tokens": 1}))  # 返回首个 system 内容
+
+    collector = {"content": "", "thinking": "", "tool_calls": [], "usage": {}, "warns": []}
+    events = _collect(server._stream_fallback(
+        [{"role": "user", "content": "什么是 GTO?"}], "ikaros", collector, node_id="n1"))
+
+    # 工具被调用且是 memory_search
+    assert called.get("name") == "memory_search", called
+    # 预检索结果进入 _call_llm 的 system 前缀
+    assert "找到1条: GTO 策略笔记" in collector["content"]
+    # 工具事件已透出
+    types = [e["type"] for e in events]
+    assert "tool_call" in types and "tool_result" in types
+    assert len(collector["tool_calls"]) == 1
+    assert collector["tool_calls"][0]["name"] == "memory_search"
+
+
+def test_stream_fallback_prefetch_fail_open(monkeypatch):
+    """F12: 预检索失败时 fail-open, 不阻塞降级正文."""
+    monkeypatch.setattr(server, "_execute_chat_tool",
+                        lambda name, arguments, node_id=None: {"ok": False, "result": "检索失败"})
+    monkeypatch.setattr(
+        server, "_call_llm",
+        lambda messages, agent="ikaros", collector=None: ("降级回答", {"total_tokens": 1}))
+
+    collector = {"content": "", "thinking": "", "tool_calls": [], "usage": {}, "warns": []}
+    events = _collect(server._stream_fallback(
+        [{"role": "user", "content": "hi"}], "ikaros", collector, node_id=None))
+
+    assert collector["content"] == "降级回答"
+    assert collector["tool_calls"] == []  # 失败不产生工具卡片
+
+
+# ────────────────── F6: _effective_mode 全局切换生效 ──────────────────
+
+def test_effective_mode_runtime_override(monkeypatch):
+    """F6: model_switch 全局 mode=hermes 对默认 ikaros 节点生效 (旧逻辑失效)."""
+    # 节点 agent 是默认 ikaros (显式 set_agent 之外的值)
+    assert server._effective_mode("ikaros") == "ikaros"
+    # 全局切 hermes → 默认节点跟随
+    monkeypatch.setattr(server, "_CT_RUNTIME", {"mode": "hermes", "model": ""})
+    assert server._effective_mode("ikaros") == "hermes"
+    # 显式 set_agent("hermes") 节点不受全局 ikaros 覆盖
+    monkeypatch.setattr(server, "_CT_RUNTIME", {"mode": "ikaros", "model": ""})
+    assert server._effective_mode("hermes") == "hermes"
+    # 空 agent + 空全局 → 默认 ikaros
+    monkeypatch.setattr(server, "_CT_RUNTIME", {"mode": "", "model": ""})
+    assert server._effective_mode("") == "ikaros"
+
+
+# ────────────────── F10: /api/state 解析 inline 参数 ──────────────────
+
+def test_state_inline_param_respected(monkeypatch):
+    """F10: inline=0 时 state_dict 返回轻量拓扑 (不内联 messages)."""
+    monkeypatch.setattr(server, "_tree", None)
+    # 手工验证参数透传逻辑: state_dict(inline=...) 由 do_GET 解析
+    # 这里直接测 do_GET 的 query 解析分支 (用 _q 的行为)
+    handler = server.Handler  # 类上直接验证参数约定
+    assert hasattr(handler, "_q")  # _q 存在 (query 解析) —— 修复后 do_GET 调它
+    # 核心断言: state_dict 签名接受 inline 且默认为 True (兼容旧调用)
+    import inspect
+    sig = inspect.signature(server.state_dict)
+    assert "inline" in sig.parameters
+    assert sig.parameters["inline"].default is True

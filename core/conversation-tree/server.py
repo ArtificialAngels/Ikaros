@@ -99,10 +99,18 @@ MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
 _CT_RUNTIME = {"mode": "", "model": ""}
 
 def _effective_mode(node_agent: str | None) -> str:
-    """节点显式 agent 优先, 其次运行时全局, 最后默认 ikaros。"""
-    if node_agent:
+    """节点 agent 显式值优先; 无显式值时用运行时全局 mode; 再默认 ikaros。
+
+    F6: 修复 model_switch 全局 mode 失效 —— 节点 agent 默认恒为 "ikaros"
+    (from_dict 默认 + add_turn 继承), 旧逻辑 `if node_agent: return node_agent`
+    永远命中, 导致 runtime mode=hermes 切换形同虚设。
+    现在: set_agent 显式设置的值 (> 0 字节点) 优先; 全局 _CT_RUNTIME["mode"]
+    作为 fallback; 两者皆空 → "ikaros"。
+    """
+    if node_agent and node_agent != "ikaros":
+        # 显式 set_agent("hermes") 的节点不被全局模式覆盖
         return node_agent
-    return _CT_RUNTIME["mode"] or "ikaros"
+    return _CT_RUNTIME["mode"] or (node_agent or "ikaros")
 
 def _effective_model(mode: str) -> str:
     if _CT_RUNTIME["model"]:
@@ -631,15 +639,19 @@ def _active_persist_key() -> str:
     return s["persist_key"] if s else SESSION_DEFAULT_PER
 
 
-def _touch_active_session() -> None:
-    """活动会话元数据打时间戳 + 记录当前节点摘要, 便于侧栏排序/展示."""
+def _touch_active_session(tree: "ct.ConversationTree | None" = None) -> None:
+    """活动会话元数据打时间戳 + 记录当前节点摘要, 便于侧栏排序/展示.
+
+    tree: 显式传入树引用 (chat 在飞时用捕获的局部 tree, 避免切会话后写错会话)。
+    """
     s = _active_session()
     if s is None:
         return
     try:
         s["updated_at"] = time.time()
-        if _tree is not None and _tree.current_id:
-            n = _tree.get_node(_tree.current_id)
+        t = tree or _tree  # F7: chat 流式期间传局部 tree, 防止全局 _tree 已切到新会话
+        if t is not None and t.current_id:
+            n = t.get_node(t.current_id)
             if n and n.summary:
                 s["current_title"] = n.summary[:80]
         _save_sessions(_sessions)
@@ -737,7 +749,9 @@ def _migrate_if_needed() -> None:
     读原始 JSON 文件, 检测含 messages 的节点, 写入 V5 store, 更新 v5_memory_id.
     """
     assert _tree is not None
-    old_path = _tree.data_dir / f"{PERSIST_KEY}.json"
+    # F8: 用当前树的 persist_key 而非硬编码 PERSIST_KEY —— 多会话下旧格式迁移
+    # 必须读写"当前会话"的拓扑文件, 否则切到其他会话时迁移错树/根本不迁移.
+    old_path = _tree.data_dir / f"{_tree.persist_key}.json"
     if not old_path.exists():
         return
 
@@ -1114,12 +1128,49 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
         yield from _flush()  # 收尾: 处理缓冲区中最后一个未以空行结束的帧
 
 
-def _stream_fallback(messages: list[dict], agent: str, collector: dict):
+def _stream_fallback(messages: list[dict], agent: str, collector: dict,
+                     node_id: str | None = None):
     """本地降级通道 (H2 恢复): gateway 不可达/空响应时, 走 DeepSeek→Hermes→Local 三层
     chat 补全, 把正文以 SSE content 增量流式透出 (≈24 字/片, 前端 rAF 限频重渲 markdown),
     并回传 usage 事件. 全部失败时抛错, 由上层转 error 事件.
+
+    F12: 挂只读工具回路 —— 调 LLM 前先用 _execute_chat_tool 做一轮 memory_search
+    预检索 (query=最后一条 user 消息), 结果并入 system 上下文 + 前端工具卡片.
+    检索失败/不可用 fail-open 不阻塞主线. 这修复了 _execute_chat_tool 定义后
+    从未被调用、降级链完全没有工具能力的问题 (AGENTS.md 声称的"3 只读工具回路").
     """
-    content, usage = _call_llm(messages, agent, collector)
+    # ── F12: 记忆预检索 (只读工具回路) ──
+    prefetch: list[dict] = []
+    try:
+        q = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                q = (m.get("content") or "").strip()
+                break
+        if q:
+            res = _execute_chat_tool("memory_search",
+                                     json.dumps({"query": q[:200]}, ensure_ascii=False),
+                                     node_id)
+            if res.get("ok") and res.get("result") and "(无相关记忆)" not in res["result"]:
+                tcid = f"fb_mem_{int(time.time() * 1000)}"
+                collector["tool_calls"].append({
+                    "id": tcid, "name": "memory_search",
+                    "params": {"query": q[:80]},
+                    "result_summary": str(res["result"])[:500],
+                    "success": True, "timestamp": time.time(),
+                })
+                yield {"type": "tool_call", "id": tcid, "name": "memory_search",
+                       "args": {"query": q[:80]}}
+                yield {"type": "tool_result", "id": tcid, "ok": True,
+                       "result": res["result"]}
+                prefetch.append({
+                    "role": "system",
+                    "content": "[树域记忆预检索 (降级链)]\n" + str(res["result"])[:1500],
+                })
+    except Exception as e:
+        sys.stderr.write(f"[ct] fallback prefetch failed: {e}\n")
+
+    content, usage = _call_llm(prefetch + messages, agent, collector)
     if not content.strip():
         raise RuntimeError("本地模型返回空响应")
     for i in range(0, len(content), 24):
@@ -1143,7 +1194,7 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
         # 未配置 gateway → 直接走本地降级 (不报错)
         yield {"type": "warn", "message": "Hermes gateway 未配置，已使用本地模型"}
         try:
-            yield from _stream_fallback(messages, agent, collector)
+            yield from _stream_fallback(messages, agent, collector, node_id=node_id)
         except Exception as e:
             yield {"type": "error", "message": f"本地模型不可用（{e}）"}
         return
@@ -1172,7 +1223,7 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
                 sys.stderr.write(f"[ct] Hermes gateway mid-stream error before content ({e}); fallback to local\n")
                 yield {"type": "warn", "message": f"Hermes gateway 中断（{e}），已降级本地模型补全"}
                 try:
-                    yield from _stream_fallback(messages, agent, collector)
+                    yield from _stream_fallback(messages, agent, collector, node_id=node_id)
                 except Exception as e2:
                     yield {"type": "error", "message": f"本地模型也不可用（{e2}）"}
                 return
@@ -1184,7 +1235,7 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
 
     # 降级本地三层链路
     try:
-        yield from _stream_fallback(messages, agent, collector)
+        yield from _stream_fallback(messages, agent, collector, node_id=node_id)
     except Exception as e:
         yield {"type": "error", "message": f"本地模型也不可用（{e}）"}
         sys.stderr.write(f"[ct] fallback failed ({e})\n")
@@ -1243,9 +1294,11 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 self.wfile.write(chunk.encode("utf-8"))
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            # M3: 客户端断开(ESC/切节点)时主动关闭生成器链, 让 _stream_hermes_gateway
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # M3 + F9: 客户端断开(ESC/切节点)时主动关闭生成器链, 让 _stream_hermes_gateway
             # 的 urlopen with 块立即退出并关掉 gateway HTTP 连接, 不再挂到 LLM_TIMEOUT.
+            # F9: 补 ConnectionAbortedError —— Windows 上客户端 abort 抛的是它
+            # (WinError 10053), 旧代码只捕前两个, 导致完整 traceback 刷屏日志.
             try:
                 generator.close()
             except Exception:
@@ -1332,7 +1385,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/uploads/"):
                 self._serve_upload(path)
             elif path == "/api/state":
-                self._send_json(state_dict())
+                # F10: 解析 inline 参数 —— 前端 state() 传 ?inline=0 要轻量拓扑,
+                # 旧代码忽略 query 默认全量内联, M1 惰性加载实际从未生效
+                self._send_json(state_dict(inline=self._q("inline") != "0"))
             elif path == "/api/context":
                 nid = self._q("node_id")
                 self._send_json(_tree.get_context(nid))
@@ -1460,7 +1515,8 @@ class Handler(BaseHTTPRequestHandler):
                 "v": 1,
                 "type": "hello",
                 "ts": time.time(),
-                "tree": PERSIST_KEY,
+                # F11: 用当前活动树的 persist_key (多会话下事件订阅者需要真实树标识)
+                "tree": getattr(_tree, "persist_key", None) or PERSIST_KEY,
                 "data": {"event_protocol": 1},
             }
             self.wfile.write(
@@ -1718,7 +1774,8 @@ class Handler(BaseHTTPRequestHandler):
                                     usage=collector["usage"],
                                     skills_used=skills_used,
                                 )
-                                _touch_active_session()
+                                # F7: 传局部 tree, 防止 chat 在飞时切会话把摘要写进新会话
+                                _touch_active_session(tree)
                             except Exception as e:
                                 sys.stderr.write(f"[ct] chat persist error: {e}\n")
                         yield f"data: {json.dumps({'type': 'done', 'state': state_dict(tree)}, ensure_ascii=False)}\n\n"

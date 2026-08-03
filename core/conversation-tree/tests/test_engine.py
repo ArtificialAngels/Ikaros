@@ -100,3 +100,81 @@ def test_prune_non_root_works(tmp_path):
     t.prune(n2.id)
     assert n2.id not in t.nodes
     assert n1.id in t.nodes
+
+
+# ────────────────── F1: branch 下继续对话继承 branch 类型 ──────────────────
+
+def test_node_type_branch_continuation_stays_branch(tmp_path):
+    """F1: branch 节点下的首个子节点必须是 branch (旧逻辑误标 trunk).
+
+    回归: fork 出的分支里继续对话, 节点类型继承 branch, 保证 merge_target /
+    is_valid_branch / __trunk__ 查找不被误标 trunk 污染.
+    """
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线"},
+                    {"role": "assistant", "content": "b"}])
+    # 主线延续 (a 尚无 children) → trunk
+    a1 = t.add_turn([{"role": "user", "content": "主线继续"},
+                     {"role": "assistant", "content": "c"}], parent_id=a.id)
+    assert a1.node_type == "trunk", a1.node_type
+    # 从 a 分叉 → branch
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    assert b.node_type == "branch"
+    # 分支里继续对话 → 必须仍是 branch (F1 核心: 旧逻辑误标 trunk)
+    c = t.add_turn([{"role": "user", "content": "分支内继续"},
+                    {"role": "assistant", "content": "d"}], parent_id=b.id)
+    assert c.node_type == "branch", c.node_type
+    # 再往下两层仍是 branch
+    d = t.add_turn([{"role": "user", "content": "再深一层"}], parent_id=c.id)
+    assert d.node_type == "branch", d.node_type
+    # a 已有子节点后, 再在其下加节点 = 旁系分叉 → branch
+    a2 = t.add_turn([{"role": "user", "content": "主线分叉"}], parent_id=a.id)
+    assert a2.node_type == "branch", a2.node_type
+
+
+def test_node_type_trunk_after_conclusion_is_branch(tmp_path):
+    """F1 扩展: conclusion 类型节点下继续对话按 branch 处理 (非 trunk)."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线"},
+                    {"role": "assistant", "content": "b"}])
+    t.conclude_branch(a.id, ["结论"])
+    c = t.add_turn([{"role": "user", "content": "结论后继续"}], parent_id=a.id)
+    assert c.node_type == "branch", c.node_type
+
+
+# ────────────────── F2: 删除/剪枝清理 merge 引用 ──────────────────
+
+def test_prune_cleans_merge_refs(tmp_path):
+    """F2: prune 后 trunk.merged_from / merged_insights / 注入结论被清理."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线"},
+                    {"role": "assistant", "content": "b"}])
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    t.conclude_branch(b.id, ["分支结论"])
+    t.merge_branch(b.id, a.id)
+    assert b.id in a.merged_from
+    assert len(a.conclusions) == 1
+    assert len(a.state["merged_insights"]) == 1
+    # 剪掉分支子树 → merge 引用全部清理
+    t.prune(b.id)
+    assert b.id not in a.merged_from
+    assert a.state.get("merged_insights") == []
+    assert all("merged from" not in c.text for c in a.conclusions)
+    # 剪掉的节点确实没了
+    assert b.id not in t.nodes
+
+
+def test_delete_node_cleans_merge_refs(tmp_path):
+    """F2: delete_node 后 merge 引用同样被清理 (unmerge 不再静默失效)."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线"},
+                    {"role": "assistant", "content": "b"}])
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    t.conclude_branch(b.id, ["分支结论"])
+    t.merge_branch(b.id, a.id)
+    # 删除分支节点本身 (而非剪子树)
+    t.delete_node(b.id)
+    assert b.id not in t.nodes
+    assert a.id not in a.merged_from
+    assert a.state.get("merged_insights") == []
+    assert all("merged from" not in c.text for c in a.conclusions)
