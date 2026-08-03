@@ -180,15 +180,15 @@ box-shadow:0 0 8px var(--brand);animation:dotPulse 2.4s var(--ease-out) infinite
 .canvas-grid{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;
 background-image:radial-gradient(circle,var(--border-divider) 1px,transparent 1px);
 background-size:24px 24px;opacity:.5}
-.canvas-layer{position:absolute;top:0;left:0;transform-origin:0 0;z-index:1}
+.canvas-layer{position:absolute;top:0;left:0;transform-origin:0 0;z-index:1;pointer-events:none}
 .edges-svg{position:absolute;top:0;left:0;pointer-events:none;z-index:2;overflow:visible}
-.nodes-layer{position:absolute;top:0;left:0;z-index:3}
+.nodes-layer{position:absolute;top:0;left:0;z-index:3;pointer-events:none}
 .temp-svg{position:absolute;top:0;left:0;pointer-events:none;z-index:10;overflow:visible}
 
 /* ===== Node Card ===== */
 .node-card{position:absolute;background:var(--bg-card);border:1.5px solid var(--border-std);
 border-radius:var(--radius-md);padding:8px 10px;width:180px;
-box-shadow:var(--shadow-card);cursor:pointer;
+box-shadow:var(--shadow-card);cursor:pointer;pointer-events:auto;
 transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out),opacity .25s,transform .35s cubic-bezier(.22,.9,.28,1);
 font-family:'JetBrains Mono',monospace;font-size:10.5px;line-height:1.4;user-select:none;
 transform:translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%) scale(var(--scale,1));will-change:transform,box-shadow}
