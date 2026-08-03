@@ -248,6 +248,22 @@ def test_set_trunk_promotes_branch(tmp_path):
     assert d.node_type == "branch"
 
 
+def test_set_trunk_rejects_abandoned(tmp_path):
+    """F14: 废弃分支禁止提升为主线 (废弃=放弃, 不应成为主线锚点)."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    t.abandon_branch(b.id)
+    with pytest.raises(ValueError):
+        t.set_trunk(b.id)
+    assert t.trunk_id == a.id  # 主线终点不受影响
+    # 未废弃分支仍可提升 (对照)
+    c = t.fork_branch(a.id, "ok", [{"role": "user", "content": "有效分支"}])
+    t.set_trunk(c.id)
+    assert t.trunk_id == c.id
+
+
 def test_trunk_id_redirect_on_delete(tmp_path):
     """S1: 主线终点被删/剪 → trunk_id 回退到最近的 trunk 祖先."""
     t = _make_tree(tmp_path)

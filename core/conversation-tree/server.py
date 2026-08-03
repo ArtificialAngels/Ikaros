@@ -1869,7 +1869,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
             elif path == "/api/set_trunk":
-                # S1: 显式主线提升 (把分支节点设为主线终点)
+                # S1 + F14: 显式主线提升 (把分支节点设为主线终点); 废弃分支禁止提升
                 try:
                     node = _tree.set_trunk(
                         node_id=data["node_id"],

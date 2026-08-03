@@ -985,6 +985,9 @@ class ConversationTree:
             node = self.nodes.get(node_id)
             if not node:
                 raise ValueError(f"node not found: {node_id}")
+            # F14: 废弃分支禁止提升为主线 (语义上废弃=已放弃, 不应成为主线锚点)
+            if not node.is_valid:
+                raise ValueError(f"cannot set trunk: node {node_id} is abandoned (is_valid=False)")
             self.trunk_id = node.id
             # 节点自身必为 trunk (主线终点), 否则 add_turn 的
             # parent.node_type == "trunk" 判定会拒绝主线延续

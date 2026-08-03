@@ -1271,8 +1271,8 @@ function onNodeContextMenu(e,nodeId){
   items.push({label:'查看完整上下文',action:'fullContext',icon:'👁'});
   items.push({divider:true});
   items.push({label:'从此分叉',action:'fork',icon:'⎇'});
-  // S1: 主线管理 —— 非主线节点可提升为主线终点
-  if(n.id!==tree.trunkId){
+  // S1 + F14: 主线管理 —— 非主线节点可提升为主线终点 (废弃分支除外)
+  if(n.id!==tree.trunkId&&n.isValid){
     items.push({label:tree.isOnTrunk(n.id)?'设为主线终点（当前主线分支）':'设为主线终点',action:'setTrunk',icon:'★'});
   }
   if(n.mergeTarget){
@@ -2296,7 +2296,10 @@ async function sendMessage(){
   const fullText=_pendingAttaches.length
     ? (text?text+'\n\n':'')+attachMarkdown()
     : text;
-  const branchLabel=tree.current?(tree.current.branchLabel||'main'):'main';
+  // F13: branchLabel 取"实际父节点"的分支名 —— fork 到非当前节点时,
+  // 旧逻辑恒取 tree.current.label, 导致 branch: 标签打错分支
+  const labelSrc=(branchParentId&&tree.nodes.get(branchParentId))||tree.current;
+  const branchLabel=labelSrc?(labelSrc.branchLabel||'main'):'main';
   const parentId=branchParentId||undefined;
   pushInputHist(text);
   // 乐观创建: 用户气泡 + 空 AI 卡 + 空 extras 容器 (思考/工具实时注入)
