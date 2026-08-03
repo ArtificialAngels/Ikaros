@@ -76,6 +76,10 @@ def tree_scoped_retrieve(
     path_ids = {n.id for n in path_nodes}
     branch_labels = {n.branch_label for n in path_nodes if n.branch_label}
 
+    # 会话隔离 (H1): 仅保留本会话(session:<persist_key>)或 legacy(无 session 标签)的记忆,
+    # 杜绝其他会话/主 Ikaros 长期记忆串台. 记忆在存储时已带 session 标签 (conversation_tree).
+    sess_tag = f"session:{getattr(tree, 'persist_key', '')}"
+
     try:
         results = _v5_retrieve(query, top_k=max(top_k * 3, 12), character=character)
     except Exception as exc:
@@ -85,6 +89,10 @@ def tree_scoped_retrieve(
     scoped: List[tuple] = []
     for r in results:
         tagset = set((r.get("tags") or "").split())
+        # 会话边界过滤: 有 session 标签但不属于本会话 → 排除
+        tagged_sessions = {t for t in tagset if t.startswith("session:")}
+        if tagged_sessions and sess_tag not in tagged_sessions:
+            continue
         on_path = any(f"node:{pid}" in tagset for pid in path_ids)
         on_branch = any(f"branch:{b}" in tagset for b in branch_labels)
         score = float(r.get("score", r.get("raw", 0.5)))

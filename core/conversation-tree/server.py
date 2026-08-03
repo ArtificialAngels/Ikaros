@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -25,6 +26,19 @@ from pathlib import Path
 # 让本服务能 import memory_v5.conversation_tree + memory_v5.store
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
+
+# 附件上传目录（相对项目根 data/，避免被 git 跟踪的源码目录污染）
+_UPLOAD_DIR = _HERE.parent.parent / "data" / "conversation-tree-uploads"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+_UPLOAD_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                ".webp": "image/webp", ".svg": "image/svg+xml", ".pdf": "application/pdf",
+                ".txt": "text/plain; charset=utf-8", ".md": "text/markdown; charset=utf-8",
+                ".json": "application/json", ".zip": "application/zip",
+                ".py": "text/plain; charset=utf-8", ".js": "application/javascript",
+                ".ts": "text/plain; charset=utf-8", ".html": "text/html; charset=utf-8",
+                ".csv": "text/csv; charset=utf-8", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".mp3": "audio/mpeg", ".wav": "audio/wav", ".mp4": "video/mp4"}
 
 import memory_v5.conversation_tree as ct  # noqa: E402
 from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
@@ -55,11 +69,154 @@ HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119"
 # gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8642/v1/chat/completions").strip() or None
 # gateway 鉴权 token; 默认 ikaros-gateway-key (由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
-HERMES_AGENT_KEY = os.environ.get("API_SERVER_KEY", "ikaros-gateway-key").strip()
+# 2026-08-03: 优先从 HERMES_HOME/.env (data/hermes-agent/.env) 读真实 API_SERVER_KEY,
+# 与 dashboard server 同源, 避免 401.
+HERMES_AGENT_KEY = os.environ.get("API_SERVER_KEY", "").strip()
+if not HERMES_AGENT_KEY:
+    try:
+        _envp = _HERE.parent.parent / "data" / "hermes-agent" / ".env"
+        if _envp.exists():
+            for _l in _envp.read_text(encoding="utf-8", errors="replace").splitlines():
+                _l = _l.strip()
+                if _l.startswith("API_SERVER_KEY=") and not _l.startswith("#"):
+                    HERMES_AGENT_KEY = _l.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+    except Exception:
+        pass
+if not HERMES_AGENT_KEY:
+    HERMES_AGENT_KEY = "ikaros-gateway-key"
 HERMES_AGENT_MODEL = os.environ.get("HERMES_AGENT_MODEL", "hermes").strip()
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
+# R2: 分离连接与读取超时. 连接用短超时(快速失败), 流式读取用长超时(允许长生成
+# 的静默间隙, 避免被 socket 超时掐断). 非流式补全同样用长读取超时(整段生成时间).
+LLM_CONNECT_TIMEOUT = int(os.environ.get("CT_LLM_CONNECT_TIMEOUT", "20"))
+LLM_READ_TIMEOUT = int(os.environ.get("CT_LLM_READ_TIMEOUT", "600"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
+
+# ── 运行时模型切换 (2026-08-03): POST /api/model_switch 覆盖默认 ──
+# mode: ""=节点属性优先(默认) | "hermes" | "ikaros";  model: 模型名覆盖
+_CT_RUNTIME = {"mode": "", "model": ""}
+
+def _effective_mode(node_agent: str | None) -> str:
+    """节点显式 agent 优先, 其次运行时全局, 最后默认 ikaros。"""
+    if node_agent:
+        return node_agent
+    return _CT_RUNTIME["mode"] or "ikaros"
+
+def _effective_model(mode: str) -> str:
+    if _CT_RUNTIME["model"]:
+        return _CT_RUNTIME["model"]
+    return HERMES_AGENT_MODEL if mode == "hermes" else CT_DEEPSEEK_MODEL
+
+
+def _load_hermes_config():
+    """加载 hermes 运行配置 (data/hermes-agent/config.yaml)。
+
+    返回 (parsed_yaml, raw_text)。yaml 缺失/解析失败 → parsed=None, 调用方退回正则。
+    L6: 不再依赖 `^model:` 顶格正则, 改为 yaml 解析, 模型块无论嵌套多深都能取到。
+    """
+    try:
+        cfg = _HERE.parent.parent / "data" / "hermes-agent" / "config.yaml"
+        txt = cfg.read_text(encoding="utf-8")
+    except Exception:
+        return None, None
+    data = None
+    try:
+        import yaml  # PyYAML; 缺失时退回正则
+        data = yaml.safe_load(txt)
+    except Exception:
+        data = None
+    return data, txt
+
+
+def _hermes_model_context(model: str) -> int:
+    """从 hermes 模型元数据表获取**实际** context window (2026-08-03)。
+
+    复用 core/hermes/agent/model_metadata.DEFAULT_CONTEXT_LENGTHS (hermes 权威
+    模型参数表: deepseek-v4-flash/pro=1M, claude-opus-4.8=1M 等), 最长键优先模糊匹配;
+    "hermes" 是 gateway 抽象名 → 用 hermes 配置的 model.default 查真实模型。
+    失败回退 CT_CONTEXT_WINDOW。
+    """
+    probe = model
+    if model == "hermes":
+        data, txt = _load_hermes_config()
+        dflt = None
+        if isinstance(data, dict):
+            mb = data.get("model") or {}
+            if isinstance(mb, dict):
+                dflt = mb.get("default")
+        if not dflt and txt:
+            m = re.search(r"default:\s*(\S+)", txt)  # 宽松回退 (yaml 未取到时)
+            if m:
+                dflt = m.group(1)
+        if dflt:
+            probe = dflt
+    try:
+        sys.path.insert(0, str(_HERE.parent / "hermes"))
+        from agent import model_metadata as _mm
+        ml = (probe or "").lower()
+        for k, v in sorted(_mm.DEFAULT_CONTEXT_LENGTHS.items(),
+                           key=lambda x: len(x[0]), reverse=True):
+            if k in ml:
+                return int(v)
+        return int(_mm.DEFAULT_FALLBACK_CONTEXT)
+    except Exception:
+        return CT_CONTEXT_WINDOW
+
+
+def _hermes_models() -> list[dict]:
+    """从 hermes 运行配置 (data/hermes-agent/config.yaml) 提取模型候选 (2026-08-03)。
+
+    L6: 用 yaml 解析 (而非 `^model:` 顶格正则), 模型块无论嵌套多深都能取到;
+    默认模型以 "hermes" 抽象名透传 gateway, MoA 参考/聚合模型也一并列出。
+    yaml 缺失时退回正则 (旧行为)。
+    """
+    cands: list[dict] = []
+    data, txt = _load_hermes_config()
+
+    def _ctx(mname: str) -> int:
+        return _hermes_model_context(mname)
+
+    def _add(mname: str, label: str, ctx: int) -> None:
+        if mname and mname not in {c.get("model") for c in cands}:
+            cands.append({"mode": "hermes", "model": mname,
+                          "label": label, "context_window": ctx})
+
+    if isinstance(data, dict):
+        mb = data.get("model") or {}
+        if isinstance(mb, dict):
+            dflt = mb.get("default"); prov = mb.get("provider")
+            if dflt:
+                _add("hermes", f"Hermes Gateway（默认 {dflt} · {prov or '?'}）",
+                     _ctx(dflt))
+        # 通用递归扫描: 任何含 model+provider 的映射/列表项 (MoA references 等)
+        def _scan(node):
+            if isinstance(node, dict):
+                mm = node.get("model"); pp = node.get("provider")
+                if mm and pp:
+                    _add(mm, f"{mm}（hermes · {pp}）", _ctx(mm))
+                for v in node.values():
+                    _scan(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _scan(v)
+        _scan(data)
+        agg = data.get("aggregator") or {}
+        if isinstance(agg, dict):
+            am = agg.get("model"); ap = agg.get("provider")
+            if am:
+                _add(am, f"{am}（MoA 聚合 · {ap or '?'}）", _ctx(am))
+    elif txt:
+        # 正则回退 (yaml 缺失/解析失败)
+        m = re.search(r"^model:\s*\n\s+default:\s*(\S+)\s*\n\s+provider:\s*(\S+)", txt, re.M)
+        if m:
+            _add("hermes", f"Hermes Gateway（默认 {m.group(1)} · {m.group(2)}）",
+                 _ctx(m.group(1)))
+    if not cands:
+        cands.append({"mode": "hermes", "model": "hermes", "label": "Hermes Gateway",
+                      "context_window": CT_CONTEXT_WINDOW})
+    return cands
 
 # Hermes 任务代理 base system prompt (与 Ikaros 伴侣人格区分): 偏执行/工具/任务导向.
 HERMES_AGENT_PROMPT = (
@@ -77,60 +234,38 @@ _AXIOM_PATH = _IKAROS_ROOT / "config" / "identity" / "axiom.md"
 _SOUL_PATH = _IKAROS_ROOT / "data" / "hermes-agent" / "SOUL.md"
 _SELF_MODEL_PATH = _HERE.parent / "memory_v5" / "data" / "v5" / "self_model.json"
 
-SYSTEM_PROMPT = (
-    "You are Explore, a helpful AI assistant that engages in structured, deep conversations. "
-    "The conversation is organized as a tree: each node is a decision point where the user can "
-    "branch off and explore alternative directions. "
-    "Answer naturally and helpfully. Keep responses concise unless asked for depth. "
-    "Use markdown for code blocks and formatting when appropriate."
-)
+# ── LLM 调用 (本地降级三层 chat 补全, 主链路走 gateway) ──
+def _urlopen_with_timeout(req, connect_timeout: int = LLM_CONNECT_TIMEOUT,
+                          read_timeout: int = LLM_READ_TIMEOUT):
+    """打开 HTTP 请求并分离连接/读取超时 (R2).
 
-# ── LLM 调用 ──────────────────────────────────────────────
-def call_hermes_agent(messages: list[dict]) -> str:
-    """调用 Hermes agent runtime (ekko AgentRuntime 的 HTTP 包装).
+    - 连接阶段用 ``connect_timeout``(短, 不可达时快速失败, 触发降级);
+    - 连接建立后把底层 socket 的读取超时改为 ``read_timeout``(长), 允许流式场景下
+      模型长生成的静默间隙, 不被单一 timeout 掐断 (原 urllib 的 timeout 同时约束两者).
 
-    失败抛错, 由 _call_llm 回退到三层 chat 补全. best-effort 解析兼容
-    chat 风格 (choices[].message.content) 与 agent run 风格 (output.content).
+    返回已打开的 response, 调用方用 ``with`` 管理生命周期.
     """
-    if not HERMES_AGENT_URL:
-        raise RuntimeError("HERMES_AGENT_URL not configured")
-    body = json.dumps({
-        "messages": messages,
-        "model": HERMES_AGENT_MODEL,
-        "max_tokens": 2048,
-        "temperature": 0.7,
-        "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        HERMES_AGENT_URL, data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {HERMES_AGENT_KEY}",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    content = ""
-    if isinstance(data, dict):
-        content = (data.get("choices", [{}])[0].get("message", {}).get("content")
-                   or (data.get("output") or {}).get("content")
-                   or data.get("content") or "").strip()
-    if content:
-        return content
-    raise RuntimeError("Hermes agent returned empty content")
+    resp = urllib.request.urlopen(req, timeout=connect_timeout)
+    try:
+        fp = getattr(resp, "fp", None)
+        raw = getattr(fp, "raw", None)
+        sock = getattr(raw, "_sock", None)
+        if sock is not None:
+            sock.settimeout(read_timeout)
+    except Exception:
+        pass
+    return resp
 
 
-def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
+def _call_llm(messages: list[dict], agent: str = "ikaros",
+              collector: "dict | None" = None) -> tuple[str, dict]:
+    """三层 chat 补全 (DeepSeek → Hermes Dashboard → Local LLM) 降级链路.
+
+    返回 (content, usage). 任一 provider 成功即返回; 全部失败抛 RuntimeError.
+    collector 非 None 时把用量写入 collector["usage"] (供 SSE usage 事件).
+    注意: 此函数是 gateway 不可达时的**降级**通道 (H2 恢复), 非主链路.
+    """
     errors: list[str] = []
-
-    # 0) Hermes agent runtime (仅 hermes 模式且已配置端点); 失败回退三层 chat
-    if agent == "hermes":
-        try:
-            return call_hermes_agent(messages)
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, RuntimeError) as e:
-            errors.append(f"Hermes agent: {e}")
-        except Exception as e:
-            errors.append(f"Hermes agent unexpected: {e}")
 
     # 1) DeepSeek API
     if _DEEPSEEK_KEY:
@@ -144,11 +279,14 @@ def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
                 headers={"Content-Type": "application/json",
                          "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
             )
-            with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+            with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 content = data["choices"][0]["message"].get("content", "")
+                usage = data.get("usage", {}) or {}
                 if content.strip():
-                    return content.strip()
+                    if collector is not None:
+                        collector["usage"] = usage
+                    return content.strip(), usage
                 errors.append("DeepSeek returned empty content")
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
             errors.append(f"DeepSeek: {e}")
@@ -165,11 +303,14 @@ def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
         }).encode("utf-8")
         req = urllib.request.Request(HERMES_CHAT_URL, data=h_body,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             content = data["choices"][0]["message"].get("content", "")
+            usage = data.get("usage", {}) or {}
             if content.strip():
-                return content.strip()
+                if collector is not None:
+                    collector["usage"] = usage
+                return content.strip(), usage
             errors.append("Hermes returned empty content")
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         errors.append(f"Hermes: {e}")
@@ -184,13 +325,16 @@ def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
         }).encode("utf-8")
         req = urllib.request.Request(LOCAL_CHAT_URL, data=l_body,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             content = data["choices"][0]["message"].get("content", "")
             if not content.strip():
                 content = data["choices"][0]["message"].get("reasoning_content", "")
+            usage = data.get("usage", {}) or {}
             if content.strip():
-                return content.strip()
+                if collector is not None:
+                    collector["usage"] = usage
+                return content.strip(), usage
             errors.append("Local LLM returned empty content")
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         errors.append(f"Local: {e}")
@@ -198,24 +342,6 @@ def _call_llm(messages: list[dict], agent: str = "ikaros") -> str:
         errors.append(f"Local unexpected: {e}")
 
     raise RuntimeError("LLM unavailable: " + "; ".join(errors))
-
-
-def _build_chat_messages(node_id: str | None, user_message: str) -> list[dict]:
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if _tree is not None:
-        try:
-            ctx = _tree.get_context(node_id)
-            if len(ctx) > MAX_CONTEXT_MSGS:
-                msgs.append({
-                    "role": "system",
-                    "content": f"(Earlier conversation truncated; showing last {MAX_CONTEXT_MSGS} messages of {len(ctx)} total.)"
-                })
-                ctx = ctx[-MAX_CONTEXT_MSGS:]
-            msgs.extend(ctx)
-        except Exception:
-            pass
-    msgs.append({"role": "user", "content": user_message})
-    return msgs
 
 
 # ── Ikaros 人格 + V5 记忆注入 (chat 接入 Ikaros V5) ──────────────
@@ -326,18 +452,21 @@ def build_ikaros_persona() -> str:
     return "\n\n".join(b for b in blocks if b.strip())
 
 
-def build_v5_memory_block(node_id: str | None, query: str, collector: "dict | None" = None) -> str:
+def build_v5_memory_block(node_id: str | None, query: str, collector: "dict | None" = None,
+                           tree: "ct.ConversationTree | None" = None) -> str:
     """树域语义检索 (V5 记忆引擎): 按当前 query 检索相关记忆并做树域加权。
 
-    依赖刚落地的存储打标 (node:/branch:), 命中路径/分支的记忆优先。检索后端
-    不可用时 fail-open 返回空串, 并向 collector 记一条 warn (降级可见化)。
+    依赖刚落地的存储打标 (node:/branch:/session:), 命中路径/分支/本会话的记忆优先,
+    且按会话隔离过滤 (H1, 见 tree_adapter.tree_scoped_retrieve). 检索后端不可用
+    时 fail-open 返回空串, 并向 collector 记一条 warn (降级可见化)。
     返回可直接拼进 system 的文本块。
     """
-    if _tree is None:
+    t = tree or _tree
+    if t is None:
         return ""
     try:
         from memory_v5.extensions.tree_adapter import tree_scoped_retrieve
-        results = tree_scoped_retrieve(_tree, node_id, query, top_k=5)
+        results = tree_scoped_retrieve(t, node_id, query, top_k=5)
     except Exception as e:
         _warn(collector, f"树域记忆检索不可用，已跳过记忆注入（{e}）")
         return ""
@@ -362,7 +491,8 @@ def build_system_prompt(mode: str) -> str:
 
 
 def build_chat_messages_v5(node_id: str | None, user_message: str,
-                           collector: "dict | None" = None) -> list[dict]:
+                           collector: "dict | None" = None,
+                           tree: "ct.ConversationTree | None" = None) -> list[dict]:
     """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
 
     - ikaros 模式: 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
@@ -371,19 +501,21 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
       会**叠加**在 core 之后 (chat_completion_helpers 追加, 不替换), 故树端只补它
       没有的: 当前分支在树里的位置 + 树域语义记忆, 人格不重复注入。
     任何环节异常都 fail-open 回退到旧的线性上下文, 并向 collector 记 warn (降级可见化)。
+    tree: H3 捕获的活动树引用, 默认全局 _tree。
     """
+    t = tree or _tree
     mode = "ikaros"
-    if _tree is not None:
-        n = _tree.get_node(node_id) if node_id else _tree.current
+    if t is not None:
+        n = t.get_node(node_id) if node_id else t.current
         if n is not None:
-            mode = getattr(n, "agent", "ikaros") or "ikaros"
+            mode = _effective_mode(getattr(n, "agent", None) or None)
 
     # ── hermes 模式: 树域上下文 + 树域记忆, 人格/工具/技能全由 gateway 提供 ──
     if mode == "hermes":
         # 树域上下文: 分支说明 (路径摘要 + 当前分支标签 + 分支归属)
-        branch_ctx = build_branch_context_block(_tree, node_id)
-        # 树域记忆: 复用现有 tree_scoped_retrieve (fail-open)
-        mem_block = build_v5_memory_block(node_id, user_message, collector=collector)
+        branch_ctx = build_branch_context_block(t, node_id)
+        # 树域记忆: 复用现有 tree_scoped_retrieve (fail-open, 已含会话隔离 H1)
+        mem_block = build_v5_memory_block(node_id, user_message, collector=collector, tree=t)
         system_text = "\n\n".join(filter(None, [
             "You are speaking inside Ikaros' conversation tree. "
             "The branch context below is authoritative for this exchange.",
@@ -394,14 +526,14 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
             if build_tree_aware_context is None:
                 raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
             ctx = build_tree_aware_context(
-                _tree, node_id, system_prompt=system_text, extra_memory=None,
+                t, node_id, system_prompt=system_text, extra_memory=None,
             )
             return ctx + [{"role": "user", "content": user_message}]
         except Exception as e:
             _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
             msgs: list[dict] = [{"role": "system", "content": system_text}]
             try:
-                ctx = _tree.get_context(node_id)
+                ctx = t.get_context(node_id)
                 if len(ctx) > MAX_CONTEXT_MSGS:
                     ctx = ctx[-MAX_CONTEXT_MSGS:]
                 msgs.extend(ctx)
@@ -412,12 +544,12 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
 
     # ── ikaros 模式: 人格(伴侣) + 树域记忆 + 树感知压缩 ──
     persona = build_system_prompt(mode)
-    mem_block = build_v5_memory_block(node_id, user_message, collector=collector)
+    mem_block = build_v5_memory_block(node_id, user_message, collector=collector, tree=t)
     try:
         if build_tree_aware_context is None:
             raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
         ctx = build_tree_aware_context(
-            _tree, node_id,
+            t, node_id,
             system_prompt=persona,
             extra_memory=mem_block or None,
         )
@@ -429,7 +561,7 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
         if mem_block:
             msgs.append({"role": "system", "content": "Relevant memories (V5):\n" + mem_block})
         try:
-            ctx = _tree.get_context(node_id)
+            ctx = t.get_context(node_id)
             if len(ctx) > MAX_CONTEXT_MSGS:
                 ctx = ctx[-MAX_CONTEXT_MSGS:]
             msgs.extend(ctx)
@@ -677,15 +809,24 @@ def ensure_tree() -> None:
         _migrate_if_needed()
 
 
-def state_dict() -> dict:
-    """返回完整树状态, 含从 V5 store 解析的 messages 字段."""
-    assert _tree is not None
-    data = json.loads(_tree.serialize())
+def state_dict(tree: "ct.ConversationTree | None" = None, inline: bool = True) -> dict:
+    """返回完整树状态, 含从 V5 store 解析的 messages 字段.
+
+    - tree: 指定活动树 (H3: 在飞 chat 捕获局部引用, 避免会话切换写错树); 默认全局 _tree.
+    - inline: True 时把每个节点的对话内容从 V5 store 回读内联进 nodes (前端 renderThread
+      直接消费); False 时只返拓扑 (M1 性能: 大对话减少 payload, 前端按需 /api/node_content
+      惰性拉取). 默认 True 保持兼容.
+    """
+    t = tree or _tree
+    assert t is not None
+    data = json.loads(t.serialize())
+    if not inline:
+        return data
     # 从 store 批量回读消息, 注入 nodes (前端兼容)
     ids = [n.get("v5_memory_id", 0) for n in data["nodes"] if n.get("v5_memory_id")]
     if ids:
         try:
-            batch = _tree._load_fn(ids)
+            batch = t._load_fn(ids)
         except Exception:
             batch = {}
         for n in data["nodes"]:
@@ -812,61 +953,7 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
     return {"ok": False, "result": f"未知工具: {name}"}
 
 
-def _deepseek_stream(messages: list[dict], tools):
-    """逐行解析 DeepSeek SSE, yield 归一化 delta: {reasoning}|{content}|{tool_calls}."""
-    body = {
-        "model": CT_DEEPSEEK_MODEL,
-        "messages": messages,
-        "max_tokens": 2048,
-        "temperature": 0.7,
-        "stream": True,
-        # DeepSeek 在最后一个空 choices 块返回 usage; 需显式开启才能拿到 token/缓存统计.
-        "stream_options": {"include_usage": True},
-    }
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        DEEPSEEK_CHAT_URL, data=data,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
-    )
-    buf = b""
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
-        for chunk in resp:
-            buf += chunk
-            while True:
-                idx = buf.find(b"\n")
-                if idx < 0:
-                    break
-                line = buf[:idx].decode("utf-8", "replace").strip()
-                buf = buf[idx + 1:]
-                if not line or not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    return
-                try:
-                    obj = json.loads(payload)
-                except Exception:
-                    continue
-                # 用量块 (最后一块, choices 可能为空): 透传给 chat 面板做上下文/缓存可视化
-                if obj.get("usage"):
-                    yield {"usage": obj["usage"]}
-                try:
-                    delta = obj["choices"][0]["delta"]
-                except Exception:
-                    continue
-                if delta.get("reasoning_content"):
-                    yield {"reasoning": delta["reasoning_content"]}
-                if delta.get("content"):
-                    yield {"content": delta["content"]}
-                if delta.get("tool_calls"):
-                    yield {"tool_calls": delta["tool_calls"]}
-
-
-def _stream_hermes_gateway(messages: list[dict], collector: dict):
+def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | None = None):
     """委托 Hermes gateway (:8642) 跑完整 tools/skills 循环, 代理其 SSE 到前端 chat 面板.
 
     gateway 用 OpenAI 兼容 SSE 流式:
@@ -885,7 +972,7 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
     if not HERMES_AGENT_URL:
         raise RuntimeError("HERMES_AGENT_URL not configured")
     body = json.dumps({
-        "model": HERMES_AGENT_MODEL,
+        "model": model or HERMES_AGENT_MODEL,
         "messages": messages,
         "max_tokens": 2048,
         "temperature": 0.7,
@@ -898,8 +985,10 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
             "Authorization": f"Bearer {HERMES_AGENT_KEY}",
         },
     )
-    # urlopen 在网关不可达时立即抛 URLError/HTTPError → 调用方回退本地循环 (尚未 yield 内容)
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+    # 连接用短超时(urlopen 的 timeout 在连接阶段生效); 建立后把底层 socket 读取超时
+    # 调长(R2), 允许模型长生成期间的静默间隙, 不被 socket 超时掐断.
+    # urlopen 不可达时立即抛 URLError/HTTPError → 调用方回退本地循环 (尚未 yield 内容)
+    with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
         buf = b""
         evt = None
         data_lines: list[str] = []
@@ -927,8 +1016,10 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
                 if tool.startswith("tool_describe") or tool == "tool_describe":
                     return
                 if status == "running" or (not status and label):
-                    # 工具开始: 注册卡片 (前端 ok:null → 待执行态)
+                    # 工具开始: 注册卡片 (前端 ok:null → 待执行态). 记录 tcid 以便
+                    # 结果回填按 id 精确匹配 (L5: 避免同名工具多次调用互相串台).
                     collector["tool_calls"].append({
+                        "id": tcid,
                         "name": tool,
                         "params": {"input": label, "emoji": emoji},
                         "result_summary": "",
@@ -946,11 +1037,21 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
                     ok = (status != "failed")
                     result_txt = p.get("result", "") if ok else "（执行失败）"
                     if ok:
-                        for _tc in reversed(collector["tool_calls"]):
-                            if _tc.get("name") == tool:
-                                _tc["result_summary"] = str(result_txt)[:500]
-                                _tc["success"] = True
-                                break
+                        # L5: 优先按 toolCallId 精确回填; 无 id 时回退按 name 逆序匹配
+                        matched = False
+                        if tcid:
+                            for _tc in reversed(collector["tool_calls"]):
+                                if _tc.get("id") == tcid:
+                                    _tc["result_summary"] = str(result_txt)[:500]
+                                    _tc["success"] = True
+                                    matched = True
+                                    break
+                        if not matched:
+                            for _tc in reversed(collector["tool_calls"]):
+                                if _tc.get("name") == tool:
+                                    _tc["result_summary"] = str(result_txt)[:500]
+                                    _tc["success"] = True
+                                    break
                     yield {
                         "type": "tool_result", "id": tcid, "ok": ok,
                         "result": result_txt,
@@ -981,7 +1082,8 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
             if obj.get("usage"):
                 collector["usage"] = obj["usage"]
                 yield {"type": "usage", "usage": obj["usage"],
-                       "model": HERMES_AGENT_MODEL, "context_window": CT_CONTEXT_WINDOW}
+                       "model": model or HERMES_AGENT_MODEL,
+                       "context_window": _hermes_model_context(model or HERMES_AGENT_MODEL)}
             try:
                 delta = obj["choices"][0]["delta"]
             except Exception:
@@ -1012,114 +1114,80 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict):
         yield from _flush()  # 收尾: 处理缓冲区中最后一个未以空行结束的帧
 
 
-def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, collector: dict):
+def _stream_fallback(messages: list[dict], agent: str, collector: dict):
+    """本地降级通道 (H2 恢复): gateway 不可达/空响应时, 走 DeepSeek→Hermes→Local 三层
+    chat 补全, 把正文以 SSE content 增量流式透出 (≈24 字/片, 前端 rAF 限频重渲 markdown),
+    并回传 usage 事件. 全部失败时抛错, 由上层转 error 事件.
+    """
+    content, usage = _call_llm(messages, agent, collector)
+    if not content.strip():
+        raise RuntimeError("本地模型返回空响应")
+    for i in range(0, len(content), 24):
+        chunk = content[i:i + 24]
+        collector["content"] += chunk
+        yield {"type": "content", "delta": chunk}
+    if usage:
+        yield {"type": "usage", "usage": usage,
+               "model": _effective_model(agent), "context_window": CT_CONTEXT_WINDOW}
+
+
+def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, collector: dict,
+                        tree: "ct.ConversationTree | None" = None):
     """生成 chat SSE 事件字典. collector 累积 {content, thinking, tool_calls, usage} 供持久化.
 
-    得兼架构: **ikaros / hermes 两种模式都优先委托 8642 gateway** 跑完整 tools/skills 循环;
-    区别只在 messages 的 system 注入内容 (ikaros=完整 persona, hermes=树域上下文+树域记忆,
-    gateway core 的 SOUL 即人格). 网关不可达/空响应时回退本地 DeepSeek + 3 只读工具回路,
-    并向前端发 warn 事件 (降级可见化).
-    ikaros 模式: 本地 DeepSeek 伴侣补全 (无工具, 纯对话).
+    主链路 = Hermes gateway (:8642) 跑完整 tools/skills 循环; gateway 不可达 / 空响应 /
+    报错 → 降级到本地三层 chat 补全 (DeepSeek→Hermes→Local), 并以 SSE ``warn`` 黄色提示条
+    告知用户 (符合 AGENTS.md 既定设计, 修复"只走 gateway 禁止降级"与文档/health 的矛盾, H2).
     """
-    # ── gateway 优先 (ikaros + hermes) ──
-    if agent in ("hermes", "ikaros") and HERMES_AGENT_URL:
-        gw_yielded = False
+    if not HERMES_AGENT_URL:
+        # 未配置 gateway → 直接走本地降级 (不报错)
+        yield {"type": "warn", "message": "Hermes gateway 未配置，已使用本地模型"}
         try:
-            # 必须迭代才会真正驱动生成器 (否则只是惰性对象, collector 不会被填充)
-            for _ev in _stream_hermes_gateway(messages, collector):
-                gw_yielded = True
-                yield _ev
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
-            yield {"type": "warn", "message": f"已降级: Hermes gateway 不可达（{e}），改用本地模型"}
-            sys.stderr.write(f"[ct] Hermes gateway unreachable ({e}); fallback local loop\n")
-        except Exception as e:  # 其它异常: 若已产出内容则保留残响应避免重复, 否则回退
-            if gw_yielded:
-                sys.stderr.write(f"[ct] Hermes gateway mid-stream error ({e}); keep partial\n")
-                return
-            yield {"type": "warn", "message": f"已降级: Hermes gateway 错误（{e}），改用本地模型"}
-            sys.stderr.write(f"[ct] Hermes gateway error ({e}); fallback local loop\n")
-        else:
-            # 网关跑通: 有内容则结束; 空响应(异常空)也回退本地循环
-            if collector["content"].strip():
-                return
-            yield {"type": "warn", "message": "Hermes gateway 返回空响应，改用本地模型"}
-            sys.stderr.write("[ct] Hermes gateway returned empty; fallback local loop\n")
-
-    # ── 本地循环 (ikaros 模式, 或 hermes 网关失败回退) ──
-    if not _DEEPSEEK_KEY:
-        # 无 DeepSeek key: 回退到既有非流式补全 (无思考/工具, 仅透传正文)
-        try:
-            reply = _call_llm(messages, agent=agent)
-            collector["content"] = reply
-            yield {"type": "content", "delta": reply}
+            yield from _stream_fallback(messages, agent, collector)
         except Exception as e:
-            yield {"type": "error", "message": str(e)}
+            yield {"type": "error", "message": f"本地模型不可用（{e}）"}
         return
 
-    # 本地循环工具集: 仅 hermes (含网关回退) 启用 3 个只读工具, ikaros 纯伴侣无工具
-    tools = CHAT_TOOLS if (agent == "hermes" and _DEEPSEEK_KEY) else None
-    loop_messages = list(messages)
-    for _ in range(MAX_TOOL_ITER):
-        tc_acc: dict = {}
-        try:
-            for d in _deepseek_stream(loop_messages, tools):
-                if "reasoning" in d and d["reasoning"]:
-                    collector["thinking"] += d["reasoning"]
-                    yield {"type": "thinking", "delta": d["reasoning"]}
-                if "content" in d and d["content"]:
-                    collector["content"] += d["content"]
-                    yield {"type": "content", "delta": d["content"]}
-                if "usage" in d and d["usage"]:
-                    collector["usage"] = d["usage"]
-                    yield {"type": "usage", "usage": d["usage"],
-                           "model": CT_DEEPSEEK_MODEL, "context_window": CT_CONTEXT_WINDOW}
-                if "tool_calls" in d:
-                    for tc in d["tool_calls"]:
-                        idx = tc.get("index", 0)
-                        slot = tc_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        fn = tc.get("function", {}) or {}
-                        if fn.get("name"):
-                            slot["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            slot["arguments"] += fn["arguments"]
-        except Exception as e:
-            yield {"type": "error", "message": f"LLM 流失败: {e}"}
+    cur_model = _effective_model(agent)
+    gw_yielded = False
+    try:
+        for _ev in _stream_hermes_gateway(messages, collector, model=cur_model):
+            gw_yielded = True
+            yield _ev
+        # gateway 正常结束但无正文 → 降级本地
+        if not collector["content"].strip():
+            yield {"type": "warn", "message": "Hermes gateway 返回空响应，已降级本地模型"}
+        else:
             return
-        calls = [v for v in tc_acc.values() if v["name"]]
-        if not calls:
-            break
-        assistant_tc = []
-        for c in calls:
-            cid = c["id"] or f"call_{len(assistant_tc)}"
-            assistant_tc.append({
-                "id": cid, "type": "function",
-                "function": {"name": c["name"], "arguments": c["arguments"]},
-            })
-        loop_messages.append({
-            "role": "assistant", "content": None, "tool_calls": assistant_tc,
-        })
-        for c in calls:
-            cid = c["id"] or f"call_{calls.index(c)}"
-            try:
-                args_parsed = json.loads(c["arguments"]) if c["arguments"] else {}
-            except Exception:
-                args_parsed = {}
-            yield {"type": "tool_call", "id": cid, "name": c["name"], "args": args_parsed}
-            res = _execute_chat_tool(c["name"], c["arguments"], node_id)
-            ok = bool(res.get("ok", False))
-            yield {"type": "tool_result", "id": cid, "ok": ok,
-                   "result": str(res.get("result", ""))[:2000]}
-            loop_messages.append({
-                "role": "tool", "tool_call_id": cid,
-                "content": str(res.get("result", ""))[:4000],
-            })
-            collector["tool_calls"].append({
-                "name": c["name"], "params": args_parsed,
-                "result_summary": str(res.get("result", ""))[:300],
-                "success": ok, "timestamp": time.time(),
-            })
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
+        yield {"type": "warn", "message": f"Hermes gateway 不可达（{e}），已降级本地模型"}
+        sys.stderr.write(f"[ct] Hermes gateway unreachable ({e}); fallback to local\n")
+    except Exception as e:
+        if gw_yielded:
+            # 中段错误: gateway 已流式产出部分内容后中断.
+            # - 若尚未产出正文(仅工具事件): 安全降级本地补全, 不会产生重复正文;
+            # - 若已有部分正文: 保留残缺 + 明确 warn(黄色提示条), 不再重复生成,
+            #   避免把 gateway 半截答案 + 本地全新答案拼接成乱文落库.
+            if not collector["content"].strip():
+                sys.stderr.write(f"[ct] Hermes gateway mid-stream error before content ({e}); fallback to local\n")
+                yield {"type": "warn", "message": f"Hermes gateway 中断（{e}），已降级本地模型补全"}
+                try:
+                    yield from _stream_fallback(messages, agent, collector)
+                except Exception as e2:
+                    yield {"type": "error", "message": f"本地模型也不可用（{e2}）"}
+                return
+            sys.stderr.write(f"[ct] Hermes gateway mid-stream error ({e}); keep partial\n")
+            yield {"type": "warn", "message": f"Hermes gateway 流中途中断（{e}），上方为已生成的部分内容"}
+            return
+        yield {"type": "warn", "message": f"Hermes gateway 错误（{e}），已降级本地模型"}
+        sys.stderr.write(f"[ct] Hermes gateway error ({e}); fallback to local\n")
+
+    # 降级本地三层链路
+    try:
+        yield from _stream_fallback(messages, agent, collector)
+    except Exception as e:
+        yield {"type": "error", "message": f"本地模型也不可用（{e}）"}
+        sys.stderr.write(f"[ct] fallback failed ({e})\n")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1176,7 +1244,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk.encode("utf-8"))
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            # M3: 客户端断开(ESC/切节点)时主动关闭生成器链, 让 _stream_hermes_gateway
+            # 的 urlopen with 块立即退出并关掉 gateway HTTP 连接, 不再挂到 LLM_TIMEOUT.
+            try:
+                generator.close()
+            except Exception:
+                pass
 
     def _send_html(self, path: Path):
         if not path.exists():
@@ -1188,6 +1261,47 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         # 必须带 Content-Length, 否则 HTTP/1.1 keep-alive 下客户端只能等连接
         # 关闭才能判定 HTML 结束 —— 浏览器标签页会因此一直转圈。
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # 静态资源: /assets/xxx.woff2 等 (2026-08-02, 字体自托管零外部依赖)
+    _MIME = {".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf",
+             ".css": "text/css; charset=utf-8", ".js": "application/javascript",
+             ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+
+    def _serve_asset(self, path: str):
+        name = path[len("/assets/"):].split("?", 1)[0]
+        # 防目录穿越: 只允许 assets/ 下的普通文件名
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            self._send_text("forbidden", 403)
+            return
+        f = HERE / "assets" / name
+        if not f.exists():
+            self._send_text("not found", 404)
+            return
+        body = f.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", self._MIME.get(f.suffix, "application/octet-stream"))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_upload(self, path: str):
+        """GET /uploads/<name> —— 附件静态服务（目录穿越防护 + MIME 白名单）。"""
+        name = path[len("/uploads/"):].split("?", 1)[0]
+        if not name or "/" in name or "\\" in name or name.startswith(".") or ".." in name:
+            self._send_text("forbidden", 403)
+            return
+        f = _UPLOAD_DIR / name
+        if not f.exists():
+            self._send_text("not found", 404)
+            return
+        body = f.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", _UPLOAD_MIME.get(f.suffix, "application/octet-stream"))
+        self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1213,6 +1327,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/index.html"):
                 self._send_html(INDEX_HTML)
+            elif path.startswith("/assets/"):
+                self._serve_asset(path)
+            elif path.startswith("/uploads/"):
+                self._serve_upload(path)
             elif path == "/api/state":
                 self._send_json(state_dict())
             elif path == "/api/context":
@@ -1274,6 +1392,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"mermaid": _tree.to_mermaid()})
             elif path == "/api/sessions":
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            elif path == "/api/health":
+                # 连接状态探测: gateway 主通道 / 本地 LLM 降级链 / DeepSeek key
+                health = {"gateway": False, "local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
+                          "model": HERMES_AGENT_MODEL, "ts": time.time()}
+                try:
+                    req = urllib.request.Request(
+                        HERMES_AGENT_URL, method="GET",
+                        headers={"Authorization": f"Bearer {HERMES_AGENT_KEY}"},
+                    )
+                    urllib.request.urlopen(req, timeout=2)
+                    health["gateway"] = True
+                except urllib.error.HTTPError as e:
+                    health["gateway"] = e.code in (200, 405)  # POST-only 端点 GET 405 = 可达
+                except Exception:
+                    health["gateway"] = False
+                try:
+                    urllib.request.urlopen(LOCAL_CHAT_URL + "/health", timeout=2)
+                    health["local_llm"] = True
+                except Exception:
+                    health["local_llm"] = False
+                self._send_json(health)
+            elif path == "/api/model_switch":
+                self._send_json({
+                    "ok": True,
+                    "current": dict(_CT_RUNTIME),
+                    "defaults": {"hermes": HERMES_AGENT_MODEL, "ikaros": CT_DEEPSEEK_MODEL},
+                    "available": _hermes_models(),
+                })
             elif path == "/api/events":
                 self._stream_events()
             else:
@@ -1449,7 +1595,11 @@ class Handler(BaseHTTPRequestHandler):
                 _tree.jump_to(data["node_id"])
                 self._send_json(state_dict())
             elif path == "/api/prune":
-                _tree.prune(data["node_id"])
+                try:
+                    _tree.prune(data["node_id"])
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
                 self._send_json(state_dict())
             elif path == "/api/rename":
                 node = _tree.rename_node(
@@ -1477,6 +1627,43 @@ class Handler(BaseHTTPRequestHandler):
                     "branch": data.get("branch"),
                 })
                 self._send_json({"ok": True, "mem": mem})
+            elif path == "/api/upload":
+                # 附件上传: base64 JSON {name, data_b64} -> data/conversation-tree-uploads/
+                import base64
+                name = (data.get("name") or "").strip()
+                b64 = data.get("data_b64") or ""
+                if not name or not b64:
+                    self._send_json({"error": "name and data_b64 required"}, 400)
+                    return
+                # 防穿越 + 防路径注入: 只保留文件名
+                safe = Path(name).name
+                if not safe or safe.startswith("."):
+                    self._send_json({"error": "invalid filename"}, 400)
+                    return
+                try:
+                    raw = base64.b64decode(b64)
+                except Exception:
+                    self._send_json({"error": "invalid base64"}, 400)
+                    return
+                if len(raw) > 20 * 1024 * 1024:
+                    self._send_json({"error": "file too large (>20MB)"}, 413)
+                    return
+                # 重名加时间戳前缀，避免覆盖
+                dest = _UPLOAD_DIR / safe
+                if dest.exists():
+                    dest = _UPLOAD_DIR / f"{int(time.time())}-{safe}"
+                dest.write_bytes(raw)
+                self._send_json({"ok": True, "url": f"/uploads/{dest.name}", "size": len(raw)})
+            elif path == "/api/model_switch":
+                # POST: {"mode":"hermes"|"ikaros"|"","model":"<名>"}
+                mode = (data.get("mode") or "").strip()
+                model = (data.get("model") or "").strip()
+                if mode not in ("", "hermes", "ikaros"):
+                    self._send_json({"error": "mode must be hermes|ikaros|''"}, 400)
+                    return
+                _CT_RUNTIME["mode"] = mode
+                _CT_RUNTIME["model"] = model
+                self._send_json({"ok": True, "current": dict(_CT_RUNTIME)})
             elif path == "/api/chat":
                 user_message = data.get("message", "").strip()
                 if not user_message:
@@ -1486,16 +1673,20 @@ class Handler(BaseHTTPRequestHandler):
                 branch_label = data.get("branch_label")
 
                 # chat 接入 Ikaros V5: 人格 + 树感知压缩 + 树域语义记忆 (fail-open)
-                target_id = parent_id or _tree.current.id
-                node = _tree.get_node(target_id)
-                mode = node.agent if node else "ikaros"
+                # H3: 捕获局部 tree 引用, 贯穿整条 chat 生命周期, 使并发会话切换
+                # 不会把在飞对话写错树或读到半切换状态.
+                tree = _tree
+                target_id = parent_id or tree.current.id
+                node = tree.get_node(target_id)
+                mode = _effective_mode(node.agent if node else None)
                 collector = {"content": "", "thinking": "", "tool_calls": [],
                              "usage": {}, "warns": []}
 
                 def _gen():
                     errored = False
                     try:
-                        messages = build_chat_messages_v5(target_id, user_message, collector=collector)
+                        messages = build_chat_messages_v5(target_id, user_message,
+                                                          collector=collector, tree=tree)
                     except Exception as e:
                         yield f"data: {json.dumps({'type': 'error', 'message': f'build messages failed: {e}'}, ensure_ascii=False)}\n\n"
                         return
@@ -1503,7 +1694,7 @@ class Handler(BaseHTTPRequestHandler):
                     for w in collector.get("warns", []):
                         yield f"data: {json.dumps({'type': 'warn', 'message': w}, ensure_ascii=False)}\n\n"
                     try:
-                        for ev in _chat_stream_events(messages, mode, target_id, collector):
+                        for ev in _chat_stream_events(messages, mode, target_id, collector, tree=tree):
                             if ev.get("type") == "error":
                                 errored = True
                             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -1515,7 +1706,7 @@ class Handler(BaseHTTPRequestHandler):
                                 skills_used = list(dict.fromkeys(
                                     tc.get("name", "") for tc in collector["tool_calls"] if tc.get("name")
                                 ))
-                                _tree.add_turn(
+                                tree.add_turn(
                                     messages=[
                                         {"role": "user", "content": user_message},
                                         {"role": "assistant", "content": collector["content"]},
@@ -1530,7 +1721,7 @@ class Handler(BaseHTTPRequestHandler):
                                 _touch_active_session()
                             except Exception as e:
                                 sys.stderr.write(f"[ct] chat persist error: {e}\n")
-                        yield f"data: {json.dumps({'type': 'done', 'state': state_dict()}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'state': state_dict(tree)}, ensure_ascii=False)}\n\n"
                     except Exception as e:
                         sys.stderr.write(f"[ct] chat stream error: {e}\n")
                         yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
@@ -1597,6 +1788,12 @@ class Handler(BaseHTTPRequestHandler):
                                     v5s.delete(n.v5_memory_id)
                                 except Exception:
                                     pass
+                            # 一并清理 MemoryRetriever 写入的 fact 记忆 (共享 store, 否则成孤儿行)
+                            for mid in getattr(n, "memory_ids", []) or []:
+                                try:
+                                    v5s.delete(mid)
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
                 _sessions = [s for s in _sessions if s["id"] != sid]
@@ -1614,12 +1811,26 @@ class Handler(BaseHTTPRequestHandler):
                         _migrate_if_needed()
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id, "state": state_dict()})
             elif path == "/api/sessions/archive":
+                # 显式归档: 传 archived=true/false 直接设置; 省略则切换 (前端兼容).
                 sid = data.get("id")
                 sess = next((s for s in _sessions if s["id"] == sid), None)
                 if not sess:
                     self._send_json({"error": "session not found"}, 404)
                     return
-                sess["archived"] = not sess.get("archived", False)
+                if "archived" in data:
+                    sess["archived"] = bool(data["archived"])
+                else:
+                    sess["archived"] = not sess.get("archived", False)
+                _save_sessions(_sessions)
+                self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            elif path == "/api/sessions/unarchive":
+                # 显式取消归档 (C5): 无论当前状态, 强制 archived=False.
+                sid = data.get("id")
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                sess["archived"] = False
                 _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             elif path == "/api/sessions/rename":

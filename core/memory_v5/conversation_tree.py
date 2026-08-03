@@ -414,7 +414,8 @@ class ConversationTree:
             if seed_messages:
                 content = json.dumps(seed_messages, ensure_ascii=False)
                 sm = seed_summary or _extract_summary(seed_messages)
-                mid = self._store_fn(content, type="conversation", tags=_tree_tag(root_id))
+                mid = self._store_fn(content, type="conversation",
+                                     tags=f"{_tree_tag(root_id)} session:{self.persist_key}")
             else:
                 sm = seed_summary
             root = ConvNode(
@@ -608,11 +609,12 @@ class ConversationTree:
             if not parent:
                 raise ValueError(f"parent not found: {pid}")
 
-            # 存储对话内容到 V5 store (带 node/branch 树域标签, 供 tree_scoped_retrieve)
+            # 存储对话内容到 V5 store (带 node/branch/session 树域标签, 供 tree_scoped_retrieve
+            # 做会话隔离过滤 —— session:<persist_key> 保证多会话记忆不串台, H1 修复)
             content = json.dumps(messages, ensure_ascii=False)
             sm = _extract_summary(messages)
             node_id = uid("n")
-            new_tags = f"{tags} {_tree_tag(node_id, branch_label)}".strip()
+            new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
             mid = self._store_fn(content, type="conversation", tags=new_tags)
 
             node = ConvNode(
@@ -621,6 +623,9 @@ class ConversationTree:
                 agent=parent.agent,
                 depth=parent.depth + 1,
                 branch_label=branch_label,
+                # M2: 首个子节点=主线(trunk), 后续兄弟=分支(branch); 让 __trunk__ 合并
+                # 命中"分叉点之上的主线"而非恒为根, 修复 node_type 全 trunk 的语义失效.
+                node_type=("branch" if parent.children else "trunk"),
                 v5_memory_id=mid,
                 summary=sm,
                 state=_clone(state) if state is not None else _clone(parent.state),
@@ -719,7 +724,7 @@ class ConversationTree:
         content = json.dumps(messages, ensure_ascii=False)
         sm = _extract_summary(messages)
         node_id = uid("br")
-        new_tags = f"{tags} {_tree_tag(node_id, branch_label)}".strip()
+        new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
         mid = self._store_fn(content, type="conversation", tags=new_tags)
 
         node = ConvNode(
@@ -909,6 +914,9 @@ class ConversationTree:
 
     # ── 剪枝 ──
     def prune(self, node_id: str) -> None:
+        if node_id == self.root_id:
+            # 禁止剪根: 会删光整棵树且 current_id 指向已删 root, 使树彻底失效.
+            raise ValueError("prune(root) is not allowed; the root node cannot be pruned")
         with self._lock:
             del_ids = {n.id for n in self.subtree(node_id)}
             target = self.nodes.get(node_id)
@@ -1275,8 +1283,9 @@ class MemoryRetriever:
         node = self.tree.get_node(node_id) if node_id else None
         branch_label = node.branch_label if node else None
         base_tags = " ".join(mem.get("tags", [])) if isinstance(mem.get("tags"), list) else mem.get("tags", "")
-        # 带 node/branch 树域标签, 供 tree_scoped_retrieve 做树域过滤 (fact 同样适用)
-        new_tags = f"{base_tags} {_tree_tag(node_id, branch_label)}".strip() if (node_id or base_tags) else base_tags
+        # 带 node/branch/session 树域标签, 供 tree_scoped_retrieve 做树域+会话过滤 (fact 同样适用)
+        sess_tag = f" session:{self.tree.persist_key}" if hasattr(self.tree, "persist_key") else ""
+        new_tags = f"{base_tags} {_tree_tag(node_id, branch_label)}{sess_tag}".strip() if (node_id or base_tags) else base_tags
         try:
             mid = self.tree._store_fn(text, type="fact", tags=new_tags)
         except Exception as e:
