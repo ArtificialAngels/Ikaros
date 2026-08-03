@@ -227,6 +227,7 @@ white-space:nowrap}
 .node-card .tag-merged{background:rgba(236,27,218,.12);color:var(--brand-opposite)}
 .node-card .tag-abandoned{background:rgba(239,68,68,.12);color:var(--brand-danger)}
 .node-card .tag-current{background:rgba(19,228,37,.12);color:var(--brand)}
+.node-card .tag-trunk{background:rgba(255,176,32,.14);color:#FFB020}
 /* 代理归属徽标 (ekko 模式): Hermes 用 opposite 品牌色, Ikaros 用低调灰 */
 .node-card .agent-hermes{color:var(--brand-opposite);font-weight:600}
 .node-card .agent-ikaros{color:var(--text-quaternary)}
@@ -899,6 +900,7 @@ const API = {
   unmerge(id){return this._post('/api/unmerge',{node_id:id})},
   abandon(id){return this._post('/api/abandon',{node_id:id})},
   rename(id,title){return this._post('/api/rename',{node_id:id,title:title})},
+  setTrunk(id,cascade){return this._post('/api/set_trunk',{node_id:id,cascade:cascade})},
   deleteNode(id){return this._post('/api/delete_node',{node_id:id})},
   setAgent(id,agent,cascade=true){return this._post('/api/set_agent',{node_id:id,agent:agent,cascade:cascade})},
   fullContext(id){return this._get('/api/full_context?node_id='+encodeURIComponent(id))},
@@ -928,9 +930,11 @@ class ConvNode{
   this.agent=o.agent||'ikaros';}
 }
 class TreeView{
-  constructor(nodesMap,rootId,currentId){this.nodes=nodesMap;this.rootId=rootId;this.currentId=currentId;this.version=0}
+  constructor(nodesMap,rootId,currentId,trunkId){this.nodes=nodesMap;this.rootId=rootId;this.currentId=currentId;this.trunkId=trunkId||null;this.version=0}
   get current(){return this.nodes.get(this.currentId)}
   getNode(id){return this.nodes.get(id)}
+  isOnTrunk(id){ // S1: 沿祖先链可达主线终点即主线路径
+    let c=this.nodes.get(id);while(c){if(c.id===this.trunkId)return true;c=c.parentId?this.nodes.get(c.parentId):null}return false}
   getPath(id){id=id||this.currentId;const p=[];let c=this.nodes.get(id);while(c){p.unshift(c);c=c.parentId?this.nodes.get(c.parentId):null}return p}
   getContext(id){return this.getPath(id).reduce((a,n)=>a.concat(n.messages),[])}
   siblings(id){const n=this.nodes.get(id);if(!n||!n.parentId)return[];const p=this.nodes.get(n.parentId);return p.children.filter(c=>c!==id)}
@@ -938,7 +942,7 @@ class TreeView{
   isLeaf(id){const n=this.nodes.get(id);return n?n.children.length===0:true}
 }
 
-let tree=null,currentMem={path:[],cross:[]},branchParentId=null;
+let tree=null,currentMem={path:[],cross:[]},branchParentId=null,branchForkMode=false;
 
 function installState(s){
   const m=new Map();
@@ -951,7 +955,7 @@ function installState(s){
       execState:n.exec_state,execProgress:n.exec_progress,execDetail:n.exec_detail,
       agent:n.agent||'ikaros',summary:n.summary||''}));
   });
-  tree=new TreeView(m,s.root_id,s.current_id);
+  tree=new TreeView(m,s.root_id,s.current_id,s.trunk_id);
 }
 
 /* ===== Canvas State ===== */
@@ -1054,6 +1058,9 @@ function renderNodes(){
     if(!n.isValid)tags+='<span class="node-tag tag-abandoned">abandoned</span>';
     if(n.nodeType==='conclusion')tags+='<span class="node-tag tag-conclusion">conclusion</span>';
     if(n.mergeTarget)tags+='<span class="node-tag tag-merged">merged</span>';
+    // S1: 主线路径标识 (沿祖先链可达 trunk_id)
+    if(n.id===tree.trunkId)tags+='<span class="node-tag tag-trunk">★ trunk</span>';
+    else if(tree.isOnTrunk(n.id))tags+='<span class="node-tag tag-trunk">trunk</span>';
     if(isCur)tags+='<span class="node-tag tag-current">current</span>';
     // 折叠按钮: 有子节点的节点才显示; 折叠态显示 +N (子树内其他节点数)
     const hasKids=n.children&&n.children.some(c=>tree.nodes.has(c));
@@ -1264,6 +1271,10 @@ function onNodeContextMenu(e,nodeId){
   items.push({label:'查看完整上下文',action:'fullContext',icon:'👁'});
   items.push({divider:true});
   items.push({label:'从此分叉',action:'fork',icon:'⎇'});
+  // S1: 主线管理 —— 非主线节点可提升为主线终点
+  if(n.id!==tree.trunkId){
+    items.push({label:tree.isOnTrunk(n.id)?'设为主线终点（当前主线分支）':'设为主线终点',action:'setTrunk',icon:'★'});
+  }
   if(n.mergeTarget){
     items.push({label:'取消合并',action:'unmerge',icon:'↩',danger:true});
   }else{
@@ -1309,7 +1320,8 @@ async function handleCtxAction(action){
     case 'exportCard':exportShareCard();break;
     case 'rename':await renameNodePrompt(nid);break;
     case 'fullContext':await showFullContext(nid);break;
-    case 'fork': branchParentId=nid;document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(tree.nodes.get(nid))+'…';focusInput();break;
+    case 'fork': branchParentId=nid;branchForkMode=true;document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(tree.nodes.get(nid))+'…';focusInput();break;
+    case 'setTrunk':await API.setTrunk(nid,false);await refresh();break;
     case 'conclude':await API.conclude(nid);await refresh();break;
     case 'merge':await API.merge(nid,'__trunk__');await refresh();break;
     case 'unmerge':await API.unmerge(nid);await refresh();break;
@@ -1789,7 +1801,7 @@ async function createConnection(fromId,targetId){
     await API.merge(fromId,targetId);
   }else{
     // Default: fork from target
-    branchParentId=targetId;
+    branchParentId=targetId;branchForkMode=true;
     document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(target)+'…';
     focusInput();
   }
@@ -2117,7 +2129,7 @@ function aiCardHtml(content,isCur,n,mi){
 }
 function branchFromNode(nid){
   const n=tree.nodes.get(nid);if(!n)return;
-  branchParentId=nid;
+  branchParentId=nid;branchForkMode=true;
   document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(n)+'…';
   focusInput();
 }
@@ -2326,7 +2338,7 @@ async function sendMessage(){
   sb.onclick=stopGenerating;
   const ac=new AbortController();activeChat=ac;
   try{
-    await API.chatStream({message:fullText,parent_id:parentId,branch_label:branchLabel},(ev)=>{
+    await API.chatStream({message:fullText,parent_id:parentId,branch_label:branchLabel,force_branch:branchForkMode},(ev)=>{
       if(ev.type==='thinking'){
         live.thinking+=ev.delta;renderExtras(extras,live);area.scrollTop=area.scrollHeight;
       }else if(ev.type==='content'){
@@ -2351,7 +2363,7 @@ async function sendMessage(){
         turn.querySelector('.ai-card')?.classList.remove('answer-live');
         // 用 store 渲染覆盖 live (含持久化 thinking/工具), 重渲染画布
         installState(ev.state);selectedNode=tree.currentId;
-        branchParentId=null;
+        branchParentId=null;branchForkMode=false;
         Promise.resolve(refreshMem()).then(()=>{renderAll();fitView();});
         renderSessions();  // 刷新左侧栏会话预览 (当前节点摘要)
       }else if(ev.type==='error'){
@@ -2377,7 +2389,7 @@ async function sendMessage(){
   sb.onclick=sendMessage;
   clearAttaches();
   if(activeChat===ac)activeChat=null;
-  branchParentId=null;
+  branchParentId=null;branchForkMode=false;
 }
 function editResendDraft(text){
   const f=document.getElementById('inputField');
@@ -2387,6 +2399,7 @@ function editResendDraft(text){
 async function branchFromCurrent(){
   const cur=tree.current;
   branchParentId=cur.children.length===0&&cur.parentId?cur.parentId:cur.id;
+  branchForkMode=true;  // S1: 显式分叉 → 服务端强制 branch
   document.getElementById('inputField').placeholder='↳ Fork from '+nodeText(cur)+'…';focusInput();
 }
 async function pruneCurrent(){
@@ -2842,12 +2855,12 @@ async function editAndResend(nodeId,idx){
   const target=n.parentId&&tree.nodes.get(n.parentId)?n.parentId:tree.rootId;
   if(target&&target!==tree.currentId){
     doJump(target).then(()=>{
-      branchParentId=tree.currentId;
+      branchParentId=tree.currentId;branchForkMode=true;
       f.placeholder='↳ Fork from '+nodeText(tree.nodes.get(target))+'… (编辑重发)';
       focusInput();
     });
   }else{
-    branchParentId=n.parentId||null;
+    branchParentId=n.parentId||null;branchForkMode=true;
     f.placeholder='↳ Fork from '+nodeText(n)+'… (编辑重发)';
     focusInput();
   }

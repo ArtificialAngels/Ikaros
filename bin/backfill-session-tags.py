@@ -1,172 +1,126 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""回填对话树记忆的 session: 标签 (R3 隐患清理).
+"""一次性存量数据回填: 给带 node:/branch: 标签但缺 session: 标签的 V5 记忆补上会话标签.
 
-问题背景
---------
-tree_adapter.tree_scoped_retrieve 仅按 tag 过滤来做多会话隔离: 带 session: 标签但
-不属于本会话的记忆会被排除。本次修复已让 add_turn / add_memory 对 *新* 记忆打
-session:{persist_key} 标签; 但 **存量** 记忆(legacy 旧行, 只有 node:/branch: 标签
-而无 session:) 仍会被 tree_scoped_retrieve 当作"无 session 标签的 legacy"放行,
-可能跨会话/跨树串台。
+背景 (H1 会话隔离): 2026-08-01 起新写入的记忆都带 session:<persist_key> 标签,
+tree_scoped_retrieve 靠它做会话边界过滤. 但存量记忆 (7-28 ~ 8-01 期间写入) 只有
+node:/branch: 标签, 没有 session: 标签 —— 它们在检索时走 "legacy 无标签放行" 分支,
+旧会话记忆可能串台.
 
-本脚本扫描所有对话树拓扑 JSON, 建立 node_id -> persist_key 映射, 对 v5 store 中带
-node:/branch: 标签但缺 session: 的记忆补打 session:{persist_key}。
+回填逻辑:
+1. 遍历 core/memory_v5/data/v5/*.json 拓扑文件, 建立 node_id → persist_key 映射;
+2. 对 memory 表中 tags 含 "node:" 但不含 "session:" 的行, 查 node_id 归属的
+   persist_key, 补上 "session:<persist_key>";
+3. 无法归属 (node id 不在任何拓扑中) 的行跳过, 保持原样.
 
-安全策略
---------
-- 默认 dry-run: 只统计 + 打印样例, 不写库。
-- 需显式 --apply 才执行 UPDATE 并 commit。
-- 每条记忆只补打一次, 已含 session: 的跳过。
-- 找不到 node 所属 persist_key 的(孤儿 node 引用)跳过并计数, 不误打。
+用法: python bin/backfill-session-tags.py [--dry-run]
+安全: 只更新 tags 字段 (追加标签, 不动内容/权重/时间戳); --dry-run 只看不改.
 """
-from __future__ import annotations
-
 import argparse
 import json
-import os
-import re
 import sqlite3
 import sys
+from pathlib import Path
 
-# 路径: 让脚本能 import memory_v5
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_IKAROS = os.path.dirname(_HERE)
-sys.path.insert(0, os.path.join(_IKAROS, "core"))
-sys.path.insert(0, _IKAROS)
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "core" / "memory_v5" / "data" / "v5"
+DB = DATA_DIR / "v5.db"
 
-NODE_RE = re.compile(r"node:([^\s]+)")
+# 排除这些文件 (非拓扑)
+_SKIP = {"sessions.json", "ui_conversation_tree_memories.json"}
 
 
-def build_node_session_map(v5_data_dir: str) -> dict:
-    """扫描 V5_DATA_DIR 下所有 ui_conversation_tree*.json, 返回 {node_id: persist_key}。"""
-    node_to_session: dict = {}
-    skipped_orphan = 0
-    if not os.path.isdir(v5_data_dir):
-        return node_to_session
-    for fname in os.listdir(v5_data_dir):
-        if not fname.startswith("ui_conversation_tree") or not fname.endswith(".json"):
+def build_node_session_map() -> dict[str, str]:
+    """遍历拓扑 JSON, 返回 {node_id: persist_key}."""
+    mapping: dict[str, str] = {}
+    for f in sorted(DATA_DIR.glob("*.json")):
+        if f.name in _SKIP:
             continue
-        persist_key = fname[: -len(".json")]  # 文件名即 persist_key
-        path = os.path.join(v5_data_dir, fname)
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                topo = json.load(f)
-        except Exception as e:
-            print(f"  [warn] 解析拓扑失败 {fname}: {e}")
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
             continue
-        nodes = (topo.get("nodes") or []) if isinstance(topo, dict) else []
-        # 拓扑 nodes 可能是 dict(keyed by id) 或 list(每项含 id); 两种都兼容.
-        if isinstance(nodes, dict):
-            node_ids = nodes.keys()
+        # 兼容顶层 list (如 ui_conversation_tree_memories.json) 与 dict 拓扑
+        if isinstance(data, dict):
+            persist_key = data.get("persist_key") or f.stem
+            nodes = data.get("nodes", [])
+        elif isinstance(data, list):
+            # 列表文件可能是 {persist_key, nodes} 列表或纯记忆列表 —— 只认 dict 项
+            persist_key = f.stem
+            nodes = []
+            for item in data:
+                if isinstance(item, dict) and "nodes" in item:
+                    persist_key = item.get("persist_key") or persist_key
+                    nodes.extend(item.get("nodes", []))
         else:
-            node_ids = [n.get("id") for n in nodes if isinstance(n, dict) and n.get("id")]
-        for nid in node_ids:
-            node_to_session[nid] = persist_key
-    return node_to_session
+            continue
+        for n in nodes:
+            if isinstance(n, dict):
+                nid = n.get("id")
+                if nid:
+                    mapping[nid] = persist_key
+    return mapping
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="回填对话树记忆的 session: 标签")
-    ap.add_argument("--apply", action="store_true",
-                    help="真正写库; 省略则 dry-run (只统计+打印样例)")
-    ap.add_argument("--limit", type=int, default=20,
-                    help="dry-run 时打印的样例条数 (默认 20)")
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="只统计不修改")
     args = ap.parse_args()
 
-    try:
-        from memory_v5 import store as v5s
-    except Exception as e:
-        print(f"[error] 无法 import memory_v5.store: {e}")
-        return 2
+    if not DB.exists():
+        print(f"[bf] DB not found: {DB}")
+        sys.exit(1)
 
-    v5_data_dir = str(v5s.V5_DATA_DIR)
-    print(f"V5 data dir : {v5_data_dir}")
-    node_to_session = build_node_session_map(v5_data_dir)
-    print(f"节点->会话映射: {len(node_to_session)} 个节点")
+    mapping = build_node_session_map()
+    print(f"[bf] node→session 映射: {len(mapping)} 节点, "
+          f"覆盖 {len(set(mapping.values()))} 个会话")
 
-    db_path = str(v5s.V5_DB_PATH)
+    db = sqlite3.connect(DB)
+    db.execute("PRAGMA journal_mode=WAL")
+    cur = db.cursor()
 
-    def _open_db():
-        # 维护脚本用裸 sqlite3 连接, 避开 store.conn() 在长扫描事务里的 WAL 读快照
-        # 陈旧问题(同一连接内 SELECT 可能读到 checkpoint 前的旧快照). 这里显式设
-        # WAL + busy_timeout + TRUNCATE checkpoint, 保证读到最新已提交数据.
-        c = sqlite3.connect(db_path)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA busy_timeout=5000")
-        c.execute("PRAGMA journal_mode=WAL")
-        try:
-            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:
-            pass
-        return c
+    # 找缺 session 标签但带 node: 标签的行
+    cur.execute(
+        "SELECT id, tags FROM memory "
+        "WHERE tags LIKE '%node:%' AND tags NOT LIKE '%session:%'"
+    )
+    rows = cur.fetchall()
+    print(f"[bf] 缺 session 标签的 node 记忆: {len(rows)} 条")
 
-    # 取所有带 node: 标签的记忆
-    candidates = []
-    with _open_db() as c:
-        cur = c.execute(
-            "SELECT id, tags FROM memory WHERE tags LIKE ?",
-            ("%node:%",),
-        )
-        for row in cur.fetchall():
-            mid = row["id"]
-            tags = row["tags"] or ""
-            # 注意: 实际 tag 是带后缀的 `session:<persist_key>` (如 session:ui_conversation_tree),
-            # 不是裸 `session:`, 故必须用 startswith 判定, 不能用 `"session:" in tags.split()`
-            # (后者是列表精确成员判定, 永远不会命中带后缀的 tag, 会导致:
-            #   1) dry-run 误报"待补打"; 2) 重复 --apply 时追加第二个同名 tag, 污染数据).
-            if any(tok.startswith("session:") for tok in tags.split()):
-                continue  # 已带 session 标签, 跳过
-            m = NODE_RE.search(tags)
-            if not m:
-                continue
-            nid = m.group(1)
-            pk = node_to_session.get(nid)
-            if not pk:
-                candidates.append((mid, tags, nid, None))
-            else:
-                candidates.append((mid, tags, nid, pk))
-
-    need = [x for x in candidates if x[3] is not None]
-    orphan = [x for x in candidates if x[3] is None]
-
-    print(f"\n扫描结果:")
-    print(f"  待补打(可定位会话): {len(need)}")
-    print(f"  孤儿 node 引用(跳过): {len(orphan)}")
-
-    if not need:
-        print("无需回填。")
-        return 0
-
-    print(f"\n样例(最多 {args.limit} 条):")
-    for mid, tags, nid, pk in need[: args.limit]:
-        print(f"  id={mid} node={nid} -> session={pk}")
-        print(f"    tags: {tags}")
-
-    if not args.apply:
-        print("\n[dry-run] 未写库。加 --apply 执行回填。")
-        return 0
-
-    # 执行回填 (裸 sqlite3 连接, 显式 commit + checkpoint)
     updated = 0
-    with _open_db() as c:
-        for mid, tags, nid, pk in need:
-            tagset = tags.split()
-            new_sess = f"session:{pk}"
-            if new_sess in tagset:
-                continue  # 防御: 已含本会话标签, 不重复追加 (幂等)
-            tagset.append(new_sess)
-            new_tags = " ".join(tagset)
-            c.execute("UPDATE memory SET tags=? WHERE id=?", (new_tags, mid))
-            updated += 1
-        c.commit()
-        try:
-            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:
-            pass
-    print(f"\n[apply] 已补打 {updated} 条记忆的 session: 标签。")
-    return 0
+    orphaned = 0
+    skipped = 0
+    for mid, tags in rows:
+        # 取第一个 node:<id> 标签
+        nid = None
+        for t in (tags or "").split():
+            if t.startswith("node:") and len(t) > 5:
+                nid = t[5:]
+                break
+        if not nid:
+            skipped += 1
+            continue
+        persist_key = mapping.get(nid)
+        if persist_key:
+            new_tags = f"{tags} session:{persist_key}".strip()
+        else:
+            # 孤儿: 节点已不在任何现存拓扑 (旧树已重建/删除) → 打 session:orphan
+            # 隔离出树域检索 (tree_scoped_retrieve 会把非本会话的 session 标签排除),
+            # 避免旧对话记忆跨会话串台; 记忆本体保留在 V5 长期库中.
+            new_tags = f"{tags} session:orphan".strip()
+            orphaned += 1
+        if not args.dry_run:
+            cur.execute("UPDATE memory SET tags=? WHERE id=?", (new_tags, mid))
+        updated += 1
+
+    if not args.dry_run:
+        db.commit()
+    db.close()
+
+    print(f"[bf] 完成: 回填 {updated} 条 (其中孤儿打标 {orphaned} 条), "
+          f"跳过 {skipped} 条"
+          f"{' (dry-run, 未修改)' if args.dry_run else ''}")
+    if updated:
+        print(f"[bf] 提示: 若之后要撤消, 可手动去掉这些行 tags 中的 'session:' 后缀")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

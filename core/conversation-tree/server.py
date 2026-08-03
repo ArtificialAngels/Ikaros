@@ -279,7 +279,9 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
     if _DEEPSEEK_KEY:
         try:
             ds_body = json.dumps({
-                "model": "deepseek-chat", "messages": messages,
+                # S2: 用 CT_DEEPSEEK_MODEL (默认 deepseek-v4-flash) 替代已废弃的
+                # deepseek-chat 别名 (AGENTS.md: deepseek-chat 已废弃)
+                "model": CT_DEEPSEEK_MODEL, "messages": messages,
                 "max_tokens": 2048, "temperature": 0.7, "stream": False,
             }).encode("utf-8")
             req = urllib.request.Request(
@@ -343,6 +345,139 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
                 if collector is not None:
                     collector["usage"] = usage
                 return content.strip(), usage
+            errors.append("Local LLM returned empty content")
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        errors.append(f"Local: {e}")
+    except Exception as e:
+        errors.append(f"Local unexpected: {e}")
+
+    raise RuntimeError("LLM unavailable: " + "; ".join(errors))
+
+
+# ── S2: 完整工具协议 (降级链自主工具调用) ──────────────────────────
+# 只读工具 schema (OpenAI function-calling 格式), 与 _execute_chat_tool 对应。
+# 由 _call_llm_tools 传给 DeepSeek, 模型可自主决定调用; 结果回填后多轮循环。
+_READONLY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "description": "在 V5 长期记忆中检索与 query 相关的内容 (按当前树域/会话加权)",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "检索关键词"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "获取当前系统时间",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "branch_overview",
+            "description": "查看当前分支的路径脉络 (根→当前节点的摘要)",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+# 工具循环上限: 防止模型无限调用工具
+MAX_TOOL_ROUNDS = 4
+
+
+def _call_llm_tools(
+    messages: list[dict],
+    tools: list[dict],
+    collector: "dict | None" = None,
+) -> tuple[str, dict, list]:
+    """带 tools 协议的三层补全 (S2): 返回 (content, usage, tool_calls).
+
+    - DeepSeek 层支持 tools (OpenAI function-calling 兼容), 模型可返回 tool_calls;
+    - Hermes Dashboard / Local LLM 不支持 tools 协议时返回空 content 由上层降级,
+      因此本函数只对 DeepSeek 传 tools, 其余两层回退普通补全 (不带 tools)。
+    - 返回的 tool_calls 为原始 OpenAI 格式列表:
+      [{"id":..., "type":"function", "function":{"name":..., "arguments":"{...}"}}, ...]
+    """
+    errors: list[str] = []
+
+    # 1) DeepSeek API (唯一支持 tools 的降级层)
+    if _DEEPSEEK_KEY:
+        try:
+            body = {
+                "model": CT_DEEPSEEK_MODEL, "messages": messages,
+                "max_tokens": 2048, "temperature": 0.7, "stream": False,
+                "tools": tools,
+            }
+            req = urllib.request.Request(
+                DEEPSEEK_CHAT_URL, data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
+            )
+            with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                msg = data["choices"][0]["message"]
+                content = msg.get("content") or ""
+                tool_calls = msg.get("tool_calls") or []
+                usage = data.get("usage", {}) or {}
+                if content.strip() or tool_calls:
+                    if collector is not None:
+                        collector["usage"] = usage
+                    return content.strip(), usage, tool_calls
+                errors.append("DeepSeek returned empty response")
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+            errors.append(f"DeepSeek: {e}")
+        except Exception as e:
+            errors.append(f"DeepSeek unexpected: {e}")
+    else:
+        errors.append("DeepSeek: no API key")
+
+    # 2) Hermes Dashboard (不带 tools, 模型只出正文)
+    try:
+        h_body = json.dumps({
+            "model": "hermes", "messages": messages,
+            "max_tokens": 2048, "temperature": 0.7, "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(HERMES_CHAT_URL, data=h_body,
+                                     headers={"Content-Type": "application/json"})
+        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"].get("content", "")
+            usage = data.get("usage", {}) or {}
+            if content.strip():
+                if collector is not None:
+                    collector["usage"] = usage
+                return content.strip(), usage, []
+            errors.append("Hermes returned empty content")
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        errors.append(f"Hermes: {e}")
+    except Exception as e:
+        errors.append(f"Hermes unexpected: {e}")
+
+    # 3) Local LLM (不带 tools)
+    try:
+        l_body = json.dumps({
+            "model": "local-llm", "messages": messages,
+            "max_tokens": 2048, "temperature": 0.7, "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(LOCAL_CHAT_URL, data=l_body,
+                                     headers={"Content-Type": "application/json"})
+        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"].get("content", "")
+            if not content.strip():
+                content = data["choices"][0]["message"].get("reasoning_content", "")
+            usage = data.get("usage", {}) or {}
+            if content.strip():
+                if collector is not None:
+                    collector["usage"] = usage
+                return content.strip(), usage, []
             errors.append("Local LLM returned empty content")
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         errors.append(f"Local: {e}")
@@ -1134,13 +1269,16 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
     chat 补全, 把正文以 SSE content 增量流式透出 (≈24 字/片, 前端 rAF 限频重渲 markdown),
     并回传 usage 事件. 全部失败时抛错, 由上层转 error 事件.
 
-    F12: 挂只读工具回路 —— 调 LLM 前先用 _execute_chat_tool 做一轮 memory_search
-    预检索 (query=最后一条 user 消息), 结果并入 system 上下文 + 前端工具卡片.
-    检索失败/不可用 fail-open 不阻塞主线. 这修复了 _execute_chat_tool 定义后
-    从未被调用、降级链完全没有工具能力的问题 (AGENTS.md 声称的"3 只读工具回路").
+    S2: 完整工具协议 —— 降级链跑多轮工具循环 (上限 MAX_TOOL_ROUNDS):
+      1. 先做一轮 memory_search 预检索 (query=最后一条 user 消息), 结果并入上下文;
+      2. 带 tools 调 _call_llm_tools, 模型可自主决定调 memory_search /
+         get_current_time / branch_overview;
+      3. 每轮把 assistant tool_calls + tool 结果回填消息列表, 直到模型不再调工具
+         或达到轮次上限。
+    所有工具经 _execute_chat_tool 执行 (只读安全), 失败 fail-open 不阻塞主线。
     """
-    # ── F12: 记忆预检索 (只读工具回路) ──
-    prefetch: list[dict] = []
+    # ── 0. 预检索 (只读工具回路, 保证降级时至少有记忆上下文) ──
+    msgs: list[dict] = list(messages)
     try:
         q = ""
         for m in reversed(messages):
@@ -1163,18 +1301,59 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
                        "args": {"query": q[:80]}}
                 yield {"type": "tool_result", "id": tcid, "ok": True,
                        "result": res["result"]}
-                prefetch.append({
+                msgs.insert(0, {
                     "role": "system",
                     "content": "[树域记忆预检索 (降级链)]\n" + str(res["result"])[:1500],
                 })
     except Exception as e:
         sys.stderr.write(f"[ct] fallback prefetch failed: {e}\n")
 
-    content, usage = _call_llm(prefetch + messages, agent, collector)
-    if not content.strip():
+    # ── 1. 多轮工具循环 (S2) ──
+    final_content = ""
+    usage: dict = {}
+    tool_rounds = 0
+    while tool_rounds < MAX_TOOL_ROUNDS:
+        content, usage, tool_calls = _call_llm_tools(
+            msgs, _READONLY_TOOLS, collector)
+        if not tool_calls:
+            final_content = content
+            break
+        tool_rounds += 1
+        # 执行本轮工具调用, 回填消息 + 前端卡片
+        tool_msgs: list[dict] = []
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name") or "tool"
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            tcid = tc.get("id") or f"fb_{tool_rounds}_{name}"
+            collector["tool_calls"].append({
+                "id": tcid, "name": name, "params": args,
+                "result_summary": "", "success": True, "timestamp": time.time(),
+            })
+            yield {"type": "tool_call", "id": tcid, "name": name, "args": args}
+            res = _execute_chat_tool(name, fn.get("arguments") or "", node_id)
+            for _tc in reversed(collector["tool_calls"]):
+                if _tc.get("id") == tcid:
+                    _tc["result_summary"] = str(res.get("result", ""))[:500]
+                    _tc["success"] = bool(res.get("ok", False))
+                    break
+            yield {"type": "tool_result", "id": tcid, "ok": bool(res.get("ok", False)),
+                   "result": res.get("result", "")}
+            tool_msgs.append({
+                "role": "tool", "tool_call_id": tcid,
+                "content": json.dumps(res, ensure_ascii=False),
+            })
+        # assistant 的 tool_calls 声明 + 工具结果 → 下一轮上下文
+        msgs = msgs + [{"role": "assistant", "content": content or "",
+                        "tool_calls": tool_calls}] + tool_msgs
+
+    if not final_content.strip():
         raise RuntimeError("本地模型返回空响应")
-    for i in range(0, len(content), 24):
-        chunk = content[i:i + 24]
+    for i in range(0, len(final_content), 24):
+        chunk = final_content[i:i + 24]
         collector["content"] += chunk
         yield {"type": "content", "delta": chunk}
     if usage:
@@ -1280,11 +1459,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_sse(self, generator):
-        """以 SSE (text/event-stream) 分块推送生成器产出的字符串."""
+        """以 SSE (text/event-stream) 分块推送生成器产出的字符串.
+
+        S4: 手动 Transfer-Encoding: chunked —— HTTP/1.1 下若响应体无 Content-Length
+        也无 chunked, 标准客户端 (curl/urllib/http.client) 会一直等连接关闭,
+        而 keep-alive 永不关闭 → 挂起. 浏览器 fetch ReadableStream 不依赖 EOF
+        所以前端无恙, 但协议上必须显式 chunked 才能让所有客户端正确判定流结束.
+        """
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
@@ -1292,8 +1478,17 @@ class Handler(BaseHTTPRequestHandler):
             for chunk in generator:
                 if not chunk:
                     continue
-                self.wfile.write(chunk.encode("utf-8"))
+                data = chunk.encode("utf-8")
+                # S4: chunked frame: <hex-size>\r\n<data>\r\n\r\n
+                self.wfile.write(f"{len(data):x}\r\n".encode("ascii"))
+                self.wfile.write(data)
+                self.wfile.write(b"\r\n")
                 self.wfile.flush()
+            # chunked terminator
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             # M3 + F9: 客户端断开(ESC/切节点)时主动关闭生成器链, 让 _stream_hermes_gateway
             # 的 urlopen with 块立即退出并关掉 gateway HTTP 连接, 不再挂到 LLM_TIMEOUT.
@@ -1303,6 +1498,7 @@ class Handler(BaseHTTPRequestHandler):
                 generator.close()
             except Exception:
                 pass
+
 
     def _send_html(self, path: Path):
         if not path.exists():
@@ -1587,6 +1783,10 @@ class Handler(BaseHTTPRequestHandler):
                     state=data.get("state"),
                     config=data.get("config"),
                     title=data.get("title"),
+                    thinking=data.get("thinking", ""),
+                    tool_calls=[ct.ToolCall(**tc) for tc in data.get("tool_calls", [])],
+                    usage=data.get("usage") or {},
+                    skills_used=data.get("skills_used") or [],
                 )
                 self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
             elif path == "/api/conclude":
@@ -1601,20 +1801,25 @@ class Handler(BaseHTTPRequestHandler):
                 if not bid or not tid:
                     self._send_json({"error": "branch_id and trunk_id required"}, 400)
                     return
-                # 前端 "Merge to Trunk" 传 '__trunk__' → 沿祖先链找 trunk 节点
+                # 前端 "Merge to Trunk" 传 '__trunk__' → 主线终点 (trunk_id), 无则沿祖先链
+                # S1: 优先 trunk_id (唯一真源), 不再沿 node_type 猜 (旧逻辑会命中 root 或误标 trunk)
                 if tid == "__trunk__":
                     bnode = _tree.get_node(bid)
-                    cur = bnode.parent_id if bnode else None
-                    tid = None
-                    while cur:
-                        cn = _tree.get_node(cur)
-                        if cn and cn.node_type == "trunk":
-                            tid = cn.id
-                            break
-                        cur = cn.parent_id if cn else None
-                    if not tid:
-                        self._send_json({"error": "no trunk ancestor found"}, 400)
-                        return
+                    if _tree.trunk_id and _tree.get_node(_tree.trunk_id):
+                        tid = _tree.trunk_id
+                    else:
+                        cur = bnode.parent_id if bnode else None
+                        tid = None
+                        while cur:
+                            cn = _tree.get_node(cur)
+                            if cn and (cn.id == _tree.trunk_id or
+                                       (cn.node_type == "trunk" and cn.id != _tree.root_id)):
+                                tid = cn.id
+                                break
+                            cur = cn.parent_id if cn else None
+                        if not tid:
+                            self._send_json({"error": "no trunk ancestor found"}, 400)
+                            return
                 _tree.merge_branch(branch_node_id=bid, trunk_target_id=tid)
                 self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/unmerge":
@@ -1663,6 +1868,18 @@ class Handler(BaseHTTPRequestHandler):
                     title=data.get("title", ""),
                 )
                 self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
+            elif path == "/api/set_trunk":
+                # S1: 显式主线提升 (把分支节点设为主线终点)
+                try:
+                    node = _tree.set_trunk(
+                        node_id=data["node_id"],
+                        cascade=bool(data.get("cascade", False)),
+                    )
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "node_id": node.id,
+                                 "trunk_id": _tree.trunk_id, "state": state_dict()})
             elif path == "/api/delete_node":
                 _tree.delete_node(data["node_id"])
                 self._send_json({"ok": True, "state": state_dict()})
@@ -1773,6 +1990,8 @@ class Handler(BaseHTTPRequestHandler):
                                     tool_calls=[ct.ToolCall(**tc) for tc in collector["tool_calls"]],
                                     usage=collector["usage"],
                                     skills_used=skills_used,
+                                    # S1: 前端显式 fork (从此分叉) 时强制 branch
+                                    force_branch=bool(data.get("force_branch", False)),
                                 )
                                 # F7: 传局部 tree, 防止 chat 在飞时切会话把摘要写进新会话
                                 _touch_active_session(tree)

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import memory_v5.conversation_tree as ct
@@ -178,3 +180,101 @@ def test_delete_node_cleans_merge_refs(tmp_path):
     assert a.id not in a.merged_from
     assert a.state.get("merged_insights") == []
     assert all("merged from" not in c.text for c in a.conclusions)
+
+
+# ────────────────── S1: trunk_id 显式主线语义 ──────────────────
+
+def test_trunk_id_advances_on_mainline(tmp_path):
+    """S1: 主线延续时 trunk_id 前进; fork/分支不改变主线终点."""
+    t = _make_tree(tmp_path)
+    assert t.trunk_id is None
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    assert t.trunk_id == a.id  # 根首子 → 主线起点
+    a2 = t.add_turn([{"role": "user", "content": "主线2"},
+                     {"role": "assistant", "content": "c"}], parent_id=a.id)
+    assert t.trunk_id == a2.id  # 主线延续 → 终点前进
+    # fork 分支不动主线
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    assert t.trunk_id == a2.id
+    assert b.node_type == "branch"
+    # 分支内继续 → branch, 主线终点不变
+    c = t.add_turn([{"role": "user", "content": "分支内"}], parent_id=b.id)
+    assert c.node_type == "branch"
+    assert t.trunk_id == a2.id
+    # 从主线中间节点 a 分叉 → branch (主线终点仍是 a2)
+    d = t.add_turn([{"role": "user", "content": "中间分叉"}], parent_id=a.id)
+    assert d.node_type == "branch"
+    assert t.trunk_id == a2.id
+    # 主线终点下继续 → 主线延续
+    e = t.add_turn([{"role": "user", "content": "主线3"}], parent_id=a2.id)
+    assert e.node_type == "trunk"
+    assert t.trunk_id == e.id
+
+
+def test_trunk_id_serialize_roundtrip(tmp_path):
+    """S1: trunk_id 随序列化持久化, 重启后主线语义不丢."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    a2 = t.add_turn([{"role": "user", "content": "主线2"},
+                     {"role": "assistant", "content": "c"}], parent_id=a.id)
+    t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    raw = t.serialize()
+    t2 = ct.ConversationTree.deserialize(raw)
+    assert t2.trunk_id == a2.id
+    # 旧 JSON (无 trunk_id) → 按最深 trunk 链推断
+    old = json.loads(raw)
+    old.pop("trunk_id")
+    t3 = ct.ConversationTree.deserialize(old)
+    assert t3.trunk_id == a2.id  # 主线链 a→a2, 最深 trunk = a2
+
+
+def test_set_trunk_promotes_branch(tmp_path):
+    """S1: set_trunk 把分支节点提升为主线终点."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    b = t.fork_branch(a.id, "exp", [{"role": "user", "content": "分支"}])
+    assert t.trunk_id == a.id
+    t.set_trunk(b.id)
+    assert t.trunk_id == b.id
+    # 分支内继续 → 现在变成主线延续 (trunk)
+    c = t.add_turn([{"role": "user", "content": "提升后继续"}], parent_id=b.id)
+    assert c.node_type == "trunk"
+    assert t.trunk_id == c.id
+    # 原主线节点 a 下继续 → branch (主线已切换)
+    d = t.add_turn([{"role": "user", "content": "旧主线继续"}], parent_id=a.id)
+    assert d.node_type == "branch"
+
+
+def test_trunk_id_redirect_on_delete(tmp_path):
+    """S1: 主线终点被删/剪 → trunk_id 回退到最近的 trunk 祖先."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    a2 = t.add_turn([{"role": "user", "content": "主线2"},
+                     {"role": "assistant", "content": "c"}], parent_id=a.id)
+    assert t.trunk_id == a2.id
+    t.delete_node(a2.id)
+    assert t.trunk_id == a.id  # 回退到父 (trunk)
+    a3 = t.add_turn([{"role": "user", "content": "主线3"},
+                     {"role": "assistant", "content": "d"}], parent_id=a.id)
+    assert a3.node_type == "trunk"
+    assert t.trunk_id == a3.id
+    t.prune(a3.id)
+    assert t.trunk_id == a.id
+
+
+def test_conclude_trunk_id_fallback(tmp_path):
+    """S1: 主线终点收尾 (conclusion) → trunk_id 回退到 trunk 祖先."""
+    t = _make_tree(tmp_path)
+    a = t.add_turn([{"role": "user", "content": "主线1"},
+                    {"role": "assistant", "content": "b"}])
+    a2 = t.add_turn([{"role": "user", "content": "主线2"},
+                     {"role": "assistant", "content": "c"}], parent_id=a.id)
+    t.conclude_branch(a2.id, ["收尾"])
+    assert t.trunk_id == a.id
+    # conclusion 节点下继续 → branch (不延续主线)
+    d = t.add_turn([{"role": "user", "content": "收尾后"}], parent_id=a2.id)
+    assert d.node_type == "branch"
