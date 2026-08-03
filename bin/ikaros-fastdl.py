@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 # 详细说明见 docs/scripts/bin/ikaros-fastdl.md
 import sys, os, json, time, shutil, subprocess, urllib.request, urllib.error, argparse
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEF_CFG = {
@@ -39,6 +40,11 @@ def load_cfg():
                     cfg[k] = v
         except Exception as e:
             print(f"[warn] 读取 fastdl.json 失败, 用默认配置: {e}", file=sys.stderr)
+    # 盘符无关: download_dir 若为相对路径, 按项目根(脚本位置推导)解析
+    dd = cfg.get("gopeed", {}).get("download_dir", "")
+    if dd and not os.path.isabs(dd):
+        root = Path(os.path.dirname(os.path.abspath(__file__))).parent
+        cfg["gopeed"]["download_dir"] = str(root / dd)
     return cfg
 
 def winpath(p):

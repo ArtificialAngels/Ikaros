@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 # 不触发真实 LLM: 把 urllib 相关调用隔离 (default_llm 仅真实运行才用, 测试注入 fake)
-sys.path.insert(0, "E:/Ikaros/bin")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
 import soul_refine as sr  # noqa: E402
 
 

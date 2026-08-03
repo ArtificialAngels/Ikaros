@@ -1763,6 +1763,8 @@ async def _call_openai_compatible(
     if os.environ.get("IKAROS_DEBUG_LOG"):
         try:
             import datetime as _dt
+            import json as _json
+            from pathlib import Path as _Path
             _log = {
                 "ts": _dt.datetime.now().isoformat(timespec="seconds"),
                 "label": label, "model": model, "base_url": base_url,
@@ -1771,8 +1773,11 @@ async def _call_openai_compatible(
                 "system_prompt_len": len(next((m.get("content", "") for m in body.get("messages", []) if m.get("role") == "system"), "")),
                 "messages": body.get("messages", []),
             }
-            with open("E:/Ikaros/tmp/cloud_sent_log.jsonl", "a", encoding="utf-8") as _f:
-                _f.write(__import__("json").dumps(_log, ensure_ascii=False) + "\n")
+            # 盘符无关: 日志落项目 tmp/ (从脚本位置推导, 不硬编码 E:)
+            _log_path = _Path(__file__).resolve().parent.parent / "tmp" / "cloud_sent_log.jsonl"
+            _log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps(_log, ensure_ascii=False) + "\n")
         except Exception:
             pass
 

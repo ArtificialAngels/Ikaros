@@ -60,22 +60,29 @@ def make_dedup_op() -> ReflectOp:
 
 
 def make_promote_op() -> ReflectOp:
-    """短期 → 长期晋升: 12h, 纯算法."""
+    """短期 → 长期晋升: 1h (原12h), 纯算法.
+
+    2026-08-02 加速: 原 12h + weight>=0.7 + access>=3 门槛过高, 大量短期记忆
+    永远停留 short_term, 崩溃即失。放宽到 weight>=0.55 或 access>=2,
+    配合 1h 频率, 短期记忆转存窗口从 12h 缩到 1h。
+    """
     from memory_v5 import store
 
-    PROMOTE_WEIGHT = 0.7
-    PROMOTE_ACCESSES = 3
+    PROMOTE_WEIGHT = 0.55
+    PROMOTE_ACCESSES = 2
 
     def _fn() -> int:
         with store.conn() as c:
             cur = c.execute(
                 "UPDATE memory SET short_term = 0, long_term = 1 "
-                "WHERE short_term = 1 "
-                "  AND weight >= ? "
-                "  AND access_count >= ?",
+                "WHERE short_term = 1 AND archived = 0 "
+                "  AND (weight >= ? OR access_count >= ?)",
                 (PROMOTE_WEIGHT, PROMOTE_ACCESSES),
             )
             n = cur.rowcount
+            # 关键: conn() 退出默认 rollback, 写操作必须显式 commit
+            # (2026-08-02 修复: 原实现无 commit, 短期→长期转存从未真正落库)
+            c.commit()
         if n:
             logger.info("promote: %d memories promoted to long-term", n)
         return n
@@ -125,7 +132,12 @@ def make_reflect_op() -> ReflectOp:
 
 
 def make_cleanup_op() -> ReflectOp:
-    """自动清理: 6h, 删除低 weight / 过期 conversation / 过期 decision."""
+    """自动清理: 6h, 归档低 weight / 过期 conversation / 过期 decision.
+
+    2026-08-02 改归档不删除: 原实现直接 DELETE, 短期记忆被物理抹除无转存——
+    进程崩溃或 promote 未跑时低权重记忆永久丢失。现改为标记 archived=1
+    (检索默认排除, 数据保留可恢复)。
+    """
     from memory_v5 import store
     import time
 
@@ -133,29 +145,37 @@ def make_cleanup_op() -> ReflectOp:
         now = time.time()
         seven_days = 7 * 86400
         thirty_days = 30 * 86400
-        deleted = 0
+        archived = 0
         with store.conn() as c:
-            # conversation > 7d
+            # conversation > 7d → 归档 (原 DELETE)
             cur = c.execute(
-                "DELETE FROM memory WHERE type = 'conversation' AND created < ?",
-                (now - seven_days,),
+                "UPDATE memory SET archived = 1, archived_at = ? "
+                "WHERE type = 'conversation' AND created < ? AND archived = 0",
+                (now, now - seven_days),
             )
-            deleted += cur.rowcount
-            # 低 weight 非灵魂
+            archived += cur.rowcount
+            # 低 weight 非灵魂 → 归档 (原 DELETE; 保底 weight 下调到 0.45,
+            # 0.4-0.45 的也归档而非删, 进一步降低误删面)
             cur = c.execute(
-                "DELETE FROM memory WHERE weight < 0.4 "
-                "AND type NOT IN ('identity', 'axiom', 'rule')"
+                "UPDATE memory SET archived = 1, archived_at = ? "
+                "WHERE weight < 0.45 "
+                "AND type NOT IN ('identity', 'axiom', 'rule') AND archived = 0",
+                (now,),
             )
-            deleted += cur.rowcount
-            # decision > 30d
+            archived += cur.rowcount
+            # decision > 30d → 归档 (原 DELETE)
             cur = c.execute(
-                "DELETE FROM memory WHERE type = 'decision' AND created < ?",
-                (now - thirty_days,),
+                "UPDATE memory SET archived = 1, archived_at = ? "
+                "WHERE type = 'decision' AND created < ? AND archived = 0",
+                (now, now - thirty_days),
             )
-            deleted += cur.rowcount
-        if deleted:
-            logger.info("cleanup: deleted %d memories", deleted)
-        return deleted
+            archived += cur.rowcount
+            # 关键: conn() 退出默认 rollback, 写操作必须显式 commit
+            # (2026-08-02 修复: 原实现无 commit, 归档从未真正落库)
+            c.commit()
+        if archived:
+            logger.info("cleanup: archived %d memories (no physical delete)", archived)
+        return archived
 
     return ReflectOp(
         name="cleanup",
@@ -358,11 +378,11 @@ def make_default_scheduler(state: ScheduleState | None = None) -> ReflectSchedul
 
 
 def make_vector_sync_op() -> ReflectOp:
-    """向量回填/校正: 24h, 确保 v5.db 每条记忆都有 Chroma 向量 (A2 修复).
+    """向量回填/校正: 1h, 确保 v5.db 每条记忆都有 Chroma 向量.
 
-    幂等: 直接 upsert 全部记忆, 缺失/失败的单独计数。
-    A1 已让 store() 写时同步, 此 op 作崩溃恢复 + 历史回填的安全网。
-    chromadb / :8587 不可用时静默返 0, 不阻塞其他反思 op。
+    2026-08-02 改增量: 先取 Chroma 已有 id 集合, 只补缺失的记忆 (原全量 upsert
+    会给 hnsw compactor 压力, 且写时同步失败率高——多进程并发写冲突 / chromadb
+    缺失环境)。幂等, chromadb / :8587 不可用时静默返 0, 不阻塞其他反思 op。
     """
     from memory_v5 import store as _store
     from memory_v5.search import VectorIndex
@@ -373,6 +393,12 @@ def make_vector_sync_op() -> ReflectOp:
         except Exception as e:
             logger.warning("vector_sync: VectorIndex 不可用, 跳过: %s", e)
             return 0
+        # 已存在向量 id 集合 (增量判定)
+        try:
+            existing = set(idx._collection.get(limit=1000000)["ids"])
+        except Exception as e:
+            logger.warning("vector_sync: 读取已有向量失败, 跳过: %s", e)
+            return 0
         synced = 0
         failed = 0
         with _store.conn() as c:
@@ -382,14 +408,16 @@ def make_vector_sync_op() -> ReflectOp:
             # 纯 SELECT 后显式提交, 释放 SHARED 读锁, 避免阻塞其他进程写入
             c.commit()
         for r in rows:
+            if str(r["id"]) in existing:
+                continue  # 已有向量, 跳过
             ok = idx.add(int(r["id"]), r["content"], type=r["type"],
                          tags=r["tags"] or "", weight=float(r["weight"]))
             if ok:
                 synced += 1
             else:
                 failed += 1
-        logger.info("vector_sync: synced=%d failed=%d total=%d",
-                    synced, failed, len(rows))
+        logger.info("vector_sync: synced=%d failed=%d missing=%d total=%d",
+                    synced, failed, synced + failed, len(rows))
         return synced
 
     return ReflectOp(

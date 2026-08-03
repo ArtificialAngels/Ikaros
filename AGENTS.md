@@ -39,6 +39,11 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - ❌ After editing `bin/cloud_chat.py`, restart the control panel — it caches `cloud_chat`, changes won't take effect otherwise.
 - ❌ Don't edit `hermes-agent` code (being relocated to `core/hermes` by another agent); docs refer to it as `core/hermes`.
 
+## 文件搜索优先级 (2026-08-03)
+- **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。
+- **降级**：everything MCP 服务不可用/报错时，回退默认 `search_files`（ripgrep）。
+- 已实测在线（E:\Ikaros 内搜索秒回）。V5 directive #2 同步此规则。
+
 ## 9100 panel refactor (2026-07-26)
 - Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable).
 - Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control.
@@ -58,7 +63,7 @@ Any commit touching architecture / ports / components MUST sync `docs/ARCHITECTU
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Ikaros** (5733 symbols, 10773 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Ikaros** (6202 symbols, 11715 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

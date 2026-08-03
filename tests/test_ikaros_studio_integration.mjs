@@ -18,7 +18,7 @@ const execFileAsync = promisify(execFile)
 
 const IKAROS_ROOT = process.env.IKAROS_ROOT || 'E:/Ikaros'
 const IKAROS_MEMORY = process.env.IKAROS_MEMORY || path.join(IKAROS_ROOT, 'core/memory_v5')
-const PORTABLE_PY = 'E:/Ikaros/runtime/portable-python/python.exe'
+const PORTABLE_PY = IKAROS_ROOT + '/runtime/portable-python/python.exe'
 const PYTHON = process.env.IKAROS_PYTHON || (fs.existsSync(PORTABLE_PY) ? PORTABLE_PY : 'python')
 
 const results = []

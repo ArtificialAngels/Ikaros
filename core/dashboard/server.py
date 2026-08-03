@@ -170,7 +170,23 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
     e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
-    e["API_SERVER_KEY"] = os.environ.get("API_SERVER_KEY", "ikaros-gateway-key")
+    # API_SERVER_KEY: 优先取 HERMES_HOME/.env（hermes 标准密钥位, 2026-08-03 起存放
+    # 64-hex 强 key）。hermes 0.19.1 gateway startup guard 拒绝 <16 字符/占位符 key,
+    # 旧默认 "ikaros-gateway-key" 在 gateway 环境未设置时会被拒。所有子进程
+    # (对话树 48920 等) 经此注入同一 key, 与 8642 gateway 保持一致。
+    _api_key = os.environ.get("API_SERVER_KEY", "")
+    if not _api_key:
+        try:
+            _envf = root / "data" / "hermes-agent" / ".env"
+            if _envf.is_file():
+                for _line in _envf.read_text(encoding="utf-8").splitlines():
+                    _line = _line.strip()
+                    if _line.startswith("API_SERVER_KEY=") and not _line.startswith("#"):
+                        _api_key = _line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        except Exception:
+            _api_key = ""
+    e["API_SERVER_KEY"] = _api_key or "ikaros-gateway-key"
 
     llama_ver = os.environ.get("IKAROS_LLAMA_VERSION")
     if not llama_ver:

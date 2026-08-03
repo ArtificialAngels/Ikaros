@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, "E:/Ikaros/core")
+# 盘符无关: 脚本位置推导 (tests/ -> memory_v5 -> core)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from memory_v5 import entity_graph as eg
 from memory_v5.extensions import ontology_align as oa

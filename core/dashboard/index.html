@@ -21,8 +21,10 @@
   <span class="spacer"></span>
   <button class="theme-toggle" id="themeToggle" title="切换深色 / 浅色" aria-label="切换主题"></button>
   <a class="iks-btn" href="http://127.0.0.1:48911/memory_browser" target="_blank">Ikaros Control</a>
+  <span class="btn-sep"></span>
   <button class="btn success" id="btnStartAll">全部启动</button>
   <button class="btn" id="btnStopAll">全部停止</button>
+  <span class="btn-sep"></span>
   <button class="btn" id="btnReset">重置布局</button>
   <button class="btn" id="btnRestart">重启面板</button>
   <button class="btn danger" id="btnShutdown">关闭面板</button>
@@ -141,7 +143,7 @@ function clamp(v,min,max) { return Math.max(min,Math.min(max,v)); }
 var PANEL_KEY = 'ikaros-control-panels';
 var canvas = document.getElementById('canvas');
 var panels = {};                 // pid -> { el, handle, minW, minH, def }
-var SNAP = 8;                    // 吸附阈值(px)
+var SNAP = 12;                   // 吸附阈值(px)
 
 function loadPanels() { try { return JSON.parse(localStorage.getItem(PANEL_KEY)) || {}; } catch (_) { return {}; } }
 function savePanels(s) { try { localStorage.setItem(PANEL_KEY, JSON.stringify(s)); } catch (_) {} }
@@ -250,10 +252,15 @@ function startResize(el, pid, dir, ev) {
   document.addEventListener('pointerup', up);
 }
 
-/* ── 注册一个面板: 生成八向手柄 + 绑定拖拽/缩放 + 应用记忆或默认 ── */
+/* ── 注册一个面板: 生成八向手柄 + 绑定拖拽/缩放 + 应用记忆或默认 ──
+   最小边界 = max(显式 minW/minH, 内容自然尺寸): 面板缩放不允许压过其内容。 */
 function registerPanel(el, pid, handleSel, def, opts) {
   opts = opts || {};
-  panels[pid] = { el: el, minW: opts.minW || 160, minH: opts.minH || 80, def: def };
+  // 内容感知最小尺寸: 注册时(已在 DOM)测量自然尺寸, 作为缩放下限
+  var naturalW = el.offsetWidth || 0, naturalH = el.offsetHeight || 0;
+  var minW = Math.max(opts.minW || 160, Math.min(naturalW || 9999, 480));
+  var minH = Math.max(opts.minH || 80, Math.min(naturalH || 9999, 420));
+  panels[pid] = { el: el, minW: minW, minH: minH, def: def };
   ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].forEach(function (d) {
     var h = document.createElement('div'); h.className = 'rz rz-' + d; h.dataset.dir = d;
     h.addEventListener('pointerdown', function (ev) { if (isMobile()) return; startResize(el, pid, d, ev); });
@@ -307,12 +314,21 @@ function registerSidePanels() {
   var sideW = Math.max(300, Math.min(400, Math.round(W * 0.34)));
   var leftW = Math.max(320, W - sideW - gap * 3 - pad * 2);
   var rx = pad + leftW + gap, ry = pad;
+  // 自适应高度: 右侧带总高不超过视口可用高度——动态测量 canvas 顶部偏移。
+  // 先排固定卡(affect/vitality/thought) + 记忆卡(200-360 弹性), stream 拿剩余,
+  // 保证一屏放下不再越界。
+  var canvasTop = canvas.getBoundingClientRect().top;
+  var availH = Math.max(400, window.innerHeight - canvasTop - pad);
+  var fixedH = 150 + 74 + 130 + gap * 3;   // affect + vitality + thought + 间距
+  var rest = availH - fixedH - gap;         // memory + stream 的可用高度
+  var memH = Math.max(200, Math.min(360, rest - 160));  // 给 stream 保底 160 (对齐 CSS min-height)
+  var streamH = Math.max(160, rest - memH);  // 下限与 CSS min-height 对齐, 避免被撑开越界
   var defs = {
     affect:   { w: sideW, h: 150, minH: 120, minW: sideW },
     vitality: { w: sideW, h: 74,  minH: 60,  minW: sideW },
     thought:  { w: sideW, h: 130, minH: 90,  minW: sideW },
-    memory:   { w: sideW, h: 360, minH: 240, minW: sideW },
-    stream:   { w: sideW, h: 320, minH: 200, minW: sideW }
+    memory:   { w: sideW, h: memH, minH: 200, minW: sideW },
+    stream:   { w: sideW, h: streamH, minH: 150, minW: sideW }
   };
   var specs = [
     ['.affect-card', 'affect', '.card-title'],
@@ -350,7 +366,7 @@ function saveLayout(id, rect) { var s=loadSizes(); s[id]=rect; saveSizes(s); }
 
 /* 默认打包布局 (12 栏 shelf 算法) —— 仅计算左侧组件区停靠, 仅在无持久化时用作初始位置 */
 function computeDefaults(ids) {
-  var pad=12, gap=14, cols=12, rowH=116;
+  var pad=12, gap=14, cols=12, rowH=98;
   var W = canvas.clientWidth || (window.innerWidth - 40);
   var sideW = Math.max(300, Math.min(400, Math.round(W * 0.34)));
   var leftW = Math.max(320, W - sideW - gap * 3 - pad * 2);
@@ -392,8 +408,8 @@ async function initGrid() {
     var el=buildCard(meta[id]);
     el.style.setProperty('--i', idx);
     if(FEATURED[id]) el.classList.add('featured');
+    cardEls[id]=el; canvas.appendChild(el);   // 先入 DOM, registerPanel 才能测内容自然尺寸
     registerPanel(el, id, '.comp-head', defaults[id], {minW:160, minH:110});
-    cardEls[id]=el; canvas.appendChild(el);
     if(id==='herdr') attachHerdrPanel(el);
   });
   updateCanvasHeight();
@@ -770,7 +786,7 @@ function applyMemory(state){
   tickTo('memActive', eg.active_memories||0);
 }
 function updateMemory(state){ applyMemory(state); }
-function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
+function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ if(/\bdemo\b/.test(location.search)) memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
 function connectSSE() { var evt=new EventSource('/api/events'); evt.addEventListener('connected',function(){connDot.className='conn-dot on';connLabel.textContent='已连接';}); evt.addEventListener('monitor',function(e){try{addMessage(JSON.parse(e.data))}catch(_){}}); evt.onerror=function(){connDot.className='conn-dot off';connLabel.textContent='重连中...';evt.close();setTimeout(connectSSE,3000);}; }
 
 /* ── herdr 监督卡片 (B5) ─────────────────────────────────────── */
@@ -874,9 +890,111 @@ function attachHerdrPanel(el){
   herdrConnect();
 }
 
+/* ── 鼠标粒子特效 v2 ────────────────────────────────────────────
+   全屏 canvas 尾迹层: 鼠标移动撒粒子, 拖拽面板迸发粒子流, 粒子间连线(星云)。
+   稳定版: 对象池(防 GC 抖动) + visibilitychange 暂停(后台零开销) +
+   粒子上限 + prefers-reduced-motion 完全关闭。 */
+(function particles(){
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var c = document.createElement('canvas');
+  c.id = 'fx-canvas';
+  c.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9998;';
+  document.body.appendChild(c);
+  var ctx = c.getContext('2d');
+  var W = 0, H = 0, DPR = Math.min(2, window.devicePixelRatio || 1);
+  function resize(){ W = c.width = Math.floor(innerWidth * DPR); H = c.height = Math.floor(innerHeight * DPR); c.style.width = innerWidth + 'px'; c.style.height = innerHeight + 'px'; }
+  resize(); addEventListener('resize', resize);
+  var hue = 188;  // 青蓝系 (与 --accent 同族)
+
+  // 对象池: 预分配 150 个, 复用避免 GC
+  var POOL = 150, parts = [], pool = [];
+  for (var i = 0; i < POOL; i++) pool.push({on:false});
+  function getP(){ for (var i = 0; i < POOL; i++) if (!pool[i].on) return pool[i]; return null; }
+  function spawn(x, y, n, spread) {
+    for (var i = 0; i < n; i++) {
+      var p = getP(); if (!p) return;
+      var a = Math.random() * Math.PI * 2, sp = Math.random() * (spread || 2.2) + 0.4;
+      p.on = true;
+      p.x = x * DPR; p.y = y * DPR;
+      p.vx = Math.cos(a) * sp * DPR; p.vy = Math.sin(a) * sp * DPR - 0.6 * DPR;
+      p.life = 1; p.decay = 0.014 + Math.random() * 0.02;
+      p.r = (1 + Math.random() * 2.2) * DPR;
+      p.col = 'hsla(' + (hue + Math.random() * 40 - 20) + ',90%,' + (55 + Math.random() * 30) + '%,';
+      parts.push(p);
+    }
+  }
+  var LINK_DIST = 90 * DPR;  // 粒子连线距离阈值
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    var n = parts.length;
+    // 粒子更新 + 绘制
+    for (var i = n - 1; i >= 0; i--) {
+      var p = parts[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.03 * DPR; p.vx *= 0.985;
+      p.life -= p.decay;
+      if (p.life <= 0 || p.x < -20 || p.x > W + 20 || p.y < -20 || p.y > H + 20) { p.on = false; parts.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(0.3, p.r * p.life), 0, Math.PI * 2);
+      ctx.fillStyle = p.col + (p.life * 0.55).toFixed(3) + ')';
+      ctx.fill();
+    }
+    // 星云连线 (O(n²) 但 n≤150 且仅在粒子≥2 时; 阈值距离裁剪保证廉价)
+    if (parts.length >= 2) {
+      var L = parts.length;
+      for (var i = 0; i < L; i++) {
+        var a = parts[i];
+        for (var j = i + 1; j < L; j++) {
+          var b = parts[j];
+          var dx = a.x - b.x, dy = a.y - b.y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < LINK_DIST * LINK_DIST && d2 > 0) {
+            var alpha = (1 - Math.sqrt(d2) / LINK_DIST) * 0.16 * Math.min(a.life, b.life);
+            ctx.strokeStyle = 'hsla(' + hue + ',80%,65%,' + alpha.toFixed(3) + ')';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    raf = requestAnimationFrame(frame);
+  }
+  var raf = null, running = false;
+  function start(){ if (!running){ running = true; raf = requestAnimationFrame(frame); } }
+  function stop(){ if (running){ running = false; cancelAnimationFrame(raf); } }
+  // 后台/切页暂停 (省电)
+  document.addEventListener('visibilitychange', function(){ if (document.hidden) stop(); else start(); });
+  start();
+
+  // 鼠标尾迹（节流: 移动超 6px 才撒）
+  var lastX = -99, lastY = -99, lastT = 0;
+  addEventListener('pointermove', function (e) {
+    var now = Date.now();
+    if (now - lastT < 14) return; lastT = now;
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    if (dx * dx + dy * dy < 36) return;
+    lastX = e.clientX; lastY = e.clientY;
+    spawn(e.clientX, e.clientY, 1, 1.6);
+  }, { passive: true });
+  // 面板拖拽/缩放迸发 (含拖动中持续撒)
+  document.addEventListener('pointerdown', function (e) {
+    var t = e.target;
+    if (t && (t.closest('.card-title, .comp-head, .mem-head, .stream-header') || t.classList.contains('rz'))) {
+      spawn(e.clientX, e.clientY, 8, 3.0);
+      var onMove = function (m) { spawn(m.clientX, m.clientY, 1, 2.0); };
+      var onUp = function () { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    }
+  });
+})();
+
 registerSidePanels(); initGrid(); loadInitial(); connectSSE();
 if(/\bdemo\b/.test(location.search)){ memoryBootFallback(); }
-setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ memoryBootFallback(); }); },3000);
+setInterval(function(){ fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ if(/\bdemo\b/.test(location.search)) memoryBootFallback(); }); },3000);
 
 })();
 </script>

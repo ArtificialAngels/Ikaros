@@ -10,8 +10,10 @@
   U7. 任一路异常 fail-open, 不阻塞
 """
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "E:/Ikaros/core")
+# 盘符无关: 脚本位置推导 (tests/ -> memory_v5 -> core)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import memory_v5
 import memory_v5.store  # noqa: F401  (确保包属性存在, 供 monkeypatch.setattr(memory_v5, "store", ...))

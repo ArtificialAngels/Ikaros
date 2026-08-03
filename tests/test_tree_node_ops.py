@@ -12,9 +12,10 @@
 """
 
 import sys
+from pathlib import Path
 import tempfile
 
-sys.path.insert(0, "E:/Ikaros/core")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
 
 from memory_v5.conversation_tree import ConversationTree
 

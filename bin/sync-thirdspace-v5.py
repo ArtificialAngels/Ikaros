@@ -39,7 +39,7 @@ def resolve_env(name: str, *fallbacks: str) -> str:
 
 
 def get_root() -> Path:
-    ikaros_root = resolve_env("IKAROS_ROOT", "E:/Ikaros")
+    ikaros_root = resolve_env("IKAROS_ROOT") or str(Path(__file__).resolve().parent.parent)
     return Path(ikaros_root)
 
 

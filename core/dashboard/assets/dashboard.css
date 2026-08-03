@@ -8,7 +8,7 @@
  *   - 功能性微动画 + 玻璃拟态 (blocks.serp.co / design deluxe)
  *   - 单强调色 + 状态色仅用于"运行/停止" (避免彩色图标网格)
  * 保留 class 名以兼容既有 JS 选择器: .comp/.comp-dot/.comp-actions/
- *   .msg/.msg-*/.mem-* 等保持不变, 仅重定义视觉层。
+ *   .msg/.msg-star/.mem-star 等保持不变, 仅重定义视觉层。
  * ==========================================================================*/
 
 /* ── 语义 token: DARK (默认) ─────────────────────────────────────────── */
@@ -215,6 +215,7 @@ body::before {
 .conn-dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
 .conn-dot.off { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .topbar .spacer { flex: 1; }
+.btn-sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 2px; flex-shrink: 0; }
 
 /* 胶囊按钮 (统一圆角 = 两端半圆; GitHub 风格配色) */
 .btn {
@@ -301,8 +302,8 @@ body::before {
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border);
-  border-radius: var(--radius-card); padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 8px;
+  border-radius: var(--radius-card); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 7px;
   cursor: default; position: absolute; overflow: visible; box-sizing: border-box;
   box-shadow: var(--shadow-1);
   transition: border-color var(--t-fast), box-shadow var(--t-mid) var(--ease-out),
@@ -314,8 +315,8 @@ body::before {
 @keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: none; } }
 
 /* 特征大卡 (JS 给关键组件加 .featured) — 仅靠字号差异化, 尺寸由 JS 默认给大 */
-.comp.featured .comp-name { font-size: 16px; }
-.comp.featured .comp-desc { font-size: 13px; }
+.comp.featured .comp-name { font-size: 15.5px; }
+.comp.featured .comp-desc { font-size: 12.5px; }
 
 /* 右下角缩放手柄 */
 .comp-resize {
@@ -338,15 +339,41 @@ body::before {
 }
 .comp:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent-soft);
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent-soft), 0 0 30px var(--accent-soft);
   transform: translateY(-3px);
 }
 .comp:hover::after { transform: translateX(120%); }
-/* 拖拽移动中: 取消 hover 位移, 直接跟手, 半透明反馈 */
-.comp.moving, .comp.moving:hover { opacity: 0.85; cursor: grabbing; transform: none; box-shadow: var(--shadow-2); }
+/* hover 时顶部光条扫过 (观赏性) */
+.comp .comp-head::after {
+  content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0; transform: scaleX(0.3); transition: opacity .25s, transform .4s var(--ease-out);
+}
+.comp:hover .comp-head::after { opacity: .8; transform: scaleX(1); }
+/* 拖拽移动中: 取消 hover 位移, 直接跟手, 半透明反馈 + 强调边框 */
+.comp.moving, .comp.moving:hover {
+  opacity: 0.88; cursor: grabbing; transform: none;
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent);
+  border-color: var(--accent);
+}
 .comp.resizing { user-select: none; cursor: nwse-resize; }
-.comp.resizing:hover { transform: none; box-shadow: var(--shadow-1); }
+.comp.resizing:hover { transform: none; box-shadow: var(--shadow-1), 0 0 0 1px var(--accent); }
 .comp.pending { box-shadow: 0 0 0 2px var(--accent) inset; }
+
+/* featured 大卡: 顶部品牌渐变条 + 更重阴影 (视觉分层) */
+.comp.featured::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2.5px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2), transparent 85%);
+  opacity: 0.85; border-radius: var(--radius-card) var(--radius-card) 0 0; pointer-events: none;
+}
+.comp.featured .comp-name { font-size: 15.5px; }
+.comp.featured .comp-desc { font-size: 12.5px; }
+
+/* 组件描述: 最多 2 行, 防内容撑爆默认尺寸 */
+.comp-desc {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* ── 统一自由面板: 绝对定位 + 八向缩放手柄 + 吸附线 ── */
 .panel { box-sizing: border-box; }
@@ -369,7 +396,9 @@ body::before {
 .rz-sw { bottom: -6px; left: -6px; width: 16px; height: 16px; cursor: sw-resize; }
 
 /* 拖拽/缩放时的吸附对齐参考线 */
-.snap-line { position: absolute; background: var(--accent); opacity: 0.85; z-index: 9999; pointer-events: none; display: none; }
+.snap-line { position: absolute; background: var(--accent); opacity: 0.9; z-index: 9999; pointer-events: none; display: none;
+  box-shadow: 0 0 8px var(--accent-glow); animation: snapPulse 0.5s ease-out; }
+@keyframes snapPulse { from { opacity: 0.3; } to { opacity: 0.9; } }
 .snap-v { width: 1px; top: 0; }
 .snap-h { height: 1px; left: 0; }
 
@@ -495,6 +524,8 @@ body::before {
   padding: 16px 18px; box-shadow: var(--shadow-2);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
+  display: flex; flex-direction: column; min-height: 0;
+  overflow: hidden;
   animation: cardIn 0.55s var(--ease-out) both; animation-delay: 0.32s;
 }
 .memory-panel::before {
@@ -514,7 +545,7 @@ body::before {
 .mem-subline b { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
 .mem-dot-sep { color: var(--border-strong); }
 .mem-section-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.4px; }
-.mem-types { display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px; }
+.mem-types { display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px; overflow-y: auto; min-height: 0; }
 .mem-type-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 .mem-type-name { font-size: 12px; color: var(--text); }
 .mem-type-val { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -588,7 +619,7 @@ body::before {
 
 /* 事件流 */
 .stream-wrap {
-  display: flex; flex-direction: column; min-height: 220px; flex: 1;
+  display: flex; flex-direction: column; min-height: 160px; flex: 1;
   background: var(--surface);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
@@ -636,6 +667,11 @@ body::before {
   border-top: 1px solid var(--border);
   font-size: 12px; color: var(--muted); flex-shrink: 0; min-height: 36px;
 }
+.status-bar::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 6px var(--green); flex-shrink: 0;
+}
+.status-bar #statusText { color: var(--text-soft); }
 .status-bar .thinking { display: none; gap: 4px; align-items: center; }
 .status-bar .thinking.active { display: flex; }
 .thinking-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
@@ -649,11 +685,22 @@ body::before {
 /* ── 响应式 ─────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
   /* 窄屏: 自由画布退化为纵向堆叠流, 保证可读与可滚动; 关闭拖拽/缩放 */
+  html, body { overflow: auto !important; height: auto !important; }
+  .app { height: auto !important; min-height: 100vh; }
   .main { overflow: visible; }
   .canvas { min-height: 0 !important; display: flex; flex-direction: column; gap: 12px; }
   .comp, .panel, .comp.featured { position: static !important; width: auto !important; height: auto !important; left: auto !important; top: auto !important; }
+  /* 事件流: flex:1 在 height:auto 父容器会按内容无限撑开(历史消息全展开→6万px),
+     窄屏固定高度 + 内部滚动, 防撑爆画布 */
+  .stream-wrap { height: 42vh !important; min-height: 220px; flex: 0 0 auto; }
   .rz { display: none !important; }
   .comp.featured .comp-name { font-size: 14px; }
+  /* 窄屏顶栏: 压缩品牌区 + 按钮字号/内边距, 防止换行堆叠成 155px 高 */
+  .topbar { padding: 8px 12px; gap: 6px; }
+  .topbar h1 { font-size: 15px; }
+  .topbar .logo { width: 26px; height: 26px; font-size: 13px; }
+  .topbar .btn, .topbar .iks-btn { padding: 4px 8px; font-size: 11px; }
+  .topbar .status-group { font-size: 11px; }
 }
 
 /* ── 偏好: 减少动效 ─────────────────────────────────────────────────── */

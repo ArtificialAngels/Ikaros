@@ -385,6 +385,8 @@ hermes-studio/logs/
 # === secrets & stray output (never commit) ===
 .dash_token
 output/
+# graphify 代码知识图谱工具生成产物 (graph.json/graph.html/cache 等, 非源码)
+graphify-out/
 
 # ThirdSpace vault 临时文件
 data/thirdspace-vault/.thirdspace/queues/

@@ -3,7 +3,7 @@
   "gopeed": {
     "connections": 32,
     "max_running": 8,
-    "download_dir": "E:/Ikaros/downloads"
+    "download_dir": "downloads"
   },
   "aria2": {
     "connections": 16,

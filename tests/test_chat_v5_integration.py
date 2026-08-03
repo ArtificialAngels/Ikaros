@@ -9,6 +9,7 @@
 import sys
 import types
 import importlib.util
+from pathlib import Path
 
 # taskbus 在 hermes venv 不可用 -> mock, 不影响被测函数
 _tb = types.ModuleType("taskbus")
@@ -16,10 +17,12 @@ _tb.EventBus = object
 _tb.exec_state_event = object
 sys.modules["taskbus"] = _tb
 
-sys.path.insert(0, "E:/Ikaros/core")
+# 盘符无关: 从脚本位置推导 core/ (tests/ 在项目根下 -> parents[1] 即根)
+_CORE = Path(__file__).resolve().parents[1] / "core"
+sys.path.insert(0, str(_CORE))
 
 spec = importlib.util.spec_from_file_location(
-    "ct_server", "E:/Ikaros/core/conversation-tree/server.py"
+    "ct_server", str(_CORE / "conversation-tree" / "server.py")
 )
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)

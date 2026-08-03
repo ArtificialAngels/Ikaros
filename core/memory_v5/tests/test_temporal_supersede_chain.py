@@ -10,8 +10,10 @@
 import sys
 import tempfile
 import time
+from pathlib import Path
 
-sys.path.insert(0, "E:/Ikaros/core")
+# 盘符无关: 脚本位置推导 (tests/ -> memory_v5 -> core)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import memory_v5.memory_retrieval as mr
 from memory_v5 import store as v5store

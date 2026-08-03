@@ -1,5 +1,6 @@
 import sys, tempfile
-sys.path.insert(0, "E:/Ikaros/core")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
 from memory_v5.conversation_tree import ConversationTree
 
 class FakeStore:
