@@ -5,13 +5,13 @@
 > 它解决的核心问题：upstream 大改时，旧 diff 对不上新代码；此时必须把"补丁要达成什么"告诉模型去重写，而不是给原始 diff。
 
 ## 0. 基线指针（每次重打后自动更新）
-- **Upstream tip**（打补丁所基于的 upstream 提交，即 §0.2 中 `base`）：`e444d165807f489b5c1ab8e4a612c8d09c2e67a2`
-- **Ikaros 补丁提交**（单提交）：`fb35be65771c657a24d85c7133ed030fa0ed3fdb` — 其父即上面的 upstream tip `e444d165`（**不是** 14db1a9；14db1a9 只是历史早期重根点，请勿再写入本段）。
+- **Upstream tip**（打补丁所基于的 upstream 提交，即 §0.2 中 `base`）：`f5be9236e00ddf2f2a412697f267078fc4ee068e`
+- **Ikaros 补丁提交**（单提交）：`f269a55cd2c48cb8fcb6554c71cab45ee4ecc1ff` — 其父即上面的 upstream tip `e444d165`（**不是** 14db1a9；14db1a9 只是历史早期重根点，请勿再写入本段）。
 - **自动 rebase 基准**：`bin/hermes-update-and-patch.py` 在每次 `finalize`（干净重打完成）时，把本段 `Upstream tip` 改写为当次重打所基于的 `target_sha`（= 当前真实 upstream），把 `Ikaros 补丁提交` 改写为新生成的单提交。于是**下次 delta 永远以最新 upstream 为基准**（`git diff base ikaros` 漂移最小 → 3-way 冲突面最小、最稳）。本段两个值是引擎运行的事实来源，不要手工改错。
 
 ## 0.5. 补丁源文件位置
 - **补丁源文件目录**：`patches/hermes/`（被 Ikaros 主仓库 git 跟踪）
-- 镜像 hermes-agent 目录结构，存放 9 个 A 类补丁文件 + 3 个 B 类插件/技能目录
+- 镜像 hermes-agent 目录结构，存放 9 个 A 类补丁文件 + 1 个 B 类技能目录 + 1 个外置插件源（ikaros_v5，§6b）
 - **不放在 `core/hermes/` 下面**——防止 hermes `git reset --hard` / `git clean` 时被误删
 - 它是**补丁事实源**，供两处使用：① B 类目录缺失时 `_copytree_lf()` 从它复制（LF 归一，不污染脏树）；② LLM 兜底时作为内容参考（`refresh_patch_source()` 每次 finalize 会把新提交里的 A/B 类同步回这里，保持与提交一致）。
 - 修改补丁内容时，**必须同时更新 `patches/hermes/` 里的源文件**，否则下次重打会用到旧版本。
@@ -51,13 +51,14 @@ Ikaros 对 hermes 的定制分两类：
 
 ## 3. 允许改动范围（allowlist，硬约束）
 - 文件（A 类，9 个，与引擎 `A_CLASS_FILES` 严格一致）：`cron/scheduler.py`、`hermes_cli/web_server.py`、`plugins/context_engine/__init__.py`、`scripts/run_tests.sh`、`scripts/run_tests_parallel.py`、`tests/cron/test_scheduler.py`、`agent/conversation_loop.py`、`gateway/platforms/api_server.py`、`tools/mcp_tool.py`
-- 目录（B 类，3 个）：`plugins/context_engine/ikaros_v5/`、`plugins/memory/ikaros_v5/`、`skills/creative/tldraw-skill/`
+- 目录（B 类，1 个）：`skills/creative/tldraw-skill/`
 - **除以上外，任何文件都不得改动。** LLM 兜底时必须显式声明此 allowlist，防止模型"热心"重写其他代码。
+- ⚠️ **08-04 起：ikaros_v5 不再属于仓库内补丁**——上下文引擎与记忆提供方已外置为 Hermes 用户插件（`$HERMES_HOME/plugins/ikaros_v5/`，源在 `patches/hermes/plugins/ikaros_v5/`），由 `ensure_external_plugins()` 部署，hermes 更新不影响。详见 §6。
 
 ## 4. 验证清单（两步都必须过）
 - [ ] `git status` 干净（除本地 `config.yaml` 外无残留；之前的散落文件如 `venv.broken`、`skills/mlops/*`、`optional-skills/*`、`website/...` 等不得出现）
 - [ ] hermes 可 import：`python -c "import hermes_cli.web_server, plugins.context_engine"`
-- [ ] `list_context_engine_names()` 能发现 `ikaros_v5`：`python -c "from plugins.context_engine import list_context_engine_names; assert 'ikaros_v5' in list_context_engine_names()"`
+- [ ] 外置插件可用且 Dashboard 可发现（08-04 起替代旧的 `list_context_engine_names` 检查，后者只扫仓库内目录、外置后返回空）：`python -c "from hermes_cli.plugins_cmd import _discover_context_engines; assert any(n == 'ikaros_v5' for n, _ in _discover_context_engines())"`；记忆提供方同理经 `load_memory_provider('ikaros_v5')` 非 None 且 `is_available()` 为 True
 - [ ] `cron/scheduler.py` 的 `_cron_session_id` 为 `f"cron_{job_id}"`（固定，非带时间戳）
 - [ ] `scripts/run_tests.sh` 同时探测 `bin/activate`（MSYS）与 `Scripts/activate`（Windows）
 - [ ] 至少 `py_compile` 全过：`python -m compileall -q cron hermes_cli plugins scripts tests`
@@ -67,7 +68,7 @@ Ikaros 对 hermes 的定制分两类：
 ## 5. 逐补丁细节（A 类：tracked 文件）
 
 ### 5.1 `plugins/context_engine/__init__.py`
-- **意图**：新增 `list_context_engine_names()`，在**不 import 引擎**的前提下目录扫描 `plugins/context_engine/`，返回可用引擎名列表。供 Dashboard schema 动态列出 `context.engine` 可选项（含 `ikaros_v5`）。
+- **意图**：新增 `list_context_engine_names()`，在**不 import 引擎**的前提下目录扫描 `plugins/context_engine/`，返回可用引擎名列表。供 Dashboard schema 动态列出 `context.engine` 可选项。⚠️ 08-04 起 ikaros_v5 已外置（§6b），该函数不再返回它——Dashboard 枚举改走 `plugins_cmd._discover_context_engines`（upstream 实现，含插件注册的引擎）。此补丁保留（Ikaros Dashboard 集成的一部分，无调用方、无害）。
 - **锚点**：插在 `discover_context_engines()` 函数定义**之后**。
 - **参考实现**（来自 `8edf1ec8f`）：
 ```python
@@ -202,9 +203,20 @@ done
 
 ## 6. B 类：静态插件目录（原样复制，不打补丁）
 以下目录是 Ikaros 自有资产，**不随 upstream 变化**，每次更新后由引擎的 `ensure_b_class()` 自动补（代表文件存在且含 marker 即跳过，否则从 `patches/hermes/` 复制并 LF 归一；LLM 兜底也无需修改内容）：
-- `plugins/context_engine/ikaros_v5/` — Ikaros V5 上下文引擎插件（`name: ikaros_v5`，把 V5 记忆注入压缩摘要以保留长对话连续性）。
-- `plugins/memory/ikaros_v5/` — Ikaros V5 记忆 provider 插件（`name: ikaros-v5`）。
 - `skills/creative/tldraw-skill/` — tldraw 白板绘图技能（`tldraw-skill` v1.2.1，生成 `.tldr` 并导出 PNG/SVG）。
+
+## 6b. 外置插件：ikaros_v5（2026-08-04 起，零侵入）
+
+**架构**：ikaros_v5 上下文引擎 + 记忆提供方不再放进 `core/hermes` 仓库，而是作为 **Hermes 用户插件**外置到运行时数据区：
+
+- **运行时位置**：`data/hermes-agent/plugins/ikaros_v5/`（= `$HERMES_HOME/plugins/`，gitignore 的数据区；hermes 更新 `reset --hard` 不触碰）。
+- **规范源**：`patches/hermes/plugins/ikaros_v5/`（Ikaros 主仓 git 跟踪），更新脚本 `ensure_external_plugins()` 幂等部署（代表文件含 marker 即跳过）。
+- **发现机制（两条原生链路，均非补丁）**：
+  - 上下文引擎：`plugin.yaml`（`kind: standalone` 显式声明，避开 memory-provider auto-coerce）+ `register(ctx)` 调 `ctx.register_context_engine()` → `agent/agent_init.py` 加载链路第 3 步 `get_plugin_context_engine()` 命中；**必须**在 config.yaml `plugins.enabled` 列表（通用插件系统 opt-in）。
+  - 记忆提供方：memory 系统原生扫描 `$HERMES_HOME/plugins/`（`plugins/memory/__init__.py` 的 user 目录发现），`load_memory_provider("ikaros_v5")` 直接可用。
+- **激活配置**（data/hermes-agent/config.yaml）：`context.engine: ikaros_v5`、`memory.provider: ikaros_v5`、`plugins.enabled: [ikaros_v5]`。
+- **文件结构**：`__init__.py`（register 双兼容：`hasattr(ctx, ...)` 同时适配 PluginContext 与 _ProviderCollector）、`context_engine.py`（继承内置 ContextCompressor + `__deepcopy__` 支持插件单例 deepcopy）、`memory_provider.py`（`_resolve_root` 兜底 `parents[4]`，因外置路径变浅一级）、`plugin.yaml`。
+- **验证**：更新脚本 `_IKAROS_V5_RUNTIME_CHECK` 覆盖 memory provider（load + is_available + initialize 载入 V5）、context engine（get_plugin_context_engine）、Dashboard 枚举（`_discover_context_engines` / `_discover_memory_providers` 均含 ikaros_v5）。
 
 ## 7. LLM 兜底提示词模板（第②步喂料）
 > 将本模板 + §5 逐补丁意图 + §0 当前 upstream 提交 + 允许改动范围（§3）一起发给受约束子 agent。
@@ -223,9 +235,11 @@ marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这
 - A 类（9 个）：cron/scheduler.py, hermes_cli/web_server.py, plugins/context_engine/__init__.py,
   scripts/run_tests.sh, scripts/run_tests_parallel.py, tests/cron/test_scheduler.py,
   agent/conversation_loop.py, gateway/platforms/api_server.py, tools/mcp_tool.py
-- B 类（3 个，已存在且正确就不要动）：plugins/context_engine/ikaros_v5/,
-  plugins/memory/ikaros_v5/, skills/creative/tldraw-skill/
+- B 类（1 个，已存在且正确就不要动）：skills/creative/tldraw-skill/
 （若这些目录已存在且内容正确，不要改动它们，只确保存在。）
+⚠️ ikaros_v5 已外置为 Hermes 用户插件（§6b），**不属于仓库内补丁**——不要创建
+plugins/context_engine/ikaros_v5/ 或 plugins/memory/ikaros_v5/；它们由
+`ensure_external_plugins()` 部署到 $HERMES_HOME/plugins/ikaros_v5/。
 
 【补丁意图】逐条（详见 hermes-ikaros-patches.md §5）：
 1. plugins/context_engine/__init__.py：新增 list_context_engine_names()，目录扫描返回引擎名，不 import 引擎。
@@ -276,15 +290,15 @@ marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这
   · agent/conversation_loop.py → # Surface the model's TRUE reasoning (thinking) only when it
   · gateway/platforms/api_server.py → def _on_reasoning(...) / if event_type == "reasoning.available" and preview:
 - B 类目录代表文件 + marker（目录须存在且代表文件含 marker）：
-  · plugins/context_engine/ikaros_v5/ → __init__.py 含 class IkarosV5ContextEngine
-  · plugins/memory/ikaros_v5/        → __init__.py 含 class IkarosV5MemoryProvider
   · skills/creative/tldraw-skill/    → SKILL.md 含 tldraw
+- 外置插件（§6b，由 ensure_external_plugins() 部署，不在此清单）：
+  · $HERMES_HOME/plugins/ikaros_v5/  → __init__.py 含 class IkarosV5ContextEngine / class IkarosV5MemoryProvider
 
 【完成后自检】
 - python -c "import hermes_cli.web_server, plugins.context_engine" 通过
-- from plugins.context_engine import list_context_engine_names; assert 'ikaros_v5' in list_context_engine_names()
+- Dashboard 枚举含外置 ikaros_v5：from hermes_cli.plugins_cmd import _discover_context_engines; assert any(n == 'ikaros_v5' for n, _ in _discover_context_engines())
 - python -m compileall -q cron hermes_cli plugins scripts tests 通过
-- git status 仅显示本次预期改动（无散落文件）
+- git status 仅显示本次预期改动（无散落文件，无 ikaros_v5 目录）
 全部通过后再告知完成。
 ```
 
@@ -318,7 +332,7 @@ marker 缺失（upstream 接口确实变了）。请你**按意图重实现**这
 - **TUI bundle 新鲜度**：`hermes update` 后 `finalize` 会自动 `rebuild_tui()` 刷新 `ui-tui/dist/entry.js`（best-effort，失败仅告警不阻断）。9100 面板通过 `HERMES_TUI_DIR` 指向该 bundle 走 Hermes 官方「预构建路径」，跳过 `npm install` 以避免 `Chat unavailable: 1`。若你**不经面板**直接 `hermes dashboard`，须自行 `set HERMES_TUI_DIR=E:\Ikaros\core\hermes\ui-tui`；独立刷新命令：`python bin/hermes-update-and-patch.py --rebuild-tui`。
 
 ### 9.3 补丁检测判据（重要）
-- **落地判据用 marker，不用 commit 哈希**：`markers_missing(derive_markers(base, ikaros))` —— 只要 9 个 A 类文件的签名行 + 3 个 B 类的代表 marker 在工作树即证明补丁就位，与"重打新提交 / 新 HEAD"解耦，永不误报「缺失」。
+- **落地判据用 marker，不用 commit 哈希**：`markers_missing(derive_markers(base, ikaros))` —— 只要 9 个 A 类文件的签名行 + 1 个 B 类的代表 marker 在工作树即证明补丁就位；外置 ikaros_v5 插件由 `ensure_external_plugins()` 单独部署并按 §6b 验证（`_IKAROS_V5_RUNTIME_CHECK`）。与"重打新提交 / 新 HEAD"解耦，永不误报「缺失」。
 - 是否存在补丁提交历史用 `patch_present_via_grep()`（`git log --grep "apply Ikaros integration patches" HEAD`），仅作辅助展示。
 - 状态接口：`GET /api/hermes/status` 返回 `{head, upstream_tip, patch_applied, dirty, detail}`，供前端轮询。
 

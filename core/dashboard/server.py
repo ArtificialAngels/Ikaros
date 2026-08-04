@@ -801,8 +801,8 @@ def _spawn_hermes_dashboard(root, env, wait, no_open):
         paths.insert(0, hermes_root_str)
     child_env["PYTHONPATH"] = ";".join(paths)
     # 让 Hermes 内的 Ikaros V5 记忆提供方准确定位 IKAROS_ROOT
-    # （core/hermes/plugins/memory/ikaros_v5 依赖此变量定位 E:/Ikaros/core/memory_v5）。
-    # 不设时回退到 __file__.parents[5]，但显式设置更稳、避免静默“unavailable”。
+    # （外置插件 data/hermes-agent/plugins/ikaros_v5/ 依赖此变量定位 E:/Ikaros/core/memory_v5；
+    #   不设时回退到 __file__.parents[4]，但显式设置更稳、避免静默“unavailable”）。
     child_env["IKAROS_ROOT"] = str(root)
     log.info("[hermes] use venv python=%s, PYTHONPATH=%s, IKAROS_ROOT=%s",
              venv_py, child_env["PYTHONPATH"], child_env["IKAROS_ROOT"])
@@ -934,8 +934,21 @@ def _ttl_cache(seconds: float):
                 hit = _store[key]
             return hit[1]
         wrapper.cache_clear = _store.clear
+        _CACHE_REGISTRY.add(wrapper)
         return wrapper
     return deco
+
+
+_CACHE_REGISTRY: set = set()
+
+
+def _clear_status_caches() -> None:
+    """组件启停操作后调用：清空全部 TTL 缓存，下次轮询立刻看到新状态。"""
+    for w in list(_CACHE_REGISTRY):
+        try:
+            w.cache_clear()
+        except Exception:
+            pass
 
 
 @_ttl_cache(30)
@@ -1166,6 +1179,7 @@ def refresh_upstream_versions(names=None, force=False):
         _UPSTREAM_CACHE[name] = entry
 
 
+@_ttl_cache(30)
 def repo_status(name: str) -> dict:
     """汇总：存在性 + 本地版本 + 缓存的上游版本 + 是否落后。"""
     spec = UPSTREAM_REPOS[name]
@@ -1831,7 +1845,12 @@ def get_component_statuses() -> list[dict]:
         if c.get("group"):
             subs = {}
             for sub in c["subcomponents"]:
-                subs[sub] = comp_already_up(sub)
+                # 复用已并发探测的 port_up_map，避免串行 tcp_probe 拖慢轮询
+                sub_cfg = next((x for x in COMPONENTS if x["id"] == sub), None)
+                if sub_cfg and sub_cfg.get("ports"):
+                    subs[sub] = any(port_up_map.get(p, False) for p in sub_cfg["ports"])
+                else:
+                    subs[sub] = comp_already_up(sub)
             entry["sub_status"] = subs
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
@@ -2056,6 +2075,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             cid = parts[2]
             action = parts[3] if len(parts) > 3 else "start"
             if run_component_action(cid, action):
+                _clear_status_caches()
                 self._send_json({
                     "ok": True, "id": cid, "action": action,
                     "msg": f"{cid} {action} 已派发",
@@ -2069,6 +2089,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             action = parts[2]
             if action in ("start", "stop"):
                 run_component_action("all", action)
+                _clear_status_caches()
                 self._send_json({"ok": True, "action": action,
                                  "msg": f"全部组件 {action} 已派发"})
             else:

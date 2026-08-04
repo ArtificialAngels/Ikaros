@@ -106,10 +106,10 @@ class IkarosV5MemoryProvider(MemoryProvider):
         return Path(
             os.environ.get("IKAROS_ROOT")
             or os.environ.get("HERMES_ROOT")
-            # __file__ = core/hermes/plugins/memory/ikaros_v5/__init__.py
-            #   parents[0]=ikaros_v5  [1]=memory  [2]=plugins
-            #   [3]=hermes  [4]=core  [5]=Ikaros 根
-            or Path(__file__).resolve().parents[5]
+            # __file__ = <root>/data/hermes-agent/plugins/ikaros_v5/memory_provider.py
+            #   parents[0]=ikaros_v5  [1]=plugins  [2]=hermes-agent
+            #   [3]=data  [4]=Ikaros 根
+            or Path(__file__).resolve().parents[4]
         )
 
     def _v5_environment_present(self) -> bool:

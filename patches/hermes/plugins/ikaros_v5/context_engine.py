@@ -4,7 +4,8 @@
 在压缩时把 Ikaros V5 的情感状态 / 实体关系 / 相关记忆注入摘要 prompt，
 使长对话压缩后仍保留 V5 连续性。
 
-通过 ``context.engine: ikaros_v5`` 启用（Dashboard 或 ``hermes config``）。
+作为外置插件注册（register_context_engine），经 ``context.engine: ikaros_v5``
+启用（Dashboard 或 ``hermes config``）。
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class IkarosV5ContextEngine(ContextCompressor):
 
     def is_available(self) -> bool:
         try:
-            from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
+            from .memory_provider import IkarosV5MemoryProvider
 
             return IkarosV5MemoryProvider()._v5_environment_present()
         except Exception:
@@ -50,7 +51,7 @@ class IkarosV5ContextEngine(ContextCompressor):
     def _ensure_provider(self):
         if self._provider is None:
             try:
-                from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
+                from .memory_provider import IkarosV5MemoryProvider
 
                 self._provider = IkarosV5MemoryProvider()
                 self._provider.initialize("")
@@ -100,3 +101,20 @@ class IkarosV5ContextEngine(ContextCompressor):
         if incoming:
             return incoming + "\n\n" + v5_ctx
         return v5_ctx
+
+    # ── 插件注册路径的 deepcopy 支持 ──
+    #
+    # agent_init 对插件注册的引擎做 copy.deepcopy（共享单例 → 子 agent 隔离）。
+    # 惰性 provider 不复制（置 None，随后按需重连），只复制可变的预算标量，
+    # 避免未来 V5 provider 持有 DB 连接/客户端时 deepcopy 失败、静默回退内置。
+
+    def __deepcopy__(self, memo):
+        cls = type(self)
+        obj = cls.__new__(cls)
+        memo[id(self)] = obj
+        for k, v in self.__dict__.items():
+            if k == "_provider":
+                obj.__dict__[k] = None  # 惰性重连
+            else:
+                obj.__dict__[k] = v
+        return obj

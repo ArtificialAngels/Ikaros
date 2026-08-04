@@ -44,5 +44,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Installing python-dotenv (mcp 1.28.1 -^> pydantic-settings -^> dotenv)...
+rem 2026-08-04 踩坑: uv 装 [web,mcp] 后 venv 缺 dotenv 包目录(仅剩 dist-info),
+rem mcp import 报 "No module named 'dotenv'" — 固定版本重装保证包目录完整。
+"%UV%" pip install --python "%VENV%\Scripts\python.exe" --reinstall "python-dotenv==1.1.1"
+if errorlevel 1 (
+  echo ERROR: python-dotenv install failed rc=%errorlevel%
+  exit /b 1
+)
+
 echo.
 echo Done. Verify with: %VENV%\Scripts\hermes.exe --help

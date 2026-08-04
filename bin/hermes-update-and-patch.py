@@ -82,8 +82,6 @@ ALLOWLIST_FILES = [
     "tests/cron/test_scheduler.py",
 ]
 ALLOWLIST_DIRS = [
-    "plugins/context_engine/ikaros_v5",
-    "plugins/memory/ikaros_v5",
     "skills/creative/tldraw-skill",
 ]
 
@@ -106,21 +104,25 @@ A_CLASS_FILES = [
     "tools/mcp_tool.py",  # 08-02: _inject_ikaros_root_paths() — MCP ${IKAROS_*} 从 HERMES_HOME 自推导
 ]
 # B 类：Ikaros 自有静态目录（原样复制；upstream 不碰，缺失即补、存在即跳过）。
+# 注意：ikaros_v5 上下文引擎/记忆提供方已于 08-04 外置为 Hermes 用户插件
+# （$HERMES_HOME/plugins/ikaros_v5/），不再属于 B 类——见 EXTERNAL_PLUGIN_* 常量
+# 与 ensure_external_plugins()。hermes 仓库内已无任何 ikaros_v5 文件。
 B_CLASS_DIRS = [
-    "plugins/context_engine/ikaros_v5",
-    "plugins/memory/ikaros_v5",
     "skills/creative/tldraw-skill",
 ]
 B_CLASS_REPR = {
-    "plugins/context_engine/ikaros_v5": "plugins/context_engine/ikaros_v5/__init__.py",
-    "plugins/memory/ikaros_v5": "plugins/memory/ikaros_v5/__init__.py",
     "skills/creative/tldraw-skill": "skills/creative/tldraw-skill/SKILL.md",
 }
 B_CLASS_MARKERS = {
-    "plugins/context_engine/ikaros_v5": "class IkarosV5ContextEngine",
-    "plugins/memory/ikaros_v5": "class IkarosV5MemoryProvider",
     "skills/creative/tldraw-skill": "tldraw",
 }
+
+# 外置插件：源在 patches/hermes/plugins/ikaros_v5/（Ikaros 主仓 git 跟踪），
+# 运行时部署到 data/hermes-agent/plugins/ikaros_v5/（$HERMES_HOME，gitignore 的数据区）。
+# hermes 更新 reset --hard 只影响 core/hermes，外置插件天然不受影响。
+EXTERNAL_PLUGIN_SRC = PATCH_SOURCE_DIR / "plugins" / "ikaros_v5"
+EXTERNAL_PLUGIN_DST = IKAROS_ROOT / "data" / "hermes-agent" / "plugins" / "ikaros_v5"
+EXTERNAL_PLUGIN_MARKER = "class IkarosV5ContextEngine"
 
 
 # --------------------------------------------------------------------------- #
@@ -403,6 +405,25 @@ def ensure_b_class(d: str) -> None:
     log(f"  补 B 类目录：{d}/")
 
 
+def ensure_external_plugins() -> None:
+    """外置 ikaros_v5 插件：patches 源 → $HERMES_HOME/plugins/ikaros_v5/（幂等）。
+
+    hermes 更新 reset --hard 只影响 core/hermes；此部署保证 data 区的运行时
+    插件始终与 patches 源一致（缺失即补、代表文件含 marker 即跳过）。
+    """
+    repr_path = EXTERNAL_PLUGIN_DST / "__init__.py"
+    if repr_path.exists():
+        txt = normalize_lf(repr_path.read_text(encoding="utf-8", errors="ignore"))
+        if EXTERNAL_PLUGIN_MARKER in txt:
+            return  # 已部署
+    if not EXTERNAL_PLUGIN_SRC.exists():
+        log(f"  [warn] 外置插件源缺失，跳过 {EXTERNAL_PLUGIN_SRC}")
+        return
+    EXTERNAL_PLUGIN_DST.parent.mkdir(parents=True, exist_ok=True)
+    _copytree_lf(EXTERNAL_PLUGIN_SRC, EXTERNAL_PLUGIN_DST)
+    log(f"  部署外置插件：{EXTERNAL_PLUGIN_DST}/")
+
+
 def scan_conflicts() -> list:
     """扫描 A 类文件与 B 类代表文件中的 git 冲突标记（<<<<<<<）。"""
     conflicts: list = []
@@ -446,6 +467,7 @@ def apply_patch_delta(base: str, ikaros: str) -> list:
             failed.append(f)
     for d in B_CLASS_DIRS:
         ensure_b_class(d)
+    ensure_external_plugins()  # 外置 ikaros_v5 插件（hermes 仓库外，hermes 更新不受影响）
     # 真正留下冲突标记的（极少），优先上报；其余靠 markers_missing 兜底
     conflicts = scan_conflicts()
     if failed and not conflicts:
@@ -502,8 +524,11 @@ def rollback_to_backup(tag: str) -> None:
 # 验证加强（spec §4 增补）：ikaros_v5 记忆提供方是否真的能在 hermes 内运行
 # --------------------------------------------------------------------------- #
 # 子进程内执行的检查：复刻 Hermes Dashboard 的就绪判定（discover + is_available），
-# 并进一步实际 initialize() 载入 V5——这正是「打补丁后是否真能跑」的硬证据，
+# 并进一步实际 initialize() 载入 V5——这正是「外置后是否真能跑」的硬证据，
 # 能直接拦住本次出现的 'Memory provider ikaros_v5 is not ready (unavailable)' 类 400。
+# 2026-08-04：插件已外置到 $HERMES_HOME/plugins/ikaros_v5/，验证走两条原生发现链路：
+#   记忆提供方 -> load_memory_provider（memory 系统 user 目录扫描）
+#   context engine -> discover_plugins + get_plugin_context_engine（通用插件系统注册）
 _IKAROS_V5_RUNTIME_CHECK = r'''
 import os, sys
 
@@ -511,7 +536,7 @@ root = os.environ.get("IKAROS_ROOT")
 if not root:
     print("FAIL: IKAROS_ROOT 未设置")
     sys.exit(1)
-# 确保可被 import：core/hermes(plugins.*) 与 core(memory_v5 包)
+# 确保可被 import：core/hermes(agent/plugins/hermes_cli) 与 core(memory_v5 包)
 sys.path.insert(0, os.path.join(root, "core"))
 for p in os.environ.get("PYTHONPATH", "").split(os.pathsep):
     if p and p not in sys.path:
@@ -522,51 +547,54 @@ def check(cond, msg):
     if not cond:
         errors.append(msg)
 
-# 1) 记忆提供方被发现且 available
-from plugins.memory import discover_memory_providers
-disc = {n: (d, avail) for n, d, avail in discover_memory_providers()}
-check("ikaros_v5" in disc, "ikaros_v5 未被 discover_memory_providers 发现: %r" % sorted(disc))
-if "ikaros_v5" in disc:
-    check(disc["ikaros_v5"][1] is True,
-          "ikaros_v5 被发现但 available=False（Hermes 会报 unavailable）")
+# 1) 记忆提供方：官方 API load_memory_provider（user 目录扫描 -> _hermes_user_memory.ikaros_v5）
+from plugins.memory import load_memory_provider
+prov = load_memory_provider("ikaros_v5")
+check(prov is not None, "load_memory_provider('ikaros_v5') = None（外置插件未被 memory 系统发现）")
+if prov is not None:
+    check(prov.name == "ikaros_v5", "provider.name=%r != ikaros_v5" % (prov.name,))
+    check(prov.is_available(),
+          "IkarosV5MemoryProvider.is_available()=False, import_error=%r" % (prov._import_error,))
+    # 2) 真正载入 V5（这才是「能在 hermes 里运行」的硬证据）
+    try:
+        prov.initialize("patch-verify")
+        check(prov._v5_loaded,
+              "initialize() 未真正载入 V5: import_error=%r" % (prov._import_error,))
+    except Exception as e:
+        errors.append("initialize() 抛异常: %r" % (e,))
 
-# 2) 直接实例化并 is_available()
-from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
-prov = IkarosV5MemoryProvider()
-check(prov.is_available(),
-      "IkarosV5MemoryProvider.is_available()=False, import_error=%r" % (prov._import_error,))
+# 3) context engine：通用插件系统注册（plugins.enabled 必须含 ikaros_v5）
+from hermes_cli.plugins import discover_plugins, get_plugin_context_engine
+discover_plugins()
+engine = get_plugin_context_engine()
+check(engine is not None and getattr(engine, "name", None) == "ikaros_v5",
+      "get_plugin_context_engine() 未返回 ikaros_v5（插件未注册/enabled 缺失）: %r"
+      % (getattr(engine, "name", None) if engine else None,))
+if engine is not None and getattr(engine, "name", None) == "ikaros_v5":
+    check(engine.is_available(), "context engine ikaros_v5 is_available()=False")
 
-# 3) 真正载入 V5（这才是「能在 hermes 里运行」的硬证据）
-try:
-    prov.initialize("patch-verify")
-    check(prov._v5_loaded,
-          "initialize() 未真正载入 V5: import_error=%r" % (prov._import_error,))
-except Exception as e:
-    errors.append("initialize() 抛异常: %r" % (e,))
-
-# 4) context engine 同样可用
-from plugins.context_engine import list_context_engine_names
-check("ikaros_v5" in list_context_engine_names(),
-      "ikaros_v5 未出现在 context engine 列表")
-from plugins.context_engine.ikaros_v5 import IkarosV5ContextEngine
-check(IkarosV5ContextEngine().is_available(),
-      "context engine ikaros_v5 is_available()=False")
+# 4) Dashboard 枚举视角：两条列表都含 ikaros_v5
+from hermes_cli.plugins_cmd import _discover_context_engines, _discover_memory_providers
+ce_names = {n for n, _ in _discover_context_engines()}
+check("ikaros_v5" in ce_names, "Dashboard context engine 列表缺 ikaros_v5: %r" % sorted(ce_names))
+mp_names = {n for n, _ in _discover_memory_providers()}
+check("ikaros_v5" in mp_names, "Dashboard memory provider 列表缺 ikaros_v5: %r" % sorted(mp_names))
 
 if errors:
     print("FAIL")
     for e in errors:
         print(" -", e)
     sys.exit(1)
-print("OK: ikaros_v5 在 hermes 内可用且已成功载入 V5")
+print("OK: ikaros_v5 外置插件在 hermes 内可用（memory provider + context engine + dashboard 枚举）")
 '''
 
 
 def verify_ikaros_v5_runtime(python_exe: Path) -> tuple[bool, str]:
-    """ikaros_v5 记忆提供方是否真的能在 hermes 子进程内运行（硬验证）。"""
+    """ikaros_v5 外置插件是否真的能在 hermes 子进程内运行（硬验证）。"""
     env = dict(os.environ)
     env["IKAROS_ROOT"] = str(IKAROS_ROOT)
     env["PYTHONPATH"] = os.pathsep.join([
-        str(REPO),                   # core/hermes -> plugins.*
+        str(REPO),                   # core/hermes -> agent/plugins/hermes_cli
         str(IKAROS_ROOT / "core"),   # memory_v5 包
     ])
     proc = run_cmd([str(python_exe), "-c", _IKAROS_V5_RUNTIME_CHECK],
@@ -613,11 +641,15 @@ def verify(python_exe: Path) -> tuple[bool, list[str]]:
     check("compileall 全过", proc.returncode == 0,
           "" if proc.returncode == 0 else proc.stderr[-300:])
 
-    # 3) list_context_engine_names() 能发现 ikaros_v5（目录扫描，不 import 引擎）
-    probe = ("from plugins.context_engine import list_context_engine_names; "
-             "assert 'ikaros_v5' in list_context_engine_names()")
+    # 3) Dashboard 枚举视角：context engine 列表含 ikaros_v5（外置插件经
+    #    通用插件系统注册后由 _discover_context_engines 可见；仓库内目录
+    #    已无 ikaros_v5，旧 list_context_engine_names 检查不再适用）
+    probe = (
+        "from hermes_cli.plugins_cmd import _discover_context_engines; "
+        "assert any(n == 'ikaros_v5' for n, _ in _discover_context_engines())"
+    )
     proc = run_cmd([str(python_exe), "-c", probe], check=False)
-    check("发现 ikaros_v5 引擎", proc.returncode == 0,
+    check("Dashboard 可发现 ikaros_v5 引擎", proc.returncode == 0,
           "" if proc.returncode == 0 else proc.stderr[-300:])
 
     # 3b) ikaros_v5 记忆提供方真的能在 hermes 内运行（发现 + 可用 + 实际载入 V5）。
@@ -932,6 +964,7 @@ def step_finalize(python_exe: Path) -> int:
     # 仅确保 B 类目录存在（A 类已由 LLM/人工改好，勿用旧源覆盖）
     for d in B_CLASS_DIRS:
         ensure_b_class(d)
+    ensure_external_plugins()  # 收尾时也确保外置 ikaros_v5 插件已部署
 
     if finalize(target_sha, already_committed=False, python_exe=python_exe):
         return 0

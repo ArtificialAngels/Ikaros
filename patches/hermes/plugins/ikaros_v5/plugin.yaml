@@ -1,0 +1,5 @@
+name: ikaros_v5
+kind: standalone
+version: 2.0.0
+description: "Ikaros V5 long-term memory — context engine (compression-time injection) + memory provider (per-turn retrieve/store). Lives outside the hermes repo at $HERMES_HOME/plugins/."
+author: "Ikaros"
