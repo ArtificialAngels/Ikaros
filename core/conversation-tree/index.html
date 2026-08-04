@@ -1551,13 +1551,18 @@ function miniInit(){
   MINI.vp=document.getElementById('miniViewport');
   MINI.map=document.getElementById('miniMap');
   if(!MINI.svg)return;
-  // 缩放后左键点击一次 → 视作鼠标离开 (冻结 hover 跟随), 移出再进入恢复
-  let miniFrozen=false, miniWheelArmed=false;
+  // 左键点击 → 冻结 3s: 期间不轮询鼠标 (移动跟随 / 滚轮缩放 均忽略),
+  // 便于"点击定位后移出鼠标"而选择方块不被拖走; 3s 后自动恢复实时跟随
+  let miniFrozen=false, miniFreezeTimer=null;
+  const freezeMini=()=>{
+    miniFrozen=true;
+    clearTimeout(miniFreezeTimer);
+    miniFreezeTimer=setTimeout(()=>{miniFrozen=false;},3000);
+  };
   MINI.map.addEventListener('mousedown',e=>{
     e.stopPropagation();e.preventDefault();
-    if(e.button===0&&miniWheelArmed){miniFrozen=true;miniWheelArmed=false;}
+    if(e.button===0)freezeMini();
   });
-  MINI.map.addEventListener('mouseleave',()=>{miniFrozen=false;miniWheelArmed=false;});
   // 实时跟随: 鼠标在缩略图上移动 (无需按下) 视口中心即跟随鼠标指向的位置
   MINI.map.addEventListener('mousemove',e=>{
     e.stopPropagation();
@@ -1576,8 +1581,8 @@ function miniInit(){
   // (不能用鼠标绝对屏幕位置 — minimap 位于主视口左下角, 那样缩放中心会固定偏到左下)
   MINI.map.addEventListener('wheel',e=>{
     e.preventDefault();e.stopPropagation();
+    if(miniFrozen)return;   // 冻结期 (点击后 3s) 忽略滚轮缩放
     cancelAutoAnim();
-    miniWheelArmed=true;   // 缩放完毕 → 下一次左键点击冻结跟随
     if(!MINI.scale)return;
     const delta=e.deltaY>0?0.9:1.1;
     const newZoom=Math.min(3,Math.max(0.15,zoom*delta));

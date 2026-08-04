@@ -734,3 +734,198 @@ body::before {
 .herdr-in#herdr-task { min-height: 46px; resize: vertical; }
 .herdr-form .btn.start { align-self: flex-end; }
 
+
+
+/* ============================================================================
+ * V2 视觉升级 (2026-08-04) — 仿 ugc-video-ai-agent-workflow (v0 风格)
+ * ----------------------------------------------------------------------------
+ * 设计语言迁移:
+ *   - HeroBanner 顶部横幅 (可关闭, localStorage 记忆)
+ *   - 灰阶 mono 工程感: 全局等宽数字 + 更克制的中性边框
+ *   - 点阵画布背景 (仿 React Flow Background gap=24 size=1)
+ *   - 浮动快捷按钮 FAB (仿 FloatingAddButton, 点击展开)
+ *   - 首次使用引导弹窗 (仿 QuickstartModal, 4 步)
+ *   - 组件卡 hover: bg 轻亮化 (仿 hover:bg-secondary)
+ *   - 运行中边缘流动动画 (仿 animated edges: stroke-dashoffset 流动)
+ * 兼容: 不改变既有 class/id, 全部为新增选择器或覆盖视觉。
+ * ==========================================================================*/
+
+/* 1. 全局: 等宽数字 + 工程感 */
+:root {
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Consolas", monospace;
+}
+body { font-feature-settings: "tnum" 1, "cv01" 1; }
+.g-num, .mem-hero-num, .mem-tile-num, .affect-value, .vitality-num,
+.comp-detail, .chip, .event-count, .thought-meta, .msg .time {
+  font-family: var(--font-mono);
+}
+
+/* 2. HeroBanner (参考 hero-banner.tsx) */
+.hero-banner {
+  position: relative; z-index: 30;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-1) 78%, transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  flex-shrink: 0;
+  animation: heroIn .45s var(--ease-out) both;
+}
+@keyframes heroIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.hero-inner {
+  display: flex; align-items: center; gap: 16px;
+  max-width: 1400px; margin: 0 auto; padding: 10px 22px;
+}
+.hero-icon {
+  width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #06121d; font-weight: 800; font-size: 17px;
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+.hero-text { flex: 1; min-width: 0; }
+.hero-text h1 { font-size: 14px; font-weight: 650; letter-spacing: .2px; color: var(--text); }
+.hero-text p { margin-top: 1px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.hero-pills { display: flex; align-items: center; gap: 8px; }
+.hero-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font-size: 11px; color: var(--text-soft);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.hero-pill:hover { border-color: var(--border-strong); background: var(--surface); }
+.pill-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
+.hero-close {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  border: 1px solid transparent; background: transparent;
+  color: var(--muted); font-size: 12px; cursor: pointer;
+  display: grid; place-items: center;
+  transition: all var(--t-fast);
+}
+.hero-close:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+@media (max-width: 900px) { .hero-pills { display: none; } }
+@media (max-width: 720px) { .hero-inner { padding: 8px 12px; gap: 10px; } .hero-icon { width: 32px; height: 32px; font-size: 15px; } }
+
+/* 3. 点阵画布背景 (仿 React Flow Background) */
+.canvas {
+  background-image:
+    radial-gradient(circle, var(--border-strong) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+[data-theme="light"] .canvas { background-image: radial-gradient(circle, rgba(23,120,190,0.16) 1px, transparent 1px); }
+
+/* 4. 组件卡 hover: 背景轻亮化 (仿 hover:bg-secondary) */
+.comp:hover, .panel:hover, .gauge:hover {
+  background: color-mix(in srgb, var(--surface) 55%, var(--bg-1) 45%);
+}
+
+/* 5. 浮动快捷按钮 FAB (参考 floating-add-button.tsx) */
+.fab {
+  position: fixed; right: 22px; bottom: 54px; z-index: 9999;
+  display: flex; align-items: flex-end; flex-direction: column;
+}
+.fab-btn {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+  color: var(--text); font-size: 22px; font-weight: 300; line-height: 1;
+  cursor: pointer; box-shadow: var(--shadow-2);
+  display: grid; place-items: center;
+  transition: transform var(--t-mid) var(--ease-elastic), background var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.fab-btn:hover { background: var(--surface-2); border-color: var(--accent); box-shadow: 0 6px 22px var(--accent-glow); }
+.fab-btn.rot { transform: rotate(135deg); background: var(--accent-soft); border-color: var(--accent); }
+.fab-menu {
+  position: absolute; right: 0; bottom: calc(100% + 10px);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 148px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-solid) 92%, transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--shadow-2);
+  opacity: 0; transform: translateY(8px) scale(0.96); pointer-events: none;
+  transform-origin: bottom right;
+  transition: opacity var(--t-fast), transform var(--t-mid) var(--ease-out);
+}
+.fab.open .fab-menu { opacity: 1; transform: none; pointer-events: auto; }
+.fab-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 8px;
+  border: none; background: transparent; color: var(--text-soft);
+  font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.fab-item:hover { background: var(--surface-2); color: var(--text); }
+.fab-ic { width: 16px; text-align: center; font-size: 11px; color: var(--muted); }
+.fab-item:hover .fab-ic { color: var(--accent); }
+.fab-sep { height: 1px; margin: 4px 8px; background: var(--border); }
+
+/* 6. 首次使用引导弹窗 (参考 quickstart-modal.tsx) */
+.tour-mask {
+  position: fixed; inset: 0; z-index: 10000;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(4, 8, 14, 0.62);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity .22s var(--ease-out);
+}
+.tour-mask.show { opacity: 1; }
+.tour-modal {
+  width: min(560px, calc(100vw - 40px));
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+  transform: translateY(14px) scale(0.97);
+  transition: transform .25s var(--ease-out);
+}
+.tour-mask.show .tour-modal { transform: none; }
+.tour-head {
+  display: flex; align-items: center; gap: 14px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.tour-icon {
+  width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #06121d; font-weight: 800; font-size: 19px;
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+.tour-head h2 { font-size: 16px; font-weight: 700; color: var(--text); }
+.tour-head p { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tour-steps { padding: 10px 22px 4px; min-height: 210px; }
+.tour-step { display: none; }
+.tour-step.active { display: flex; gap: 14px; animation: tourStepIn .3s var(--ease-out); }
+@keyframes tourStepIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.tour-num {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 12px; font-weight: 700; font-family: var(--font-mono);
+}
+.tour-body h3 { font-size: 14px; font-weight: 650; color: var(--text); margin-bottom: 6px; }
+.tour-body p { font-size: 12.5px; line-height: 1.7; color: var(--text-soft); }
+.tour-foot {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 22px 18px;
+}
+.tour-progress { margin-left: auto; font-size: 11px; font-family: var(--font-mono); color: var(--muted); }
+
+/* 7. 运行中边缘流动 (仿 animated edges) */
+@keyframes edgeFlow {
+  from { background-position: 0 0; }
+  to { background-position: 28px 0; }
+}
+.comp.pending.featured::before {
+  background: repeating-linear-gradient(90deg, var(--accent) 0 10px, transparent 10px 20px);
+  background-size: 28px 2.5px; height: 2.5px; opacity: 0.9;
+  animation: edgeFlow 1.1s linear infinite;
+}
+
+/* 8. 组件卡新增微交互 (参考节点 hover 反馈) */
+.comp:hover .comp-head { background: color-mix(in srgb, var(--surface-2) 55%, transparent); border-radius: 8px; margin: -3px -6px; padding: 3px 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .hero-banner, .tour-step.active { animation: none; }
+}

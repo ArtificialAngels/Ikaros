@@ -14,6 +14,8 @@ import json
 import os
 import queue
 import re
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -383,6 +385,15 @@ _READONLY_TOOLS = [
         "function": {
             "name": "branch_overview",
             "description": "查看当前分支的路径脉络 (根→当前节点的摘要)",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gateway_ensure",
+            "description": "检查 Hermes gateway (:8642) 健康状态; 不可达时自动拉起并等待就绪 (降级自救)。"
+                           "当 gateway/Hermes 服务疑似挂掉、工具不可用、需要恢复完整工具链时调用。",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1052,13 +1063,74 @@ CHAT_TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "gateway_ensure",
+            "description": "检查 Hermes gateway (:8642) 健康状态; 不可达时自动拉起它并等待就绪. "
+                           "当 gateway/Hermes 服务疑似挂掉、工具不可用、或需要恢复完整工具链时调用.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 MAX_TOOL_ITER = 5
 
 
+# ── gateway 降级自救 (2026-08-04): gateway 不可达时由对话树侧拉起 ──
+
+def _gateway_health_check(timeout: float = 2.0) -> bool:
+    """探测 :8642 gateway 是否可达 (GET /health, 200/404 均视为进程活着)."""
+    try:
+        base = HERMES_AGENT_URL or "http://127.0.0.1:8642/v1/chat/completions"
+        health = base.replace("/v1/chat/completions", "/health")
+        req = urllib.request.Request(health, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            return resp.status < 500
+    except Exception:
+        return False
+
+
+def _spawn_gateway() -> dict:
+    """拉起 gateway: python -m hermes_cli.main gateway run --replace (cwd=core/hermes).
+
+    日志追加到 tmp/gateway8642.log; 轮询 :8642 最多 30s。返回 {ok, pid?, result}。
+    """
+    root = Path(os.environ.get("IKAROS_ROOT",
+                               str(Path(__file__).resolve().parent.parent.parent)))
+    py = root / "runtime" / "portable-python" / "python.exe"
+    cwd = root / "core" / "hermes"
+    log = root / "tmp" / "gateway8642.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env.setdefault("HERMES_HOME", str(root / "data" / "hermes-agent"))
+    try:
+        fh = open(log, "a", encoding="utf-8", errors="replace")
+    except OSError:
+        fh = open(os.devnull, "w")
+    try:
+        proc = subprocess.Popen(
+            [str(py), "-m", "hermes_cli.main", "gateway", "run", "--replace"],
+            cwd=str(cwd), env=env, stdout=fh, stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        return {"ok": False, "result": f"gateway 拉起失败: {e}"}
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if _gateway_health_check():
+            return {"ok": True, "pid": proc.pid,
+                    "result": f"gateway 已拉起 (PID {proc.pid}), :8642 健康检查通过"}
+        if proc.poll() is not None:
+            return {"ok": False,
+                    "result": f"gateway 进程提前退出 (code={proc.returncode}), 见 tmp/gateway8642.log"}
+        time.sleep(1)
+    return {"ok": False,
+            "result": f"gateway 进程存活 (PID {proc.pid}) 但 :8642 30s 内未就绪, 见 tmp/gateway8642.log"}
+
+
 def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
-    """执行 chat 只读工具, 返回 {ok, result}. 所有工具均为只读/安全."""
+    """执行 chat 降级工具, 返回 {ok, result}. 除 gateway_ensure (白名单拉起 gateway) 外均为只读/安全."""
     try:
         args = json.loads(arguments) if arguments else {}
     except Exception:
@@ -1099,6 +1171,11 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
             return {"ok": True, "result": "\n".join(lines)}
         except Exception as e:
             return {"ok": False, "result": f"概览失败: {e}"}
+    if name == "gateway_ensure":
+        # 降级自救 (2026-08-04): gateway 不可达时拉起, 可达时报告状态
+        if _gateway_health_check():
+            return {"ok": True, "result": "gateway 正常运行 (:8642 健康检查通过)"}
+        return _spawn_gateway()
     return {"ok": False, "result": f"未知工具: {name}"}
 
 

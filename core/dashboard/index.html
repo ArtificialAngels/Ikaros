@@ -9,6 +9,23 @@
 <body>
 <div class="app">
 
+<!-- HeroBanner (参考 ugc-video-ai-agent-workflow): 可关闭顶部横幅 -->
+<div class="hero-banner" id="heroBanner">
+  <div class="hero-inner">
+    <div class="hero-icon">伊</div>
+    <div class="hero-text">
+      <h1>Ikaros 控制台</h1>
+      <p>监控与启停 Ikaros 全家桶 · 拖拽卡片自由布局 · 布局自动记忆</p>
+    </div>
+    <div class="hero-pills">
+      <span class="hero-pill"><span class="pill-dot"></span>实时监控</span>
+      <span class="hero-pill"><span class="pill-dot"></span>一键启停</span>
+      <span class="hero-pill"><span class="pill-dot"></span>自由布局</span>
+    </div>
+    <button class="hero-close" id="heroClose" title="收起横幅" aria-label="收起横幅">✕</button>
+  </div>
+</div>
+
 <div class="topbar">
   <div class="brand">
     <span class="logo">伊</span>
@@ -111,6 +128,67 @@
   <div class="thinking" id="thinking"><span>思考中</span><span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span></div>
   <span id="statusText">就绪</span>
   <span class="event-count" id="eventCount">0 事件</span>
+</div>
+
+<!-- 浮动快捷按钮 (参考 ugc-video-ai-agent-workflow FloatingAddButton) -->
+<div class="fab" id="fab">
+  <div class="fab-menu" id="fabMenu">
+    <button class="fab-item" data-fab="start"><span class="fab-ic">▶</span>全部启动</button>
+    <button class="fab-item" data-fab="stop"><span class="fab-ic">■</span>全部停止</button>
+    <button class="fab-item" data-fab="reset"><span class="fab-ic">↺</span>重置布局</button>
+    <button class="fab-item" data-fab="restart"><span class="fab-ic">⟳</span>重启面板</button>
+    <div class="fab-sep"></div>
+    <button class="fab-item" data-fab="tour"><span class="fab-ic">?</span>使用引导</button>
+  </div>
+  <button class="fab-btn" id="fabBtn" title="快捷操作" aria-label="快捷操作">＋</button>
+</div>
+
+<!-- 首次使用引导弹窗 (参考 QuickstartModal) -->
+<div class="tour-mask" id="tourMask">
+  <div class="tour-modal">
+    <div class="tour-head">
+      <div class="tour-icon">伊</div>
+      <div>
+        <h2>Ikaros 控制台 · 快速上手</h2>
+        <p>四个要点，一分钟学会</p>
+      </div>
+    </div>
+    <div class="tour-steps" id="tourSteps">
+      <div class="tour-step active" data-step="0">
+        <div class="tour-num">1</div>
+        <div class="tour-body">
+          <h3>启停组件</h3>
+          <p>每张组件卡都有「启动 / 停止 / 重启」按钮，顶部可一键启动或停止全部。绿点 = 运行中，红点 = 已停止。</p>
+        </div>
+      </div>
+      <div class="tour-step" data-step="1">
+        <div class="tour-num">2</div>
+        <div class="tour-body">
+          <h3>自由布局</h3>
+          <p>按住卡片标题栏可拖动，边缘和角落可缩放。拖动时自动吸附对齐，布局会记忆到本地。</p>
+        </div>
+      </div>
+      <div class="tour-step" data-step="2">
+        <div class="tour-num">3</div>
+        <div class="tour-body">
+          <h3>实时监控</h3>
+          <p>情感 (PAD)、生命活力、自我思考、V5 记忆、事件流——右侧仪表带实时刷新，展示伊卡洛斯的内部状态。</p>
+        </div>
+      </div>
+      <div class="tour-step" data-step="3">
+        <div class="tour-num">4</div>
+        <div class="tour-body">
+          <h3>主题与恢复</h3>
+          <p>右上角切换深色 / 浅色主题。想恢复初始布局点「重置布局」，随时可重新打开本引导。</p>
+        </div>
+      </div>
+    </div>
+    <div class="tour-foot">
+      <button class="btn" id="tourSkip">跳过</button>
+      <span class="tour-progress" id="tourProgress">1 / 4</span>
+      <button class="btn primary" id="tourNext">下一步</button>
+    </div>
+  </div>
 </div>
 
 </div>
@@ -990,6 +1068,72 @@ function attachHerdrPanel(el){
       document.addEventListener('pointerup', onUp);
     }
   });
+})();
+
+/* ── HeroBanner / FAB / 引导弹窗 (参考 ugc-video-ai-agent-workflow) ── */
+(function heroBanner(){
+  var KEY='ikaros-hero-dismissed';
+  var b=document.getElementById('heroBanner');
+  if(!b)return;
+  if(localStorage.getItem(KEY)==='1'){ b.style.display='none'; return; }
+  var close=document.getElementById('heroClose');
+  if(close)close.addEventListener('click',function(){
+    b.style.display='none'; localStorage.setItem(KEY,'1');
+  });
+})();
+
+(function fab(){
+  var fab=document.getElementById('fab'), btn=document.getElementById('fabBtn'), menu=document.getElementById('fabMenu');
+  if(!fab||!btn||!menu)return;
+  btn.addEventListener('click',function(e){
+    e.stopPropagation();
+    var open=fab.classList.toggle('open');
+    btn.classList.toggle('rot',open);
+    if(open) fab.classList.add('pop');
+    else setTimeout(function(){fab.classList.remove('pop')},160);
+  });
+  document.addEventListener('click',function(e){
+    if(!e.target.closest('#fab')){ fab.classList.remove('open','pop'); btn.classList.remove('rot'); }
+  });
+  menu.querySelectorAll('.fab-item').forEach(function(it){
+    it.addEventListener('click',function(){
+      var act=it.getAttribute('data-fab');
+      fab.classList.remove('open','pop'); btn.classList.remove('rot');
+      if(act==='start')systemAction('start');
+      else if(act==='stop')systemAction('stop');
+      else if(act==='reset'){ localStorage.removeItem(LS_KEY);localStorage.removeItem(PANEL_KEY);canvas.style.minHeight='';location.reload(); }
+      else if(act==='restart')restartPanel();
+      else if(act==='tour')openTour();
+    });
+  });
+})();
+
+(function tour(){
+  var KEY='ikaros-tour-done';
+  var mask=document.getElementById('tourMask');
+  if(!mask)return;
+  var steps=[].slice.call(document.querySelectorAll('.tour-step'));
+  var idx=0;
+  window.openTour=function(){
+    idx=0; render();
+    mask.style.display='flex';
+    requestAnimationFrame(function(){mask.classList.add('show');});
+  };
+  function close(){ mask.classList.remove('show'); setTimeout(function(){mask.style.display='none';},200); }
+  function render(){
+    steps.forEach(function(s,i){ s.classList.toggle('active',i===idx); });
+    document.getElementById('tourProgress').textContent=(idx+1)+' / '+steps.length;
+    document.getElementById('tourNext').textContent=(idx===steps.length-1)?'开始使用':'下一步';
+  }
+  document.getElementById('tourNext').addEventListener('click',function(){
+    if(idx<steps.length-1){ idx++; render(); }
+    else { localStorage.setItem(KEY,'1'); close(); }
+  });
+  document.getElementById('tourSkip').addEventListener('click',function(){
+    localStorage.setItem(KEY,'1'); close();
+  });
+  mask.addEventListener('click',function(e){ if(e.target===mask){ localStorage.setItem(KEY,'1'); close(); } });
+  if(localStorage.getItem(KEY)!=='1'){ setTimeout(openTour,600); }
 })();
 
 registerSidePanels(); initGrid(); loadInitial(); connectSSE();
