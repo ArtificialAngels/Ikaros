@@ -915,6 +915,30 @@ def _hermes_patch_present() -> bool:
     return bool(out.strip())
 
 
+# ── 轻量 TTL 缓存：避免高频轮询重复跑 git / PowerShell ─────────────
+# 9100 面板每 2s 轮询 /api/components；hermes_patch_status 内部多次 git
+# 调用(~0.6s)、_running_command_lines 起 PowerShell(~0.7s)，若不缓存会把
+# 单次轮询拖到 4-5s，组件卡迟迟不渲染。补丁状态 30s 内视为稳定，足够。
+import functools as _functools
+
+def _ttl_cache(seconds: float):
+    def deco(fn):
+        _store: dict[tuple, tuple] = {}  # args_key -> (t, value)
+        @_functools.wraps(fn)
+        def wrapper(*a, **kw):
+            key = (a, tuple(sorted(kw.items())))
+            now = time.time()
+            hit = _store.get(key)
+            if hit is None or (now - hit[0]) > seconds:
+                _store[key] = (now, fn(*a, **kw))
+                hit = _store[key]
+            return hit[1]
+        wrapper.cache_clear = _store.clear
+        return wrapper
+    return deco
+
+
+@_ttl_cache(30)
 def hermes_patch_status() -> dict:
     """返回 hermes 版本 / Ikaros 补丁状态，供 9100 面板显示与启动预检共用。"""
     res = {"head": None, "upstream_tip": None, "patch_applied": None,
@@ -1008,6 +1032,7 @@ def run_hermes_update_and_patch() -> dict:
         proc = subprocess.run(
             [str(py), str(HERMES_PATCH_SCRIPT), "--apply"],
             cwd=str(HERMES_ROOT), capture_output=True, text=True,
+            env=child_env(build_env(ROOT)),
             creationflags=CREATE_NO_WINDOW, timeout=900,
         )
     except subprocess.TimeoutExpired:
@@ -1059,6 +1084,7 @@ _CONTENT_MARKERS = {
 }
 
 
+@_ttl_cache(30)
 def local_repo_version(name: str) -> dict:
     """本地仓库版本：最新 tag（按版本排序）或短 HEAD；含 dirty 标记与内容完整性。"""
     d = UPSTREAM_REPOS[name]["local"]
@@ -1460,6 +1486,7 @@ def comp_running(name: str) -> bool:
     return False
 
 
+@_ttl_cache(5)
 def comp_already_up(name: str) -> bool:
     if name == "local_model":
         return tcp_probe(8080)
@@ -1734,6 +1761,7 @@ def tcp_probe(port: int) -> bool:
         return False
 
 
+@_ttl_cache(8)
 def _running_command_lines() -> list[str]:
     """Return lower-cased command lines of all running processes (PowerShell)."""
     try:
