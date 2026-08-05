@@ -45,7 +45,7 @@
 自动下载 HF 模型（需联网一次）；之后离线也能用缓存。不装则全程规则回退，功能不降级。
 
 **接入点（已落地）**：
-- hermes 插件 `on_pre_compress`（`core/hermes/plugins/memory/ikaros_v5/__init__.py`）在
+- hermes 插件 `on_pre_compress`（`data/hermes-agent/plugins/ikaros_v5/memory_provider.py`）在
   `self._v5_search(...)` 返回后调用 `compress_retrieval_block(max_chars_per_item=150)`，
   **已替换**原 `text[:150]` 硬截断；整段 `try/except` 包裹，压缩器异常时自动回退原始硬截断。
 - :8080 本地小模型构建 system/记忆前缀时跑 `enforce_budget`（尚未接线，待评估）。

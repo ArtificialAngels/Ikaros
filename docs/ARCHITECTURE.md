@@ -433,7 +433,7 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
    - **导入守护 + 离线回退**：U 盘离线便携，不硬依赖 HF 模型权重；`pip install llmlingua` 到 Ikaros venv 联网一次下模型后离线可用缓存。
    - 配套 `compress_old_rounds(tail_keep=6)`（保最近 N 轮原样、压旧轮）、`compress_retrieval_block`（高相关原样、低相关先压再裁，避免「要么全要要么全弃」）、`enforce_budget`（按 score/顺序截到预算内）。
    - **消费此前闲置的 `token_budget` 配置**（min 800 / max 1200 / `char_x` 估算）。
-   - **已接入主链路（2026-07-30 验证）**：`core/hermes/plugins/memory/ikaros_v5/__init__.py` 的 `on_pre_compress` 用 `compress_retrieval_block(max_chars_per_item=150)` 替换原有 `text[:150]` 硬截断，整段用 `try/except` 包裹，压缩器异常时自动回退原始硬截断。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
+   - **已接入主链路（2026-07-30 验证）**：`data/hermes-agent/plugins/ikaros_v5/memory_provider.py` 的 `on_pre_compress` 用 `compress_retrieval_block(max_chars_per_item=150)` 替换原有 `text[:150]` 硬截断，整段用 `try/except` 包裹，压缩器异常时自动回退原始硬截断。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
 
 2. **`gated_retrieval.py` — 分层检索门控（相对 TencentDB 的缺口）**
    - `gated_retrieve()`：默认**只注入高层**（`self_model.get_self_prompt()` + distill/reflect 层记忆），仅在查询实质化且预算剩余时才**下钻** `retrieve()` 拉低层细节。

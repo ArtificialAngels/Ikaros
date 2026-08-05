@@ -1045,6 +1045,8 @@ def run_hermes_update_and_patch() -> dict:
         proc = subprocess.run(
             [str(py), str(HERMES_PATCH_SCRIPT), "--apply"],
             cwd=str(HERMES_ROOT), capture_output=True, text=True,
+            # 必须显式传 env：否则脚本子进程 HERMES_HOME 缺失会回退默认
+            # C:\Users\...\hermes，把更新数据写到 C 盘（2026-08-03 根因修复，commit 065c9f0）。
             env=child_env(build_env(ROOT)),
             creationflags=CREATE_NO_WINDOW, timeout=900,
         )

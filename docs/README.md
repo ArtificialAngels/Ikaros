@@ -21,6 +21,11 @@
 
 > **清理记录**（2026-07-24）：删除了 6 份过时/重复文档（`CODEBASE_STRUCTURE.md`、`v5-architecture-review.md`、`v5-architecture-analysis-2026-07-20.md`、`ikaros-architecture-decomposition.md`、`ikaros-agent-standalone-architecture-analysis.md`、`ikaros-soul.md`），合并了 `ikaros-neko-integration.md` 到 `neko-deep-analysis.md` 附录 C，删除了 3 份已移除组件的脚本文档（`ikaros-voice-ws.md`、`hermes-studio.md`、`hermes-desktop.md`）。
 
+### Hermes 集成与更新（Ikaros 套在 Hermes 之上的解耦 / 维护）
+- [hermes-ikaros-patches.md](hermes-ikaros-patches.md) — Hermes 集成补丁全貌（A/B 类 3-way 重放 + ikaros_v5 外置插件机制 `§6b`）
+- [hermes-update-integrity.md](hermes-update-integrity.md) — 更新不冲掉配置/插件的两层安全（EXTERNAL_PLUGIN 机制，core/hermes 的 git 操作碰不到外置插件）
+- [ikaros-as-hermes-agent-proposal.md](ikaros-as-hermes-agent-proposal.md) — Ikaros 作为「套在 Hermes 之上的智能体」解耦方案（已实施 + 2026-08-05 验证）
+
 ### V5 规格与迁移
 - [v5.2-preprocess-factory-spec.md](v5.2-preprocess-factory-spec.md) — V5.2 预处理工厂规格（节奏/记忆/摘要/画像/情感）
 - [p2-payload-schema-migration.md](p2-payload-schema-migration.md) — P2 载荷 schema 迁移说明

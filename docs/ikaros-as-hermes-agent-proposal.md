@@ -73,19 +73,19 @@ Ikaros **已经是一个"套在 Hermes 之上的智能体"的雏形**——它�
 
 ## 3. 可行性证据：ikaros_v5 插件天然可外置
 
-直接 grep `core/hermes/plugins/memory/ikaros_v5/__init__.py` 与 `context_engine/ikaros_v5/__init__.py` 的 import：
+直接 grep `data/hermes-agent/plugins/ikaros_v5/`（`__init__.py` + `context_engine.py` + `memory_provider.py`）的 import：
 
 ```
-# memory/ikaros_v5/__init__.py
+# data/hermes-agent/plugins/ikaros_v5/memory_provider.py（示意：memory_v5.* 实际在方法内惰性 import）
 from agent.memory_provider import MemoryProvider          # ← Hermes 公共扩展基类
 from memory_v5.store import stats, search                 # ← Ikaros 自己的 V5
 from memory_v5.affect import AffectState
 from memory_v5.reflect.registry import make_default_scheduler, make_consolidate_op
 from memory_v5.extensions.token_compressor import (...)
 
-# context_engine/ikaros_v5/__init__.py
+# data/hermes-agent/plugins/ikaros_v5/context_engine.py
 from agent.context_compressor import ContextCompressor   # ← Hermes 公共扩展基类
-from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
+from .memory_provider import IkarosV5MemoryProvider      # 同目录相对导入（外置单目录插件）
 ```
 
 **结论**：ikaros_v5 仅依赖 Hermes 的两个**公共扩展基类**（`MemoryProvider` / `ContextCompressor`）+ Ikaros 自己的 `memory_v5`。**零 Hermes 内部私有模块依赖** → 它满足 Hermes 插件协议，可以放在任何插件扫描目录下加载，不必须住在 `core/hermes` 里。
@@ -160,8 +160,7 @@ if _IKAROS_MEMORY not in sys.path:
 Ikaros 壳（9100 面板）
  ├─ data/hermes-agent/            ← 个人配置（HERMES_HOME）
  │   ├─ config.yaml              （memory.provider / context.engine = ikaros_v5 + mcp_servers.ikaros-v5-memory）
- │   ├─ plugins/memory/ikaros_v5      ← 外置的核心插件（步骤1）
- │   ├─ plugins/context_engine/ikaros_v5
+ │   ├─ plugins/ikaros_v5/           ← 外置的核心插件（步骤1，单目录：plugin.yaml + context_engine.py + memory_provider.py + __init__.py）
  │   └─ skills/ikaros-*          ← 标准 skill
  ├─ core/memory_v5/              ← Ikaros 自仓（V5 引擎 + mcp_server.py）
  ├─ core/conversation-tree/      ← 独立上层服务（48920）
@@ -179,8 +178,8 @@ Ikaros 壳（9100 面板）
 - [x] `discover_plugins()` + `get_plugin_context_engine()` 返回 `ikaros_v5` 且 `available=True`（2026-08-05 实测 PASS）
 - [x] `IkarosV5MemoryProvider.initialize()` 真载入 V5（`v5.db` 可读写，2026-08-05 实测 PASS）
 - [x] `config.yaml` 的 `mcp_servers.ikaros-v5-memory` 连得上 `core/memory_v5/mcp_server.py`（`v5_*` 工具可用）
-- [ ] 9100 面板 `hermes` 组件 restart 后，Dashboard（9119）的 Context Engine / Memory Provider 下拉仍含 `ikaros_v5` 且为当前选中（待运行时确认）
-- [ ] 对话树（48920）经 8642 gateway 调用 ikaros_v5 上下文正常（待运行时确认）
+- [x] 9100 面板 `hermes` 组件 restart 后，Dashboard（9119）的 Context Engine / Memory Provider 下拉含 `ikaros_v5` 且为当前选中（2026-08-05 活体验证：活的 `/api/config/schema` 实测 `context.engine` options=`[compressor, ikaros_v5]`、`memory.provider` options 含 `ikaros_v5`，config 两项均设为 `ikaros_v5`）
+- [ ] 对话树（48920）经 8642 gateway 调用 ikaros_v5 上下文正常（待运行时确认；当前 48920 未起，gateway 8642 已就绪）
 - [x] `git -C core/hermes diff` 相对上游为空（2026-08-05 实测：工作树干净）
 
 ---

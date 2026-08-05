@@ -19,6 +19,8 @@
 
 实测验证：外置插件经 `load_memory_provider("ikaros_v5")` + `discover_plugins()` 均被发现且 `available=True`，`IkarosV5MemoryProvider.initialize()` 真载入 V5（见 §3.3）。集成一直正常接在 V5 上。
 
+**2026-08-05 活体验证（重启 hermes 栈后）**：Dashboard(9119) 活的 `/api/config/schema` 显示 `context.engine` options=`[compressor, ikaros_v5]`、`memory.provider` options 含 `ikaros_v5`，config 两项均设为选中；gateway(8642) `/health`=200 且 `/v1/models` 无 key 返 401（鉴权生效）。详见 `ikaros-as-hermes-agent-proposal.md` §5。
+
 ## 2. 配置层：config.yaml 绝对安全
 
 `memory.provider: ikaros_v5` / `context.engine: ikaros_v5` 写在 `E:/Ikaros/data/hermes-agent/config.yaml`。

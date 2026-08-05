@@ -80,8 +80,8 @@ def enforce_budget(blocks: list[str], budget_tokens: int) -> list[str]
     # 按 score/顺序截到预算内（est_tokens 用 char_x 估算）
 ```
 
-### 接入点（尚未启用）
-- Hermes 插件 `on_pre_compress`（`core/hermes/plugins/memory/ikaros_v5/__init__.py` 的检索结果）跑 `compress_retrieval_block`，替换当前 `text[:150]` 硬截断。
+### 接入点（已启用）
+- Hermes 插件 `on_pre_compress`（`data/hermes-agent/plugins/ikaros_v5/memory_provider.py` 的检索结果）跑 `compress_retrieval_block`，替换当前 `text[:150]` 硬截断。
 - 消费 `preprocess_config.yaml` 的 `token_budget`（min 800 / max 1200 / `char_x`）—— 这是之前一直空置的配置。
 
 ---
