@@ -76,14 +76,8 @@ ALLOWED_UNTracked = {"config.yaml"}                     # 本地运行配置，�
 ALLOWLIST_FILES = [
     "cron/scheduler.py",
     "hermes_cli/web_server.py",
-    "plugins/context_engine/__init__.py",
-    "scripts/run_tests.sh",
-    "scripts/run_tests_parallel.py",
-    "tests/cron/test_scheduler.py",
 ]
-ALLOWLIST_DIRS = [
-    "skills/creative/tldraw-skill",
-]
+ALLOWLIST_DIRS = []
 
 # --------------------------------------------------------------------------- #
 # A / B 类补丁定义 + 3-way 重放核心
@@ -93,29 +87,23 @@ ALLOWLIST_DIRS = [
 #   因此必须用 3-way（git apply --3way）而非整文件覆盖——这样 upstream 推进时
 #   能自动并入 upstream 自身改动，只把冲突聚焦到真正重叠的行。
 A_CLASS_FILES = [
-    "plugins/context_engine/__init__.py",
     "hermes_cli/web_server.py",
     "cron/scheduler.py",
-    "scripts/run_tests.sh",
-    "scripts/run_tests_parallel.py",
-    "tests/cron/test_scheduler.py",
     "agent/conversation_loop.py",
-    "gateway/platforms/api_server.py",
-    "tools/mcp_tool.py",  # 08-02: _inject_ikaros_root_paths() — MCP ${IKAROS_*} 从 HERMES_HOME 自推导
+    # tools/mcp_tool.py 已消除（08-05）：IKAROS_* 自推导逻辑搬到
+    # core/hermes-bridge/inject_ikaros_paths.py，由启动器 build_env()/bridge
+    # 拉起前注入（setdefault，不覆盖权威值）。hermes 工作树不再含此补丁。
+    # gateway/platforms/api_server.py 已消除（08-05）：其 OpenAI-wire reasoning
+    # 中继由 core/hermes-bridge 经 session-chat 翻译替代；对话树(:48920) 默认改走
+    # :8650 bridge，8642 工作树回归纯净。hermes 工作树不再含此补丁。
 ]
 # B 类：Ikaros 自有静态目录（原样复制；upstream 不碰，缺失即补、存在即跳过）。
 # 注意：ikaros_v5 上下文引擎/记忆提供方已于 08-04 外置为 Hermes 用户插件
 # （$HERMES_HOME/plugins/ikaros_v5/），不再属于 B 类——见 EXTERNAL_PLUGIN_* 常量
 # 与 ensure_external_plugins()。hermes 仓库内已无任何 ikaros_v5 文件。
-B_CLASS_DIRS = [
-    "skills/creative/tldraw-skill",
-]
-B_CLASS_REPR = {
-    "skills/creative/tldraw-skill": "skills/creative/tldraw-skill/SKILL.md",
-}
-B_CLASS_MARKERS = {
-    "skills/creative/tldraw-skill": "tldraw",
-}
+B_CLASS_DIRS = []
+B_CLASS_REPR = {}
+B_CLASS_MARKERS = {}
 
 # 外置插件：源在 patches/hermes/plugins/ikaros_v5/（Ikaros 主仓 git 跟踪），
 # 运行时部署到 data/hermes-agent/plugins/ikaros_v5/（$HERMES_HOME，gitignore 的数据区）。
@@ -273,7 +261,8 @@ def clear_state() -> None:
 # 前置检查
 # --------------------------------------------------------------------------- #
 def ensure_clean_working_tree() -> None:
-    """工作树应仅有允许的未跟踪文件（config.yaml）。"""
+    """工作树应仅有允许的未跟踪文件（config.yaml）或已知的 Ikaros overlay 改动
+    （A 类 M + B 类 A，2026-08-05 起 overlay 不再提交，故这些永远是预期改动）。"""
     proc = run_git(["status", "--porcelain"], check=True)
     lines = [l for l in proc.stdout.splitlines() if l.strip()]
     bad = []
@@ -281,6 +270,10 @@ def ensure_clean_working_tree() -> None:
         code = l[:2]
         path = l[3:].strip()
         if code == "??" and path in ALLOWED_UNTracked:
+            continue
+        # 已知的 Ikaros overlay 改动（A 类 modified/added + B 类 added）是预期内的，
+        # 不视为“脏”，避免 plan / 预检误报。
+        if path in A_CLASS_FILES or path in B_CLASS_DIRS:
             continue
         bad.append(l)
     if bad:
@@ -687,7 +680,7 @@ def verify(python_exe: Path) -> tuple[bool, list[str]]:
         report.append("  [WARN] import 失败（多为 venv 依赖未装，非补丁问题）："
                       + proc.stderr[-200:])
 
-    # 7) 行尾：提交后无意外 EOL 翻转（informational，不阻断）
+    # 7) 行尾：重放后无意外 EOL 翻转（informational，不阻断）
     report.append("  [INFO] EOL 检查：hermes .gitattributes 对 *.sh 强制 LF；"
                   "新增文件请保持与周围一致。")
 
@@ -810,42 +803,45 @@ def rebuild_tui() -> tuple[bool, str]:
 
 
 # --------------------------------------------------------------------------- #
-# 收尾：验证 + 提交（兜底时）+ 更新 §0
+# 收尾：验证 + 更新 §0（不提交，overlay 保留为未提交工作树）
 # --------------------------------------------------------------------------- #
-def finalize(target_sha: str, already_committed: bool, python_exe: Path) -> bool:
+def finalize(target_sha: str, ikaros_commit: str, python_exe: Path) -> bool:
+    """收尾（**不再 commit**：2026-08-05 起 core/hermes 保持纯净 upstream，
+    Ikaros 定制只作为未提交 working-tree overlay 存在，便于随时 reset --hard 重放）。
+
+    - target_sha    : 当前 upstream HEAD（纯 upstream，= 新的 Upstream tip）
+    - ikaros_commit : Ikaros overlay 的“源提交”（ikaros-patches-backup 分支，已知良好）；
+                      它**不是** HEAD，HEAD 永远是纯 upstream。用于更新 §0 指针与同步
+                      patches/hermes/ 事实源。
+    """
     log("运行验证（spec §4）...")
     ok, report = verify(python_exe)
     for line in report:
         print(line)
     if not ok:
-        log("验证未通过，终止收尾（未提交）。请修复后重试或回滚。")
+        log("验证未通过，终止收尾（overlay 保持未提交，可修复后重试或回滚）。")
         return False
 
-    if not already_committed:
-        # 把 A 类文件 + B 类目录作为新 Ikaros 单提交（不碰 config.yaml 等本地文件）
-        paths = list(A_CLASS_FILES) + list(B_CLASS_DIRS)
-        run_git(["add", "--", *paths], check=True)
-        run_git(["commit", "-m",
-                 f"feat(hermes): apply Ikaros integration patches on upstream {target_sha[:8]}"],
-                check=True)
-        log("已提交新的 Ikaros 单提交。")
-
-    new_commit = run_git(["rev-parse", "HEAD"], check=True).stdout.strip()
-    # §0 指针：新 base = 当前 upstream（target_sha），新 Ikaros 提交 = new_commit。
-    # 下次更新时 delta 将以 target_sha 为基准重放 → 自动 rebase、漂移最小。
-    update_spec_pointers(SPEC, target_sha, new_commit)
-    # 同步 patches/hermes/ 源文件，保持事实源与提交一致
-    refresh_patch_source(new_commit)
+    # —— 关键变更：不提交任何 Ikaros 单提交，保持 core/hermes 历史 100% upstream ——
+    # overlay 作为未提交工作树改动保留，hermes 直接运行它。
+    # §0 指针：Upstream tip = target_sha（纯 upstream HEAD）；
+    #          Ikaros 补丁提交 = ikaros_commit（overlay 源，永不指向 HEAD）。
+    # 下次 --apply 以 target_sha 为 reset 目标、以 git diff <upstream_tip> <ikaros_commit>
+    # 重放 overlay → 可重入、漂移最小。
+    update_spec_pointers(SPEC, target_sha, ikaros_commit)
+    # 同步 patches/hermes/ 源文件，保持事实源与 overlay 源提交一致
+    refresh_patch_source(ikaros_commit)
     # TUI 重建（best-effort，非阻断）：刷新 ui-tui/dist/entry.js 配合 HERMES_TUI_DIR
     # 预构建路径，避免 hermes update 后陈旧 bundle 让 9119 chat 行为异常。
     ok_tui, msg_tui = rebuild_tui()
     if ok_tui:
         log(f"TUI 重建：{msg_tui}")
     else:
-        log(f"[warn] TUI 重建未完成（不影响补丁提交；9119 chat 仍可用既有 bundle）：{msg_tui}")
+        log(f"[warn] TUI 重建未完成（不影响 overlay；9119 chat 仍可用既有 bundle）：{msg_tui}")
     clear_state()
-    log(f"完成。新 Ikaros 提交 = {new_commit[:8]}（基于 upstream {target_sha[:8]}）")
-    log("注意：未自动 push（本地 main 是 Ikaros 修补分支，push 会污染 origin/main）。")
+    log(f"完成。core/hermes HEAD = 纯 upstream {target_sha[:8]}；"
+        f"Ikaros overlay 未提交（源 = {ikaros_commit[:8]}），由 patches/hermes/ 经 --apply 重放。")
+    log("注意：未自动 push（且不再往 core/hermes 历史写 Ikaros 提交）。")
     return True
 
 
@@ -898,7 +894,7 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
                     "backup_tag": backup_tag_name, "mode": "need-llm",
                     "prompt_file": str(prompt_file)})
         if auto_llm and dispatch_llm(prompt_file):
-            if finalize(target_sha, already_committed=False, python_exe=python_exe):
+            if finalize(target_sha, ikaros, python_exe=python_exe):
                 return 0
             return 1
         log("=== 需要人工 / agent 步骤 ===")
@@ -918,7 +914,7 @@ def step_deterministic(target: str, ikaros_old: str, backup_tag_name: str,
         return 2
 
     log("3-way 重放干净通过，验证中...")
-    if finalize(target_sha, already_committed=False, python_exe=python_exe):
+    if finalize(target_sha, ikaros, python_exe=python_exe):
         return 0
     log("验证未通过，回滚到备份。")
     rollback_to_backup(backup_tag_name)
@@ -944,13 +940,9 @@ def step_light_patch(base: str, ikaros: str, python_exe: Path, spec_text: str) -
         log("轻量补丁后仍缺失，回滚。")
         run_git(["reset", "--hard", "HEAD"], check=False)
         return 2
-    # 在当前 HEAD 上提交（本地 Ikaros 修补分支，不 push）
-    paths = list(A_CLASS_FILES) + list(B_CLASS_DIRS)
-    run_git(["add", "--", *paths], check=True)
-    run_git(["commit", "-m",
-             "feat(hermes): apply Ikaros integration patches (auto, light)"],
-            check=True)
-    log("轻量补丁已提交到当前 HEAD。")
+    # 2026-08-05 起：轻量补丁**不再提交**（保持 core/hermes 历史纯净 upstream）。
+    # overlay 作为未提交工作树改动保留，hermes 直接运行它。
+    log("轻量补丁已就位（未提交 working-tree overlay，纯 upstream 历史保持干净）。")
     return 0
 
 
@@ -966,7 +958,7 @@ def step_finalize(python_exe: Path) -> int:
         ensure_b_class(d)
     ensure_external_plugins()  # 收尾时也确保外置 ikaros_v5 插件已部署
 
-    if finalize(target_sha, already_committed=False, python_exe=python_exe):
+    if finalize(target_sha, state.get("ikaros_old"), python_exe=python_exe):
         return 0
     return 1
 
@@ -977,7 +969,7 @@ def step_finalize(python_exe: Path) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Hermes × Ikaros 补丁稳定重打工具")
     ap.add_argument("--apply", action="store_true",
-                    help="完整更新：fetch + reset + 3-way 重放 + 提交 + 更新 §0")
+                    help="完整更新：fetch + reset + 3-way 重放（overlay 不提交）+ 更新 §0")
     ap.add_argument("--light-patch", action="store_true",
                     help="轻量补丁：不 fetch/不 reset，仅当 markers 缺失时 3-way "
                          "重放到当前 HEAD（启动预检用，冲突则回滚且不阻塞）")
@@ -986,7 +978,7 @@ def main() -> int:
     ap.add_argument("--auto-llm", action="store_true",
                     help="冲突时尝试自动派 LLM（需 HERMES_PATCH_LLM_CMD 环境变量）")
     ap.add_argument("--finalize", action="store_true",
-                    help="LLM 改完后：验证 + 提交 + 更新 §0 指针")
+                    help="LLM 改完后：验证 + 更新 §0 指针（不提交）")
     ap.add_argument("--rebuild-tui", action="store_true",
                     help="仅重建 TUI bundle（ui-tui/dist/entry.js），不碰补丁；"
                          "配合 HERMES_TUI_DIR 预构建路径刷新陈旧 bundle")

@@ -514,11 +514,13 @@ function buildCard(c) {
   }
   if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
     inner+='<div class="hermes-patch" id="repo-'+c.id+'"></div>';
-    inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
-  }
-  if(c.id==='hermes_dashboard'){
-    inner+='<div class="hermes-patch" id="hermes-patch-'+c.id+'"></div>';
-    inner+='<div class="comp-actions hermes-extra"><button class="btn" id="hermes-check-'+c.id+'">检查补丁</button><button class="btn warn" id="hermes-update-'+c.id+'">更新并打补丁</button></div>';
+    if(c.id==='neko_group'){
+      inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
+    } else {
+      // hermes 已 0 侵入（studio bridge + 不可约 overlay 由 --apply 自动维护）：
+      // 面板只保留「克隆 / 更新」入口，移除补丁状态窥探与手动补丁。
+      inner+='<div class="comp-actions hermes-extra"><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button><button class="btn warn" id="hermes-update-'+c.id+'">更新 Hermes</button></div>';
+    }
   }
   if(c.id==='runtime'){
     inner+='<div class="runtime-box" id="runtime-'+c.id+'"></div>';
@@ -543,7 +545,6 @@ function buildCard(c) {
   }
   el.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.addEventListener('click',function(e){ e.stopPropagation(); doAction(c.id, b.dataset.act); }); });
   if(c.id==='hermes_dashboard'){
-    var _hc=el.querySelector('#hermes-check-'+c.id); if(_hc)_hc.addEventListener('click', hermesCheck);
     var _hu=el.querySelector('#hermes-update-'+c.id); if(_hu)_hu.addEventListener('click', hermesUpdate);
   }
   if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
@@ -601,7 +602,6 @@ function updateCard(c) {
   var card=document.getElementById('card-'+c.id); if(!card)return;
   var isBusy=busy.has(c.id); card.classList.toggle('pending',isBusy);
   card.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.disabled=isBusy; });
-  if(c.id==='hermes_dashboard' && c.hermes_patch) updateHermesPatch(c);
   if(((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group') && c.repo) updateRepoBox(c);
   if(c.id==='runtime' && c.runtime) updateRuntimeBox(c);
 }
@@ -612,39 +612,10 @@ async function doAction(id,act) {
   setTimeout(function(){ busy.delete(id); refreshStatuses(); },12000);
 }
 
-function updateHermesPatch(c) {
-  var box=document.getElementById('hermes-patch-'+c.id);
-  if(!box||!c.hermes_patch)return;
-  var p=c.hermes_patch;
-  var ver=p.head?('HEAD '+p.head):'?';
-  var up=p.upstream_tip?('上游 '+p.upstream_tip):'?';
-  var badge;
-  if(p.repo_healthy===false){
-    badge='<span class="hp-badge warn">仓库损坏</span>';
-  } else if(p.patch_applied===true){
-    badge='<span class="hp-badge ok">补丁已打</span>';
-  } else if(p.patch_applied===false){
-    badge='<span class="hp-badge bad">补丁缺失</span>';
-  } else {
-    badge='<span class="hp-badge warn">未知</span>';
-  }
-  var dirty = p.dirty? ' <span class="hp-badge warn">有未跟踪改动</span>':'';
-  box.innerHTML='<div class="hp-line">版本 '+esc(ver)+' / '+esc(up)+' '+badge+dirty+'</div>'
-              +'<div class="hp-detail">'+esc(p.detail||'')+'</div>';
-}
-async function hermesCheck() {
-  var box=document.getElementById('hermes-patch-hermes_dashboard');
-  if(box)box.innerHTML='<div class="hp-detail">检查并打补丁中…</div>';
-  try{
-    var r=await fetch('/api/hermes/check',{method:'POST'});
-    var j=await r.json();
-    if(box)box.innerHTML='<div class="hp-detail">'+(j.ok?('✓ '+esc(j.msg)):('✗ '+esc(j.msg)))+'</div>';
-    setTimeout(refreshStatuses,1500);
-  }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
-}
 async function hermesUpdate() {
-  var box=document.getElementById('hermes-patch-hermes_dashboard');
-  if(box)box.innerHTML='<div class="hp-detail">更新并打补丁中（可能需数十秒）…</div>';
+  // 0 侵入后 hermes 卡片只剩 repo 版本盒子，更新反馈复用它（refreshStatuses 会覆盖为最新版本）
+  var box=document.getElementById('repo-hermes_dashboard');
+  if(box)box.innerHTML='<div class="hp-detail">更新 Hermes 中（可能需数十秒）…</div>';
   try{
     var r=await fetch('/api/hermes/update',{method:'POST'});
     var j=await r.json();

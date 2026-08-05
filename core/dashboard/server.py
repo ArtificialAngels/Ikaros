@@ -23,9 +23,7 @@ Endpoints:
   POST /api/components/<id>/<action>   action in {start,stop,restart}
   POST /api/system/<action>            action in {start,stop}  (all components)
   POST /api/shutdown                     stop this control panel service
-  GET  /api/hermes/status              -> hermes HEAD / upstream tip / 补丁状态
-  POST /api/hermes/check               -> 检查并自动打补丁（light-patch：3-way 重放；已打则 no-op）
-  POST /api/hermes/update              -> 跑完整脚本（fetch+reset+3-way 重放+LLM兜底）
+  POST /api/hermes/update              -> 克隆更新 Hermes（fetch+reset+3-way 重放+LLM兜底，0 侵入后唯一入口）
 """
 
 from __future__ import annotations
@@ -108,6 +106,12 @@ COMPONENTS = [
      "desc": "Explore.poker 风格树形对话面板 :48920（后端 = conversation_tree 引擎）",
      "ports": [48920], "markers": ["conversation-tree"],
      "panel_url": "http://127.0.0.1:48920/"},
+    {"id": "hermes_bridge", "name": "Hermes 包装层 (Studio Bridge)", "category": "Backend",
+     "desc": "studio 式「0 侵入」包装层 :8650 —— 透明代理纯净 Hermes gateway(:8642) 原生 "
+             "session-chat, 把 reasoning/工具/正文翻译为对话树方言, 使 core/hermes 工作树 100% 纯净. "
+             "对话树(:48920) 默认经此通道; 不可达时对话树自动降级本地 DeepSeek.",
+     "ports": [8650], "markers": ["hermes-bridge"],
+     "panel_url": "http://127.0.0.1:8650/health"},
     {"id": "herdr", "name": "Herdr 终端编排", "category": "Backend",
      "desc": "coding-agent 终端多路复用器 (headless server，命名管道，无 TCP 端口)",
      "ports": [], "markers": ["herdr.exe"],
@@ -772,15 +776,8 @@ def _spawn_hermes_dashboard(root, env, wait, no_open):
     `hermes --help` 取原生命令（`hermes dashboard [--no-open]`）；若环境离线导致
     npm 构建失败，9119 起不来，需先在有网处预构建 web_dist 或显式加回 --skip-build。
     """
-    # ── 启动前补丁预检（需求 §9：没打就补上）──
-    try:
-        pre = ensure_hermes_patch_applied()
-        if pre["ok"]:
-            log.info("[hermes] 启动前补丁预检：%s", pre["msg"])
-        else:
-            log.warning("[hermes] 启动前补丁预检未自动完成：%s（仍继续启动）", pre["msg"])
-    except Exception:
-        log_exception("hermes patch precheck")
+    # 注：0 侵入后（studio bridge + 不可约 overlay 由 bin/hermes-update-and-patch.py
+    # --apply 自动维护），9119 启动不再做补丁预检；补丁更新统一走面板「更新 Hermes」。
     hermes_dir = root / "core" / "hermes"
     venv_py = hermes_dir / "venv" / "Scripts" / "python.exe"
     hermes_bin = hermes_dir / "venv" / "Scripts" / "hermes.exe"
@@ -987,50 +984,6 @@ def hermes_patch_status() -> dict:
            and not (l[:2] == "??" and l[3:].strip() == "config.yaml")]
     res["dirty"] = bool(bad)
     return res
-
-
-def ensure_hermes_patch_applied() -> dict:
-    """启动 9119 前调用：若 Ikaros 补丁未打，调用补丁脚本做「轻量补丁」——
-    以 3-way 把 Ikaros delta 重放到当前 HEAD（不 fetch / 不 reset，适用
-    「更新把补丁冲掉」常见场景）。冲突则回滚并告警，但不阻塞启动。
-
-    委托 bin/hermes-update-and-patch.py --light-patch 执行，复用同一套
-    3-way + marker 校验逻辑，保证启动预检与手动「更新并打补丁」行为一致。
-    """
-    st = hermes_patch_status()
-    if not st.get("repo_healthy"):
-        return {"ok": True, "applied": False, "skipped": True,
-                "msg": "hermes git 仓库损坏，跳过补丁检测（工作树完好，不影响运行）",
-                "detail": st["detail"]}
-    if st.get("patch_applied"):
-        return {"ok": True, "applied": True,
-                "msg": "Ikaros 补丁已就位", "detail": st["detail"]}
-    if not HERMES_PATCH_SCRIPT.exists():
-        return {"ok": False, "applied": False,
-                "msg": "找不到 bin/hermes-update-and-patch.py"}
-    py = HERMES_AGENT_DIR / "venv" / "Scripts" / "python.exe"
-    if not py.exists():
-        py = pathlib.Path(sys.executable)
-    log.info("[hermes_dashboard] 补丁缺失，启动前自动补上（3-way 轻量补丁）...")
-    try:
-        proc = subprocess.run(
-            [str(py), str(HERMES_PATCH_SCRIPT), "--light-patch"],
-            cwd=str(HERMES_ROOT), capture_output=True, text=True,
-            creationflags=CREATE_NO_WINDOW, timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "applied": False, "msg": "轻量补丁超时（>5min）"}
-    # 重新检测补丁状态（marker 校验，最稳）
-    st2 = hermes_patch_status()
-    if st2.get("patch_applied"):
-        log.info("[hermes_dashboard] 已自动补上 Ikaros 补丁")
-        return {"ok": True, "applied": True, "msg": "已自动补上 Ikaros 补丁",
-                "detail": (proc.stdout or "")[-300:]}
-    msg = ("自动补丁冲突（upstream 大改），请手动运行 "
-           "bin/hermes-update-and-patch.py --apply")
-    log.warning("[hermes_dashboard] %s", msg)
-    tail = (proc.stderr or proc.stdout or "")[-400:]
-    return {"ok": False, "applied": False, "msg": msg, "detail": tail}
 
 
 def run_hermes_update_and_patch() -> dict:
@@ -1445,6 +1398,11 @@ def stop_component_qwenpaw(root, env):
 def start_component_conversation_tree(root, env, wait):
     """启动对话树面板后端 (:48920)，便携 Python 跑 core/conversation-tree/server.py。"""
     log.info("[conversation_tree] starting panel server (:48920)...")
+    # studio 式包装层 :8650 是对话树默认的 agent runtime 通道; 启动前确保已起
+    # (否则对话树会走本地 DeepSeek 降级, 失去云端模型 + reasoning 工具卡).
+    if not tcp_probe(8650):
+        log.info("[conversation_tree] bridge :8650 not up, starting hermes_bridge first...")
+        start_component_hermes_bridge(root, env, wait=True)
     py = str(root / "runtime" / "portable-python" / "python.exe")
     server = root / "core" / "conversation-tree" / "server.py"
     if not server.exists():
@@ -1462,6 +1420,32 @@ def stop_component_conversation_tree(root, env):
     log.info("[conversation_tree] stopping (:48920)...")
     kill_port(48920)
     kill_by_cmdline("conversation-tree")
+
+
+def start_component_hermes_bridge(root, env, wait):
+    """启动 studio 式「0 侵入」包装层 (:8650).
+
+    透明代理纯净 Hermes gateway(:8642) 原生 session-chat 端点, 把 reasoning/工具/
+    正文翻译为对话树方言. 由 bin/hermes-bridge.py 拉起 (便携 Python 跑 core/hermes-bridge/server.py).
+    """
+    log.info("[hermes_bridge] starting studio wrapper (:8650)...")
+    py = str(root / "runtime" / "portable-python" / "python.exe")
+    launcher = root / "bin" / "hermes-bridge.py"
+    if not launcher.exists():
+        log.error("[hermes_bridge] %s not found", launcher)
+        return
+    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    spawn_hidden(py, [str(launcher)], env, cwd=str(root),
+                 logfile=str(root / "data" / "logs" / "hermes-bridge.log"),
+                 detached=True)
+    if wait:
+        wait_for_port(8650, 30)
+
+
+def stop_component_hermes_bridge(root, env):
+    log.info("[hermes_bridge] stopping (:8650)...")
+    kill_port(8650)
+    kill_by_cmdline("hermes-bridge")
 
 
 def start_component_herdr(root, env, wait):
@@ -1524,6 +1508,8 @@ def comp_already_up(name: str) -> bool:
         return tcp_probe(8088)
     if name == "conversation_tree":
         return tcp_probe(48920)
+    if name == "hermes_bridge":
+        return tcp_probe(8650)
     if name == "herdr":
         return _marker_up("herdr.exe")
     if name == "neko_group":
@@ -1556,6 +1542,8 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_qwenpaw(root, env, wait)
     elif name == "conversation_tree":
         start_component_conversation_tree(root, env, wait)
+    elif name == "hermes_bridge":
+        start_component_hermes_bridge(root, env, wait)
     elif name == "herdr":
         start_component_herdr(root, env, wait)
     elif name == "all":
@@ -1594,6 +1582,8 @@ def component_stop(name: str, env: dict) -> None:
         stop_component_qwenpaw(root, env)
     elif name == "conversation_tree":
         stop_component_conversation_tree(root, env)
+    elif name == "hermes_bridge":
+        stop_component_hermes_bridge(root, env)
     elif name == "herdr":
         stop_component_herdr(root, env)
     elif name == "all":
@@ -1856,12 +1846,6 @@ def get_component_statuses() -> list[dict]:
             entry["sub_status"] = subs
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
-        # Hermes 版本 / 补丁状态（需求 §9）
-        if c["id"] in ("hermes_dashboard", "hermes_service"):
-            try:
-                entry["hermes_patch"] = hermes_patch_status()
-            except Exception:
-                log_exception("hermes_patch_status")
         # 上游仓库存在性 + 版本落后检测（hermes / neko 克隆与版本检查）
         if c["id"] in ("hermes_dashboard", "hermes_service", "neko_group"):
             try:
@@ -2039,8 +2023,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(state)
         elif path == "/api/events":
             self._handle_sse()
-        elif path == "/api/hermes/status":
-            self._send_json(hermes_patch_status())
         else:
             self.send_error(404)
 
@@ -2126,13 +2108,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
             return
 
-        # /api/hermes/<action>  (status | check | update)
+        # /api/hermes/<action>  —— 0 侵入后仅保留「克隆更新」入口（update）
         if len(parts) >= 3 and parts[0] == "api" and parts[1] == "hermes":
             sub = parts[2]
-            if sub == "status":
-                self._send_json(hermes_patch_status()); return
-            if sub == "check":
-                self._send_json(ensure_hermes_patch_applied()); return   # 检查并自动打补丁
             if sub == "update":
                 self._send_json(run_hermes_update_and_patch()); return
             self._send_json({"ok": False, "msg": "unknown hermes action"}, status=400)

@@ -66,10 +66,15 @@ for _ep in _ENV_PATHS:
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119").rstrip("/") + "/v1/chat/completions"
-# Hermes agent runtime 端点 (gateway :8642 的 /v1/chat/completions, 会跑完整 tools/skills 循环).
-# 默认指向本地 gateway; 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示.
+# Hermes agent runtime 端点.
+# 默认走 Ikaros 自有的 studio 式「0 侵入」包装层 core/hermes-bridge (:8650) —— 它透明代理
+# 纯净 Hermes gateway(:8642) 的原生 session-chat 端点, 并把 reasoning/工具/正文翻译成
+# 对话树方言. 这样 core/hermes 工作树可保持 100% 纯净 (无 api_server.py 补丁).
+# bridge 不可达时本服务自动降级到本地 DeepSeek (见 health probe + 流式降级逻辑), 不会硬崩.
+# 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示;
+# 亦可覆盖为直连 :8642 (http://127.0.0.1:8642/v1/chat/completions) 绕过 bridge.
 # gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
-HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8642/v1/chat/completions").strip() or None
+HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8650/v1/chat/completions").strip() or None
 # gateway 鉴权 token; 默认 ikaros-gateway-key (由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 # 2026-08-03: 优先从 HERMES_HOME/.env (data/hermes-agent/.env) 读真实 API_SERVER_KEY,
 # 与 dashboard server 同源, 避免 401.
@@ -1209,6 +1214,9 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {HERMES_AGENT_KEY}",
+            # studio 式包装层 (core/hermes-bridge) 用此头稳定绑定 Hermes session;
+            # 直连 8642 网关时该头被忽略, 故向前兼容、零风险.
+            "X-Ikaros-Conv-Id": (_active_session_id or ""),
         },
     )
     # 连接用短超时(urlopen 的 timeout 在连接阶段生效); 建立后把底层 socket 读取超时

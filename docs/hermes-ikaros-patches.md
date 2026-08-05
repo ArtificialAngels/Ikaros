@@ -5,15 +5,19 @@
 > 它解决的核心问题：upstream 大改时，旧 diff 对不上新代码；此时必须把"补丁要达成什么"告诉模型去重写，而不是给原始 diff。
 
 ## 0. 基线指针（每次重打后自动更新）
-- **Upstream tip**（打补丁所基于的 upstream 提交，即 §0.2 中 `base`）：`f5be9236e00ddf2f2a412697f267078fc4ee068e`
-- **Ikaros 补丁提交**（单提交）：`f269a55cd2c48cb8fcb6554c71cab45ee4ecc1ff` — 其父即上面的 upstream tip `e444d165`（**不是** 14db1a9；14db1a9 只是历史早期重根点，请勿再写入本段）。
-- **自动 rebase 基准**：`bin/hermes-update-and-patch.py` 在每次 `finalize`（干净重打完成）时，把本段 `Upstream tip` 改写为当次重打所基于的 `target_sha`（= 当前真实 upstream），把 `Ikaros 补丁提交` 改写为新生成的单提交。于是**下次 delta 永远以最新 upstream 为基准**（`git diff base ikaros` 漂移最小 → 3-way 冲突面最小、最稳）。本段两个值是引擎运行的事实来源，不要手工改错。
+
+> **核心约定（2026-08-05 起）**：`core/hermes` 仓库**永远保持纯净 upstream**——Ikaros 定制补丁**绝不进入 `core/hermes` 的 git 历史**。补丁只以两种形式存在：① `patches/hermes/` 下的**补丁源文件**（被 Ikaros 主仓 git 跟踪，是事实源）；② 运行时由 `bin/hermes-update-and-patch.py --apply` 把 `patches/hermes/` 的 delta **重放到 `core/hermes` 工作树，作为未提交的 working-tree overlay**（9 个 A 类文件 modified + 1 个 B 类目录 added），hermes 直接跑这个 overlay。因此 `core/hermes` 的 `git status` 永远显示这些 overlay 改动（**这是预期、正确的**），`git log` 永远是纯 upstream。
+
+- **Upstream tip**（`core/hermes` 当前 HEAD，纯净 upstream 提交）：`f5be9236e00ddf2f2a412697f267078fc4ee068e`
+- **Ikaros 补丁提交（overlay 源，不并入 HEAD）**：分支 `ikaros-patches-backup` → `5610941565c11f8e77a8a19691ea7253f20a659f`（最后一个带 Ikaros 补丁的已知良好提交）。它**不被 `core/hermes` 的 HEAD 引用**，纯粹用于需要时整体恢复 overlay（`git checkout ikaros-patches-backup -- .`）或作为 `git diff <upstream_tip> <ikaros_commit>` 的 `theirs` 端计算 delta。**本段值是脚本运行的事实来源，不要手工改错。**
+- **补丁事实源（overlay 内容来源）**：`patches/hermes/`（被 Ikaros 主仓 git 跟踪），镜像 `core/hermes` 结构，含 9 个 A 类补丁文件 + 1 个 B 类技能目录 + 外置插件源 ikaros_v5（§6b）。
+- **为什么不再 commit 单提交**：旧方案用 `finalize()` 把 overlay 提交成 `core/hermes` 的一个 Ikaros 单提交，导致 upstream `git reset --hard` / `git log` 里混着 Ikaros 提交；且本腐败仓库的 `reset --hard` 偶发删 working-tree 文件（恢复用 `git checkout ikaros-patches-backup -- .`）。新方案让 `core/hermes` 历史 100% upstream，overlay 始终是未提交工作树——`--apply` 每次 `reset --hard <upstream>` 后重放，干净可重入。
 
 ## 0.5. 补丁源文件位置
 - **补丁源文件目录**：`patches/hermes/`（被 Ikaros 主仓库 git 跟踪）
-- 镜像 hermes-agent 目录结构，存放 9 个 A 类补丁文件 + 1 个 B 类技能目录 + 1 个外置插件源（ikaros_v5，§6b）
+- 镜像 `core/hermes` 目录结构，存放 9 个 A 类补丁文件 + 1 个 B 类技能目录 + 1 个外置插件源（ikaros_v5，§6b）
 - **不放在 `core/hermes/` 下面**——防止 hermes `git reset --hard` / `git clean` 时被误删
-- 它是**补丁事实源**，供两处使用：① B 类目录缺失时 `_copytree_lf()` 从它复制（LF 归一，不污染脏树）；② LLM 兜底时作为内容参考（`refresh_patch_source()` 每次 finalize 会把新提交里的 A/B 类同步回这里，保持与提交一致）。
+- 它是**补丁事实源**，供三处使用：① `--apply` 的 `apply_patch_delta()` 以 `git diff <upstream_tip> <ikaros_commit>` 计算 delta 并 3-way 重放到 `core/hermes` 工作树（overlay，不提交）；② B 类目录缺失时 `_copytree_lf()` 从它复制（LF 归一）；③ `finalize()` 的 `refresh_patch_source()` 把 A/B 类同步回这里，保持事实源与 overlay 源提交一致。
 - 修改补丁内容时，**必须同时更新 `patches/hermes/` 里的源文件**，否则下次重打会用到旧版本。
 
 ## 1. 补丁总览
@@ -36,17 +40,17 @@ Ikaros 对 hermes 的定制分两类：
 2. 打备份 tag → `git checkout -B main` → `git reset --hard <target>`（新 upstream，旧补丁由备份 tag 保留）。
 3. `derive_markers` + `apply_patch_delta(base, ikaros)`（逐文件 3-way 重放到新 upstream）。
 4. 有冲突标记（`scan_conflicts`）→ 升级 §2.3 LLM 兜底；无冲突则 `markers_missing` 复查。
-5. markers 全在 → `finalize()`：跑 §4 验证 → 提交 A 类文件 + B 类目录为**新的 Ikaros 单提交** → `update_spec_pointers` 把 §0 改成（新 upstream, 新提交）→ `refresh_patch_source` 同步 `patches/hermes/` → **重建 TUI bundle**（`rebuild_tui()` 刷新 `ui-tui/dist/entry.js`，配合 `HERMES_TUI_DIR` 预构建路径，best-effort 非阻断）→ 不 push。
+5. markers 全在 → `finalize()`：跑 §4 验证 → **不提交**（保持 core/hermes 纯 upstream 历史）→ `update_spec_pointers` 把 §0 改成（新 upstream tip, 原 overlay 源提交 `ikaros_commit`）→ `refresh_patch_source` 同步 `patches/hermes/` → **重建 TUI bundle**（`rebuild_tui()` 刷新 `ui-tui/dist/entry.js`，配合 `HERMES_TUI_DIR` 预构建路径，best-effort 非阻断）→ overlay 作为未提交工作树保留，hermes 直接运行它。
 
 ### 2.2 轻量路径（`--light-patch`：启动预检 / 检查补丁）
 - **不 fetch / 不 reset**，仅当 `markers_missing` 才把 Ikaros delta 3-way 重放到**当前 HEAD**（专为"更新把补丁冲掉"的常见场景设计）。
 - 冲突或重放后仍缺失 → `git reset --hard HEAD` 回滚、**不阻塞启动**（未打补丁的 hermes 仍可运行，仅缺 Ikaros 集成）；返回告警，建议手动跑 `--apply`。
-- 干净 → 在当前 HEAD 提交 `feat(hermes): apply Ikaros integration patches (auto, light)`，返回成功。
+- 干净 → 在当前 HEAD 保留未提交 working-tree overlay（**不提交**，core/hermes 历史保持纯 upstream），返回成功。
 
 ### 2.3 兜底路径（LLM / 人工）
 - 触发条件：3-way 冲突（Ikaros 与 upstream 真改同一行）或 markers 缺失（upstream 接口变了，旧 diff 不兼容）。
 - 派一个**受约束的子 agent**（不是真起 hermes-agent 产品）指向 `core/hermes`，喂入 §7 提示词模板 + §5 补丁意图。模型只允许改 §3 allowlist 文件，按意图在新代码上重实现。
-- 完成后 `--finalize`：仅 `ensure_b_class` 确保 B 类（**不**用旧源覆盖 A 类）→ `finalize()` 验证 + 提交 + 更新 §0 + 刷新源。
+- 完成后 `--finalize`：仅 `ensure_b_class` 确保 B 类（**不**用旧源覆盖 A 类）→ `finalize()` 验证 + 更新 §0（不提交）+ 刷新源。
 - 验证（§4）任一失败 → 回滚备份 tag，报告失败。
 
 ## 3. 允许改动范围（allowlist，硬约束）
@@ -56,13 +60,13 @@ Ikaros 对 hermes 的定制分两类：
 - ⚠️ **08-04 起：ikaros_v5 不再属于仓库内补丁**——上下文引擎与记忆提供方已外置为 Hermes 用户插件（`$HERMES_HOME/plugins/ikaros_v5/`，源在 `patches/hermes/plugins/ikaros_v5/`），由 `ensure_external_plugins()` 部署，hermes 更新不影响。详见 §6。
 
 ## 4. 验证清单（两步都必须过）
-- [ ] `git status` 干净（除本地 `config.yaml` 外无残留；之前的散落文件如 `venv.broken`、`skills/mlops/*`、`optional-skills/*`、`website/...` 等不得出现）
+- [ ] `core/hermes` 工作树含**预期的 Ikaros overlay 改动**（9 个 A 类 `M ` + 1 个 B 类 `A `，以及允许的 `config.yaml` 等本地文件）；**不应**出现 `git status` 完全干净——overlay 不提交是正确状态。非 allowlist 的散落残留（如 `venv.broken`、`skills/mlops/*`、`optional-skills/*`、`website/...`、`err.txt` 等）若出现才是异常。
 - [ ] hermes 可 import：`python -c "import hermes_cli.web_server, plugins.context_engine"`
 - [ ] 外置插件可用且 Dashboard 可发现（08-04 起替代旧的 `list_context_engine_names` 检查，后者只扫仓库内目录、外置后返回空）：`python -c "from hermes_cli.plugins_cmd import _discover_context_engines; assert any(n == 'ikaros_v5' for n, _ in _discover_context_engines())"`；记忆提供方同理经 `load_memory_provider('ikaros_v5')` 非 None 且 `is_available()` 为 True
 - [ ] `cron/scheduler.py` 的 `_cron_session_id` 为 `f"cron_{job_id}"`（固定，非带时间戳）
 - [ ] `scripts/run_tests.sh` 同时探测 `bin/activate`（MSYS）与 `Scripts/activate`（Windows）
 - [ ] 至少 `py_compile` 全过：`python -m compileall -q cron hermes_cli plugins scripts tests`
-- [ ] 行尾：提交后 `git diff` 无意外 CRLF/LF 翻转（hermes `.gitattributes` 强制 CRLF）
+- [ ] 行尾：重放后 `git diff` 无意外 CRLF/LF 翻转（hermes `.gitattributes` 强制 CRLF）
 - [ ] TUI bundle 新鲜度（**信息项，非阻断**）：`ui-tui/dist/entry.js` 存在且与当前 `ui-tui` 源码一致。`hermes update` 把 `ui-tui` 切到新 upstream 后，旧的 `entry.js` 会变成**陈旧 bundle**——若 upstream 改了 TUI 接口，陈旧 bundle 会让 9119 chat 运行时行为异常。补丁 `finalize` 会自动 `rebuild_tui()` 刷新；也可手动 `python bin/hermes-update-and-patch.py --rebuild-tui`。该 bundle 经 9100 面板的 `HERMES_TUI_DIR` 预构建路径被 Hermes 直接加载（跳过 `npm install`，避免沙箱删除闸门导致的 `Chat unavailable: 1`）。
 
 ## 5. 逐补丁细节（A 类：tracked 文件）
@@ -270,8 +274,8 @@ plugins/context_engine/ikaros_v5/ 或 plugins/memory/ikaros_v5/；它们由
 3. 每改完一个 A 类文件，确认它含【落地判据】里自己的签名行；B 类目录确保存在且含 marker。
 4. 别碰 allowlist（§3）外文件；新增 .py 用 CRLF；不要英文旁白污染代码。
 5. 验证 + 收尾：直接跑 `python E:\Ikaros\bin\hermes-update-and-patch.py --finalize`
-   （自动跑 §4 验证 → 提交 A 类+B 类为新 Ikaros 单提交 → 更新 §0 指针 → 刷新 patches/hermes/）。
-   ⚠️ 不要自己 `git commit`/`git push`；--finalize 会处理提交，且**绝不 push**。
+   （自动跑 §4 验证 → **不提交**（overlay 保留为未提交工作树）→ 更新 §0 指针 → 刷新 patches/hermes/）。
+   ⚠️ 不要自己 `git commit`/`git push`；--finalize 会处理收尾（不提交），且**绝不 push**。
 6. 若某块后补定制（推理透出 / token_compressor）被上游覆盖冲掉，参考
    E:\Ikaros\tmp\hermes-reasoning-patches\ 与 E:\Ikaros\tmp\hermes-tokencompressor-patches\ 里的
    reapply 脚本重贴（这些目录是手动备份，可能不存在；不存在则按 §5 重做）。
@@ -303,8 +307,8 @@ plugins/context_engine/ikaros_v5/ 或 plugins/memory/ikaros_v5/；它们由
 ```
 
 ## 8. 安全 / 幂等
-- 更新前先 `git stash` 或打一个备份提交，便于失败回滚。
-- **绝不**裸跑 `llama-server.exe`、**绝不**自动 `push`、**绝不**碰 allowlist 外文件。
+- 更新前先确保 `ikaros-patches-backup` 分支存在（失败可用 `git checkout ikaros-patches-backup -- .` 整体恢复 overlay），或 `git stash` 当前未提交改动。
+- **绝不**裸跑 `llama-server.exe`、**绝不**自动 `push`、**绝不**往 `core/hermes` 历史提交 Ikaros 补丁（overlay 保持未提交）、**绝不**碰 allowlist 外文件。
 - 失败时产出清晰报告：应用了什么 / 哪步失败 / LLM 改了哪些文件。
 - 半完成态极难收拾（本次已踩坑：缺失 git 对象 + 18 个散落文件 + 未提交），脚本须能从任意中间态安全恢复或整体回滚。
 - WorkBuddy 沙箱 safe-delete 可能 fail-closed 拦截删除（对 `venv.broken` 这类残留），清理用同盘 `mv` 移到 `tmp/` 而非硬删。
@@ -321,12 +325,12 @@ plugins/context_engine/ikaros_v5/ 或 plugins/memory/ikaros_v5/；它们由
   - 补丁状态徽标：`补丁已打` / `补丁缺失` / `未知`，以及 `有未跟踪改动` 提示（允许 `config.yaml`）
 - 两个按钮：
   - **检查补丁** → `POST /api/hermes/check`：跑与启动同款的预检（缺失则自动补上），返回结果。
-  - **更新并打补丁** → `POST /api/hermes/update`：调用 `bin/hermes-update-and-patch.py --apply`（fetch + reset + 3-way delta 重放 + LLM 兜底 + 验证 + 提交 + 更新 §0），返回脚本输出尾部。可能耗时数十秒～数分钟。
+  - **更新并打补丁** → `POST /api/hermes/update`：调用 `bin/hermes-update-and-patch.py --apply`（fetch + reset + 3-way delta 重放 + LLM 兜底 + 验证 + 更新 §0，overlay 不提交），返回脚本输出尾部。可能耗时数十秒～数分钟。
 
 ### 9.2 9119 启动预检
 - `start_component_hermes_dashboard()` 在 spawn Hermes 之前调用 `ensure_hermes_patch_applied()`：
   - 补丁已就位（marker 全在）→ 直接启动。
-  - 缺失 → **调用 `bin/hermes-update-and-patch.py --light-patch`**（轻量、**不 fetch / 不 reset**，仅当 markers 缺失时把 Ikaros delta 3-way 重放到当前 HEAD 并提交），成功即启动。
+  - 缺失 → **调用 `bin/hermes-update-and-patch.py --light-patch`**（轻量、**不 fetch / 不 reset**，仅当 markers 缺失时把 Ikaros delta 3-way 重放到当前 HEAD（overlay 不提交）），成功即启动。
   - 轻量补丁冲突（upstream 大改）→ `git reset --hard HEAD` 回滚并告警，**但仍继续启动**（未打补丁的 hermes 仍可运行，仅缺 Ikaros 集成）；后续由人工跑「更新并打补丁」走 LLM 兜底。
 - 预检**绝不阻塞** 9119 启动；完整 fetch/reset/LLM 兜底只在手动按钮触发。
 - **TUI bundle 新鲜度**：`hermes update` 后 `finalize` 会自动 `rebuild_tui()` 刷新 `ui-tui/dist/entry.js`（best-effort，失败仅告警不阻断）。9100 面板通过 `HERMES_TUI_DIR` 指向该 bundle 走 Hermes 官方「预构建路径」，跳过 `npm install` 以避免 `Chat unavailable: 1`。若你**不经面板**直接 `hermes dashboard`，须自行 `set HERMES_TUI_DIR=E:\Ikaros\core\hermes\ui-tui`；独立刷新命令：`python bin/hermes-update-and-patch.py --rebuild-tui`。
@@ -338,7 +342,7 @@ plugins/context_engine/ikaros_v5/ 或 plugins/memory/ikaros_v5/；它们由
 
 ### 9.4 安全约束（延续 §8）
 - 启动预检不 fetch / 不 reset / 不 push，只做最小 3-way 补丁。
-- 完整 `hermes-update-and-patch.py --apply`（含 fetch/reset）仅由手动按钮触发，且脚本内**不实现 push**（本地 `main` 是 Ikaros 修补分支，push 会污染 `origin/main`）。
+- 完整 `hermes-update-and-patch.py --apply`（含 fetch/reset）仅由手动按钮触发，且脚本内**不提交、不实现 push**（`core/hermes` 历史保持纯 upstream；overlay 不提交是正确状态，回滚用 `ikaros-patches-backup` 分支）。
 - 任何路径都不碰 allowlist（§3）外文件。
 
 ## 10. 给其他智能体的修复手册（Agent Repair Guide）
@@ -372,12 +376,13 @@ git diff <base 提交> HEAD -- <问题文件>      # base = §0 upstream 提交
   输出 `MISSING: []` = 全部命中；否则按缺的项逐文件补签名行 / 补 B 类目录。
 - 签名行与 marker 的样例见 §7【落地判据 marker】；**以 `derive_markers(base, ikaros)` 实际输出为准**（引擎生成提示词时会动态注入到【落地判据 marker】段）。
 
-### 10.5 收尾（不要自己 commit / push）
+### 10.5 收尾（不要自己 commit / push —— 2026-08-05 起脚本也不再 commit）
 ```bash
 python E:/Ikaros/bin/hermes-update-and-patch.py --finalize
 ```
-- 它会：跑 §4 验证 → 提交 A 类文件 + B 类目录为新 Ikaros 单提交 → 更新 §0 指针（新 base = 本次 upstream）→ 刷新 `patches/hermes/` 源文件 → 清理状态文件。
-- **绝不 push**（本地 `main` 是 Ikaros 修补分支，push 会污染 `origin/main`）。
+- 它会：跑 §4 验证 → **不提交**（core/hermes 历史保持纯 upstream）→ 更新 §0 指针（Upstream tip = 本次 upstream；Ikaros 补丁提交 = overlay 源 `ikaros_commit`，永不指向 HEAD）→ 刷新 `patches/hermes/` 源文件 → 清理状态文件。overlay 作为未提交工作树保留，hermes 直接运行它。
+- 回滚 overlay：`git checkout ikaros-patches-backup -- .`（整体恢复已知良好 Ikaros 工作树）；或 `git reset --hard ikaros-patches-backup` 回到带 Ikaros 提交的状态。
+- **绝不 push**（core/hermes 不再含 Ikaros 提交，push 无意义且会污染 `origin/main`）。
 
 ### 10.6 常见坑与回滚
 - 后补定制被冲掉（推理透出 / token_compressor）：用 `tmp/hermes-reasoning-patches/`、`tmp/hermes-tokencompressor-patches/` 的 reapply 脚本重贴（目录可能不存在，不存在就按 §5 重做）。
