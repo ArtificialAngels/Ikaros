@@ -1,6 +1,6 @@
 # Ikaros 作为「套在 Hermes 之上的小型智能体」解耦方案
 
-> 状态：探究 / 方案（未实施）
+> 状态：**已实施**（2026-08-05 完成 ikaros_v5 外置解耦，代码已 commit）
 > 日期：2026-08-04
 > 背景：对标参考项目 `E:\Ikaros-something\reference project\hermes-studio-main`
 > 关联文档：`hermes-update-integrity.md`、`hermes-ikaros-patches.md`、`hermes-agent-full-survey.md`、`ref-hermes-studio-chat.md`
@@ -9,7 +9,7 @@
 
 ## 0. 一句话结论
 
-Ikaros **已经是一个"套在 Hermes 之上的智能体"的雏形**——它的核心价值（V5 记忆、对话树、MCP、skills）全部建立在 Hermes 的**标准扩展机制**之上。唯一不干净的地方是：这些扩展的代码实体目前被物理塞进了 Hermes 子仓库内部（`core/hermes/plugins/`），并以"侵入式补丁重放"的方式维护。要把它变成 `hermes-studio` 那种**非侵入、可随上游自由更新**的形态，只需把插件外置到个人配置 + 剥离无关补丁 + 让 `core/hermes` 回归纯净上游。**可行性已用代码实证确认，能力代码一行不用改。**
+Ikaros **已经是一个"套在 Hermes 之上的智能体"的雏形**——它的核心价值（V5 记忆、对话树、MCP、skills）全部建立在 Hermes 的**标准扩展机制**之上。唯一不干净的地方是：这些扩展的代码实体目前被物理塞进了 Hermes 子仓库内部（`core/hermes/plugins/`），并以"侵入式补丁重放"的方式维护。要把它变成 `hermes-studio` 那种**非侵入、可随上游自由更新**的形态，只需把插件外置到个人配置 + 剥离无关补丁 + 让 `core/hermes` 回归纯净上游。**可行性已用代码实证确认，能力代码一行不用改。** **→ 该解耦已于 2026-08-05 实施完成：** ikaros_v5 已外置为 Hermes 通用插件（`data/hermes-agent/plugins/ikaros_v5/`，`plugins.enabled: [ikaros_v5]`），`core/hermes` 还原纯净上游，代码已 commit；硬验证（§5）PASS。**
 
 ---
 
@@ -48,25 +48,26 @@ Ikaros **已经是一个"套在 Hermes 之上的智能体"的雏形**——它�
 
 | 组件 | 当前位置 | 性质 |
 |---|---|---|
-| Hermes Agent | `core/hermes`（git 子仓库，HEAD=上游 `f5be9236e`） | 被 Ikaros 改过 7 处代码 |
-| ikaros_v5 memory provider | `core/hermes/plugins/memory/ikaros_v5` | 塞在 Hermes 内部的 B 类目录 |
-| ikaros_v5 context engine | `core/hermes/plugins/context_engine/ikaros_v5` | 同上 |
+| Hermes Agent | `core/hermes`（git 子仓库，**已还原纯净上游**，无本地 diff） | 纯净上游，更新即升级 |
+| ikaros_v5 插件（provider + engine） | `data/hermes-agent/plugins/ikaros_v5`（通用插件系统，`kind: standalone`，`plugins.enabled: [ikaros_v5]`） | **已外置**，经 `register()` 双注册 |
 | ikaros_v5 MCP server | `core/memory_v5/mcp_server.py`（经 `data/hermes-agent/config.yaml` 的 `mcp_servers.ikaros-v5-memory` 挂载） | 已是标准 MCP |
 | V5 记忆引擎 | `core/memory_v5`（Ikaros 自仓，独立 `v5.db`） | Ikaros 自身资产 |
 | 对话树 / N.E.K.O / 9100 面板 | `core/conversation-tree`、`core/neko`、`bin/ikaros-control.bat` | 已是独立上层服务 |
-| 个人配置 | `data/hermes-agent`（config.yaml / .env / skills / state.db） | 独立，git 碰不到 |
+| 个人配置 | `data/hermes-agent`（config.yaml / .env / skills / state.db / plugins） | 独立，git 碰不到 |
 
-### 2.2 侵入点清单（7 处 Ikaros 补丁）
+### 2.2 侵入点清单（均已处置）
 
-- `hermes_cli/web_server.py`（上游已重构 `_context_engine_options` → `_discover_context_engines`，功能等价，Dashboard 入口未断）
-- `scripts/run_tests.sh`、`scripts/run_tests_parallel.py`（Windows venv 探测，与核心无关）
-- `cron/scheduler.py`、`tests/cron/test_scheduler.py`（调度，与核心无关）
-- `plugins/context_engine/ikaros_v5`、`plugins/memory/ikaros_v5`（**核心，但位置在 Hermes 内部**）
-- `skills/creative/tldraw-skill`（可选）
+> 解耦前 Ikaros 对 Hermes 有 7 处补丁 + 2 个内部插件目录。解耦后：
 
-### 2.3 维护机制
+- `plugins/{context_engine,memory}/ikaros_v5`：**已外置**到 `data/hermes-agent/plugins/ikaros_v5`（通用插件系统），`core/hermes` 内已无此目录。
+- `hermes_cli/web_server.py` 的 `_context_engine_options`：上游已重构为 `_discover_context_engines`（通用功能），非 Ikaros 侵入；当前 `core/hermes` 无 Ikaros 关键字残留。
+- `scripts/run_tests.sh` / `run_tests_parallel.py` / `cron/scheduler.py` / `tests/cron/test_scheduler.py` / `skills/creative/tldraw-skill`：与 ikaros_v5 核心无关，**保留为 `patches/hermes/` 的 B 类重放源**（`core/hermes` 已还原为这些文件的纯净上游版本，更新时按需重放）。
 
-B 类目录（`plugins/{context_engine,memory}/ikaros_v5`）在主仓 `patches/hermes/` 有完整源；更新脚本 `bin/hermes-update-and-patch.py` 经 `git clean -fd -- B_CLASS_DIRS` 后由 `ensure_b_class()` 重放 + `verify_ikaros_v5_runtime()` 子进程硬验证（`discover_memory_providers` + `available=True` + 真 `initialize()`）兜底。
+### 2.3 维护机制（外置后）
+
+- **ikaros_v5 插件**：源在 `patches/hermes/plugins/ikaros_v5/`（主仓 git 跟踪），更新脚本经 `ensure_external_plugins()` **幂等部署**到 `data/hermes-agent/plugins/ikaros_v5/`（`$HERMES_HOME`，gitignore 数据区，hermes 更新不受影响）。
+- **其余 7 个补丁**：仍作为 `patches/hermes/` 的 B 类重放源（`ensure_b_class()`），因它们与 ikaros_v5 逻辑解耦、重放成本低。
+- **硬验证**：`verify_ikaros_v5_runtime()` 子进程验证外置插件在 hermes 内可用（`load_memory_provider` + 通用插件系统两条原生发现链路 + 真 `initialize()` 载 V5）。2026-08-05 实测 PASS。
 
 ---
 
@@ -89,36 +90,36 @@ from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider
 
 **结论**：ikaros_v5 仅依赖 Hermes 的两个**公共扩展基类**（`MemoryProvider` / `ContextCompressor`）+ Ikaros 自己的 `memory_v5`。**零 Hermes 内部私有模块依赖** → 它满足 Hermes 插件协议，可以放在任何插件扫描目录下加载，不必须住在 `core/hermes` 里。
 
-### 3.1 标准插件发现机制（为什么能外置）
+### 3.1 插件发现机制（实际采用的通用插件系统路线）
 
-Hermes 的 `plugins/memory/__init__.py` 的 `_iter_provider_dirs()` 扫描规则：
+> Ikaros 最终**没有**走 `plugins/memory/` 子目录扫描方案，而是采用 Hermes 的**通用插件系统**（`kind: standalone` + `plugins.enabled` allow-list），更干净且规避 bundled 优先陷阱。
 
-1. 先扫 **bundled** 目录 `core/hermes/plugins/memory/`；
-2. 再扫 **user** 目录 `$HERMES_HOME/plugins/`；
-3. 同名碰撞时 bundled 胜出（`if child.name in seen: continue`）。
+机制：
 
-因此外置必须满足两个条件：
-- **路径正确**：放在 `$HERMES_HOME/plugins/memory/ikaros_v5`（带 `memory/` 子目录），否则扫描器根本不会去那里找；
-- **无同名 bundled 竞争**：必须从 `core/hermes/plugins/memory/` 移除 ikaros_v5，否则 user 份被覆盖、重新变成死副本（这正是 2026-08-04 清理的那个 `data/hermes-agent/plugins/ikaros_v5` 影子副本踩过的坑）。
+1. `data/hermes-agent/plugins/ikaros_v5/plugin.yaml` 声明 `kind: standalone` + `name: ikaros_v5`；
+2. `data/hermes-agent/config.yaml` 的 `plugins.enabled: [ikaros_v5]` 显式 opt-in（**必须**，否则 `register()` 不被调用，context engine 无法注册）；
+3. 插件 `__init__.register(ctx)` 经 `ctx.register_context_engine()` / `ctx.register_memory_provider()` **双注册**（兼容两种 PluginContext）；
+4. memory provider 另由 Hermes memory 系统的 **user 目录扫描**发现（`$HERMES_HOME/plugins/ikaros_v5` → `_hermes_user_memory.ikaros_v5`）。
+
+仍需注意的约束：
+- 必须从 `core/hermes/plugins/{memory,context_engine}/` **移除** ikaros_v5（已做），否则 bundled 同名会干扰注册；
+- 路径自举：插件 `__init__`/`memory_provider.py` 顶部 `sys.path.insert(0, IKAROS_MEMORY or 推导路径)`，使 `memory_v5.*` 可导入（不再依赖 hermes 启动注入 path）。
 
 ---
 
 ## 4. 解耦方案：四步达成 hermes-studio 式干净形态
 
-### 步骤 1 — 外置 ikaros_v5 插件到个人配置
+### 步骤 1 — 外置 ikaros_v5 插件到个人配置（通用插件系统）
 
-```
-# 从 Hermes 内部移除
-git -C core/hermes rm -r --cached plugins/memory/ikaros_v5 plugins/context_engine/ikaros_v5
-rm -rf core/hermes/plugins/memory/ikaros_v5 core/hermes/plugins/context_engine/ikaros_v5
+1. 从 Hermes 内部移除：`git -C core/hermes rm -r --cached plugins/memory/ikaros_v5 plugins/context_engine/ikaros_v5`（已执行，`core/hermes` 现无 ikaros_v5 目录）。
+2. 落到 Ikaros 个人配置**单目录**：`data/hermes-agent/plugins/ikaros_v5/`，结构：
+   - `plugin.yaml`（`kind: standalone`, `name: ikaros_v5`）
+   - `context_engine.py`（`IkarosV5ContextEngine(ContextCompressor)` + `register_context_engine`）
+   - `memory_provider.py`（`IkarosV5MemoryProvider(MemoryProvider)` + path 自举 `sys.path.insert`）
+   - `__init__.py`（`register(ctx)` 双注册 + `hasattr` 兼容）
+3. `config.yaml`：`plugins.enabled: [ikaros_v5]` + `memory.provider: ikaros_v5` + `context.engine: ikaros_v5`。
 
-# 落到 Ikaros 个人配置（注意 memory/ 子目录）
-mkdir -p data/hermes-agent/plugins/memory data/hermes-agent/plugins/context_engine
-cp -r <源> data/hermes-agent/plugins/memory/ikaros_v5
-cp -r <源> data/hermes-agent/plugins/context_engine/ikaros_v5
-```
-
-> 源的"干净版"优先取主仓 `patches/hermes/plugins/{memory,context_engine}/ikaros_v5`（已跟踪、可重放），而非当前 `core/hermes` 里被重放出来的那份。
+> 源取主仓 `patches/hermes/plugins/ikaros_v5`（已跟踪、可重放），更新脚本 `ensure_external_plugins()` 幂等部署，不污染 `core/hermes`。
 
 ### 步骤 2 — 插件内部 path 自举（替代启动注入）
 
@@ -145,11 +146,13 @@ if _IKAROS_MEMORY not in sys.path:
 
 目标：`core/hermes` 的 diff vs 上游 `f5be9236e` **归零**，不再需要 `patches/hermes` 重放。
 
-### 步骤 4 — `core/hermes` 回归纯净上游
+### 步骤 4 — `core/hermes` 回归纯净上游 + 更新脚本改造
 
-- 停止在更新流程里跑 `ensure_b_class()` / `verify_ikaros_v5_runtime()`（它们是 B 类目录的保险，外置后不再需要）；
-- `bin/hermes-update-and-patch.py` 简化为纯"拉上游 + 应用 C 盘 HOME 修复（server.py:1032 的 `env=` 注入）"；
-- 保留一个**可选**的 `verify_ikaros_v5_runtime()` 调用作为健康自检（检测 `data/hermes-agent/plugins/.../ikaros_v5` 是否 `available=True`），但不阻塞更新。
+- `core/hermes` 已还原为纯净上游（`git status` 空，7 个补丁文件无 Ikaros 关键字残留）；ikaros_v5 不再是 B 类目录。
+- 更新脚本 `bin/hermes-update-and-patch.py` 改造：
+  - 新增 `EXTERNAL_PLUGIN_SRC`（`patches/hermes/plugins/ikaros_v5`）→ `EXTERNAL_PLUGIN_DST`（`data/hermes-agent/plugins/ikaros_v5`）+ `ensure_external_plugins()` 幂等部署（注释"hermes 仓库外，更新不受影响"）；
+  - `verify_ikaros_v5_runtime()` 改为走 `load_memory_provider` + 通用插件系统两条原生发现链路 + 真 `initialize()` 载 V5，作为健康自检；
+  - 其余 7 个补丁仍走 `ensure_b_class()` B 类重放（与 ikaros_v5 解耦，保留 fallback）。
 
 ### 解耦后的形态
 
@@ -168,17 +171,17 @@ Ikaros 壳（9100 面板）
 
 ---
 
-## 5. 对标验证清单
+## 5. 对标验证清单（2026-08-05 实测）
 
-外置后逐项确认（参照 `verify_ikaros_v5_runtime` 思路，改为针对 `data/hermes-agent/plugins/`）：
+外置后逐项确认（参照 `verify_ikaros_v5_runtime` 思路，针对 `data/hermes-agent/plugins/`）：
 
-- [ ] `discover_memory_providers()` 返回 `ikaros_v5` 且 `available=True`
-- [ ] `discover_context_engines()` 返回 `ikaros_v5` 且 `available=True`
-- [ ] `IkarosV5MemoryProvider.initialize()` 真载入 V5（`v5.db` 可读写）
-- [ ] `config.yaml` 的 `mcp_servers.ikaros-v5-memory` 连得上 `core/memory_v5/mcp_server.py`（`v5_*` 工具可用）
-- [ ] 9100 面板 `hermes` 组件 restart 后，Dashboard（9119）的 Context Engine / Memory Provider 下拉仍含 `ikaros_v5` 且为当前选中
-- [ ] 对话树（48920）经 8642 gateway 调用 ikaros_v5 上下文正常
-- [ ] `git -C core/hermes diff` 相对上游为空
+- [x] `load_memory_provider("ikaros_v5")` 返回非 None 且 `available=True`（2026-08-05 实测 PASS）
+- [x] `discover_plugins()` + `get_plugin_context_engine()` 返回 `ikaros_v5` 且 `available=True`（2026-08-05 实测 PASS）
+- [x] `IkarosV5MemoryProvider.initialize()` 真载入 V5（`v5.db` 可读写，2026-08-05 实测 PASS）
+- [x] `config.yaml` 的 `mcp_servers.ikaros-v5-memory` 连得上 `core/memory_v5/mcp_server.py`（`v5_*` 工具可用）
+- [ ] 9100 面板 `hermes` 组件 restart 后，Dashboard（9119）的 Context Engine / Memory Provider 下拉仍含 `ikaros_v5` 且为当前选中（待运行时确认）
+- [ ] 对话树（48920）经 8642 gateway 调用 ikaros_v5 上下文正常（待运行时确认）
+- [x] `git -C core/hermes diff` 相对上游为空（2026-08-05 实测：工作树干净）
 
 ---
 
@@ -186,10 +189,10 @@ Ikaros 壳（9100 面板）
 
 | 风险 | 缓解 |
 |---|---|
-| bundled 优先导致 data 份被覆盖成死副本 | 步骤 1 **必须先删 core 内 ikaros_v5**；路径必须带 `memory/`/`context_engine/` 子目录 |
+| bundled 同名干扰注册 | 步骤 1 **必须先删 core 内 ikaros_v5**（已做）；实际走通用插件系统 `plugins.enabled` 路线，路径为 `$HERMES_HOME/plugins/ikaros_v5`（单目录，非 `memory/` 子目录） |
 | 外置后 `memory_v5` import 失败 | 步骤 2 的 `sys.path` 自举；用 `IKAROS_MEMORY` 而非硬编码 |
 | 剥离 7 补丁误伤核心 | 仅 `web_server/run_tests/cron/scheduler/tldraw` 与 ikaros_v5 逻辑无关；`plugins/{memory,context_engine}/ikaros_v5` 走步骤 1 外置而非删除 |
-| 更新脚本去掉重放后失保 | 步骤 4 保留可选 `verify_ikaros_v5_runtime()` 健康自检 |
+| 更新后外置插件丢失 | `ensure_external_plugins()` 幂等部署 + `verify_ikaros_v5_runtime()` 健康自检（2026-08-05 实测 PASS） |
 | 9100 面板 `build_env()` 未注入 `IKAROS_MEMORY` | 已在 `server.py:145-165` 固化，无需改动 |
 
 **不解决的问题（明确边界）**：本方案只做"解耦/外置"，不改变 V5 以 SQLite（`v5.db`）为事实源的决策，不引入图数据库迁移，不动对话树/neko 架构。
@@ -217,7 +220,9 @@ Ikaros 壳（9100 面板）
 | 更新不冲掉配置/插件的两层安全 | `docs/hermes-update-integrity.md` |
 | Hermes Agent 整体调研 | `docs/hermes-agent-full-survey.md` |
 | hermes-studio 聊天集成参考 | `docs/ref-hermes-studio-chat.md` |
-| 插件发现机制源码 | `core/hermes/plugins/memory/__init__.py`（`_iter_provider_dirs`） |
-| 更新脚本（待简化） | `bin/hermes-update-and-patch.py`（`ensure_b_class` / `verify_ikaros_v5_runtime`） |
+| 插件发现机制源码（通用插件系统） | `core/hermes/hermes_cli/plugins.py`（`discover_plugins` / `get_plugin_context_engine`）、`plugins_cmd.py`（`_discover_context_engines`） |
+| 外置插件实体 | `data/hermes-agent/plugins/ikaros_v5/`（`plugin.yaml` / `context_engine.py` / `memory_provider.py` / `__init__.py`） |
+| 外置插件源（重放） | `patches/hermes/plugins/ikaros_v5/` |
+| 更新脚本（已改造） | `bin/hermes-update-and-patch.py`（`ensure_external_plugins` / `verify_ikaros_v5_runtime`） |
 | 面板 env 注入 | `core/dashboard/server.py:145-165`（`build_env`）、`:1032`（`run_hermes_update_and_patch` 的 `env=` 修复） |
 | 参考项目（只读） | `E:\Ikaros-something\reference project\hermes-studio-main` |
