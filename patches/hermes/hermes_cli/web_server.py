@@ -5079,7 +5079,7 @@ def get_sessions(
             # Opportunistic, config-gated, double-throttled stale-session
             # sweep — the only auto_archive hook that fires for Desktop's
             # `hermes serve` backend. No-op when disabled or run recently.
-            _maybe_auto_archive_for_profile(db, profile)
+            _maybe_auto_archive_for_profile(profile)
             min_message_count = max(0, min_messages)
             archived_only = archived == "only"
             include_archived = archived == "include"
