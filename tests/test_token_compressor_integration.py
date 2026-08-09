@@ -20,10 +20,21 @@ from pathlib import Path
 
 _CORE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core"))
 _HERMES = os.path.join(_CORE, "hermes")
+_PLUGIN_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "data", "hermes-agent", "plugins", "ikaros_v5"))
 sys.path.insert(0, _HERMES)   # for `agent` package
 sys.path.insert(0, _CORE)     # for `memory_v5` package
 
-from plugins.memory.ikaros_v5 import IkarosV5MemoryProvider  # noqa: E402
+# 外置插件 (2026-08-04 起) 不在 hermes 仓库内：直接按文件路径加载，
+# 避免 core/hermes/plugins 的 regular package 遮蔽 runtime 的 namespace plugins。
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "ikaros_v5_memory_provider",
+    os.path.join(_PLUGIN_DIR, "memory_provider.py"))
+assert _spec is not None and _spec.loader is not None
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+IkarosV5MemoryProvider = _mod.IkarosV5MemoryProvider  # noqa: E402
 
 
 class _FakeMem:

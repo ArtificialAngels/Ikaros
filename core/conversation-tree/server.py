@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,11 @@ from pathlib import Path
 # 让本服务能 import memory_v5.conversation_tree + memory_v5.store
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
+# 2026-08-05: 面板以 safe_path (-P) 拉起本脚本, 脚本目录不进 sys.path →
+# 同目录 rescue_tools 导入失败 (ModuleNotFoundError, _RESCUE 静默降级)。
+# 显式加入脚本目录, 保证 import rescue_tools 在面板 env 下也命中。
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 # 附件上传目录（相对项目根 data/，避免被 git 跟踪的源码目录污染）
 _UPLOAD_DIR = _HERE.parent.parent / "data" / "conversation-tree-uploads"
@@ -47,6 +53,16 @@ from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
 from memory_v5 import store as v5s     # noqa: E402
 # B2: 任务事件总线 (herdr events.subscribe 语义内化); core/ 已在 sys.path
 from taskbus import EventBus, exec_state_event  # noqa: E402
+# ── gateway 自救工具集 (2026-08-05): ikaros_* 工具由对话树侧直接执行,
+# 不经过 gateway 透出 —— gateway 挂掉时诊断/日志/重启仍可用 (鸡生蛋解药)。
+# 同目录模块; 缺失/异常时 _RESCUE=None 降级为旧逻辑 (fail-open)。
+try:
+    import rescue_tools as _RESCUE_MOD  # noqa: E402
+    _RESCUE = _RESCUE_MOD
+    sys.stderr.write(f"[ct] rescue_tools loaded ({len(_RESCUE.SCHEMAS)} ikaros_* tools)\n")
+except Exception as _imp_err:
+    _RESCUE = None
+    sys.stderr.write(f"[ct] rescue_tools import FAILED: {type(_imp_err).__name__}: {_imp_err}\n")
 
 # ── LLM 配置 ──────────────────────────────────────────────────
 _DEEPSEEK_KEY = ""
@@ -233,6 +249,43 @@ def _hermes_models() -> list[dict]:
                       "context_window": CT_CONTEXT_WINDOW})
     return cands
 
+
+def _hermes_providers_status() -> list[dict]:
+    """provider 配置状态 (只读, 脱敏: 只报告 key 是否已配置, 绝不返回 key 本身)。
+
+    信息源: data/hermes-agent/config.yaml 的 model.default/provider 与
+    custom_providers 列表; 内置 provider 的 key 走环境变量 (``{NAME}_API_KEY``)。
+    """
+    data, _ = _load_hermes_config()
+    out: list[dict] = []
+
+    def _has_env_key(name: str) -> bool:
+        env = (name or "").replace("-", "_").upper() + "_API_KEY"
+        return bool(os.environ.get(env))
+
+    if isinstance(data, dict):
+        mb = data.get("model") or {}
+        if isinstance(mb, dict):
+            prov = mb.get("provider")
+            if prov:
+                out.append({
+                    "name": str(prov), "role": "default",
+                    "has_key": _has_env_key(str(prov)),
+                    "model": mb.get("default"),
+                    "source": "env {0}_API_KEY".format(str(prov).replace("-", "_").upper()),
+                })
+        cps = data.get("custom_providers") or []
+        if isinstance(cps, list):
+            for cp in cps:
+                if isinstance(cp, dict) and cp.get("name"):
+                    out.append({
+                        "name": str(cp.get("name")), "role": "custom",
+                        "has_key": bool(cp.get("api_key")),
+                        "base_url": cp.get("base_url"),
+                        "models": cp.get("models") or [],
+                    })
+    return out
+
 # Hermes 任务代理 base system prompt (与 Ikaros 伴侣人格区分): 偏执行/工具/任务导向.
 HERMES_AGENT_PROMPT = (
     "You are Hermes, an autonomous task agent operating inside Ikaros. "
@@ -404,8 +457,14 @@ _READONLY_TOOLS = [
     },
 ]
 
-# 工具循环上限: 防止模型无限调用工具
-MAX_TOOL_ROUNDS = 4
+# ikaros_* 自救工具集 (gateway 独立通道, 2026-08-05): 进程/端口诊断、日志读取、
+# 配置读取、gateway 重启、herdr 管道兜底。与 _execute_chat_tool 分派对应。
+if _RESCUE is not None:
+    _READONLY_TOOLS = _READONLY_TOOLS + list(_RESCUE.SCHEMAS)
+
+# 工具循环上限: 防止模型无限调用工具.
+# 2026-08-05: 4→6, 给诊断→日志→重启→复查 的完整自救链留足轮次 (ikaros_* 工具集).
+MAX_TOOL_ROUNDS = 6
 
 
 def _call_llm_tools(
@@ -935,6 +994,37 @@ def _migrate_if_needed() -> None:
         sys.stderr.write(f"[ct] migrated {migrated} nodes to V5 store\n")
 
 
+def _migrate_tree(t: "ct.ConversationTree | None") -> int:
+    """树级 V5 迁移 (整包导入用): 把 'messages 已内联但 v5_memory_id=0' 的节点
+    写入 V5 store 并更新 id + summary。返回迁移节点数; 有迁移则 persist。
+    与 _migrate_if_needed 的区别: 不依赖全局 _tree, 任意树可迁移。
+    """
+    if t is None:
+        return 0
+    migrated = 0
+    for node in t.nodes.values():
+        msgs = getattr(node, "messages", None)
+        mid = getattr(node, "v5_memory_id", 0) or 0
+        if msgs and not mid:
+            try:
+                new_id = v5s.store(json.dumps(msgs, ensure_ascii=False),
+                                   type="conversation", tags="imported")
+                node.v5_memory_id = new_id
+                try:
+                    node.summary = ct._extract_summary(msgs)
+                except Exception:
+                    pass
+                migrated += 1
+            except Exception as exc:
+                sys.stderr.write(f"[ct] import migrate node {node.id}: {exc}\n")
+    if migrated:
+        try:
+            t.persist()
+        except Exception:
+            pass
+    return migrated
+
+
 def ensure_tree() -> None:
     """进程启动 / 首次请求时恢复或初始化会话 + 迁移旧格式 + 加载活动会话的树."""
     global _tree, _retriever, _sessions, _active_session_id
@@ -1079,17 +1169,24 @@ CHAT_TOOLS = [
     },
 ]
 
+# ikaros_* 自救工具集同样并入 hermes 模式工具表 (正常态也可见/可用)
+if _RESCUE is not None:
+    CHAT_TOOLS = CHAT_TOOLS + list(_RESCUE.SCHEMAS)
+
 MAX_TOOL_ITER = 5
 
 
 # ── gateway 降级自救 (2026-08-04): gateway 不可达时由对话树侧拉起 ──
 
 def _gateway_health_check(timeout: float = 2.0) -> bool:
-    """探测 :8642 gateway 是否可达 (GET /health, 200/404 均视为进程活着)."""
+    """探测 :8642 gateway 是否可达 (GET /health, 200/404 均视为进程活着).
+
+    2026-08-05 修复: 原实现探测 HERMES_AGENT_URL (默认 :8650 bridge) 的 /health,
+    bridge 活着但背后 gateway 死了时误报"健康", 导致 gateway_ensure 假阳性、
+    自救链不触发。现直连 :8642 本体。
+    """
     try:
-        base = HERMES_AGENT_URL or "http://127.0.0.1:8642/v1/chat/completions"
-        health = base.replace("/v1/chat/completions", "/health")
-        req = urllib.request.Request(health, method="GET")
+        req = urllib.request.Request("http://127.0.0.1:8642/health", method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             return resp.status < 500
     except Exception:
@@ -1097,10 +1194,11 @@ def _gateway_health_check(timeout: float = 2.0) -> bool:
 
 
 def _spawn_gateway() -> dict:
-    """拉起 gateway: python -m hermes_cli.main gateway run --replace (cwd=core/hermes).
-
-    日志追加到 tmp/gateway8642.log; 轮询 :8642 最多 30s。返回 {ok, pid?, result}。
-    """
+    """拉起/重启 gateway: 优先委托 rescue_tools (venv python + kill + 完整 env);
+    模块缺失时回退旧逻辑 (portable-python, 30s 轮询)。"""
+    if _RESCUE is not None:
+        r = _RESCUE.call("ikaros_restart_gateway", {})
+        return {"ok": bool(r.get("ok")), "result": r.get("result", "")}
     root = Path(os.environ.get("IKAROS_ROOT",
                                str(Path(__file__).resolve().parent.parent.parent)))
     py = root / "runtime" / "portable-python" / "python.exe"
@@ -1135,11 +1233,18 @@ def _spawn_gateway() -> dict:
 
 
 def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
-    """执行 chat 降级工具, 返回 {ok, result}. 除 gateway_ensure (白名单拉起 gateway) 外均为只读/安全."""
+    """执行 chat 降级工具, 返回 {ok, result}. 除 gateway_ensure / ikaros_restart_gateway /
+    ikaros_herdr (白名单) 外均为只读/安全."""
     try:
         args = json.loads(arguments) if arguments else {}
     except Exception:
         args = {}
+    # ikaros_* 自救工具集: 本地执行, 不依赖 gateway (鸡生蛋解药)
+    if _RESCUE is not None and name.startswith("ikaros_"):
+        try:
+            return _RESCUE.call(name, args)
+        except Exception as e:
+            return {"ok": False, "result": f"{name} 执行失败: {type(e).__name__}: {e}"}
     if name == "memory_search":
         q = (args.get("query") or "").strip()
         if not q:
@@ -1182,8 +1287,6 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
             return {"ok": True, "result": "gateway 正常运行 (:8642 健康检查通过)"}
         return _spawn_gateway()
     return {"ok": False, "result": f"未知工具: {name}"}
-
-
 def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | None = None):
     """委托 Hermes gateway (:8642) 跑完整 tools/skills 循环, 代理其 SSE 到前端 chat 面板.
 
@@ -1301,6 +1404,18 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
                 if text:
                     collector["thinking"] += text
                     yield {"type": "thinking", "delta": text}
+                return
+            # 上游错误透传 (bridge 透出的 gateway upstream 失败: 401/404/连接失败)
+            # —— studio 式包装层把上游失败显式转成 event:error, 这里消费它,
+            # 让降级提示从笼统的「空响应」变成准确的「gateway 上游错误 (HTTP 401 ...)」.
+            if this_evt == "error":
+                try:
+                    p = json.loads(raw)
+                except Exception:
+                    return
+                collector["upstream_error"] = p.get("error") or "unknown upstream error"
+                yield {"type": "warn",
+                       "message": f"Hermes 上游返回错误：{collector['upstream_error']}"}
                 return
             # 其它命名事件 (hermes.token 等) 不处理
             if this_evt is not None:
@@ -1471,7 +1586,11 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
             yield _ev
         # gateway 正常结束但无正文 → 降级本地
         if not collector["content"].strip():
-            yield {"type": "warn", "message": "Hermes gateway 返回空响应，已降级本地模型"}
+            if collector.get("upstream_error"):
+                yield {"type": "warn",
+                       "message": f"Hermes 上游错误（{collector['upstream_error']}），已降级本地模型"}
+            else:
+                yield {"type": "warn", "message": "Hermes gateway 返回空响应，已降级本地模型"}
         else:
             return
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
@@ -1606,8 +1725,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_asset(self, path: str):
         name = path[len("/assets/"):].split("?", 1)[0]
-        # 防目录穿越: 只允许 assets/ 下的普通文件名
-        if not name or "/" in name or "\\" in name or name.startswith("."):
+        # 防目录穿越: 允许 assets/ 下单层子目录 (如 cursors/), 但禁止 .. / 绝对路径 / 隐藏文件
+        if not name or name.startswith(".") or ".." in name or name.startswith("/") or name.startswith("\\"):
+            self._send_text("forbidden", 403)
+            return
+        if "\\" in name or "/" in name.split("/")[-1] or any(p.startswith(".") for p in name.split("/")[:-1]):
             self._send_text("forbidden", 403)
             return
         f = HERE / "assets" / name
@@ -1728,6 +1850,30 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"mermaid": _tree.to_mermaid()})
             elif path == "/api/sessions":
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            elif path == "/api/sessions/tree":
+                # 融合桥 (8099 poker UI): 读指定会话完整树 (拓扑 + messages, V5 回读)
+                qs = {}
+                if "?" in self.path:
+                    for kv in self.path.split("?", 1)[1].split("&"):
+                        if "=" in kv:
+                            k, v = kv.split("=", 1)
+                            try:
+                                qs[k] = urllib.parse.unquote(v)
+                            except Exception:
+                                qs[k] = v
+                sid = qs.get("session_id", "")
+                if not sid:
+                    self._send_json({"error": "session_id required"}, 400)
+                    return
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if sess is None:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                t = _load_tree_for(sess["persist_key"])
+                if t is None:
+                    t = _make_tree_for(sess["persist_key"])
+                    t.init([{"role": "system", "content": "会话已恢复。"}])
+                self._send_json(state_dict(t, inline=True))
             elif path == "/api/health":
                 # 连接状态探测: gateway 主通道 / 本地 LLM 降级链 / DeepSeek key
                 health = {"gateway": False, "local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
@@ -1756,6 +1902,8 @@ class Handler(BaseHTTPRequestHandler):
                     "defaults": {"hermes": HERMES_AGENT_MODEL, "ikaros": CT_DEEPSEEK_MODEL},
                     "available": _hermes_models(),
                 })
+            elif path == "/api/providers":
+                self._send_json({"ok": True, "providers": _hermes_providers_status()})
             elif path == "/api/events":
                 self._stream_events()
             else:
@@ -2093,6 +2241,62 @@ class Handler(BaseHTTPRequestHandler):
                 build_demo()
                 self._send_json(state_dict())
             # ── 多会话管理 (左侧栏 新建 / 切换 / 删除 / 归档 / 重命名) ──
+            elif path == "/api/sessions/import":
+                # 融合桥 (8099 poker UI): 整包导入 super-conv-2.0 树 JSON.
+                # body: {tree:{v,schema,root_id,current_id,trunk_id,nodes[]},
+                #        session_id?: 覆盖已有会话, name?: 新建会话标题}
+                tree_data = data.get("tree")
+                if not isinstance(tree_data, dict) or not isinstance(tree_data.get("nodes"), list):
+                    self._send_json({"error": "tree.nodes (list) required"}, 400)
+                    return
+                nodes = tree_data["nodes"]
+                sid = data.get("session_id") or data.get("id")
+                if sid and any(s["id"] == sid for s in _sessions):
+                    sess = next(s for s in _sessions if s["id"] == sid)
+                    persist_key = sess["persist_key"]
+                    created = False
+                else:
+                    sid = _new_session_id()
+                    persist_key = f"ui_conversation_tree_{sid}"
+                    sess = {"id": sid, "title": str(data.get("name") or "导入会话")[:80],
+                            "persist_key": persist_key, "created_at": time.time(),
+                            "updated_at": time.time(), "archived": False}
+                    _sessions.append(sess)
+                    created = True
+                # 归一化: root / current / trunk 兜底 (节点 id 由调用方生成, 此处只保证字段齐全)
+                ids = [n.get("id") for n in nodes if isinstance(n, dict) and n.get("id")]
+                root_id = tree_data.get("root_id") or (ids[0] if ids else "root")
+                if root_id not in set(ids):
+                    nodes.insert(0, {"id": root_id, "parent_id": None, "children": [],
+                                     "depth": 0, "branch_label": None, "messages": [],
+                                     "summary": "", "node_type": "trunk", "is_valid": True})
+                    ids.insert(0, root_id)
+                current_id = tree_data.get("current_id") or root_id
+                if current_id not in set(ids):
+                    current_id = root_id
+                payload = {
+                    "v": int(tree_data.get("v", 0) or 0),
+                    "schema": "super-conv-2.0",
+                    "root_id": root_id,
+                    "current_id": current_id,
+                    "trunk_id": tree_data.get("trunk_id") or current_id,
+                    "nodes": nodes,
+                }
+                with _lock:
+                    topo = V5_DATA_DIR / f"{persist_key}.json"
+                    topo.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                    t = _load_tree_for(persist_key)
+                    if t is None:
+                        t = _make_tree_for(persist_key)
+                        t.init([{"role": "system", "content": "会话已恢复。"}])
+                    migrated = _migrate_tree(t)
+                    if sid == _active_session_id:
+                        _bind_active_tree(t)
+                        _touch_active_session(t)
+                _save_sessions(_sessions)
+                self._send_json({"ok": True, "id": sid, "created": created,
+                                 "version": payload["v"], "node_count": len(nodes),
+                                 "migrated": migrated})
             elif path == "/api/sessions/create":
                 sid = _new_session_id()
                 per = f"ui_conversation_tree_{sid}"

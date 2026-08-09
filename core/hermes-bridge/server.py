@@ -139,13 +139,54 @@ def _auth_header() -> Dict[str, str]:
 
 
 # ── 会话确保 ─────────────────────────────────────────────────────────────
-def ensure_session(sid: str, system: str) -> None:
-    """GET 存在则跳过; 否则 POST 创建. 创建失败 (409 已存在 / 503 db 不可用) 静默容错."""
+# ⚠️ 上游会话行的 ``model`` 字段是**持久化的钉死值**: 创建时不传 model 会落到
+# 兜底名 "hermes-agent" (api_server._handle_create_session: ``model =
+# body.get("model") or self._model_name``), 之后每次 session-chat 即使请求带
+# model=hermes 命中 model_routes, ``_create_agent`` 里 session-persisted model
+# (hermes-agent) 也优先于 route → 实际执行 opencode-go/hermes-agent → 401 →
+# 空响应 → 48920 降级 (2026-08-05 根因定位).
+# 因此: 创建会话必须显式传 model (与 chat/stream 请求一致), 且对存量
+# "hermes-agent" 坏会话 DELETE 重建 (上游支持 DELETE /api/sessions/{id}).
+def _delete_session(sid: str) -> None:
+    """DELETE /api/sessions/{sid} — 自愈坏会话用 (静默容错)."""
+    try:
+        req = urllib.request.Request(
+            f"{GATEWAY}/api/sessions/{sid}",
+            headers=_auth_header(),
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+    except Exception as e:
+        sys.stderr.write(f"[bridge] delete session {sid} failed: {e}\n")
+
+
+def ensure_session(sid: str, system: str, model: str = "hermes") -> None:
+    """GET 存在则校验/自愈, 否则 POST 创建 (带 model, 防兜底名钉死).
+
+    - GET 200 且 session.model 是兜底名 "hermes-agent" → DELETE 重建 (对话历史由
+      V5 store 持有, 会话行重建无碍; 否则该会话后续每次请求都被 hermes-agent
+      抢先 → 401).
+    - 创建失败 (409 已存在 / 503 db 不可用) 静默容错.
+    """
     get_url = f"{GATEWAY}/api/sessions/{sid}"
     try:
         req = urllib.request.Request(get_url, headers=_auth_header())
         with urllib.request.urlopen(req, timeout=10) as r:
             if r.status == 200:
+                raw = r.read().decode("utf-8", "replace")
+                sess_model = ""
+                try:
+                    sess_model = (json.loads(raw).get("session") or {}).get("model") or ""
+                except Exception:
+                    pass
+                if sess_model == "hermes-agent":
+                    # 坏会话: 上游持久化模型会压过 model_routes route → 删掉重建
+                    sys.stderr.write(
+                        f"[bridge] session {sid} pinned to fallback model "
+                        f"'hermes-agent'; deleting to rebuild with model={model}\n"
+                    )
+                    _delete_session(sid)
                 return
     except urllib.error.HTTPError as e:
         if e.code != 404:
@@ -154,7 +195,7 @@ def ensure_session(sid: str, system: str) -> None:
     except Exception:
         pass
 
-    create = {"id": sid}
+    create = {"id": sid, "model": model}
     if system:
         create["system_prompt"] = system
     create_url = f"{GATEWAY}/api/sessions"
@@ -288,7 +329,7 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
         model = body.get("model") or "hermes"
 
         try:
-            ensure_session(sid, system)
+            ensure_session(sid, system, model)
         except Exception as e:
             sys.stderr.write(f"[bridge] ensure_session error: {e}\n")
 
@@ -305,9 +346,20 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
             for frame in stream_session_chat(sid, last_user, system, model, translator):
                 self._write_chunk(frame)
         except urllib.error.HTTPError as e:
-            sys.stderr.write(f"[bridge] hermes stream HTTPError {e.code}: {e.reason}\n")
+            # 上游 4xx/5xx：透出错误帧（不再静默空 [DONE]，让 48920 诊断可见）
+            msg = f"gateway upstream HTTP {e.code}: {e.reason}"
+            sys.stderr.write(f"[bridge] {msg}\n")
+            payload = json.dumps(
+                {"error": msg, "type": "upstream_http_error", "code": e.code}
+            ).encode("utf-8")
+            self._write_chunk(b"event: error\r\ndata: " + payload + b"\r\n\r\n")
         except Exception as e:
-            sys.stderr.write(f"[bridge] hermes stream error: {e}\n")
+            msg = f"gateway upstream error: {type(e).__name__}: {e}"
+            sys.stderr.write(f"[bridge] {msg}\n")
+            payload = json.dumps(
+                {"error": msg, "type": "upstream_error"}
+            ).encode("utf-8")
+            self._write_chunk(b"event: error\r\ndata: " + payload + b"\r\n\r\n")
         finally:
             for frame in translator.finish():
                 self._write_chunk(frame)

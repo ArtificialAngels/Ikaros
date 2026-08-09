@@ -2,7 +2,7 @@
 
 > **目标读者**: 所有接入本项目的 AI Agent
 > **核心原则**: 便携性（零系统依赖）+ 路径统一管理（一处注册，全局可查）
-> **最后更新**: 2026-07-30
+> **最后更新**: 2026-08-05
 
 ---
 
@@ -28,7 +28,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 ├─────────────────────────────────────────────────────────────┤
 │      L1: 基础设施 (Hermes Infrastructure) — 逻辑分组           │
 │  core/hermes/ — Agent 框架 (Skills / MCP)                    │
-│  hermes Dashboard :9119 — 云端 LLM 网关                     │
+│  hermes-bridge :8650 → 纯净 gateway :8642 (tools/skills)     │
 │  bin/ikaros-memory-watchdog — 本地 LLM :8080 + Embed :8587   │
 ├─────────────────────────────────────────────────────────────┤
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
@@ -51,12 +51,13 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 | :48911 | Neko 主前端 | `core/neko/app/main_server/` (包, `python -m app.main_server`) | 面板 neko 组件 |
 | :48912 | Neko 记忆服务器 | `core/neko/app/memory_server/` (包, `python -m app.memory_server`) | 面板 neko_memory |
 | :48915 | Neko Agent 服务器 | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) | 面板 neko_agent |
-| :9119 | Hermes Dashboard | `core/hermes/.../web_server.py` | 面板 hermes_dashboard |
+| :8650 | Hermes Bridge（studio 式「0 侵入」包装层，对话树默认通道） | `core/hermes-bridge/server.py`（启动器 `bin/hermes-bridge.py`） | 面板 hermes_bridge 组件（启动 :48920 前自动拉起） |
+| :8642 | Hermes gateway（纯净 Agent 运行时，完整 tools/skills 循环） | `python -m hermes_cli.main gateway run`（Bearer `API_SERVER_KEY`，默认 `ikaros-gateway-key`） | 对话树 rescue 工具 / 面板可自拉起 |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` | 面板 qwenpaw |
 | :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | 面板 conversation_tree 组件 |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 面板 herdr 组件（按需，不随全栈自启） |
 
-> **端口状态**：上述 9 个 TCP 端口为当前生效服务。已移除：语音桥（原端口 7870 / 7871）—— 于 2026-07-24 删除。**`:8642` Hermes API 网关已重新启用**（由 `hermes_cli.main gateway run` 提供，dashboard 与 chat-tree 复用），请勿删除。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
+> **端口状态**：上述 TCP 端口为当前生效服务。已移除：语音桥（原端口 7870 / 7871）—— 于 2026-07-24 删除。**`:8642` Hermes gateway**（`hermes_cli.main gateway run` 提供，纯净 Agent 运行时，请勿删除）与 **`:8650` Hermes Bridge**（2026-08-05 新增，studio 式「0 侵入」包装层，对话树默认通道，见 §1.5）为当前对话树主链路。`:9119` 现为 **Hermes 原生 Dashboard**（Web 面板 / headless 服务，由 9100 面板 `hermes_service` / `hermes_dashboard` 组件管理），**已不再是任何 LLM 网关**。`:8080` 为**懒加载**：看门狗仅监测端口，模型在 agent 首次 `call_llm(local)` 时热载入。另：`herdr`（coding-agent 终端多路复用器，2026-07-29 经 Path B 接入）使用**命名管道**而非 TCP 端口，作为 `herdr` 组件在 9100 面板独立控制（默认不随全栈自启）；其 supervisor 编排端点与对话树事件流同址于 `:48920`。
 
 ### 1.3 控制面板 9100 重构 (2026-07-26)
 
@@ -65,7 +66,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **local_model / memory 拆分**：原看门狗统一持有的 `:8080`（本地 LLM）与 `:8587`（Embedding）拆分为两个独立卡片 `local_model` 与 `memory`，**两者均可在面板内切换模型**。
 - **neko_group 合并**：Neko 原来的 3 个服务（`:48911` / `:48912` / `:48915`）合并为单一 `neko_group`，支持**一键启动**或分别控制。
 - **Hermes API 网关（:8642）已重新启用**：由 `python -m hermes_cli.main gateway run` 提供，dashboard 与 chat-tree 复用；Person Sync（人设同步脚本）已删除。旧的 `bin/hermes-api-server.py` 脚本未启用。
-- **hermes → dashboard 别名**：`cloud_chat` 的 `hermes` 云端 provider 现已**别名指向 `dashboard`**（即 Hermes Dashboard `:9119`）。
+- **hermes → dashboard 别名（2026-08-05 作废）**：原 `cloud_chat` 的 `hermes` 云端 provider 别名指向 Dashboard `:9119` 的路由已随 9119 网关用途移除而作废；对话树主链路改经 Hermes Bridge `:8650` → 纯净 gateway `:8642`（见 §1.5）。
 
 ### 1.3.1 面板布局与自我思考卡片 (2026-08-01)
 
@@ -82,8 +83,22 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **后端引擎**：`core/memory_v5/conversation_tree.py`（`ConversationTree`，33 tests）；REST 接口 `fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context`；`build_context_v2`（L0 祖先 + L1 兄弟 + L2 合并，MAX 50）。
 - **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针，真实记忆在 `v5.db`。
 - **与 V5 集成**：`hermes_provider.push_to_conversation_tree()` 在记忆写入后静默推送节点（`core/memory_v5/hermes_provider.py:343`）；`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话（`.hermes_history`）批量导入对话树（需重启服务重载内存树）。
-- **LLM 路由（2026-08-01 得兼改造）**：`/api/chat` 的 **ikaros / hermes 两种模式统一走 Hermes gateway :8642**（`/v1/chat/completions`，跑完整 tools/skills 循环）。区别只在 tree 端注入的 system 内容：hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（gateway core 的 SOUL 即人格，不重复注入）；ikaros 模式注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。gateway 不可达/空响应时降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ 3 只读工具回路，并通过 SSE `warn` 事件向前端提示降级。gateway 的 SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果由 `api_server._on_tool_complete` 截断 2000 透出。
+- **LLM 路由（2026-08-05 更新）**：`/api/chat` 的 **ikaros / hermes 两种模式默认走 Hermes Bridge :8650**（OpenAI-wire `/v1/chat/completions`；bridge 内部驱动纯净 Hermes gateway :8642 原生 session-chat，跑完整 tools/skills 循环）。区别只在 tree 端注入的 system 内容：hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（gateway core 的 SOUL 即人格，不重复注入）；ikaros 模式注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。**主链路工具由 gateway 提供（完整）**；bridge/gateway 不可达时降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ **4 只读工具**回路，并通过 SSE `warn` 事件（黄色提示条）向前端提示降级——**遇到「只有 4 工具」说明走了降级，根因是 :8642 未就绪或 bridge 没起，不是工具没挂**。bridge 的 SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
 - **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `cloud_chat.build_system_prompt`（桌宠）/ Hermes（SOUL.md）/ chat tree 三处使用。
+
+### 1.5 Hermes 接入：studio 式「0 侵入」Bridge（2026-08-05，commit b6c8e13）
+
+对话树与 Hermes 的接入改为**独立进程包装**，`core/hermes` 工作树保持纯净：
+
+- **组件**：`core/hermes-bridge/`（纯 stdlib SSE 翻译桥：`translate.py` / `server.py` / `inject_ikaros_paths.py`）+ 启动器 `bin/hermes-bridge.py`，监听 **:8650**。设计文档见 `docs/hermes-bridge-design.md`。
+- **链路**：`:48920` 继续调 OpenAI-wire `/v1/chat/completions`（**零前端改动**）→ bridge → 纯净 Hermes gateway `:8642` 原生 session-chat 端点 → bridge 把 `reasoning / tool.progress / 正文` 翻译成 48920 方言（`hermes.reasoning` / `hermes.tool.progress` / OpenAI chunks / `[DONE]`）。
+- **overlay 精简**：`core/hermes` 工作树补丁从 10 个降到 **3 个且全部不可约**：
+  1. `hermes_cli/web_server.py` — Hermes 原生 Dashboard 接线（9119 网关用途报废）
+  2. `cron/scheduler.py` — 对运行版 hermes 深度适配（还原崩 cron）
+  3. `agent/conversation_loop.py` — reasoning 源头正确性修复（bridge 依赖它产出干净推理，不能在翻译层修）
+  其余 7 个薄胶水文件已清理/迁出；**overlay 不提交约定**见 `docs/hermes-ikaros-patches.md`。
+- **配置**：`HERMES_AGENT_URL` 默认 `http://127.0.0.1:8650/v1/chat/completions`（走 bridge）；设 `HERMES_AGENT_URL=""` 禁用 agent runtime（回退 chat 补全 + 任务代理提示）；直连 `:8642` 可绕过 bridge。gateway 需 Bearer `API_SERVER_KEY`（默认 `ikaros-gateway-key`，由 :8642 gateway 进程设定）。
+- **9100 面板 hermes 卡片精简**：删除补丁预检 / 手动补丁 / 补丁状态徽章；只保留「克隆/同步」+「更新 Hermes」（`/api/hermes/update` → `bin/hermes-update-and-patch.py --apply`，克隆更新权威入口）。新增 **hermes_bridge 托管组件**（启停/健康，`:8650/health`）；启动 48920 前自动确保 bridge 已起。
 
 ---
 
@@ -307,7 +322,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `entity_graph.py` | 实体图谱 (6 张 `eg_*` 表同库): 抽取(Stage A/B)+传播激活(spreading_activation_search)+整合 | `run_episodic_consolidation()` |
 | `validation.py` | 结构化内容守卫 (`V5-0109`): 拦截 LLM 旁白/裸 JSON/栅栏/超长，防污染 v5.db | `is_clean_structured_content()` |
 | `reflect/` | 记忆反射: consolidate/distill/llm_client/registry/scheduler。**全走 DeepSeek 云端 (deepseek-v4-flash)**；本地 :8080 仅 agent 按需懒加载，不参与反思认知 | `registry.run_all()` |
-| `extensions/` | **上下文压缩与检索增强层（骨架，尚未接入主链路）**：`token_compressor.py`（委派 `llmlingua` 现成库 + 离线规则回退，消费闲置的 `token_budget`）、`gated_retrieval.py`（分层门控，TencentDB 思路借鉴）、`temporal_graph.py`（`eg_*` 加 `valid_from/valid_to` + `dissonance` supersede，Graphiti 思路借鉴但 SQLite 原生、不换图库）。详见 §5.2.5 与 `docs/v5-context-compression.md` | `compress_text()` / `gated_retrieve()` / `apply_migration()` |
+| `extensions/` | **上下文压缩与检索增强层**：`token_compressor.py`（委派 `llmlingua` 现成库 + 离线规则回退，消费闲置的 `token_budget`，**已接入** hermes 插件 `on_pre_compress`）、`gated_retrieval.py`（分层门控，TencentDB 思路借鉴，**骨架阶段**）、`temporal_graph.py`（`eg_*` 加 `valid_from/valid_to` + `dissonance` supersede，Graphiti 思路借鉴但 SQLite 原生、不换图库，**已接入 2026-08-01**）。详见 §5.2.5 与 `docs/v5-context-compression.md` | `compress_text()` / `gated_retrieve()` / `apply_migration()` |
 | `models/model_config.py` | 本地 LLM 单一配置源: 模型/别名(`local-llm`)/端口(8080)/ctx/gpu_layers，落盘 `model_config.json` | `default_config()` |
 | `cogno_5d.py` | 5D 认知增强 (时间/设备/地理/情绪/上下文) | `enrich_reply()` |
 | `__init__.py` | V5 版本 5.1.0 + CONTROLLED_KINDS 注册表 (12 kinds) | `validate_state_key()` |
@@ -334,6 +349,8 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `hermes_paw_bridge.py` | Hermes Agent 驱动的猫爪桥 (:8088) |
 | `import-hermes-to-convtree.py` | Hermes 单会话 → 对话树 (:48920) 导入器 |
 | `conversation-tree/server.py` | 对话树面板后端 (REST, :48920) |
+| `hermes-bridge.py` | Hermes Bridge 启动器（studio 包装层 :8650，便携 Python 跑 `core/hermes-bridge/server.py`） |
+| `hermes-update-and-patch.py` | Hermes 克隆更新 + overlay 补丁重放（`--apply`；9100 面板「更新 Hermes」权威入口） |
 
 ---
 
@@ -346,7 +363,7 @@ setlocal 不可用（被 call 的子批中会丢失）
   → main_logic/core.py (ikaros_integration 嫁接点)
     → orchestrator.run(history=...) [companion 模式]
       → cloud_chat.py (system prompt 组装 + LLM 路由)
-        → Hermes Dashboard :9119 (DeepSeek 云端, 首选)
+        → Hermes Bridge :8650 → 纯净 gateway :8642 (完整 tools/skills 循环, 首选)
           → 失败回退 → 本地 :8080 (Qwen3-1.7B)
             → 失败回退 → cloud_chat 返回"走神"文案
       → cogno_5d.enrich_reply() (5D 增强)

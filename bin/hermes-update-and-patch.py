@@ -63,7 +63,12 @@ REPO = IKAROS_ROOT / "core" / "hermes"                  # hermes 子仓库
 # 防御：确保 HERMES_HOME 指向 E:/Ikaros/data/hermes-agent，避免脚本内 hermes/uv 子进程
 # 因调用方未注入 HERMES_HOME 而回退平台默认 AppData/Local/hermes（会把第二份家目录写到 C 盘）。
 # 见 2026-08-04：9100 面板「更新并打补丁」未给子进程传 env，导致 bootstrap 落到 C 盘。
-os.environ.setdefault("HERMES_HOME", str(IKAROS_ROOT / "data" / "hermes-agent"))
+# 2026-08-07：MSYS 风格值（如 /e/Ikaros/data/hermes-agent，git-bash export 或子进程继承）会被
+# 原生 Windows Python 解析成 E:\e\Ikaros\data\hermes-agent → 在 E:\ 盘根凭空长出 \e\ 目录。
+# setdefault 只挡「未设置」，挡不住「被设成 MSYS 风格」——这里强制覆盖非 Windows 绝对路径。
+_hermes_home = os.environ.get("HERMES_HOME", "")
+if not (_hermes_home and len(_hermes_home) >= 3 and _hermes_home[1] == ":"):
+    os.environ["HERMES_HOME"] = str(IKAROS_ROOT / "data" / "hermes-agent")
 SPEC = IKAROS_ROOT / "docs" / "hermes-ikaros-patches.md"
 STATE_FILE = IKAROS_ROOT / "tmp" / "hermes-patch-state.json"
 BACKUP_PREFIX = "ikaros-hermes-backup"

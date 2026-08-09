@@ -27,6 +27,12 @@ different event vocabulary:
     event: tool.failed          data: {"tool_name","preview","args"}
     event: run.started | message.started | assistant.completed |
            run.completed | done                                    # control, dropped
+    event: error               data: {"message": "..."}            # runtime failure,
+                                                                   # forwarded verbatim
+    event: assistant.completed data: {"content": "..."}            # failure carrier:
+                                                                   # forwarded as
+                                                                   # event:error when
+                                                                   # no delta preceded
 
 This module maps the native vocabulary onto the conversation-tree dialect so
 the thinking block + tool cards keep working with ``core/hermes`` 100% pristine.
@@ -57,10 +63,25 @@ _EV_TOOL_FAILED = "tool.failed"
 _REASONING_TOOL = "_thinking"
 
 # Control events we deliberately drop (the conversation-tree ends on [DONE]).
+# NOTE: ``assistant.completed`` is NOT unconditionally droppable: the gateway
+# surfaces agent-internal failures (401 / provider auth / quota) as the
+# completed message's ``content`` text rather than an ``event: error`` frame.
+# We drop it only when content was already streamed via assistant.delta
+# (normal completion); otherwise its non-empty content is the ONLY carrier of
+# the failure and must be forwarded (see ``_on_assistant_completed``).
 _DROP_EVENTS = frozenset({
     "run.started", "message.started", "assistant.completed",
     "run.completed", "done",
 })
+
+# Upstream *runtime* error frame (gateway ``_run_agent`` failure — e.g. the
+# ``auth.lock`` Permission-denied case). This is NOT a control event: it carries
+# the real failure reason and must reach the conversation-tree so its warn /
+# degradation message stops being the generic "空响应". We pass it through
+# verbatim (normalizing the upstream ``{message: ...}`` shape into the
+# ``{error: ...}`` shape the conversation-tree ``_flush`` already parses).
+_EV_ERROR = "error"
+_EV_ASSISTANT_COMPLETED = "assistant.completed"
 
 _DEFAULT_EMOJI = "🔧"
 
@@ -92,10 +113,25 @@ class SSETranslator:
         # running card can be paired with its completed/failed card by id.
         self._seq = 0
         self._stack: List[Tuple[str, str]] = []
+        # True once ANY content delta has been forwarded. Used to decide
+        # whether an ``assistant.completed`` content is a duplicate of already
+        # streamed text (drop) or the sole carrier of a failure (forward).
+        self._content_emitted = False
 
     def feed(self, event: str, payload: Dict[str, Any]) -> List[bytes]:
+        if event == _EV_ASSISTANT_COMPLETED:
+            return self._on_assistant_completed(payload)
         if event in _DROP_EVENTS:
             return []
+        if event == _EV_ERROR:
+            # 透传上游运行时错误：把 {message:...} 规范成 {error:...}，
+            # 让 conversation-tree 的 event:error 消费逻辑直接命中。
+            err = payload.get("error") or payload.get("message") or "unknown upstream error"
+            normalized = {
+                "error": err,
+                "type": payload.get("type", "upstream_error"),
+            }
+            return [_sse_frame(normalized, event=_EV_ERROR)]
         if event == _EV_ASSISTANT_DELTA:
             return self._on_delta(payload)
         if event == _EV_TOOL_PROGRESS:
@@ -125,10 +161,29 @@ class SSETranslator:
             frames.append(_sse_frame({"text": reasoning}, event="hermes.reasoning"))
         delta = payload.get("delta")
         if delta:
+            self._content_emitted = True
             frames.append(_sse_frame(
                 {"choices": [{"delta": {"content": delta}}]},
             ))
         return frames
+
+    def _on_assistant_completed(self, payload: Dict[str, Any]) -> List[bytes]:
+        """Forward the completed message's content when it is the ONLY text.
+
+        The gateway puts agent-internal failures (401 / provider auth /
+        quota / permission) into the completed message's ``content`` instead
+        of raising — and in that failure path NO ``assistant.delta`` content
+        was ever emitted, so the completed ``content`` is the sole carrier of
+        the error. Forwarding it as ``event: error`` lets the conversation-tree
+        surface the real reason instead of degrading with "空响应".
+
+        On a healthy stream the delta frames already carried the text, so this
+        content is a duplicate and must stay dropped.
+        """
+        content = payload.get("content")
+        if content and not self._content_emitted:
+            return [_sse_frame({"error": content}, event=_EV_ERROR)]
+        return []
 
     def _on_tool_progress(self, payload: Dict[str, Any]) -> List[bytes]:
         # Reasoning stream: tool_name == "_thinking" carries the model's

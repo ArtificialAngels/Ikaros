@@ -1846,6 +1846,12 @@ def get_component_statuses() -> list[dict]:
             entry["sub_status"] = subs
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
+        # Hermes 版本 / 补丁状态（需求 §9）
+        if c["id"] in ("hermes_dashboard", "hermes_service"):
+            try:
+                entry["hermes_patch"] = hermes_patch_status()
+            except Exception:
+                log_exception("hermes_patch_status")
         # 上游仓库存在性 + 版本落后检测（hermes / neko 克隆与版本检查）
         if c["id"] in ("hermes_dashboard", "hermes_service", "neko_group"):
             try:

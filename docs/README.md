@@ -9,7 +9,7 @@
 
 | 文档 | 日期 | 内容 | 规模 |
 |------|------|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-07-30 | Ikaros 全栈架构（分层/端口/路径/数据流/规则） | 27KB |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-08-05 | Ikaros 全栈架构（分层/端口/路径/数据流/规则） | 40KB |
 | [module-dependency-map.html](module-dependency-map.html) | 2026-07-27 | 模块依赖关系图（交互式 SVG） | — |
 | [neko-deep-analysis.md](neko-deep-analysis.md) | 2026-07-27 | N.E.K.O 模块深度分析（**保持独立，合并 V5 建议已作废**） | 32KB |
 | [neko-chat-architecture.md](neko-chat-architecture.md) | 2026-07-25 | N.E.K.O 前端聊天系统架构（记忆/会话/主动搭话前端实现） | 13KB |
@@ -22,6 +22,7 @@
 > **清理记录**（2026-07-24）：删除了 6 份过时/重复文档（`CODEBASE_STRUCTURE.md`、`v5-architecture-review.md`、`v5-architecture-analysis-2026-07-20.md`、`ikaros-architecture-decomposition.md`、`ikaros-agent-standalone-architecture-analysis.md`、`ikaros-soul.md`），合并了 `ikaros-neko-integration.md` 到 `neko-deep-analysis.md` 附录 C，删除了 3 份已移除组件的脚本文档（`ikaros-voice-ws.md`、`hermes-studio.md`、`hermes-desktop.md`）。
 
 ### Hermes 集成与更新（Ikaros 套在 Hermes 之上的解耦 / 维护）
+- [hermes-bridge-design.md](hermes-bridge-design.md) — studio 式「0 侵入」包装层设计（bridge :8650 → 纯净 gateway :8642，对话树默认通道）
 - [hermes-ikaros-patches.md](hermes-ikaros-patches.md) — Hermes 集成补丁全貌（A/B 类 3-way 重放 + ikaros_v5 外置插件机制 `§6b`）
 - [hermes-update-integrity.md](hermes-update-integrity.md) — 更新不冲掉配置/插件的两层安全（EXTERNAL_PLUGIN 机制，core/hermes 的 git 操作碰不到外置插件）
 - [ikaros-as-hermes-agent-proposal.md](ikaros-as-hermes-agent-proposal.md) — Ikaros 作为「套在 Hermes 之上的智能体」解耦方案（已实施 + 2026-08-05 验证）
