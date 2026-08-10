@@ -14,6 +14,13 @@ V3 沉默失败根因 (2026-07-05 复盘):
   → import 死, search 返空
   V4 修: 走 portable-python (有 chromadb 1.5.2) + 文档明示
 
+V5.6 (2026-08-10): 长文本分块嵌入
+  :8587 llama-server 物理批限制 ≈512 tokens, 超长输入 HTTP 500
+  → 长记忆 (对话转写 >~350 中文字符) 向量同步静默失败, 只剩 FTS
+  → 修复: _fetch_embedding 按 ≤350 字符分块, 每块带 task 前缀嵌入,
+    mean pooling 聚合 (标准长文本嵌入做法)。修复前 LongMemEval 评测
+    (50 实例) recall_any=0.740 / nDCG=0.310; 修复后对比结果待跑。
+
 ## 内联注释摘录
 
 # ── 运行时内存缓存 (性能优化, 哥哥优化项) ──

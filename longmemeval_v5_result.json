@@ -1,0 +1,45 @@
+{
+  "config": {
+    "limit": 50,
+    "top_k": 10,
+    "seed": 42,
+    "skip_vector": false
+  },
+  "agg": {
+    "recall_any": 0.84,
+    "recall_all": 0.52,
+    "ndcg": 0.501247379617361
+  },
+  "by_type": {
+    "temporal-reasoning": {
+      "recall_any": 0.7272727272727273,
+      "recall_all": 0.09090909090909091,
+      "ndcg": 0.23260069050174306
+    },
+    "single-session-user": {
+      "recall_any": 0.8,
+      "recall_all": 0.8,
+      "ndcg": 0.5117049742256585
+    },
+    "knowledge-update": {
+      "recall_any": 1.0,
+      "recall_all": 0.8571428571428571,
+      "ndcg": 0.7911709519768497
+    },
+    "single-session-preference": {
+      "recall_any": 1.0,
+      "recall_all": 1.0,
+      "ndcg": 0.8154648767857288
+    },
+    "multi-session": {
+      "recall_any": 0.8235294117647058,
+      "recall_all": 0.35294117647058826,
+      "ndcg": 0.4245638368048755
+    },
+    "single-session-assistant": {
+      "recall_any": 1.0,
+      "recall_all": 1.0,
+      "ndcg": 1.0
+    }
+  }
+}

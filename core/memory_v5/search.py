@@ -113,6 +113,14 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
       - Explicit User-Agent (V3 comment records urllib UA rejection)
       - Logs on failure + returns None, does not swallow
 
+    V5.6 (2026-08-10): chunked embedding for long documents.
+      - :8587 llama-server physical batch limit ≈512 tokens; any longer input
+        returns HTTP 500 ("input (N tokens) is too large to process").
+      - Long memories (conversation transcripts, >~350 CJK chars) silently lost
+        their vector sync, leaving them FTS-only and harming recall.
+      - Fix: split into ≤350-char chunks, embed each with the task prefix,
+        mean-pool the vectors (standard long-text embedding practice).
+
     nomic-embed-text-v2-moe task prefixes (2026-07-14):
       - task="query"    (semantic search)  -> "search_query: "
       - task="document" (index/re-embed)   -> "search_document: "
@@ -123,27 +131,49 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
     from urllib.parse import urlparse
 
     prefix = "search_document: " if task == "document" else "search_query: "
-    payload = (prefix + text)[:2000]
-    body = json.dumps({"content": payload}).encode("utf-8")
-    try:
-        u = urlparse(EMBED_URL)
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
-        conn.request("POST", u.path or "/", body=body, headers={
-            "Content-Type": "application/json",
-            "Host": u.netloc,
-            "User-Agent": USER_AGENT,
-        })
-        resp = conn.getresponse()
-        if resp.status != 200:
-            logger.warning("embed HTTP %d for '%s...'", resp.status, text[:30])
-            return None
-        data = json.loads(resp.read().decode("utf-8"))
-        # :8587 observed response: list: [{"index":0, "embedding":[[...]]}]
-        # Also compatible with dict shapes {"embedding":[[...]]} / {"data":[{"embedding":[...]}]}
-        return _extract_vector(data)
-    except Exception as e:
-        logger.warning("embedding failed: %s", e)
+    # 单块嵌入: 超长文本分块 (每块 ≤350 字符, 中文 ~500 tokens 内安全)
+    text = (text or "").strip()
+    if not text:
         return None
+    _MAX_CHUNK = 350
+    chunks = [text[i:i + _MAX_CHUNK] for i in range(0, len(text), _MAX_CHUNK)] \
+        if len(text) > _MAX_CHUNK else [text]
+
+    vectors: list[list[float]] = []
+    for chunk in chunks:
+        payload = (prefix + chunk)[:2000]
+        body = json.dumps({"content": payload}).encode("utf-8")
+        try:
+            u = urlparse(EMBED_URL)
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
+            conn.request("POST", u.path or "/", body=body, headers={
+                "Content-Type": "application/json",
+                "Host": u.netloc,
+                "User-Agent": USER_AGENT,
+            })
+            resp = conn.getresponse()
+            if resp.status != 200:
+                logger.warning("embed HTTP %d for '%s...'", resp.status, chunk[:30])
+                conn.close()
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+            conn.close()
+            # :8587 observed response: list: [{"index":0, "embedding":[[...]]}]
+            # Also compatible with dict shapes {"embedding":[[...]]} / {"data":[{"embedding":[...]}]}
+            vec = _extract_vector(data)
+            if vec is None:
+                return None
+            vectors.append(vec)
+        except Exception as e:
+            logger.warning("embedding failed: %s", e)
+            return None
+
+    if len(vectors) == 1:
+        return vectors[0]
+    # 多块平均池化 (标准长文本嵌入做法)
+    import numpy as np
+    mean = np.mean(np.asarray(vectors, dtype=np.float32), axis=0)
+    return [float(x) for x in mean]
 
 
 def _get_embedding(text: str, task: str = "query") -> Optional[list[float]]:

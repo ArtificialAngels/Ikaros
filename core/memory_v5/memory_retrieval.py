@@ -199,6 +199,13 @@ def retrieve(
     out.sort(key=lambda x: -x["score"])
     result = out[:tk]
 
+    # ── 关键词兜底: 长句/混合 query FTS+向量双 miss 时, 拆词逐词 FTS 重查 ──
+    # 实测 (2026-08-10): "memU 调研学到了什么" 整句 0 命中, 拆成 "memU"/"调研"
+    # 后各能命中。这是 memU progressive_retrieve 文档里 "reword query" 场景的
+    # 自动版 —— agent 不会每次手动重写 query, 检索层自己兜。
+    if len(result) < 3:
+        result = _keyword_fallback(query, result, tk, min_weight, character)
+
     # ── Vault fallback: 本体检索不足时, 去 ThirdSpace Vault 搜 ──
     if len(result) < 3:
         vault_hits = _vault_search(query, limit=tk - len(result))
@@ -403,6 +410,72 @@ def _finish(merged: dict[str, dict], tk: int) -> list[dict]:
     out = [v for v in merged.values() if v["score"] > 0]
     out.sort(key=lambda x: -x["score"])
     return out[:tk]
+
+
+# ─── 关键词兜底 (长句拆词重查) ─────────────────────────────────────
+# 复用 skill_store 的分词器 (ASCII 词原样 + 中文 2-gram, 支持中英混排),
+# 保证两处检索的拆词行为一致。
+
+
+def _keyword_tokens(query: str) -> list[str]:
+    try:
+        from memory_v5.skill_store import _tokens
+        return _tokens(query)
+    except Exception:
+        return []
+
+
+def _keyword_fallback(
+    query: str,
+    result: list[dict],
+    tk: int,
+    min_weight: float,
+    character: str,
+) -> list[dict]:
+    """整句检索 miss 时, 把长 query 拆成关键词逐词 FTS 重查, 补足结果.
+
+    只补足 (append), 不改动已命中的排序; 每条兜底命中标记 source='kw'.
+    关键词命中是弱信号, score 用固定小值 (0.45, 略低于融合阈值 0.6 的
+    常见命中, 保证不喧宾夺主, 但能进 top_k)。
+    """
+    if len(result) >= 3 or len(result) >= tk:
+        return result
+    tokens = _keyword_tokens(query)
+    if len(tokens) < 2:
+        return result
+    try:
+        from memory_v5 import store
+    except Exception:
+        return result
+
+    seen_ids = {str(r["id"]) for r in result}
+    for tok in tokens:
+        if len(result) >= tk:
+            break
+        try:
+            hits = store.search(tok, top_k=2, min_weight=min_weight, character=character)
+        except Exception as e:
+            logger.debug("keyword fallback failed for %r: %s", tok, e)
+            continue
+        for m in hits:
+            mid = str(m.id)
+            if mid in seen_ids:
+                continue
+            seen_ids.add(mid)
+            result.append({
+                "id": mid, "content": m.content, "type": m.type,
+                "weight": m.weight, "tags": getattr(m, "tags", ""),
+                "created": m.created,
+                "pad_p": getattr(m, "pad_p", 0.0),
+                "pad_a": getattr(m, "pad_a", 0.0),
+                "source": "kw",
+                "score": 0.45,
+                "access_count": int(getattr(m, "access_count", 0)),
+                "reinforcement": float(getattr(m, "reinforcement", 0.0)),
+                "last_accessed": float(getattr(m, "last_accessed", 0.0)),
+                "long_term": bool(getattr(m, "long_term", False)),
+            })
+    return result
 
 
 # ─── ThirdSpace Vault fallback ─────────────────────────────────────

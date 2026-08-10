@@ -304,7 +304,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 ### 4.1 core/memory_v5/ — V5 灵魂核心
 
-> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，40 个 MCP 工具仍以前缀 **`v5_*`** 暴露。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
+> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，48 个 MCP 工具仍以前缀 **`v5_*`** 暴露（2026-08-10 实测，含 V5.3 activity/compression、V5.4 project、V5.5 skill 各系列）。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
 
 | 模块 | 职责 | 入口 |
 |------|------|------|

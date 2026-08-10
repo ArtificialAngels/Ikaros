@@ -109,6 +109,9 @@ from memory_v5.tools import (  # noqa: E402
     v5_activity_status, v5_context_compression_stats,
     # V5.4: project track
     v5_project_note, v5_project_retrieve, v5_project_stats,
+    # V5.5: skill track
+    v5_skill_write, v5_skill_list, v5_skill_get,
+    v5_skill_search, v5_skill_remove,
 )
 
 _NEW_V5_TOOLS = [
@@ -134,6 +137,9 @@ _NEW_V5_TOOLS = [
     v5_activity_status, v5_context_compression_stats,
     # V5.4: project track
     v5_project_note, v5_project_retrieve, v5_project_stats,
+    # V5.5: skill track (agent-distilled reusable workflows, Markdown files)
+    v5_skill_write, v5_skill_list, v5_skill_get,
+    v5_skill_search, v5_skill_remove,
 ]
 for _tool_fn in _NEW_V5_TOOLS:
     try:
