@@ -37,7 +37,7 @@ set "HERMES_AGENT_BRIDGE_PYTHON=%IKAROS_HERMES_AGENT%\venv\Scripts\python.exe"
 set "HERMES_AGENT_NODE=%IKAROS_RUNTIME%\node\node.exe"
 
 REM ---- N.E.K.O Frontend (Electron desktop + FastAPI backend) ----
-set "IKAROS_NEKO=%IKAROS_ROOT%\core\neko"
+set "IKAROS_NEKO=%IKAROS_ROOT%\apps\neko"
 set "IKAROS_NEKO_PYTHON=%IKAROS_NEKO%\.venv\Scripts\python.exe"
 set "IKAROS_NEKO_SERVER=app.main_server"
 set "IKAROS_NEKO_DESKTOP=%IKAROS_NEKO%\N.E.K.O.exe"

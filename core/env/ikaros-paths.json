@@ -42,13 +42,13 @@
     "llm": "core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf"
   },
   "neko": {
-    "root": "core/neko",
-    "python": "core/neko/.venv/Scripts/python.exe",
+    "root": "apps/neko",
+    "python": "apps/neko/.venv/Scripts/python.exe",
     "server": "app.main_server",
-    "desktop": "core/neko/N.E.K.O.exe",
-    "static": "core/neko/static",
-    "templates": "core/neko/templates",
-    "venv": "core/neko/.venv",
+    "desktop": "apps/neko/N.E.K.O.exe",
+    "static": "apps/neko/static",
+    "templates": "apps/neko/templates",
+    "venv": "apps/neko/.venv",
     "start_script": "bin/neko-start.bat",
     "stop_script": "bin/neko-stop.bat"
   },

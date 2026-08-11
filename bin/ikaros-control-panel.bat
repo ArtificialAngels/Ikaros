@@ -6,7 +6,7 @@ set "NO_PROXY=*"
 set "no_proxy=*"
 
 set "PANEL_DIR=%IKAROS_ROOT%/core/control-panel"
-set "ELECTRON=%IKAROS_ROOT%/core/neko/N.E.K.O.exe"
+set "ELECTRON=%IKAROS_ROOT%/apps/neko/N.E.K.O.exe"
 set "PY=%IKAROS_ROOT%/runtime/portable-python/pythonw.exe"
 set "SERVER=%IKAROS_ROOT%/core/dashboard/server.py"
 

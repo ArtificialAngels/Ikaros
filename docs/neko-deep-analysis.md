@@ -1,11 +1,11 @@
 # N.E.K.O 模块深度分析报告
 
 > **日期**: 2026-07-24
-> **范围**: `E:\Ikaros\core\neko` 全量代码分析
+> **范围**: `E:\Ikaros\apps\neko` 全量代码分析
 > **版本**: N.E.K.O 0.8.3
 > **目的**: 为 Ikaros V5 全量接管 neko 功能提供架构依据
 
-> **⚠️ 2026-07-27 状态校正**: `core/neko` 保持**独立完整**，**不**迁移/合并到 V5(`core/memory_v5`)。
+> **⚠️ 2026-07-27 状态校正**: `apps/neko` 保持**独立完整**，**不**迁移/合并到 V5(`core/memory_v5`)。
 > 本分析文档作为 neko 架构参考保留；其"迁移到 V5"的改造建议**已作废**,不再执行。
 > 相关迁移脚本 `bin/migrate-neko-to-v5.py` 与方案文档 `docs/memory-replacement-plan.md` /
 > `docs/memory-server-proxy-plan.md` 已移除。neko 继续使用自有 `memory_server.py` 记忆系统。
@@ -346,7 +346,7 @@ _process_stream_data_internal(user_text, ...) →
 ### 5.3 需新增/改造的模块
 
 > ⚠️ **2026-07-27 作废声明**：自本节以下「5.3 / 5.4 / 5.5」的改造方案**全部作废，不再执行**。
-> 决策：`core/neko` 保持独立完整，不迁移/合并到 V5（`core/memory_v5`）。
+> 决策：`apps/neko` 保持独立完整，不迁移/合并到 V5（`core/memory_v5`）。
 > 保留本节仅作为"若未来重新评估合并"的历史参考；当前 neko 与 V5 的边界见文档顶部状态横幅。
 
 | 模块 | 职责 | 改造难度 | 优先级 |
@@ -506,27 +506,27 @@ Phase 4 ─ 超长上下文 ──── 长期
 
 | 文件路径 | 规模 | 职责 |
 |----------|------|------|
-| `core/neko/main_logic/core.py` | 10000+ 行 | 对话流程主控（核心改造目标） |
-| `core/neko/main_logic/session_state.py` | 701 行 | 会话状态机 |
-| `core/neko/main_logic/proactive_delivery.py` | 424 行 | 主动交付管理 |
-| `core/neko/main_logic/ikaros_integration.py` | 208 行 | Ikaros 集成桥 |
-| `core/neko/main_logic/omni_offline_client.py` | 1600+ 行 | 离线 LLM 对话客户端 |
-| `core/neko/main_logic/omni_realtime_client.py` | 大 | 实时语音对话客户端 |
-| `core/neko/app/main_server.py` | 138KB | 主 HTTP/WS 服务器 |
-| `core/neko/app/agent_server.py` | 285KB | Agent 推理服务器 |
-| `core/neko/app/memory_server.py` | 226KB | 记忆服务器 |
-| `core/neko/brain/agent_session.py` | 161 行 | Agent 会话管理器 |
-| `core/neko/static/app-proactive.js` | 2000+ 行 | 前端主动搭话调度 |
-| `core/neko/main_routers/system_router.py` | 大 | 主动搭话路由入口 |
-| `core/neko/config/prompts/prompts_proactive.py` | 0.3MB | 主动搭话提示词模板 |
+| `apps/neko/main_logic/core.py` | 10000+ 行 | 对话流程主控（核心改造目标） |
+| `apps/neko/main_logic/session_state.py` | 701 行 | 会话状态机 |
+| `apps/neko/main_logic/proactive_delivery.py` | 424 行 | 主动交付管理 |
+| `apps/neko/main_logic/ikaros_integration.py` | 208 行 | Ikaros 集成桥 |
+| `apps/neko/main_logic/omni_offline_client.py` | 1600+ 行 | 离线 LLM 对话客户端 |
+| `apps/neko/main_logic/omni_realtime_client.py` | 大 | 实时语音对话客户端 |
+| `apps/neko/app/main_server.py` | 138KB | 主 HTTP/WS 服务器 |
+| `apps/neko/app/agent_server.py` | 285KB | Agent 推理服务器 |
+| `apps/neko/app/memory_server.py` | 226KB | 记忆服务器 |
+| `apps/neko/brain/agent_session.py` | 161 行 | Agent 会话管理器 |
+| `apps/neko/static/app-proactive.js` | 2000+ 行 | 前端主动搭话调度 |
+| `apps/neko/main_routers/system_router.py` | 大 | 主动搭话路由入口 |
+| `apps/neko/config/prompts/prompts_proactive.py` | 0.3MB | 主动搭话提示词模板 |
 
 ## 附录 B：端口映射
 
 | 端口 | 服务 | 组件路径 |
 |------|------|---------|
-| :48911 | Neko 主服务 (HTTP/WS) | `core/neko/app/main_server.py` |
-| :48912 | Neko 记忆服务 | `core/neko/app/memory_server.py` |
-| :48915 | Neko Agent 服务 | `core/neko/app/agent_server.py` |
+| :48911 | Neko 主服务 (HTTP/WS) | `apps/neko/app/main_server.py` |
+| :48912 | Neko 记忆服务 | `apps/neko/app/memory_server.py` |
+| :48915 | Neko Agent 服务 | `apps/neko/app/agent_server.py` |
 | :8080 | 本地 LLM (Qwen3-1.7B) | Ikaros memory-watchdog |
 | :8587 | Embedding (nomic) | Ikaros memory-watchdog |
 | :9119 | Hermes Dashboard | `core/hermes/` |

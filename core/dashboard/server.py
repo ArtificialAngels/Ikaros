@@ -168,8 +168,8 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_MEMORY_SCRIPT"] = s(root / "core/memory_v5" / "v5" / "store.py")
     e["IKAROS_NODE_MODULES"] = s(root / "runtime" / "node" / "node_modules")
     e["IKAROS_RUST"] = s(root / "runtime" / "rust")
-    e["IKAROS_NEKO"] = s(root / "core/neko")
-    e["IKAROS_NEKO_PYTHON"] = s(root / "core/neko" / ".venv" / "Scripts" / "python.exe")
+    e["IKAROS_NEKO"] = s(root / "apps/neko")
+    e["IKAROS_NEKO_PYTHON"] = s(root / "apps/neko" / ".venv" / "Scripts" / "python.exe")
     e["IKAROS_NEKO_SERVER"] = "app.main_server"  # 模块形式（上游已将入口重构为包 app/main_server）
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
     e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
@@ -639,9 +639,9 @@ def stop_component_local_model(root, env):
 
 def start_component_neko(root, env, wait):
     log.info("[neko] starting N.E.K.O frontend (:48911)...")
-    neko_dir = root / "core/neko"
+    neko_dir = root / "apps/neko"
     if not neko_dir.exists():
-        log.error("[neko] core/neko directory not found: %s", neko_dir)
+        log.error("[neko] apps/neko directory not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
     server = "app.main_server"  # 上游已将 main_server.py 重构为包 app/main_server
@@ -665,9 +665,9 @@ def stop_component_neko(root, env):
 
 def start_component_neko_memory(root, env, wait):
     log.info("[neko_memory] starting N.E.K.O memory server (:48912)...")
-    neko_dir = root / "core/neko"
+    neko_dir = root / "apps/neko"
     if not neko_dir.exists():
-        log.error("[neko_memory] core/neko not found: %s", neko_dir)
+        log.error("[neko_memory] apps/neko not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
     server = "app.memory_server"  # 上游已将 memory_server.py 重构为包
@@ -681,9 +681,9 @@ def start_component_neko_memory(root, env, wait):
 
 def start_component_neko_agent(root, env, wait):
     log.info("[neko_agent] starting N.E.K.O agent server (:48915)...")
-    neko_dir = root / "core/neko"
+    neko_dir = root / "apps/neko"
     if not neko_dir.exists():
-        log.error("[neko_agent] core/neko not found: %s", neko_dir)
+        log.error("[neko_agent] apps/neko not found: %s", neko_dir)
         return
     py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
     server = "app.agent_server"  # 上游已将 agent_server.py 重构为包
@@ -1306,7 +1306,7 @@ def neko_desktop_running() -> bool:
 def start_component_neko_desktop(root, env, wait):
     """启动 N.E.K.O Electron 桌面壳（GUI 程序，需可见窗口，不隐藏）。"""
     log.info("[neko_desktop] launching N.E.K.O desktop shell...")
-    exe = root / "core/neko" / "N.E.K.O.exe"
+    exe = root / "apps/neko" / "N.E.K.O.exe"
     if not exe.exists():
         log.error("[neko_desktop] %s not found", exe)
         return

@@ -66,12 +66,12 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "llm": "core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
     },
     "neko": {
-        "root": "core/neko",
+        "root": "apps/neko",
         "server": "app.main_server",   # 上游已将入口重构为包 app/main_server（python -m 形式）
-        "desktop": "core/neko/N.E.K.O.exe",
-        "static": "core/neko/static",
-        "templates": "core/neko/templates",
-        "venv": "core/neko/.venv",
+        "desktop": "apps/neko/N.E.K.O.exe",
+        "static": "apps/neko/static",
+        "templates": "apps/neko/templates",
+        "venv": "apps/neko/.venv",
     },
     "ports": {
         "embedding": 8587,
@@ -393,7 +393,7 @@ class IkarosPaths:
         env["IKAROS_EMBEDDING_PORT"] = str(self.get("ports.embedding", 8587))
 
         # Neko
-        env["IKAROS_NEKO"] = self.get("neko.root", str(self.root / "core/neko"))
+        env["IKAROS_NEKO"] = self.get("neko.root", str(self.root / "apps/neko"))
         env["IKAROS_NEKO_PYTHON"] = str(Path(env["IKAROS_NEKO"]) / ".venv" / "Scripts" / "python.exe")
         env["IKAROS_NEKO_SERVER"] = "app.main_server"  # 上游已将入口重构为包 app/main_server（python -m 形式）
 

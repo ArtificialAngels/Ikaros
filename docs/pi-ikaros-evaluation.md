@@ -25,9 +25,9 @@
 | 控制面板（dashboard） | `0.0.0.0:9100`（`IKAROS_CONTROL_PORT` 可覆盖） | `core/dashboard/server.py:56,2389` |
 | 本地 LLM（懒加载 agent） | `:8080` | 见 `ARCHITECTURE.md` |
 | Embedding 服务 | `:8587` | `core/memory_v5/search.py` 向量路径 |
-| Neko 主服务（FastAPI 单 worker） | `127.0.0.1:48911` | `core/neko/app/main_server/` |
-| Neko 记忆服务（单 worker + 每角色锁） | `127.0.0.1:48912` | `core/neko/app/memory_server/` |
-| Neko Agent 服务 | `127.0.0.1:48915` | `core/neko/app/agent_server/` |
+| Neko 主服务（FastAPI 单 worker） | `127.0.0.1:48911` | `apps/neko/app/main_server/` |
+| Neko 记忆服务（单 worker + 每角色锁） | `127.0.0.1:48912` | `apps/neko/app/memory_server/` |
+| Neko Agent 服务 | `127.0.0.1:48915` | `apps/neko/app/agent_server/` |
 | Hermes 网关/面板 | `:9119` / `:8642` | Hermes 侧 |
 | Hermes-Paw | `:8088` | Hermes 侧 |
 | 对话树面板（ThreadingHTTPServer + SSE） | `127.0.0.1:48920` | `core/conversation-tree/server.py` |

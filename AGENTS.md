@@ -11,9 +11,9 @@
 | :9100 | Control panel Web UI | `core/dashboard/server.py` (start: `bin/ikaros-control.bat`) |
 | :8080 | Local LLM (Qwen3-1.7B, **lazy-loaded**) | watchdog `bin/ikaros-memory-watchdog.py` |
 | :8587 | Embedding (nomic) | watchdog |
-| :48911 | Neko main frontend | `core/neko/app/main_server/` (包, `python -m app.main_server`) |
-| :48912 | Neko memory server | `core/neko/app/memory_server/` (包, `python -m app.memory_server`) |
-| :48915 | Neko agent server | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) |
+| :48911 | Neko main frontend | `apps/neko/app/main_server/` (包, `python -m app.main_server`) |
+| :48912 | Neko memory server | `apps/neko/app/memory_server/` (包, `python -m app.memory_server`) |
+| :48915 | Neko agent server | `apps/neko/app/agent_server/` (包, `python -m app.agent_server`) |
 | :9119 | Hermes Dashboard (cloud LLM gateway) | `core/hermes/.../web_server.py` |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
@@ -30,7 +30,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 ## Startup
 - Control panel: `bin/ikaros-control.bat` → opens http://127.0.0.1:9100
 - Neko frontend (Electron shell `N.E.K.O.exe`): `bin/neko-start.bat`
-- **Distinction**: `core/control-panel/` = Electron desktop shell (pulls up `:9100` + components); `core/neko/` = FastAPI + React **frontend service** (its `N.E.K.O.exe` is the neko shell). Don't conflate the two.
+- **Distinction**: `core/control-panel/` = Electron desktop shell (pulls up `:9100` + components); `apps/neko/` = FastAPI + React **frontend service** (its `N.E.K.O.exe` is the neko shell). Don't conflate the two.
 
 ## 便携环境 (2026-08-11, 学秋叶整合包)
 - IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）

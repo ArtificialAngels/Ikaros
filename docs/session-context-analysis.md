@@ -1,7 +1,7 @@
 # N.E.K.O 对话框 Session 机制与上下文管理深度分析
 
 > **日期**: 2026-07-24
-> **范围**: `E:\Ikaros\core\neko` — LLMSessionManager、OmniOfflineClient、system_router、proactive pipeline
+> **范围**: `E:\Ikaros\apps\neko` — LLMSessionManager、OmniOfflineClient、system_router、proactive pipeline
 > **分析目标**: 6 个维度的问题诊断与解决方案
 
 ---

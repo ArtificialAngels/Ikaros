@@ -9,7 +9,7 @@ if not defined IKAROS_NEKO (
 )
 
 if defined IKAROS_NEKO set "ROOT=%IKAROS_NEKO%"
-if not defined ROOT set "ROOT=%~dp0..\core\neko"
+if not defined ROOT set "ROOT=%~dp0..\apps\neko"
 
 REM Process-level proxy isolation: bypass Windows system socks proxy
 REM (socks://127.0.0.1:8086 is invalid for httpx and causes errors).
@@ -18,7 +18,7 @@ set "NO_PROXY=*"
 set "no_proxy=*"
 
 if not exist "%ROOT%" (
-    echo [neko] ERROR: core/neko not found at %ROOT%
+    echo [neko] ERROR: apps/neko not found at %ROOT%
     pause
     exit /b 1
 )

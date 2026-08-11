@@ -25,7 +25,7 @@
 
 ### Architecture / 重命名
 - `core/v5/` → **`core/memory_v5/`**（包名 `memory_v5`）；`hermes-agent/` → **`core/hermes/`**，venv 同步迁移并修复符号链接深度。 (2026-07-27 校正)
-- 边界决策：**core/neko 保持独立完整**，取消「neko 记忆合并进 V5」计划（删除 `bin/migrate-neko-to-v5.py` + `docs/memory-replacement-plan.md` + `docs/memory-server-proxy-plan.md`）；neko 不引入 `memory_v5` 依赖、数据不回写 V5。
+- 边界决策：**apps/neko 保持独立完整**，取消「neko 记忆合并进 V5」计划（删除 `bin/migrate-neko-to-v5.py` + `docs/memory-replacement-plan.md` + `docs/memory-server-proxy-plan.md`）；neko 不引入 `memory_v5` 依赖、数据不回写 V5。
 
 ### Docs
 - 新增三份交互式架构图（`docs/`）：架构全景图、文件夹层级图、`module-dependency-map.html`（模块依赖）。

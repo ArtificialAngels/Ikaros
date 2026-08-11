@@ -22,14 +22,14 @@ bin/bootstrap-venvs.py  —  Ikaros Python 环境引导工具（仅脚手架 / �
      - 路径: runtime/portable-python/python.exe（若存在）
      - 角色: 运行中实际拉起模型服务（llama.cpp 等）的 portable 解释器。
   4. Neko venv (.venv)
-     - 路径: core/neko/.venv
+     - 路径: apps/neko/.venv
      - 基础解释器: runtime/portable-python311/python.exe（随 IKAROS 树捆绑的 3.11.15，
        保证 neko 不依赖 uv 缓存或系统 Python，满足“U 盘即插即用”）。
      - 角色: 承载 N.E.K.O 桌面宠物三个后端服务（:48911/:48912/:48915）。
-     - 源码: core/neko（editable 安装，.pth 指向该目录）。
+     - 源码: apps/neko（editable 安装，.pth 指向该目录）。
      - 重建策略:
          * 换盘符 / home 失效（不强制重装）: 仅重指 pyvenv.cfg 的 home、
-           重写 editable .pth 指向 core/neko、并把 python311.dll + vcruntime
+           重写 editable .pth 指向 apps/neko、并把 python311.dll + vcruntime
            拷进 Scripts/ —— 已装的 ~200 个 cp311 轮子原样复用，无需联网。
          * venv 完全缺失: 用捆绑 3.11 建 venv 后 `pip install -e .`
            （需联网安装依赖，谨慎）。
@@ -75,8 +75,8 @@ HERMES_REQUIREMENTS_CANDIDATES = [
 ]
 
 # 4) Neko venv（桌面宠物三个后端服务）
-#    .venv 位于 core/neko 下；基础解释器用随树捆绑的 3.11.15（runtime/portable-python311）。
-#    editable 源码根 = core/neko；editable .pth 文件名保持 pip 生成的约定名。
+#    .venv 位于 apps/neko 下；基础解释器用随树捆绑的 3.11.15（runtime/portable-python311）。
+#    editable 源码根 = apps/neko；editable .pth 文件名保持 pip 生成的约定名。
 NEKO_VENV = REPO_ROOT / "core" / "neko" / ".venv"
 NEKO_SRC = REPO_ROOT / "core" / "neko"
 NEKO_BUNDLED_PY311 = REPO_ROOT / "runtime" / "portable-python311" / "python.exe"
@@ -148,7 +148,7 @@ def _fix_neko_venv_paths(venv_path: Path, py311_exe: Path) -> None:
     """重指 neko venv 的 home / editable.pth / 拷 DLL，保留已装 cp311 包。
 
     用于“换盘符 / home 失效”场景：不重装依赖，仅把绝对路径改到当前
-    IKAROS 树内的捆绑 3.11 与 core/neko 源码。
+    IKAROS 树内的捆绑 3.11 与 apps/neko 源码。
     """
     # 1) pyvenv.cfg 的 home 改指捆绑 3.11 目录
     cfg = venv_path / "pyvenv.cfg"
@@ -167,7 +167,7 @@ def _fix_neko_venv_paths(venv_path: Path, py311_exe: Path) -> None:
             new_lines.append(f"home = {home}")
         cfg.write_text("\r\n".join(new_lines) + "\r\n", encoding="utf-8")
 
-    # 2) editable .pth 单行指向 core/neko（覆盖任何失效的旧路径，如已删的 exProject）
+    # 2) editable .pth 单行指向 apps/neko（覆盖任何失效的旧路径，如已删的 exProject）
     pth = venv_path / "Lib" / "site-packages" / "_editable_impl_n_e_k_o.pth"
     pth.parent.mkdir(parents=True, exist_ok=True)
     pth.write_text(str(NEKO_SRC) + "\n", encoding="utf-8")
@@ -194,7 +194,7 @@ def ensure_neko_venv(force: bool = False) -> None:
         if run([str(NEKO_BUNDLED_PY311), "-m", "venv", str(NEKO_VENV)]) != 0:
             print("[error] 创建 neko venv 失败。")
             return
-        # 在 core/neko 下 editable 安装；会重新生成正确的 editable .pth
+        # 在 apps/neko 下 editable 安装；会重新生成正确的 editable .pth
         run([str(NEKO_VENV / "Scripts" / "python.exe"),
              "-m", "pip", "install", "-e", "."], cwd=str(NEKO_SRC))
         return

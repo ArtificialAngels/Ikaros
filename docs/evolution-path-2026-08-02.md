@@ -82,7 +82,7 @@
 |------|------|
 | 记忆事实源 | SQLite(v5.db) 永久，**不迁图库**（可测试性验证，不动事实源） |
 | Hermes 定位 | 官方东西只用，**特定需求打补丁**（patches/hermes → core/hermes） |
-| Git 策略 | core/hermes、core/neko **永不 push**；仅主仓可 push，且等哥哥说 "Push" |
+| Git 策略 | core/hermes、apps/neko **永不 push**；仅主仓可 push，且等哥哥说 "Push" |
 | 协作 | 临时文件→tmp/；不自动 push；"等哥哥一句 commit" |
 | 数据 | v5.db 文件名 + v5_* 工具前缀为外部契约，不可改 |
 | 环境 | 便携式，U 盘可带；venv 换盘符需重建（正常代价） |

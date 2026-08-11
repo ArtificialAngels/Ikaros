@@ -1,7 +1,7 @@
 # N.E.K.O 前端聊天系统架构分析
 
 > **日期**: 2026-07-25
-> **范围**: `E:\Ikaros\core\neko\` — 完整前端聊天链路
+> **范围**: `E:\Ikaros\apps\neko\` — 完整前端聊天链路
 > **参考项目**: `E:\Ikaros-something\reference project\N.E.K.O-main`
 
 ---
@@ -332,20 +332,20 @@ OmniOfflineClient.stream_text(data)
 
 | 文件 | 规模 | 职责 |
 |---|---|---|
-| `core/neko/app/main_server.py` | 138KB | 主 HTTP/WS 服务器，路由注册 |
-| `core/neko/app/memory_server.py` | 226KB | 记忆服务器，所有记忆读写端点 |
-| `core/neko/main_logic/core.py` | 10600+ 行 | 对话流程主控，session 管理 |
-| `core/neko/main_logic/session_state.py` | 701 行 | 事件驱动状态机 |
-| `core/neko/main_logic/omni_offline_client.py` | 1600+ 行 | 文本对话客户端，LLM 流式调用 |
-| `core/neko/main_logic/omni_realtime_client.py` | 3200+ 行 | 实时语音对话客户端 |
-| `core/neko/main_routers/websocket_router.py` | 中 | WebSocket 路由和 action 分发 |
-| `core/neko/main_routers/system_router.py` | 大 | 主动搭话路由入口 |
-| `core/neko/main_routers/memory_router.py` | 47KB | 前端记忆 API 路由 |
-| `core/neko/main_logic/proactive_delivery.py` | 424 行 | 主动交付节流/排序 |
-| `core/neko/static/app-proactive.js` | 2000+ 行 | 前端主动搭话调度 |
-| `core/neko/static/app-websocket.js` | 中 | 前端 WebSocket 客户端 |
-| `core/neko/static/app-chat.js` | 中 | ���端聊天渲染 |
-| `core/neko/memory/facts.py` | 72KB | 事实提取与存储 |
-| `core/neko/memory/reflection.py` | 174KB | 反思引擎 |
-| `core/neko/memory/persona.py` | 146KB | 人格管理器 |
-| `core/neko/memory/hybrid_recall.py` | 32KB | BM25 + 余弦混合检索 |
+| `apps/neko/app/main_server.py` | 138KB | 主 HTTP/WS 服务器，路由注册 |
+| `apps/neko/app/memory_server.py` | 226KB | 记忆服务器，所有记忆读写端点 |
+| `apps/neko/main_logic/core.py` | 10600+ 行 | 对话流程主控，session 管理 |
+| `apps/neko/main_logic/session_state.py` | 701 行 | 事件驱动状态机 |
+| `apps/neko/main_logic/omni_offline_client.py` | 1600+ 行 | 文本对话客户端，LLM 流式调用 |
+| `apps/neko/main_logic/omni_realtime_client.py` | 3200+ 行 | 实时语音对话客户端 |
+| `apps/neko/main_routers/websocket_router.py` | 中 | WebSocket 路由和 action 分发 |
+| `apps/neko/main_routers/system_router.py` | 大 | 主动搭话路由入口 |
+| `apps/neko/main_routers/memory_router.py` | 47KB | 前端记忆 API 路由 |
+| `apps/neko/main_logic/proactive_delivery.py` | 424 行 | 主动交付节流/排序 |
+| `apps/neko/static/app-proactive.js` | 2000+ 行 | 前端主动搭话调度 |
+| `apps/neko/static/app-websocket.js` | 中 | 前端 WebSocket 客户端 |
+| `apps/neko/static/app-chat.js` | 中 | ���端聊天渲染 |
+| `apps/neko/memory/facts.py` | 72KB | 事实提取与存储 |
+| `apps/neko/memory/reflection.py` | 174KB | 反思引擎 |
+| `apps/neko/memory/persona.py` | 146KB | 人格管理器 |
+| `apps/neko/memory/hybrid_recall.py` | 32KB | BM25 + 余弦混合检索 |

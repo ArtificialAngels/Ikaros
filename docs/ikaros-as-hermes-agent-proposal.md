@@ -52,7 +52,7 @@ Ikaros **已经是一个"套在 Hermes 之上的智能体"的雏形**——它�
 | ikaros_v5 插件（provider + engine） | `data/hermes-agent/plugins/ikaros_v5`（通用插件系统，`kind: standalone`，`plugins.enabled: [ikaros_v5]`） | **已外置**，经 `register()` 双注册 |
 | ikaros_v5 MCP server | `core/memory_v5/mcp_server.py`（经 `data/hermes-agent/config.yaml` 的 `mcp_servers.ikaros-v5-memory` 挂载） | 已是标准 MCP |
 | V5 记忆引擎 | `core/memory_v5`（Ikaros 自仓，独立 `v5.db`） | Ikaros 自身资产 |
-| 对话树 / N.E.K.O / 9100 面板 | `core/conversation-tree`、`core/neko`、`bin/ikaros-control.bat` | 已是独立上层服务 |
+| 对话树 / N.E.K.O / 9100 面板 | `core/conversation-tree`、`apps/neko`、`bin/ikaros-control.bat` | 已是独立上层服务 |
 | 个人配置 | `data/hermes-agent`（config.yaml / .env / skills / state.db / plugins） | 独立，git 碰不到 |
 
 ### 2.2 侵入点清单（均已处置）
@@ -164,7 +164,7 @@ Ikaros 壳（9100 面板）
  │   └─ skills/ikaros-*          ← 标准 skill
  ├─ core/memory_v5/              ← Ikaros 自仓（V5 引擎 + mcp_server.py）
  ├─ core/conversation-tree/      ← 独立上层服务（48920）
- ├─ core/neko/                   ← 独立上层服务
+ ├─ apps/neko/                   ← 独立上层服务
  └─ core/hermes/                 ← 纯净上游（git 直接跟踪 upstream，无本地 diff）
 ```
 

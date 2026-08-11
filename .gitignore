@@ -399,9 +399,10 @@ data/thirdspace-vault/99-归档/
 # Model weights (multi-GB) — pulled locally, never pushed (per repo blob policy)
 *.gguf
 *.onnx_data
-# === 2026-07-27: core/neko = N.E.K.O 上游桌宠前端 (Apache-2.0, github.com/Project-N-E-K-O/N.E.K.O) ===
+# === 2026-07-27: apps/neko = N.E.K.O 上游桌宠前端 (Apache-2.0, github.com/Project-N-E-K-O/N.E.K.O) ===
+# 2026-08-12: 从 core/neko 迁到 apps/neko (apps = 自家应用壳层, core = 自有核心)
 # 本仓库不修改其源码, 集成走独立桥/启动脚本。由 scripts/fetch-upstreams.py 拉取; 清单见 UPSTREAM.md。
-core/neko/
+apps/neko/
 
 # === build artifacts (NOT in git) ===
 # Rust cargo 构建产物 (含本仓库自带 core/env/*/target)

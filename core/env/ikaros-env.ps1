@@ -30,7 +30,7 @@ $env:IKAROS_BRIDGE       = "$env:IKAROS_ROOT\bridge"
 $env:IKAROS_HERMES       = "$env:IKAROS_ROOT\hermes"
 
 # ---- Step 3b: N.E.K.O Frontend (Electron desktop + FastAPI) ----
-$env:IKAROS_NEKO         = "$env:IKAROS_ROOT\core\neko"
+$env:IKAROS_NEKO         = "$env:IKAROS_ROOT\apps\neko"
 $env:IKAROS_NEKO_PYTHON  = "$env:IKAROS_NEKO\.venv\Scripts\python.exe"
 $env:IKAROS_NEKO_SERVER  = "app.main_server"
 $env:IKAROS_NEKO_DESKTOP = "$env:IKAROS_NEKO\N.E.K.O.exe"

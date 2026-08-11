@@ -18,7 +18,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 ┌─────────────────────────────────────────────────────────────┐
 │      L3: 表现层 (Presentation) — 逻辑分组                       │
 │  core/control-panel/ — Electron 桌面壳 (Desktop Shell)        │
-│  core/neko/ — 前端服务 (Frontend Service): FastAPI+React      │
+│  apps/neko/ — 前端服务 (Frontend Service): FastAPI+React      │
 │  :48911 main_server  :48912 memory_server  :48915 agent      │
 ├─────────────────────────────────────────────────────────────┤
 │      L2: 智能体层 (Soul) — 逻辑分组                             │
@@ -39,7 +39,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **桌面壳 vs 前端服务**：`core/control-panel/` 是 Electron **桌面壳**（拉起面板 `:9100` 与各组件）；`core/neko/` 是 **前端服务**（FastAPI + React，其 `N.E.K.O.exe` 即 neko 壳）。二者职责不同，勿混为一谈。
+> **桌面壳 vs 前端服务**：`core/control-panel/` 是 Electron **桌面壳**（拉起面板 `:9100` 与各组件）；`apps/neko/` 是 **前端服务**（FastAPI + React，其 `N.E.K.O.exe` 即 neko 壳）。二者职责不同，勿混为一谈。
 
 ### 1.2 核心端口一览
 
@@ -48,9 +48,9 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 | :9100 | 控制面板 Web UI | `core/dashboard/server.py` | `bin/ikaros-control.bat` |
 | :8587 | Embedding (本地) | `bin/ikaros-memory-watchdog.py` | 面板 memory 组件 |
 | :8080 | 本地 LLM (Qwen3-1.7B, **懒加载**) | `bin/ikaros-memory-watchdog.py` | 看门狗**仅被动监测端口**，不主动拉起模型；模型由 agent 首次调用本地 LLM 时经 `ensure_local_llm()` 热载入（`bin/llama-help.py --hotload` 可手动触发） |
-| :48911 | Neko 主前端 | `core/neko/app/main_server/` (包, `python -m app.main_server`) | 面板 neko 组件 |
-| :48912 | Neko 记忆服务器 | `core/neko/app/memory_server/` (包, `python -m app.memory_server`) | 面板 neko_memory |
-| :48915 | Neko Agent 服务器 | `core/neko/app/agent_server/` (包, `python -m app.agent_server`) | 面板 neko_agent |
+| :48911 | Neko 主前端 | `apps/neko/app/main_server/` (包, `python -m app.main_server`) | 面板 neko 组件 |
+| :48912 | Neko 记忆服务器 | `apps/neko/app/memory_server/` (包, `python -m app.memory_server`) | 面板 neko_memory |
+| :48915 | Neko Agent 服务器 | `apps/neko/app/agent_server/` (包, `python -m app.agent_server`) | 面板 neko_agent |
 | :8650 | Hermes Bridge（studio 式「0 侵入」包装层，对话树默认通道） | `core/hermes-bridge/server.py`（启动器 `bin/hermes-bridge.py`） | 面板 hermes_bridge 组件（启动 :48920 前自动拉起） |
 | :8642 | Hermes gateway（纯净 Agent 运行时，完整 tools/skills 循环） | `python -m hermes_cli.main gateway run`（Bearer `API_SERVER_KEY`，默认 `ikaros-gateway-key`） | 对话树 rescue 工具 / 面板可自拉起 |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` | 面板 qwenpaw |
@@ -177,10 +177,10 @@ set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;...;%IKAROS_ROOT%\runtime\portabl
 
 ### 2.5 Neko 的独立 Venv
 
-`core/neko/` 使用**独立的 venv**（非 portable-python）：
+`apps/neko/` 使用**独立的 venv**（非 portable-python）：
 
 ```
-core/neko/.venv/Scripts/python.exe
+apps/neko/.venv/Scripts/python.exe
 ```
 
 这是因为 Neko 的依赖（fastapi 0.115, websockets 15.0, SQLAlchemy 等）与 portable-python 的依赖不同。启动 Neko 相关组件时**必须**使用此 venv。
@@ -226,7 +226,7 @@ _v5_path = _ROOT / "core" / "memory_v5"          # → E:\Ikaros\core\memory_v5
 使用 `IKAROS_ROOT` 环境变量：
 
 ```python
-# core/neko/main_logic/ikaros_integration.py
+# apps/neko/main_logic/ikaros_integration.py
 _IKAROS_ROOT = Path(os.environ.get("IKAROS_ROOT", os.environ.get("HERMES_ROOT", "E:\\Ikaros")))
 _IKAROS_MEMORY = _IKAROS_ROOT / "core" / "memory_v5"
 ```
@@ -286,7 +286,7 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 | `ikaros-dashboard/` | `core/dashboard/` | 2026-07-24 |
 | `ikaros-monitor/` | _(已移除)_ | 2026-07-24 |
 | `identity/` | `config/identity/` | 2026-07-24 |
-| `N.E.K.O-main/` | `core/neko/` | 2026-07-24 |
+| `N.E.K.O-main/` | `apps/neko/` | 2026-07-24 |
 | `Ikaros-Control-Panel/` | `core/control-panel/` | 2026-07-24 |
 
 ### 3.6 `.bat` 文件铁律
@@ -329,7 +329,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `cogno_5d.py` | 5D 认知增强 (时间/设备/地理/情绪/上下文) | `enrich_reply()` |
 | `__init__.py` | V5 版本 5.1.0 + CONTROLLED_KINDS 注册表 (12 kinds) | `validate_state_key()` |
 
-### 4.2 core/neko/ — 前端表现层
+### 4.2 apps/neko/ — 前端表现层
 
 | 服务器 | 端口 | 职责 |
 |--------|------|------|
@@ -498,7 +498,7 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
 2. Hermes Agent venv 用于 Hermes Agent 相关操作（正在迁至 `core/hermes/`，路径以实际为准）
    → E:\Ikaros\core\hermes\venv\Scripts\python.exe
 3. Neko venv 用于 Neko 前端相关操作
-   → E:\Ikaros\core\neko\.venv\Scripts\python.exe
+   → E:\Ikaros\apps\neko\.venv\Scripts\python.exe
 4. 不得在三个 venv 间混合使用
 5. PYTHONHOME 必须为空 (set "PYTHONHOME=")
 ```

@@ -9,7 +9,7 @@
 
 ## 1. 背景与目标
 
-Ikaros 当前没有终端多路复用 / PTY 能力。`core/neko/app/agent_server.py` 的自动化能力只覆盖 `browser_use` / `computer_use` / `OpenClaw`（桌面/浏览器自动化），无法在受监控的终端里跑、协调、并读取 coding agent 的实时状态。
+Ikaros 当前没有终端多路复用 / PTY 能力。`apps/neko/app/agent_server.py` 的自动化能力只覆盖 `browser_use` / `computer_use` / `OpenClaw`（桌面/浏览器自动化），无法在受监控的终端里跑、协调、并读取 coding agent 的实时状态。
 
 `herdr` 正好补这块空白：它是一个 agent-aware 的终端多路复用器，把终端组织成 `workspace / tab / pane`，识别 pane 内运行的 coding agent，并暴露其 `idle / working / blocked / done / unknown` 生命周期状态。集成后，Ikaros 可以：
 
@@ -220,7 +220,7 @@ class CodingAgentSupervisor:
 | `core/herdr/client.py` | `HerdrClient`（CLI/socket 封装） |
 | `core/herdr/supervisor.py` | `CodingAgentSupervisor`（编排 + 状态机） |
 | `core/herdr/config.py` | socket 路径解析 + 默认 kind 列表 |
-| `core/memory_v5/orchestrator.py` 或 `core/neko/app/agent_server.py` | 接入 supervisor（调用点） |
+| `core/memory_v5/orchestrator.py` 或 `apps/neko/app/agent_server.py` | 接入 supervisor（调用点） |
 | `core/conversation-tree/server.py` | `/api/chat` 增加「执行类」分支（可选） |
 | `core/dashboard/index.html` / `panel.html` | herdr 卡片 UI |
 | `docs/ARCHITECTURE.md` | 端口/组件表增加 herdr（提交时同步，遵循 doc-drift 规则） |
