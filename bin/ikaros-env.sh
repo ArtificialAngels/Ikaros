@@ -33,3 +33,5 @@ export IKAROS_PORT_LLM="8080"
 export IKAROS_PYTHON="${IKAROS_ROOT}/runtime/portable-python/python.exe"
 export IKAROS_RUNTIME="${IKAROS_ROOT}/runtime"
 export IKAROS_RUST="${IKAROS_ROOT}/runtime/rust"
+# omp / bun 便携二进制 (2026-08-12: omp 从 C:\Users\PZS0X\.bun 迁到 runtime/bun)
+export PATH="${IKAROS_ROOT}/runtime/bun/bin:${IKAROS_ROOT}/runtime/node/node_modules/bun/bin:${PATH}"

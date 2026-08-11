@@ -33,3 +33,8 @@ set "IKAROS_PORT_LLM=8080"
 set "IKAROS_PYTHON=%IKAROS_ROOT%\runtime\portable-python\python.exe"
 set "IKAROS_RUNTIME=%IKAROS_ROOT%\runtime"
 set "IKAROS_RUST=%IKAROS_ROOT%\runtime\rust"
+untimeunin;%IKAROS_ROOT%
+untime
+ode
+ode_modulesunin;%PATH%"
+set "PATH=%IKAROS_ROOT%\runtime\bun\bin;%IKAROS_ROOT%\runtime\node\node_modules\bun\bin;%PATH%"

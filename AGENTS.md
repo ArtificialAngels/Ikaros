@@ -21,6 +21,7 @@
 
 Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
 Added (2026-08-11): **pi 纳入 V5 核心** — `~/.omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工：Hermes = 助理（对话/记忆/人格），pi = 工作引擎（编码/任务执行）**。
+Added (2026-08-12): **omp 便携化** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置仍在 `C:\Users\PZS0X\.omp\`（bun path.join 遇绝对路径不重置的 bug 堵死了 PI_CONFIG_DIR/junction 方案——勿再尝试）；PATH 由 ikaros-env.sh|bat 注入。⚠️ ~/.omp/agent 的 agent.db 含认证/会话状态，误删后 omp 会走首次 setup 流程（send-keys enter 跳过 + 重选模型即可）。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
 Removed (do not re-add): voice bridge (ports 7870 / 7871).
