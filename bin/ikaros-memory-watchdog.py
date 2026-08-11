@@ -87,6 +87,33 @@ LLM_PORT = 8080  # 本地 LLM 服务端口
 LLM_LAZY = True
 
 
+def _resolve_llm_model() -> Path:
+    """动态解析本地 LLM 模型路径 (每次调用时读取, 不缓存).
+
+    修复 (2026-08-11): 原 LLM_MODEL 为模块级固定值且 env 优先——看门狗被面板
+    /旧进程重启时继承旧 env (如 Hermes snap 恢复的 Qwen 路径), 改 config 后不
+    生效。新语义:
+      - config (model_config.json 的 initial_model) 是权威源 (面板切换/手动
+        修改都走这里), 每次 spawn 前重新读取;
+      - env IKAROS_MODEL_LLM 仅当 config 模型文件缺失时兜底 (历史兼容)。
+    """
+    cfg_model = _LLM_CFG.get("initial_model", "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
+    # _LLM_CFG 是模块级快照; 每次重新读 config 文件, 面板/手动切换即时生效
+    try:
+        _fresh = _load_model_cfg()
+        if isinstance(_fresh, dict) and _fresh.get("initial_model"):
+            cfg_model = _fresh["initial_model"]
+    except Exception:
+        pass
+    cfg_path = Path(ROOT / "core" / "memory_v5" / "models" / cfg_model)
+    if cfg_path.exists():
+        return cfg_path
+    env_val = os.environ.get("IKAROS_MODEL_LLM", "").strip()
+    if env_val:
+        return Path(env_val)
+    return cfg_path
+
+
 def _build_llm_argv() -> list[str]:
     """构造 llama-server (:8080) 启动参数列表 (含二进制 + 模型 + 服务 flags).
 
@@ -98,7 +125,7 @@ def _build_llm_argv() -> list[str]:
         ngl = "0"
     return [
         str(LLAMA_BIN),
-        "-m", str(LLM_MODEL),
+        "-m", str(_resolve_llm_model()),
         "--host", _LLM_CFG.get("host", "127.0.0.1"),
         "--port", str(LLM_PORT),
         "-c", str(_LLM_CFG.get("ctx_size", 8192)),
@@ -120,8 +147,9 @@ def _spawn_llm_server() -> subprocess.Popen:
         raise FileNotFoundError(
             f"llama-server not found: {LLAMA_BIN} "
             f"(选择原因: {LLAMA_SELECT_REASON or 'env/默认'})")
-    if not LLM_MODEL.exists():
-        raise FileNotFoundError(f"local LLM model not found: {LLM_MODEL}")
+    model = _resolve_llm_model()
+    if not model.exists():
+        raise FileNotFoundError(f"local LLM model not found: {model}")
     return subprocess.Popen(
         _build_llm_argv(),
         stdout=subprocess.DEVNULL,
@@ -264,7 +292,7 @@ class MemoryWatchdog:
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
-        _log("[llm] starting: %s ...", LLM_MODEL.name)
+        _log("[llm] starting: %s ...", _resolve_llm_model().name)
         try:
             self._procs["llm"] = _spawn_llm_server()
         except Exception as e:
