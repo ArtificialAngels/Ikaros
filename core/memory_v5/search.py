@@ -399,6 +399,10 @@ def fused_search(query: str, top_k: int = 5) -> list[dict]:
     """Dual-path fusion: FTS5 (keyword) + ChromaDB (semantic) -> merge + deduplicate.
 
     V3 -> V4: FTS5 via v5.store, vectors via v5.search.
+
+    R8 (M5): 已废弃 —— 检索入口已收敛到 memory_retrieval.unified_retrieve
+    (v5_memory_search / V5MemoryAPI.search / conversation-tree 均走统一路由层)。
+    保留定义仅供 dissonance / metacog 内部继续使用, 新代码请走 unified_retrieve。
     """
     # V5 package lives in Ikaros-memory/; insert Ikaros-memory not its parent dir
     sys.path.insert(0, str(MEM_ROOT))

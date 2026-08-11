@@ -77,7 +77,8 @@ def v5_memory_search(
     Paths (first match wins):
       1. emotion_tag given  -> emotional_memory.search_by_emotion()
       2. time/exclude given  -> memory_retrieval.retrieve() (3-way fusion)
-      3. default            -> search.fused_search() (FTS5 + vector)
+      3. default            -> V5MemoryAPI.search(fuse=True) = unified_retrieve(scope="auto")
+                              (语义三路融合 + 图补路 + Vault; 失败降级 FTS5)
       4. any failure        -> FTS5 only (store.search)
     Always returns a JSON array string; never raises.
     """

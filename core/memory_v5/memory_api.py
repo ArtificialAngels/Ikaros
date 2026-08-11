@@ -97,7 +97,7 @@ class V5MemoryAPI:
         fuse: bool = True,
         top_k: int = 5,
         time_range: tuple = None,
-        min_score: float = 0.6,
+        min_score: Optional[float] = None,
     ) -> list[dict]:
         """Search memory.
 
@@ -105,6 +105,12 @@ class V5MemoryAPI:
         do an exact tag match against SQLite (works without ChromaDB).
         Otherwise, when `fuse=True`, runs the 3-way fused semantic retrieval;
         on any failure it falls back to FTS5 keyword search.
+
+        R8 (M6): min_score 现在是真正的融合分下限 —— 对 unified_retrieve 返回的
+        score 字段做后置过滤 (过滤后为空则如实返回 []); None = 不过滤, 沿用配置层
+        min_fused_score (线上 0.3)。历史默认 0.6 会把 FTS-only 命中 (融合分
+        0.3~0.4, 见 preprocess_config.yaml 2026-07-26 标定注释) 全部滤掉, 导致
+        语义召回打空, 故默认改为 None, 由调用方按需收紧。
         """
         # 1) exact / structured path
         if domain or key or tags or type or category_path:
@@ -154,6 +160,13 @@ class V5MemoryAPI:
                                          time_range=tr, min_weight=0.0)
 # 内联说明见 docs/scripts/core/memory_v5/v5/memory_api.md（见“内联注释摘录”）
                 if fused:
+                    if min_score is not None and min_score > 0:
+                        # R8 (M6): min_score 后置过滤生效 —— 过滤后为空则如实
+                        # 返回空列表 (尊重调用方下限, 不回退到未过滤的 FTS5 路径)。
+                        fused = [r for r in fused
+                                 if float(r.get("score", 0.0)) >= min_score]
+                        if not fused:
+                            return []
                     return fused
             except Exception:  # noqa: BLE001
                 pass
