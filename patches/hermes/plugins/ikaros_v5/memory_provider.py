@@ -88,8 +88,10 @@ class IkarosV5MemoryProvider(MemoryProvider):
 
         try:
             from memory_v5.store import stats as _v5_stats, search as _v5_search
+            from memory_v5.memory_retrieval import unified_retrieve as _v5_unified
             self._v5_stats = _v5_stats
             self._v5_search = _v5_search
+            self._v5_unified = _v5_unified
             self._v5_loaded = True
             logger.info("Ikaros V5 MemoryProvider loaded (root=%s)", v5_path)
         except ImportError as e:
@@ -149,6 +151,45 @@ class IkarosV5MemoryProvider(MemoryProvider):
             "---",
         ]
 
+        # 动态人格块: self_model(身份/信念) + relationship(关系深度/温暖度)
+        # + emotion_status(情绪状态) 渲染成固定文本注入, 不靠模型主动调工具。
+        # 任一模块不可用则静默跳过该块, 不抛异常。
+        persona_parts: list[str] = []
+        try:
+            from memory_v5.self_model import SelfModel
+            sm = SelfModel.load()
+            sp = sm.get_self_prompt() if hasattr(sm, "get_self_prompt") else ""
+            if sp:
+                persona_parts.append(sp)
+        except Exception as e:
+            logger.debug("system_prompt_block: self_model unavailable (%s)", e)
+
+        try:
+            from memory_v5.relationship import Relationship
+            rel = Relationship.load()
+            rp = rel.to_prompt() if hasattr(rel, "to_prompt") else ""
+            if rp:
+                rp += f"（深度 {rel.depth:.2f} / 温暖度 {rel.warmth:.2f}）"
+                persona_parts.append(rp)
+        except Exception as e:
+            logger.debug("system_prompt_block: relationship unavailable (%s)", e)
+
+        try:
+            from memory_v5.affect import AffectState
+            st = AffectState.load().decay()
+            ap = st.to_prompt() if hasattr(st, "to_prompt") else ""
+            if ap:
+                persona_parts.append(ap)
+        except Exception as e:
+            logger.debug("system_prompt_block: affect unavailable (%s)", e)
+
+        if persona_parts:
+            parts.append(
+                "\n---\n## Ikaros 当前状态\n\n"
+                + "\n\n".join(persona_parts)
+                + "\n---"
+            )
+
         # 服务重启手递：读取 handoff 并注入到新 session 的 system prompt
         handoff_path = self._v5_root / "data" / "v5" / "service_handoff.json"
         if handoff_path.is_file():
@@ -185,17 +226,17 @@ class IkarosV5MemoryProvider(MemoryProvider):
         if not self._v5_loaded or not query or len(query.strip()) < 4:
             return ""
 
-        # 用 V5 的 FTS5 检索（不走 Chroma/向量，轻量不阻塞）
+        # 用 V5 的统一语义检索（向量+FTS 三路融合+图扩散，中文概念查询也能召回）
         try:
-            results = self._v5_search(query.strip()[:200], top_k=5)
+            results = self._v5_unified(query.strip()[:200], top_k=5)
             if not results:
                 return ""
             lines = []
             for r in results[:5]:
-                text = getattr(r, "content", "") or ""
-                weight = getattr(r, "weight", 0)
+                text = r.get("content", "") or ""
+                score = r.get("score", r.get("weight", 0))
                 if text:
-                    lines.append(f"  [{weight:.2f}] {str(text)[:120]}")
+                    lines.append(f"  [{score:.2f}] {str(text)[:120]}")
             if lines:
                 return "\n[Ikaros 相关记忆]\n" + "\n".join(lines) + "\n"
         except Exception as e:
@@ -241,7 +282,7 @@ class IkarosV5MemoryProvider(MemoryProvider):
                 )
                 logger.debug("sync_turn: stored conversation turn")
             except Exception as e:
-                logger.debug("sync_turn store failed: %s", e)
+                logger.warning("sync_turn store failed: %s", e)
 
         threading.Thread(target=_store, daemon=True).start()
 
@@ -321,24 +362,21 @@ class IkarosV5MemoryProvider(MemoryProvider):
 
         parts: list[str] = []
 
-        # 1) 情感状态
-        affect_file = self._v5_root / "data" / "v5" / "affect.json"
-        if affect_file.exists():
-            try:
-                affect = json.loads(affect_file.read_text("utf-8"))
-                mood = affect.get("mood_label", "")
-                pad = affect.get("pad", {})
-                trust = affect.get("trust", 0)
+        # 1) 情感状态 (V5 API: AffectState.load → decay → 渲染, 与 system_prompt_block 一致;
+        #    旧实现手读 affect.json 的 mood_label/pad 键 — 5.1.0 schema 不存在这些键,
+        #    情绪块恒渲染空值)
+        try:
+            from memory_v5.affect import AffectState
+            st = AffectState.load().decay()
+            ap = st.to_prompt() if hasattr(st, "to_prompt") else ""
+            if ap:
                 parts.append(
-                    f"[Ikaros 情感状态]\n"
-                    f"情绪基调: {mood} | "
-                    f"P={pad.get('pleasure',0):.2f} "
-                    f"A={pad.get('arousal',0):.2f} "
-                    f"D={pad.get('dominance',0):.2f} | "
-                    f"信任度: {trust:.2f}\n"
+                    f"[Ikaros 情感状态]\n{ap}\n"
+                    f"P={st.pleasure:.2f} A={st.arousal:.2f} "
+                    f"D={st.dominance:.2f} T={st.trust:.2f}\n"
                 )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # 2) 检索相关记忆
         try:
@@ -351,7 +389,7 @@ class IkarosV5MemoryProvider(MemoryProvider):
                     break
 
             if query_text:
-                results = self._v5_search(query_text, top_k=5)
+                results = self._v5_unified(query_text, top_k=5)
                 if results:
                     mem_lines = []
                     # V5 token_compressor 增强: 消费 token_budget, 避免 text[:150]
@@ -363,8 +401,8 @@ class IkarosV5MemoryProvider(MemoryProvider):
                         )
                         dict_results = [
                             {
-                                "content": getattr(r, "content", "") or "",
-                                "score": float(getattr(r, "weight", 0) or 0),
+                                "content": r.get("content", "") or "",
+                                "score": float(r.get("score", r.get("weight", 0)) or 0),
                             }
                             for r in results[:5]
                         ]
@@ -382,10 +420,10 @@ class IkarosV5MemoryProvider(MemoryProvider):
                             _tc_err,
                         )
                         for r in results[:5]:
-                            text = getattr(r, "content", "") or ""
-                            weight = getattr(r, "weight", 0)
+                            text = r.get("content", "") or ""
+                            score = r.get("score", r.get("weight", 0))
                             if text:
-                                mem_lines.append(f"  [{weight:.2f}] {str(text)[:150]}")
+                                mem_lines.append(f"  [{score:.2f}] {str(text)[:150]}")
                     if mem_lines:
                         parts.append(
                             "[Ikaros 相关记忆]\n" + "\n".join(mem_lines) + "\n"
