@@ -94,6 +94,13 @@ def retrieve(
     try:
         from memory_v5.search import get_vector_index
         vec_list = get_vector_index().search(query, top_k=max(tk * 2, 6))
+        if not vec_list:
+            # 兜底: 单例可能持有旧快照, 或新记忆向量还在 Chroma WAL 未应用
+            # (compaction 无 vision 模型被跳过). 强制刷新重建实例(从持久化
+            # 重放)后重查一次, 消除新记忆 30s 语义不可见窗口。失败由 except
+            # 兜住, 不影响 FTS 路。
+            vec_list = get_vector_index(refresh=True).search(
+                query, top_k=max(tk * 2, 6))
     except Exception as e:
         logger.debug("vector search failed: %s", e)
 
@@ -203,7 +210,9 @@ def retrieve(
     # 实测 (2026-08-10): "memU 调研学到了什么" 整句 0 命中, 拆成 "memU"/"调研"
     # 后各能命中。这是 memU progressive_retrieve 文档里 "reword query" 场景的
     # 自动版 —— agent 不会每次手动重写 query, 检索层自己兜。
-    if len(result) < 3:
+    # 触发条件: 结果不足 top_k 即补足 (2026-08-10 从 <3 放宽, 避免 3-4 条
+    # 低相关历史记忆占位时特异性 token 命中永远进不来)
+    if len(result) < tk:
         result = _keyword_fallback(query, result, tk, min_weight, character)
 
     # ── Vault fallback: 本体检索不足时, 去 ThirdSpace Vault 搜 ──
@@ -238,11 +247,16 @@ SCOPES = ("auto", "semantic", "lexical", "graph", "tree", "temporal")
 
 # 统一归一化字段 (与 retrieve() 返回一致 + source 标记来源)
 _REQ_FIELDS = ("id", "content", "type", "weight", "tags", "created",
-               "pad_p", "pad_a", "source", "score")
+               "pad_p", "pad_a", "pad_d", "source", "score")
 
 
 def _norm(d: dict) -> dict:
-    """把任意路检索结果归一化成统一字段 (缺省补默认值)."""
+    """把任意路检索结果归一化成统一字段 (缺省补默认值).
+
+    R8 (M5/M6): 补 pad_d + 阶段4 富字段透传 (access_count/reinforcement/
+    last_accessed/long_term), 与 retrieve() / memory_api._row_to_dict 字段
+    对齐, 保证 v5_memory_search (经 unified_retrieve) 的返回字段不缺项。
+    """
     return {
         "id": str(d.get("id", "")),
         "content": d.get("content", "") or "",
@@ -252,8 +266,13 @@ def _norm(d: dict) -> dict:
         "created": float(d.get("created", 0.0) or 0.0),
         "pad_p": float(d.get("pad_p", 0.0) or 0.0),
         "pad_a": float(d.get("pad_a", 0.0) or 0.0),
+        "pad_d": float(d.get("pad_d", 0.0) or 0.0),
         "source": d.get("source", "semantic"),
         "score": float(d.get("score", 0.0) or 0.0),
+        "access_count": int(d.get("access_count", 0) or 0),
+        "reinforcement": float(d.get("reinforcement", 0.0) or 0.0),
+        "last_accessed": float(d.get("last_accessed", 0.0) or 0.0),
+        "long_term": bool(d.get("long_term", False)),
     }
 
 
@@ -438,7 +457,7 @@ def _keyword_fallback(
     关键词命中是弱信号, score 用固定小值 (0.45, 略低于融合阈值 0.6 的
     常见命中, 保证不喧宾夺主, 但能进 top_k)。
     """
-    if len(result) >= 3 or len(result) >= tk:
+    if len(result) >= tk:
         return result
     tokens = _keyword_tokens(query)
     if len(tokens) < 2:
@@ -449,11 +468,28 @@ def _keyword_fallback(
         return result
 
     seen_ids = {str(r["id"]) for r in result}
-    for tok in tokens:
+    # 稀有 token 优先: 常见词("哥哥"/"什么")LIKE 命中噪音多, 先查特异性 token
+    # (2026-08-10 实测: '文艺' 1 条命中 vs '哥哥' 50+ 条; 顺序错则金丝雀被挤掉)
+    try:
+        scored = []
+        for tok in tokens:
+            try:
+                n = store.count_like(tok, min_weight=min_weight, character=character)
+            except Exception:
+                n = 999
+            scored.append((n, tok))
+        scored.sort(key=lambda x: x[0])
+        ordered = [t for _, t in scored]
+    except Exception:
+        ordered = tokens
+    for tok in ordered:
         if len(result) >= tk:
             break
         try:
-            hits = store.search(tok, top_k=2, min_weight=min_weight, character=character)
+            # FTS5 unicode61 对中文 2-gram MATCH 无效(整串分词), 走 LIKE 子串
+            # 查询 (2026-08-10 实测: MATCH '主力' 0 命中 vs LIKE %主力% 命中)
+            hits = store.search_like(tok, top_k=3, min_weight=min_weight,
+                                     character=character)
         except Exception as e:
             logger.debug("keyword fallback failed for %r: %s", tok, e)
             continue

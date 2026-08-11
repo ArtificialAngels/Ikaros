@@ -37,11 +37,21 @@ class FakeMem:
 
 
 def _kw_store_factory(records):
-    """store.search 按关键词返回对应记录 (大小写不敏感)."""
+    """store.search/search_like/count_like 按关键词返回对应记录 (大小写不敏感).
+
+    2026-08-10: fallback 从 FTS MATCH 切到 LIKE 子串查询, mock 同步补
+    search_like / count_like。
+    """
     def _search(q, top_k=5, **kw):
         ql = q.lower()
         return [m for m in records if ql in m.content.lower()][:top_k]
-    return type("S", (), {"search": staticmethod(_search)})
+    def _search_like(substr, top_k=5, **kw):
+        return _search(substr, top_k=top_k)
+    def _count_like(substr, **kw):
+        return sum(1 for m in records if substr.lower() in m.content.lower())
+    return type("S", (), {"search": staticmethod(_search),
+                          "search_like": staticmethod(_search_like),
+                          "count_like": staticmethod(_count_like)})
 
 
 # ── K1: 拆词补足 ──

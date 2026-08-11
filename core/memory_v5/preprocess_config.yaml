@@ -22,7 +22,9 @@ memory_retrieval:
     fact: 1.1
     user_trait: 1.15      # 对哥哥的理解优先 (V5 新增)
     preference: 1.05
-    conversation: 0.8
+    conversation: 1.0     # 2026-08-10 从 0.8 调平: sync_turn 写入的跨会话记忆全是
+                          # conversation, 0.8 降权把中等相关对话(fused≈0.25-0.3)
+                          # 压到 min_fused 阈值以下, 导致跨会话对话记忆召回弱
     default: 1.0
 
 summary:
