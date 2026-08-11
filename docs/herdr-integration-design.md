@@ -481,3 +481,34 @@ GET /api/events   (text/event-stream, HTTP/1.1, 15s 心跳)
 - 完整 agent 闭环（run→真实 blocked→approve→done）需本机安装一个 herdr 支持的 coding agent 二进制（用户决策 kind）。当前 supervisor 逻辑 + 端点 + SSE 链路已用 `FakeSupervisor` 全量验收；真实协议形状在 B0–B4 已逐项确认。
 - `herdr` 组件默认不随全栈自启；面板"停止"会发 `herdr server stop`（SKILL.md 警告：别从活跃会话误停）。
 
+
+---
+
+### 12.9 omp (pi) 接入 herdr（2026-08-10）
+
+**决策**：重活派给 omp（oh-my-pi 17.2.12）作为 herdr agent `pi`，走 go-deepseek 通道（go 的 deepseek 便宜，go 的 glm 贵——哥哥拍板）。
+
+**安装**：`bun install -g @oh-my-pi/pi-coding-agent`（bun 在 `E:\Ikaros\runtime\node\node_modules\bun\bin`，已写入用户 PATH）。
+
+**go-deepseek 通道**：`~/.omp/agent/models.yml` 注册 provider `go-deepseek`（baseUrl `https://opencode.ai/zen/go/v1`，api `openai-completions`，apiKey 引用 env `OPENCODE_GO_API_KEY`）；key 本体放 `~/.omp/.env`（**必须**：omp 的 dotenv 只在进程启动 cwd 读取，`--cwd` flag 不生效；pane 里 cwd 是 `E:\`，读不到 `E:\Ikaros\.env`，会 401）。
+
+**启动/派活**：
+```bash
+# server 常驻（detached，不依赖任何会话）
+powershell -NoProfile -Command "Start-Process -FilePath 'E:\Ikaros\runtime\herdr\herdr.exe' -ArgumentList 'server' -WindowStyle Hidden"
+
+# 拉起 pi agent（omp 原生 kind，无需适配器）
+herdr agent start pi --kind omp --pane w3:p1 -- --model go-deepseek/deepseek-v4-flash
+
+# 派活（--wait 在 omp 上时序不稳，直接发再 read）
+herdr agent prompt pi "任务描述"
+herdr agent read pi
+herdr agent list   # 状态 idle / working
+```
+
+**坑（都已踩过）**：
+1. `setx PATH "$PATH;..."` 会把 MSYS 格式路径写进注册表 → Windows 全挂 → 修复脚本 `bin/fix-user-path.py`。
+2. herdr server 重启会丢 agent 会话（pane 进程断开）→ 需重新 `agent start`；pane 持久化不受影响。
+3. `agent prompt --wait` 对 omp 等待超时是已知现象，内容正常返回，直接 `read` 即可。
+4. omp 在 `E:\` 启动会报 gitnexus MCP 连接失败（噪音，不致命）。
+5. 旧 agent pane 用 `pane close` 清理（没有 `agent close` 命令）。

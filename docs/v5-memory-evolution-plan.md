@@ -217,3 +217,43 @@ frequency_boost = min(0.25, log2(access_count+1) * 0.05)          # 高频 → �
 | `docs/ARCHITECTURE.md` + `AGENTS.md` | 落地后同步（记忆检索链路描述） |
 
 **建议实施顺序**：阶段 1（路由层，独立可验收）→ 阶段 4（权重，改动最小）→ 阶段 5（时间接线，让 dissonance 闭环）→ 阶段 2（两档分层）→ 阶段 3（本体，纯增量）。每阶段独立可交付、可回滚；阶段 1+4 完成后即达成 cognee 调研的"检索多路路由"主收益。
+
+---
+
+# 附录 A：CortexFS 调研借鉴清单（2026-08-10）
+
+> 参考来源：`E:\Ikaros-something\reference project\cortexfs-main`（LIghtJUNction/cortexfs，Rust FUSE agent runtime，v0.1.7，MIT）。
+> 定位：Linux FUSE 文件系统形态的 agent 运行时——把模型/agent/工具/会话挂载成 `/ctx` 普通文件，ls/cat 即可检查。
+> 与 Ikaros 关系：形态不同（Linux FUSE vs Windows 桌面+Web），**理念可借鉴，代码不可复用**。以下只收"对 Ikaros 有落地价值"的点。
+
+## A.1 值得借鉴的 4 个理念（按性价比排序）
+
+| # | CortexFS 做法 | Ikaros 现状 | 借鉴价值 / 落地方式 |
+|---|---|---|---|
+| 1 | **会话即可审计的普通文件**：会话历史是普通 `messages.jsonl` / `events.jsonl`，提示词上下文可从文件重建，任何工具可读 | 对话内容在 v5.db + ui_conversation_tree.json（JSON 指针 + DB 内容分离） | 中。conversation-tree 已部分采用（拓扑 JSON 可审计）。可考虑给 v5.db 会话记录加 JSONL 导出/镜像，让对话可 diff 可 grep |
+| 2 | **host-owned execution**：宿主串行化工具调用、每次重查权限、返回规范结果，agent 才能继续 | Hermes gateway 工具循环已是此模式（agent 提议 → gateway 执行 → 结果透出） | 低（已实现）。CortexFS 的增量：工具调用前**每次都重查权限**（我们的 permission 是会话级配置，非调用级） |
+| 3 | **性能门控纪律**：性能改动必须先建可复现基线，收益须 > max(3%, 2×噪声)；禁 unsafe、禁 target-cpu=native；由独立 reviewer 审核 | 无正式门控；本次 LongMemEval 评测（8-10）算是补了一次基线 | 高。落地：`bin/eval-longmemeval.py` 留作检索性能回归基线；后续检索改动先跑它再动代码 |
+| 4 | **单一工具路径（tsh）+ 工具即文件**：agent 通过文件系统视图发现工具，不暴露庞大原生工具列表 | 48 个 v5_* MCP 工具全量暴露给 gateway | 中。可考虑工具分组/按需暴露（类似 Hermes toolset），但需评估成本；V5 工具已按功能分模块（memory/self/care/...），可先做"按会话只挂相关工具集" |
+
+## A.2 不建议借鉴的（避免过度设计）
+
+- **FUSE 挂载形态本身**：Linux-only，Windows 无对应，且我们已有 9100 面板 + 对话树 48920 两个可视面，再加文件系统面是重复
+- **四角色 agent 树（architect/coder/worker/reviewer）**：我们已有 herdr 多路复用 + WorkBuddy 委派，角色已覆盖
+- **bubblewrap 沙箱**：桌面伴侣场景无多租户隔离需求
+
+## A.3 落地建议（挂进后续迭代）
+
+1. **P2（低成本高价值）✅ 已落地（2026-08-10）**：检索/性能改动强制先跑基线再改——固化为一键回归工具：
+   - 用法：`bin\retrieval-baseline.bat` → 跑 `bin/eval-longmemeval.py --limit 20`（top_k 10 / seed 42 为脚本默认）→ 结果存 `data\eval\longmemeval_baseline.json`
+   - 数据：默认 `E:\Ikaros-something\reference project\longmemeval_s_cleaned.json`，可用环境变量 `LONGMEMEVAL_DATA` 覆盖（缺文件时脚本报错并 exit /b 1）
+   - 验收：nDCG ∈ 0.3~0.9。2026-08-10 实测基线（n=20）：nDCG **0.748**，recall_any 0.950 / recall_all 0.750；分类型 multi-session 0.455 / temporal-reasoning 0.583 / single-session-user 0.908 / 其余 1.0
+   - 2026-08-10 方案 A（中文语义召回）落地后重跑：nDCG **0.862**（+0.114），recall_any **1.000**（+0.05）/ recall_all **0.850**（+0.10）；multi-session 0.678 / temporal-reasoning 0.760——无回归且全面提升
+4. **P2 ✅ 已落地（2026-08-10）**：中文语义召回兜底（方案 A）——`store.search_like`（LIKE 子串查询，绕开 FTS5 unicode61 整串分词）+ `count_like`（token 稀有度）+ `_keyword_fallback` 切 LIKE、稀有 token 优先、触发条件放宽到 `<top_k`；`preprocess_config.yaml` conversation type_boost 0.8→1.0。e2e 跨会话测试 5/5（`bin/cross-session-e2e-check.py`），pytest 281 全绿
+2. **P3（中成本）✅ 已落地（2026-08-10）**：conversation-tree 会话导出 JSONL 镜像（借鉴 messages.jsonl 可审计思路）——`bin\export-convtree-jsonl.py`（支持 `--help`；每行一个消息：node_id / parent_id / role / content / created / session）→ `data\eval\convtree_export.jsonl`（2026-08-10 实测 9 节点 / 17 条记录，逐行 JSON 校验通过）
+3. **P3（中成本，待拍板）**：MCP 工具按会话分组暴露（借鉴 tsh 单一工具路径的"少暴露"原则），减少每轮 API 调用的工具 schema 体积——调研完成，报告见 `docs/hermes-tools-scoping.md`（48 工具 7 分组表、三档方案与改动点、风险评估、决策门）；结论：值得做但当前仅 conversation-tree 一个消费方，收益边界窄，推荐先做 mcp_server.py 分组表（零 hermes 侵入），会话级分组待模式分化成为痛点再上
+
+## A.4 备忘：CortexFS 自评数据（参考，非基准）
+
+- 20/20 请求运行时成功；exact-match 准确率仅 20%（返回散文而非精确答案）
+- p50 延迟 6.7s / p95 11.4s（含模型推理）；token 统计仅 1/20 可用
+- 教训：**"能跑" 不等于 "答得准"**——我们评测里的 nDCG 0.31→0.87 过程同理，检索召回 ≠ 问答准确，QA 维度（HaluMem）仍需补

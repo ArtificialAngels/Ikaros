@@ -27,3 +27,11 @@ V3 参考: ikaros-memory-v3.py 第 1-30 行 API 表面
 # 原因: 模块级 _conn 在测试间会污染 (前一个测试关不掉).
 # V3 模块级 _conn 是历史包袱, V4 干净.
 
+
+V5.6 (2026-08-10): FTS 查询 AND → OR
+  FTS5 默认把引号短语以 AND 连接; 长自然语言 query (10+ token) 要求
+  单条记忆同时含全部 token → 几乎必然 0 命中 (LongMemEval 实测长句
+  AND=0 命中 / OR=232 命中)。_sanitize_fts5_query 改为多 token 用 OR
+  连接 (单 token 不变), bm25 排序保证多词命中的记忆仍排最前,
+  召回优先且精度不塌。效果: LongMemEval 20 实例 nDCG 0.50 → 0.87,
+  temporal-reasoning 0.23 → 0.83。
