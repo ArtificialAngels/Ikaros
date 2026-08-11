@@ -31,6 +31,12 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - Neko frontend (Electron shell `N.E.K.O.exe`): `bin/neko-start.bat`
 - **Distinction**: `core/control-panel/` = Electron desktop shell (pulls up `:9100` + components); `core/neko/` = FastAPI + React **frontend service** (its `N.E.K.O.exe` is the neko shell). Don't conflate the two.
 
+## 便携环境 (2026-08-11, 学秋叶整合包)
+- IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）
+- **Hermes 侧上游**：`data/hermes-agent/.env` 内含同源 32 个 IKAROS_* 变量（Hermes 进程加载 → bash 子进程继承 → snap 捕获新值，覆盖旧 snap；BASH_ENV 方案被 snap 后置覆盖，弃用）
+- 注册表 IKAROS_* 已清零（勿再 setx IKAROS_*，改 .env / ikaros-env.*）
+- 权威源链：`bin/ikaros-env.sh|bat` ↔ `data/hermes-agent/.env`（手工同步，生成脚本见 commit 说明）；`model_config.json` 决定本地 LLM 模型
+
 ## Soul core
 - Renamed: the V5 soul-core dir is now `core/memory_v5/` (the old `v5` subdir under `core` is gone). Python package `v5` → **`memory_v5`** (`import memory_v5`); `sys.path` must include `E:/Ikaros/core`.
 - Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. The 48 MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix).
