@@ -111,6 +111,39 @@
       </div>
     </div>
 
+    <div class="memory-panel panel" data-pid="usage" id="usagePanel">
+      <div class="mem-head" data-handle>
+        <span class="mem-title-text">用量分析</span>
+        <span class="mem-live">30 天 · Hermes</span>
+      </div>
+      <div class="usage-totals" id="usageTotals">加载中…</div>
+      <div class="mem-section-label">模型分布</div>
+      <div class="usage-models" id="usageModels"></div>
+      <div class="mem-section-label">每日调用趋势</div>
+      <div class="usage-chart" id="usageChart"></div>
+      <div class="usage-notes" id="usageNotes"></div>
+    </div>
+
+    <div class="memory-panel panel" data-pid="cron" id="cronPanel">
+      <div class="mem-head" data-handle>
+        <span class="mem-title-text">Cron 任务</span>
+        <span class="mem-live" id="cronLive">-</span>
+      </div>
+      <div class="cron-list" id="cronList">加载中…</div>
+    </div>
+
+    <div class="memory-panel panel" data-pid="kanban" id="kanbanPanel">
+      <div class="mem-head" data-handle>
+        <span class="mem-title-text">Kanban</span>
+        <span class="mem-live" id="kanbanLive">-</span>
+      </div>
+      <div class="kanban-new">
+        <input id="kanbanTitle" placeholder="新任务标题…" />
+        <button class="btn small" id="kanbanAdd">新建</button>
+      </div>
+      <div class="kanban-list" id="kanbanList">加载中…</div>
+    </div>
+
     <div class="stream-wrap panel" data-pid="stream">
       <div class="stream-header" data-handle>实时事件流</div>
       <div class="stream" id="stream">
@@ -835,7 +868,112 @@ function applyMemory(state){
   tickTo('memActive', eg.active_memories||0);
 }
 function updateMemory(state){ applyMemory(state); }
-function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ if(/\bdemo\b/.test(location.search)) memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); }
+function loadInitial() { fetch('/api/state').then(function(r){return r.json()}).then(function(s){ updateAffect(s);updateVitality(s);updateMemory(s);updateThought(s); }).catch(function(){ if(/\bdemo\b/.test(location.search)) memoryBootFallback(); }); fetch('/api/log').then(function(r){return r.json()}).then(function(events){if(events&&events.length)events.forEach(addMessage)}).catch(function(){}); loadUsage(); loadCron(); loadKanban(); var kbAdd=document.getElementById('kanbanAdd'); if(kbAdd&&!kbAdd._bound){ kbAdd._bound=true; kbAdd.addEventListener('click',kanbanAdd); var kbInp=document.getElementById('kanbanTitle'); if(kbInp)kbInp.addEventListener('keydown',function(e){ if(e.key==='Enter')kanbanAdd(); }); } }
+
+/* ── 用量分析卡片 (任务3) ─────────────────────────────────────── */
+function fmtNum(n){ n=Number(n||0); if(n>=1e6)return (n/1e6).toFixed(1)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'K'; return String(n); }
+function loadUsage(){
+  var box=document.getElementById('usageTotals'); if(!box)return;
+  fetch('/api/usage?days=30').then(function(r){return r.json()}).then(function(u){
+    if(!u.ok){ box.textContent='用量不可用: '+(u.error||''); return; }
+    var t=u.totals||{};
+    box.innerHTML=
+      '<div class="usage-tile"><div class="usage-tile-num">'+fmtNum(t.calls)+'</div><div class="usage-tile-label">API 调用</div></div>'
+      +'<div class="usage-tile"><div class="usage-tile-num">'+fmtNum(t.input_tokens)+'</div><div class="usage-tile-label">输入 tokens</div></div>'
+      +'<div class="usage-tile"><div class="usage-tile-num">'+fmtNum(t.output_tokens)+'</div><div class="usage-tile-label">输出 tokens</div></div>'
+      +'<div class="usage-tile"><div class="usage-tile-num">$'+Number(t.cost_est||0).toFixed(2)+'</div><div class="usage-tile-label">预估费用</div></div>';
+    var mbox=document.getElementById('usageModels');
+    mbox.innerHTML=(u.by_model||[]).map(function(m){
+      return '<div class="usage-model-row"><b>'+esc(m.model)+'</b><span>'+fmtNum(m.calls)+' 次 · '+fmtNum(m.input_tokens)+' in / '+fmtNum(m.output_tokens)+' out · $'+Number(m.cost_est||0).toFixed(2)+'</span></div>';
+    }).join('')||'<div class="usage-model-row"><b>无数据</b></div>';
+    var daily=u.daily||[]; var cbox=document.getElementById('usageChart');
+    var maxCalls=Math.max.apply(null, daily.map(function(d){return d.calls||0}).concat([1]));
+    cbox.innerHTML=daily.map(function(d){
+      var h=Math.max(3, Math.round((d.calls||0)/maxCalls*52));
+      return '<div class="usage-bar" style="height:'+h+'px" title="'+d.d+' · '+fmtNum(d.calls)+' 次 · $'+Number(d.cost_est||0).toFixed(2)+'"></div>';
+    }).join('')||'<span style="font-size:11px;color:var(--muted)">无数据</span>';
+    var nbox=document.getElementById('usageNotes');
+    nbox.innerHTML=(u.notes||[]).map(function(n){return '⚠ '+esc(n)}).join('<br>');
+  }).catch(function(e){ box.textContent='用量加载失败: '+e; });
+}
+
+/* ── Cron 面板 (任务4) ─────────────────────────────────────────── */
+function loadCron(){
+  var box=document.getElementById('cronList'); if(!box)return;
+  fetch('/api/cron').then(function(r){return r.json()}).then(function(u){
+    if(!u.ok){ box.textContent='加载失败: '+(u.error||''); return; }
+    document.getElementById('cronLive').textContent=u.jobs.length+' 个任务';
+    box.innerHTML=u.jobs.map(function(j){
+      var st=j.enabled?(j.state||'active'):'paused';
+      var stCls=st==='paused'?'st-paused':((j.last_status==='ok')?'st-ok':'st-err');
+      return '<div class="cron-row">'
+        +'<div class="cron-head"><b>'+esc(j.name)+'</b><span class="cron-badge '+stCls+'">'+esc(st)+'</span></div>'
+        +'<div class="cron-meta">'+esc(j.schedule||'')+(j.script?' · '+esc(j.script):'')+'</div>'
+        +'<div class="cron-meta">下次 '+esc(j.next_run_at?String(j.next_run_at).slice(0,16).replace('T',' '):'-')+' · 上次 '+esc(j.last_status||'-')+'</div>'
+        +'<div class="cron-actions">'
+        +(j.enabled
+          ?'<button class="btn small" data-act="pause" data-id="'+esc(j.id)+'">暂停</button>'
+          :'<button class="btn small" data-act="resume" data-id="'+esc(j.id)+'">恢复</button>')
+        +'<button class="btn small" data-act="run" data-id="'+esc(j.id)+'">立即</button>'
+        +'<button class="btn small danger" data-act="remove" data-id="'+esc(j.id)+'">删除</button>'
+        +'</div></div>';
+    }).join('')||'<div class="cron-empty">暂无 cron 任务</div>';
+    box.querySelectorAll('button[data-act]').forEach(function(b){
+      b.addEventListener('click',function(){ cronAct(b.getAttribute('data-act'),b.getAttribute('data-id')); });
+    });
+  }).catch(function(e){ box.textContent='加载失败: '+e; });
+}
+function cronAct(act,id){
+  fetch('/api/cron',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:act,id:id})})
+    .then(function(r){return r.json()}).then(function(u){
+      if(!u.ok) alert('操作失败: '+(u.error||''));
+      loadCron();
+    }).catch(function(e){ alert('操作失败: '+e); });
+}
+
+/* ── Kanban 面板 (任务4) ───────────────────────────────────────── */
+var KANBAN_STATUS = {ready:'待办', running:'进行中', blocked:'阻塞', done:'完成', archived:'归档'};
+function loadKanban(){
+  var box=document.getElementById('kanbanList'); if(!box)return;
+  fetch('/api/kanban').then(function(r){return r.json()}).then(function(u){
+    if(!u.ok){ box.textContent='加载失败: '+(u.error||''); return; }
+    document.getElementById('kanbanLive').textContent=u.tasks.length+' 张卡';
+    box.innerHTML=u.tasks.map(function(t){
+      var st=KANBAN_STATUS[t.status]||t.status||'-';
+      var done=(t.status==='done'||t.status==='archived');
+      return '<div class="kanban-row'+(done?' is-done':'')+'">'
+        +'<div class="kanban-head"><span class="kanban-title">'+esc(t.title)+'</span>'
+        +'<span class="cron-badge st-'+esc(t.status||'ready')+'">'+esc(st)+'</span></div>'
+        +'<div class="cron-meta">'+esc(t.id)+(t.priority?' · P'+esc(t.priority):'')+'</div>'
+        +'<div class="cron-actions">'
+        +(t.status!=='done'?'<button class="btn small" data-act="complete" data-id="'+esc(t.id)+'">完成</button>':'')
+        +(t.status!=='archived'?'<button class="btn small" data-act="archive" data-id="'+esc(t.id)+'">归档</button>':'')
+        +'</div></div>';
+    }).join('')||'<div class="cron-empty">暂无任务</div>';
+    box.querySelectorAll('button[data-act]').forEach(function(b){
+      b.addEventListener('click',function(){ kanbanAct(b.getAttribute('data-act'),b.getAttribute('data-id')); });
+    });
+  }).catch(function(e){ box.textContent='加载失败: '+e; });
+}
+function kanbanAct(act,id){
+  fetch('/api/kanban',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:act,id:id})})
+    .then(function(r){return r.json()}).then(function(u){
+      if(!u.ok) alert('操作失败: '+(u.error||''));
+      loadKanban();
+    }).catch(function(e){ alert('操作失败: '+e); });
+}
+function kanbanAdd(){
+  var inp=document.getElementById('kanbanTitle'); var title=(inp.value||'').trim();
+  if(!title){ alert('请输入任务标题'); return; }
+  fetch('/api/kanban',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'create',title:title})})
+    .then(function(r){return r.json()}).then(function(u){
+      if(!u.ok) alert('创建失败: '+(u.error||''));
+      inp.value=''; loadKanban();
+    }).catch(function(e){ alert('创建失败: '+e); });
+}
 function connectSSE() { var evt=new EventSource('/api/events'); evt.addEventListener('connected',function(){connDot.className='conn-dot on';connLabel.textContent='已连接';}); evt.addEventListener('monitor',function(e){try{addMessage(JSON.parse(e.data))}catch(_){}}); evt.onerror=function(){connDot.className='conn-dot off';connLabel.textContent='重连中...';evt.close();setTimeout(connectSSE,3000);}; }
 
 /* ── herdr 监督卡片 (B5) ─────────────────────────────────────── */

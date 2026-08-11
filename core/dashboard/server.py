@@ -1705,6 +1705,135 @@ def _read_tail(count: int = 200) -> list[dict]:
         return _log_cache[-count:]
 
 
+def _usage_report(days: int = 30) -> dict:
+    """Hermes usage 聚合（state.db session_model_usage）：totals / by_model / daily / notes.
+
+    失真说明（2026-08-10 调研结论）：
+    - glm-5.2 走 go 服务器通道时不写 usage 记录 → 历史"记 0"根因是未记录而非记 0；
+    - estimated_cost 依赖官方价格快照，快照缺失时计 0（如 2026-08-09 后）。
+    """
+    db = ROOT / "data" / "hermes-agent" / "state.db"
+    if not db.exists():
+        return {"ok": False, "error": f"state.db not found: {db}"}
+    cut = time.time() - days * 86400
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(db))
+        conn.row_factory = sqlite3.Row
+        totals = dict(conn.execute(
+            "SELECT COUNT(*) AS rows_cnt,"
+            " COALESCE(SUM(api_call_count),0) AS calls,"
+            " COALESCE(SUM(input_tokens),0) AS input_tokens,"
+            " COALESCE(SUM(output_tokens),0) AS output_tokens,"
+            " COALESCE(SUM(cache_read_tokens),0) AS cache_read,"
+            " ROUND(COALESCE(SUM(estimated_cost_usd),0),4) AS cost_est"
+            " FROM session_model_usage WHERE last_seen >= ?", (cut,)).fetchone())
+        by_model = [dict(r) for r in conn.execute(
+            "SELECT model, COUNT(*) AS rows_cnt, SUM(api_call_count) AS calls,"
+            " SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,"
+            " ROUND(SUM(estimated_cost_usd),4) AS cost_est"
+            " FROM session_model_usage WHERE last_seen >= ?"
+            " GROUP BY model ORDER BY calls DESC", (cut,))]
+        daily = [dict(r) for r in conn.execute(
+            "SELECT date(last_seen,'unixepoch','localtime') AS d,"
+            " SUM(api_call_count) AS calls, ROUND(SUM(estimated_cost_usd),4) AS cost_est"
+            " FROM session_model_usage WHERE last_seen >= ?"
+            " GROUP BY d ORDER BY d", (cut,))]
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "ok": True, "days": days,
+        "totals": totals, "by_model": by_model, "daily": daily,
+        "notes": [
+            "glm-5.2 走 go 服务器通道时不写 usage 记录（历史失真根因：未记录而非记 0）",
+            "estimated_cost 依赖官方价格快照，快照缺失时计 0",
+        ],
+    }
+
+
+# ── Cron / Kanban 管理 (任务4): 读直连数据, 写操作走 hermes CLI 保持语义一致 ──
+_HERMES_CLI = [str(ROOT / "core" / "hermes" / "venv" / "Scripts" / "python.exe"),
+               "-m", "hermes_cli.main"]
+
+
+def _hermes_cli(args: list, timeout: int = 90) -> tuple[int, str]:
+    """调用 hermes CLI, 返回 (rc, stdout)."""
+    try:
+        proc = subprocess.run(
+            _HERMES_CLI + args, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+        return proc.returncode, proc.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return 124, "hermes CLI 超时"
+    except Exception as exc:  # noqa: BLE001
+        return 1, f"调用失败: {type(exc).__name__}: {exc}"
+
+
+def _cron_list() -> dict:
+    """读 cron/jobs.json 返回精简任务列表."""
+    jobs_file = ROOT / "data" / "hermes-agent" / "cron" / "jobs.json"
+    try:
+        data = json.loads(jobs_file.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    rows = []
+    for j in data.get("jobs", []):
+        sched = j.get("schedule_display") or (j.get("schedule") or {}).get("display") or ""
+        rows.append({
+            "id": j.get("id"), "name": j.get("name"), "schedule": sched,
+            "enabled": j.get("enabled"), "state": j.get("state"),
+            "last_status": j.get("last_status"), "last_error": j.get("last_error"),
+            "next_run_at": j.get("next_run_at"), "last_run_at": j.get("last_run_at"),
+            "script": j.get("script"),
+        })
+    return {"ok": True, "jobs": rows}
+
+
+def _cron_action(action: str, job_id: str) -> dict:
+    if action not in ("pause", "resume", "run", "remove"):
+        return {"ok": False, "error": f"未知动作: {action}"}
+    rc, out = _hermes_cli(["cron", action, job_id])
+    if rc != 0:
+        return {"ok": False, "error": out or f"rc={rc}"}
+    return {"ok": True, "msg": f"cron {action} {job_id} 成功"}
+
+
+def _kanban_list() -> dict:
+    rc, out = _hermes_cli(["kanban", "list", "--json"])
+    if rc != 0:
+        return {"ok": False, "error": out or f"rc={rc}"}
+    try:
+        tasks = json.loads(out)
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "kanban list --json 解析失败"}
+    rows = [{
+        "id": t.get("id"), "title": t.get("title"), "status": t.get("status"),
+        "priority": t.get("priority"), "assignee": t.get("assignee"),
+        "created_by": t.get("created_by"), "created_at": t.get("created_at"),
+    } for t in tasks]
+    return {"ok": True, "tasks": rows}
+
+
+def _kanban_action(action: str, payload: dict) -> dict:
+    if action == "create":
+        title = (payload.get("title") or "").strip()
+        if not title:
+            return {"ok": False, "error": "缺少 title"}
+        rc, out = _hermes_cli(["kanban", "create", title, "--json"])
+    elif action in ("complete", "archive"):
+        tid = (payload.get("id") or "").strip()
+        if not tid:
+            return {"ok": False, "error": "缺少 id"}
+        rc, out = _hermes_cli(["kanban", action, tid])
+    else:
+        return {"ok": False, "error": f"未知动作: {action}"}
+    if rc != 0:
+        return {"ok": False, "error": out or f"rc={rc}"}
+    return {"ok": True, "msg": f"kanban {action} 成功", "out": out[:400]}
+
+
 # 缓存 V5 模块导入，避免每次 /api/state 都重新 import 刷屏日志
 _v5_modules: dict = {}
 
@@ -2024,6 +2153,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/log":
             events = _read_tail(200)
             self._send_json(events)
+        elif path == "/api/usage":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                days = min(int(qs.get("days", ["30"])[0]), 90)
+            except (ValueError, IndexError):
+                days = 30
+            self._send_json(_usage_report(days))
+        elif path == "/api/cron":
+            self._send_json(_cron_list())
+        elif path == "/api/kanban":
+            self._send_json(_kanban_list())
         elif path == "/api/state":
             state = _read_v5_state()
             self._send_json(state)
@@ -2084,6 +2224,31 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                                  "msg": f"全部组件 {action} 已派发"})
             else:
                 self._send_json({"ok": False, "msg": "未知系统动作"}, status=400)
+            return
+
+        # /api/cron → {action: pause|resume|run|remove, id}
+        if len(parts) >= 2 and parts[0] == "api" and parts[1] == "cron":
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception:
+                body = {}
+            res = _cron_action((body.get("action") or "").strip(),
+                               (body.get("id") or "").strip())
+            self._send_json(res, status=200 if res.get("ok") else 400)
+            return
+
+        # /api/kanban → {action: create|complete|archive, title?/id?}
+        if len(parts) >= 2 and parts[0] == "api" and parts[1] == "kanban":
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception:
+                body = {}
+            res = _kanban_action((body.get("action") or "").strip(), body)
+            self._send_json(res, status=200 if res.get("ok") else 400)
             return
 
         # /api/shutdown  → stop this control panel

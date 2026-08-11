@@ -533,6 +533,45 @@ body::before {
   background: linear-gradient(90deg, var(--accent), var(--violet));
   opacity: 0.9;
 }
+
+/* 用量分析面板 (任务3) */
+.usage-panel { grid-column: 1 / -1; }
+.usage-totals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+.usage-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 8px 10px; }
+.usage-tile-num { font-size: 16px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.usage-tile-label { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.usage-model-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.usage-model-row:last-child { border-bottom: none; }
+.usage-model-row b { font-weight: 600; color: var(--text); }
+.usage-model-row span { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.usage-chart { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin: 2px 0 8px; }
+.usage-bar { flex: 1; background: linear-gradient(180deg, var(--accent), var(--violet)); border-radius: 3px 3px 0 0; min-width: 2px; opacity: 0.8; transition: opacity .2s; }
+.usage-bar:hover { opacity: 1; }
+.usage-notes { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
+
+/* Cron / Kanban 面板 (任务4) */
+.cron-list, .kanban-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
+.cron-row, .kanban-row { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 8px 10px; }
+.kanban-row.is-done { opacity: .55; }
+.cron-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 3px; }
+.cron-head b { font-size: 12px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-title { font-size: 12px; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cron-badge { font-size: 10px; padding: 1px 7px; border-radius: 99px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); flex-shrink: 0; }
+.cron-badge.st-ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 35%, transparent); }
+.cron-badge.st-err { color: #ef4444; border-color: rgba(239,68,68,.35); }
+.cron-badge.st-paused, .cron-badge.st-archived { color: var(--muted); }
+.cron-badge.st-running { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.cron-badge.st-done { color: var(--green); }
+.cron-badge.st-blocked { color: #f59e0b; border-color: rgba(245,158,11,.35); }
+.cron-meta { font-size: 10px; color: var(--muted); margin: 2px 0; }
+.cron-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.cron-actions .btn.small { padding: 2px 9px; font-size: 10px; border-radius: 6px; }
+.cron-actions .btn.small.danger { color: #ef4444; border-color: rgba(239,68,68,.35); }
+.cron-empty { font-size: 11px; color: var(--muted); text-align: center; padding: 10px 0; }
+.kanban-new { display: flex; gap: 6px; margin-bottom: 10px; }
+.kanban-new input { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-track); color: var(--text); font-size: 12px; padding: 5px 9px; outline: none; }
+.kanban-new input:focus { border-color: var(--accent); }
+.kanban-new .btn.small { padding: 4px 12px; font-size: 11px; }
 .mem-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .mem-title-text { font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: 0.3px; }
 .mem-live { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }

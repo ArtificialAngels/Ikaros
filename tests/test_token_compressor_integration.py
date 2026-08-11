@@ -37,19 +37,13 @@ _spec.loader.exec_module(_mod)
 IkarosV5MemoryProvider = _mod.IkarosV5MemoryProvider  # noqa: E402
 
 
-class _FakeMem:
-    """模拟 memory_v5.store.search 返回的对象(.content / .weight)"""
-
-    def __init__(self, content: str, weight: float):
-        self.content = content
-        self.weight = weight
-
-
 def _make_provider(fake_results):
     p = IkarosV5MemoryProvider()
     p._v5_loaded = True
     p._v5_root = Path(tempfile.mkdtemp(prefix="v5_sandbox_"))  # affect.json 不存在 -> 跳过
-    p._v5_search = lambda q, top_k=5: fake_results
+    # 检索引擎已从 FTS5(store.search) 升级为 unified_retrieve(三路融合)：
+    # 注入点随引擎变更，返回 dict 列表 {content, score}
+    p._v5_unified = lambda q, top_k=5: fake_results
     p._v5_stats = lambda: {"total": 100}
     return p
 
@@ -61,9 +55,9 @@ class TestHermesIntegration(unittest.TestCase):
 
     def test_enhanced_path_keeps_high_score_compresses_long(self):
         results = [
-            _FakeMem("用户喜欢在安静独立的环境工作，讨厌被频繁打断", 0.95),
-            _FakeMem("x" * 400, 0.2),                       # 低相关长内容 -> 压缩
-            _FakeMem("用户最近开始学习 Rust 编程语言", 0.80),  # 高相关 -> 原样
+            {"content": "用户喜欢在安静独立的环境工作，讨厌被频繁打断", "score": 0.95},
+            {"content": "x" * 400, "score": 0.2},                       # 低相关长内容 -> 压缩
+            {"content": "用户最近开始学习 Rust 编程语言", "score": 0.80},  # 高相关 -> 原样
         ]
         p = _make_provider(results)
         out = p.on_pre_compress(self._messages())
@@ -85,8 +79,8 @@ class TestHermesIntegration(unittest.TestCase):
     def test_fallback_when_compressor_raises(self):
         import memory_v5.extensions.token_compressor as tcm
         results = [
-            _FakeMem("用户喜欢在安静独立的环境工作", 0.95),
-            _FakeMem("y" * 400, 0.2),
+            {"content": "用户喜欢在安静独立的环境工作", "score": 0.95},
+            {"content": "y" * 400, "score": 0.2},
         ]
         p = _make_provider(results)
 
