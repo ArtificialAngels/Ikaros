@@ -174,9 +174,13 @@ def http_server(tmp_data_dir, patched_store, reset_state):
 
 def http_get(base_url: str, path: str):
     """GET <base_url><path>, 返回 (status, parsed_json_or_text)."""
-    with urllib.request.urlopen(base_url + path) as resp:
-        body = resp.read().decode("utf-8")
-        status = resp.status
+    try:
+        with urllib.request.urlopen(base_url + path) as resp:
+            body = resp.read().decode("utf-8")
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        status = e.code
     try:
         return status, json.loads(body)
     except json.JSONDecodeError:

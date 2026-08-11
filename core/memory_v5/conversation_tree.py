@@ -217,7 +217,7 @@ class ConvNode:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ConvNode":
-        return cls(
+        node = cls(
             id=d["id"],
             parent_id=d.get("parent_id"),
             children=list(d.get("children", [])),
@@ -247,6 +247,14 @@ class ConvNode:
             exec_progress=d.get("exec_progress", 0.0),
             exec_detail=d.get("exec_detail", ""),
         )
+        # 整包导入: 序列化节点可能内联 messages (对话本体)。拓扑 JSON 只存指针,
+        # 故此处仅作**迁移暂存** (from_dict 后由 _migrate_tree 写入 V5 store),
+        # 不参与 to_dict/persist 序列化, 保证拓扑文件保持精简。
+        # (旧代码直接丢弃 messages → import 后消息历史丢失, 导出-导入无法闭环)
+        msgs = d.get("messages")
+        if msgs is not None:
+            node.messages = msgs
+        return node
 
 
 # ───────────────────────── Store 接口 (可注入) ───────────────────────
@@ -765,41 +773,42 @@ class ConversationTree:
         与 add_turn 的区别: fork_branch 显式标记 node_type="branch",
         用于分支管理场景。add_turn 保持 node_type 继承父节点。
         """
-        fork_node = self.nodes.get(fork_point_id)
-        if not fork_node:
-            raise ValueError(f"fork point not found: {fork_point_id}")
+        with self._lock:
+            fork_node = self.nodes.get(fork_point_id)
+            if not fork_node:
+                raise ValueError(f"fork point not found: {fork_point_id}")
 
-        content = json.dumps(messages, ensure_ascii=False)
-        sm = _extract_summary(messages)
-        node_id = uid("br")
-        new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
-        mid = self._store_fn(content, type="conversation", tags=new_tags)
-        if mid == 0:
-            # F5: store 失败 (返回 0) 时显式告警, 不再无声丢内容
-            logger.warning("fork_branch: V5 store failed for node %s (content not persisted)", node_id)
+            content = json.dumps(messages, ensure_ascii=False)
+            sm = _extract_summary(messages)
+            node_id = uid("br")
+            new_tags = f"{tags} {_tree_tag(node_id, branch_label)} session:{self.persist_key}".strip()
+            mid = self._store_fn(content, type="conversation", tags=new_tags)
+            if mid == 0:
+                # F5: store 失败 (返回 0) 时显式告警, 不再无声丢内容
+                logger.warning("fork_branch: V5 store failed for node %s (content not persisted)", node_id)
 
-        node = ConvNode(
-            id=node_id,
-            parent_id=fork_point_id,
-            agent=fork_node.agent,
-            depth=fork_node.depth + 1,
-            branch_label=branch_label,
-            node_type="branch",
-            v5_memory_id=mid,
-            summary=sm,
-            state=_clone(state) if state is not None else _clone(fork_node.state),
-            config=_clone(config) if config is not None else _clone(fork_node.config),
-            meta={"created_at": time.time(), "title": title},
-            thinking=thinking,
-            tool_calls=list(tool_calls) if tool_calls else [],
-            usage=usage or {},
-            skills_used=list(skills_used) if skills_used else [],
-            created_at=time.time(),
-        )
-        self.nodes[node.id] = node
-        fork_node.children.append(node.id)
-        self.current_id = node.id
-        self.version += 1
+            node = ConvNode(
+                id=node_id,
+                parent_id=fork_point_id,
+                agent=fork_node.agent,
+                depth=fork_node.depth + 1,
+                branch_label=branch_label,
+                node_type="branch",
+                v5_memory_id=mid,
+                summary=sm,
+                state=_clone(state) if state is not None else _clone(fork_node.state),
+                config=_clone(config) if config is not None else _clone(fork_node.config),
+                meta={"created_at": time.time(), "title": title},
+                thinking=thinking,
+                tool_calls=list(tool_calls) if tool_calls else [],
+                usage=usage or {},
+                skills_used=list(skills_used) if skills_used else [],
+                created_at=time.time(),
+            )
+            self.nodes[node.id] = node
+            fork_node.children.append(node.id)
+            self.current_id = node.id
+            self.version += 1
         self._emit()
         self.persist()
         return node
@@ -811,27 +820,28 @@ class ConversationTree:
         conclusions: List[str],
     ) -> ConvNode:
         """将分支节点标记为已结论化。"""
-        node = self.nodes.get(node_id)
-        if not node:
-            raise ValueError(f"node not found: {node_id}")
-        node.node_type = "conclusion"
-        # S1: 主线终点被收尾 → 回退到最近的 trunk 祖先 (conclusion 不再延续主线)
-        if self.trunk_id == node_id:
-            anc = self.nodes.get(node.parent_id) if node.parent_id else None
-            self.trunk_id = None
-            while anc:
-                if anc.node_type == "trunk" and anc.id != self.root_id:
-                    self.trunk_id = anc.id
-                    break
-                anc = self.nodes.get(anc.parent_id) if anc.parent_id else None
-        for text in conclusions:
-            node.conclusions.append(NodeInsight(
-                text=text,
-                confidence=0.8,
-                source_ids=[node_id],
-                extracted_at=time.time(),
-            ))
-        self.version += 1
+        with self._lock:
+            node = self.nodes.get(node_id)
+            if not node:
+                raise ValueError(f"node not found: {node_id}")
+            node.node_type = "conclusion"
+            # S1: 主线终点被收尾 → 回退到最近的 trunk 祖先 (conclusion 不再延续主线)
+            if self.trunk_id == node_id:
+                anc = self.nodes.get(node.parent_id) if node.parent_id else None
+                self.trunk_id = None
+                while anc:
+                    if anc.node_type == "trunk" and anc.id != self.root_id:
+                        self.trunk_id = anc.id
+                        break
+                    anc = self.nodes.get(anc.parent_id) if anc.parent_id else None
+            for text in conclusions:
+                node.conclusions.append(NodeInsight(
+                    text=text,
+                    confidence=0.8,
+                    source_ids=[node_id],
+                    extracted_at=time.time(),
+                ))
+            self.version += 1
         self._emit()
         self.persist()
         return node
@@ -848,76 +858,79 @@ class ConversationTree:
         trunk.merged_from += branch_node_id。
         分支结论注入主干时 confidence × 0.9 并标记来源。
         """
-        branch = self.nodes.get(branch_node_id)
-        trunk = self.nodes.get(trunk_target_id)
-        if not branch:
-            raise ValueError(f"branch node not found: {branch_node_id}")
-        if not trunk:
-            raise ValueError(f"trunk node not found: {trunk_target_id}")
-        if trunk.node_type != "trunk":
-            raise ValueError(f"merge target must be trunk, got: {trunk.node_type}")
+        with self._lock:
+            branch = self.nodes.get(branch_node_id)
+            trunk = self.nodes.get(trunk_target_id)
+            if not branch:
+                raise ValueError(f"branch node not found: {branch_node_id}")
+            if not trunk:
+                raise ValueError(f"trunk node not found: {trunk_target_id}")
+            if trunk.node_type != "trunk":
+                raise ValueError(f"merge target must be trunk, got: {trunk.node_type}")
 
-        # 1. 建立 merge 边
-        branch.merge_target = trunk_target_id
-        if branch_node_id not in trunk.merged_from:
-            trunk.merged_from.append(branch_node_id)
+            # 1. 建立 merge 边
+            branch.merge_target = trunk_target_id
+            if branch_node_id not in trunk.merged_from:
+                trunk.merged_from.append(branch_node_id)
 
-        # 2. 注入结论（confidence × 0.9）
-        for insight in branch.conclusions:
-            trunk.conclusions.append(NodeInsight(
-                text=f"[merged from {branch.branch_label}] {insight.text}",
-                confidence=insight.confidence * 0.9,
-                source_ids=list(insight.source_ids) + [branch_node_id],
-                extracted_at=time.time(),
-            ))
+            # 2. 注入结论（confidence × 0.9）
+            for insight in branch.conclusions:
+                trunk.conclusions.append(NodeInsight(
+                    text=f"[merged from {branch.branch_label}] {insight.text}",
+                    confidence=insight.confidence * 0.9,
+                    source_ids=list(insight.source_ids) + [branch_node_id],
+                    extracted_at=time.time(),
+                ))
 
-        # 3. 更新主干 state
-        trunk.state.setdefault("merged_insights", [])
-        trunk.state["merged_insights"].append({
-            "branch_id": branch_node_id,
-            "branch_label": branch.branch_label,
-            "conclusions": [i.text for i in branch.conclusions],
-            "merged_at": time.time(),
-        })
+            # 3. 更新主干 state
+            trunk.state.setdefault("merged_insights", [])
+            trunk.state["merged_insights"].append({
+                "branch_id": branch_node_id,
+                "branch_label": branch.branch_label,
+                "conclusions": [i.text for i in branch.conclusions],
+                "merged_at": time.time(),
+            })
 
-        self.version += 1
+            self.version += 1
         self._emit()
         self.persist()
 
     # ── v2: 撤销合并 ──
     def unmerge_branch(self, branch_node_id: str) -> None:
         """撤销分支合并: 断开 merge 边, 从主干移除注入的结论."""
-        branch = self.nodes.get(branch_node_id)
-        if not branch or not branch.merge_target:
-            return
-        trunk = self.nodes.get(branch.merge_target)
-        if trunk:
-            if branch_node_id in trunk.merged_from:
-                trunk.merged_from.remove(branch_node_id)
-            trunk.conclusions = [
-                c for c in trunk.conclusions
-                if branch_node_id not in c.source_ids
-            ]
-            if "merged_insights" in trunk.state:
-                trunk.state["merged_insights"] = [
-                    m for m in trunk.state["merged_insights"]
-                    if m.get("branch_id") != branch_node_id
+        with self._lock:
+            branch = self.nodes.get(branch_node_id)
+            if not branch or not branch.merge_target:
+                return
+            trunk = self.nodes.get(branch.merge_target)
+            if trunk:
+                if branch_node_id in trunk.merged_from:
+                    trunk.merged_from.remove(branch_node_id)
+                trunk.conclusions = [
+                    c for c in trunk.conclusions
+                    if branch_node_id not in c.source_ids
                 ]
-        branch.merge_target = None
-        self.version += 1
+                if "merged_insights" in trunk.state:
+                    trunk.state["merged_insights"] = [
+                        m for m in trunk.state["merged_insights"]
+                        if m.get("branch_id") != branch_node_id
+                    ]
+            branch.merge_target = None
+            self.version += 1
         self._emit()
         self.persist()
 
     # ── v2: 废弃分支 ──
     def abandon_branch(self, node_id: str) -> None:
         """废弃分支: 子树全部标记 is_valid=False, 不移除节点."""
-        node = self.nodes.get(node_id)
-        if not node:
-            raise ValueError(f"node not found: {node_id}")
-        for n in self.subtree(node_id):
-            n.is_valid = False
-            n.meta["abandoned_at"] = time.time()
-        self.version += 1
+        with self._lock:
+            node = self.nodes.get(node_id)
+            if not node:
+                raise ValueError(f"node not found: {node_id}")
+            for n in self.subtree(node_id):
+                n.is_valid = False
+                n.meta["abandoned_at"] = time.time()
+            self.version += 1
         self._emit()
         self.persist()
 
@@ -1247,11 +1260,15 @@ class ConversationTree:
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             path = self.data_dir / f"{self.persist_key}.json"
-            tmp = path.with_suffix(".json.tmp")
+            # R9: 并发持久化安全 —— persist() 在引擎锁外被调用 (R1 设计),
+            # 多线程同时写同一 .json.tmp 会互相截断, Windows 下 rename 期间
+            # 文件被占 → WinError 32, 写全部丢失。每次用唯一 tmp 名,
+            # os.replace 原子替换目标, 并发写同一目标 = 最后一次赢, 不丢文件。
+            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:12]}.tmp")
             tmp.write_text(self.serialize(), encoding="utf-8")
             tmp.replace(path)
         except Exception as exc:
-            logger.debug("persist skipped: %s", exc)
+            logger.warning("persist failed for %s: %s", self.persist_key, exc)
 
     @classmethod
     def deserialize(cls, raw: str | dict, **kwargs: Any) -> "ConversationTree":

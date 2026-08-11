@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import queue
@@ -47,6 +48,16 @@ _UPLOAD_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"
                 ".csv": "text/csv; charset=utf-8", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 ".mp3": "audio/mpeg", ".wav": "audio/wav", ".mp4": "video/mp4"}
+# 任务2: 上传上限 50MB (对齐 hermes-studio), 8 字节随机 hex 文件名防冲突
+_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+# 允许以文本方式读入上下文发给 LLM 的扩展名 (其他文件仅透出链接/元信息)
+_TEXT_EXTENSIONS = {".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json",
+                    ".csv", ".html", ".css", ".yaml", ".yml", ".toml", ".ini",
+                    ".log", ".sh", ".bat", ".cmd", ".sql", ".xml", ".go", ".rs",
+                    ".java", ".c", ".cpp", ".h", ".rb", ".php", ".r", ".lua",
+                    ".toml", ".cfg", ".conf", ".diff", ".patch"}
+# 文本附件读入上下文的内容上限 (防超大文件把上下文撑爆)
+_UPLOAD_TEXT_CAP = 20000
 
 import memory_v5.conversation_tree as ct  # noqa: E402
 from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
@@ -91,6 +102,12 @@ HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119"
 # 亦可覆盖为直连 :8642 (http://127.0.0.1:8642/v1/chat/completions) 绕过 bridge.
 # gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8650/v1/chat/completions").strip() or None
+# 任务2: 多模态直连端点 —— bridge :8650 会把 content 列表拍平成文本, 无法透传图片,
+# 故含 image_url 的消息直接打 gateway :8642 原生的 OpenAI-wire 端点 (其
+# _normalize_multimodal_content 接受 image_url base64; 该端点同样流 hermes.tool.progress)。
+HERMES_GATEWAY_CHAT_URL = os.environ.get(
+    "HERMES_GATEWAY_URL", "http://127.0.0.1:8642"
+).rstrip("/") + "/v1/chat/completions"
 # gateway 鉴权 token; 默认 ikaros-gateway-key (由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
 # 2026-08-03: 优先从 HERMES_HOME/.env (data/hermes-agent/.env) 读真实 API_SERVER_KEY,
 # 与 dashboard server 同源, 避免 401.
@@ -331,8 +348,11 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
 
     返回 (content, usage). 任一 provider 成功即返回; 全部失败抛 RuntimeError.
     collector 非 None 时把用量写入 collector["usage"] (供 SSE usage 事件).
-    注意: 此函数是 gateway 不可达时的**降级**通道 (H2 恢复), 非主链路.
+    注意: 此函数是 gateway 不可达时的**降级**通道 (H2 恢复), 非主链路。
     """
+    # 任务2: 文本端点不支持 ContentBlock 列表 —— 附件消息降级为纯文本 (图片→占位)
+    messages = [dict(m, content=_flatten_openai_content(m.get("content")))
+                for m in messages]
     errors: list[str] = []
 
     # 1) DeepSeek API
@@ -480,6 +500,9 @@ def _call_llm_tools(
     - 返回的 tool_calls 为原始 OpenAI 格式列表:
       [{"id":..., "type":"function", "function":{"name":..., "arguments":"{...}"}}, ...]
     """
+    # 任务2: DeepSeek 文本端点不支持 ContentBlock 列表 —— 附件消息拍平成纯文本
+    messages = [dict(m, content=_flatten_openai_content(m.get("content")))
+                for m in messages]
     errors: list[str] = []
 
     # 1) DeepSeek API (唯一支持 tools 的降级层)
@@ -708,9 +731,136 @@ def build_system_prompt(mode: str) -> str:
     return build_ikaros_persona()
 
 
+# ── 任务2: 附件 → OpenAI ContentBlock 协议 ─────────────────────────────
+def _flatten_openai_content(content) -> str:
+    """把 OpenAI 消息 content (str 或 [{"type":..., ...}] 列表) 拍平成纯文本.
+
+    供不支持多模态的文本端点 (DeepSeek/Hermes dashboard/Local) 与树摘要使用:
+    text 块取 text; image_url 块降级为占位说明 (无视觉能力的模型读不到图).
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                ptype = str(item.get("type") or "").strip().lower()
+                if ptype == "text":
+                    parts.append(str(item.get("text") or ""))
+                elif ptype == "image_url":
+                    img = item.get("image_url") or {}
+                    url = img.get("url") if isinstance(img, dict) else img
+                    name = (img.get("name") if isinstance(img, dict) else None) or ""
+                    parts.append(f"[图片附件 {name}]".strip())
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _resolve_upload_path(url_or_name: str) -> Path | None:
+    """把前端传的 ``/uploads/<name>`` 或 ``<name>`` 解析为本地文件路径.
+
+    只接受 _UPLOAD_DIR 下的文件名 (防目录穿越), 不存在返回 None.
+    """
+    raw = (url_or_name or "").strip()
+    name = raw[len("/uploads/"):] if raw.startswith("/uploads/") else raw
+    name = Path(name).name  # 只留 basename, 剥掉任何路径成分
+    if not name or name.startswith(".") or "/" in name or "\\" in name:
+        return None
+    f = _UPLOAD_DIR / name
+    return f if f.is_file() else None
+
+
+def _read_text_attachment(path: Path, cap: int = _UPLOAD_TEXT_CAP) -> str:
+    """读文本附件内容 (UTF-8, 容错 replace; 超长截断). 非文本返回空串."""
+    try:
+        raw = path.read_bytes()[: cap * 2]
+    except Exception:
+        return ""
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    return text if len(text) <= cap else text[:cap] + "\n… (内容超长已截断)"
+
+
+def _attachment_content_blocks(attachments: list[dict]) -> list[dict]:
+    """附件引用列表 → OpenAI ContentBlock 协议列表.
+
+    - 图片: 读文件 → ``{"type":"image_url","image_url":{"url":"data:<mime>;base64,..."}}``
+    - 文本类: 读内容 → ``{"type":"text","text":"### 附件 <name>\n<content>"}``
+    - 其他 (二进制/不可读): 仅透出文件名与大小占位
+    单个附件读取出错时降级为占位块, 不阻塞整条消息.
+    """
+    blocks: list[dict] = []
+    for att in attachments or []:
+        if not isinstance(att, dict):
+            continue
+        name = str(att.get("name") or "附件")
+        path = _resolve_upload_path(str(att.get("url") or ""))
+        if path is None:
+            blocks.append({"type": "text",
+                           "text": f"[附件 {name} 未找到，已跳过]"})
+            continue
+        ext = path.suffix.lower()
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"):
+            mime = _UPLOAD_MIME.get(ext, "image/png")
+            try:
+                b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}", "name": name},
+                })
+                continue
+            except Exception:
+                blocks.append({"type": "text",
+                               "text": f"[图片附件 {name} 读取失败]"})
+                continue
+        if ext in _TEXT_EXTENSIONS:
+            content = _read_text_attachment(path)
+            if content.strip():
+                blocks.append({"type": "text",
+                               "text": f"### 附件: {name}\n{content}"})
+                continue
+        size = path.stat().st_size if path.exists() else 0
+        blocks.append({"type": "text",
+                       "text": f"[附件 {name} ({size} 字节，非文本格式)]"})
+    return blocks
+
+
+def _messages_have_images(messages: list[dict]) -> bool:
+    """消息列表里是否含 image_url 内容块 (用于决定是否必须直连 gateway 多模态)."""
+    for m in messages or []:
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "").lower() == "image_url":
+                return True
+    return False
+
+
+def _build_user_content(user_message: str, attachments: list | None):
+    """组装 user 消息 content: 无附件 → 纯字符串; 有附件 → OpenAI ContentBlock 列表.
+
+    内容块顺序: 文本(用户输入)在前, 附件块在后 (gateway 按顺序消费).
+    """
+    if not attachments:
+        return user_message
+    blocks: list[dict] = []
+    if user_message and user_message.strip():
+        blocks.append({"type": "text", "text": user_message})
+    blocks.extend(_attachment_content_blocks(attachments))
+    return blocks if blocks else user_message
+
+
 def build_chat_messages_v5(node_id: str | None, user_message: str,
                            collector: "dict | None" = None,
-                           tree: "ct.ConversationTree | None" = None) -> list[dict]:
+                           tree: "ct.ConversationTree | None" = None,
+                           attachments: "list | None" = None) -> list[dict]:
     """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
 
     - ikaros 模式: 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
@@ -720,6 +870,8 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
       没有的: 当前分支在树里的位置 + 树域语义记忆, 人格不重复注入。
     任何环节异常都 fail-open 回退到旧的线性上下文, 并向 collector 记 warn (降级可见化)。
     tree: H3 捕获的活动树引用, 默认全局 _tree。
+    attachments: 任务2 附件列表 [{name,url,isImage}] → 转 OpenAI ContentBlock
+      (图片 image_url base64 / 文本读内容), 见 _build_user_content。
     """
     t = tree or _tree
     mode = "ikaros"
@@ -746,7 +898,7 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
             ctx = build_tree_aware_context(
                 t, node_id, system_prompt=system_text, extra_memory=None,
             )
-            return ctx + [{"role": "user", "content": user_message}]
+            return ctx + [{"role": "user", "content": _build_user_content(user_message, attachments)}]
         except Exception as e:
             _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
             msgs: list[dict] = [{"role": "system", "content": system_text}]
@@ -771,7 +923,7 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
             system_prompt=persona,
             extra_memory=mem_block or None,
         )
-        return ctx + [{"role": "user", "content": user_message}]
+        return ctx + [{"role": "user", "content": _build_user_content(user_message, attachments)}]
     except Exception as e:
         # 回退: 旧线性上下文 + 人格 + 记忆
         _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
@@ -785,7 +937,7 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
             msgs.extend(ctx)
         except Exception:
             pass
-        msgs.append({"role": "user", "content": user_message})
+        msgs.append({"role": "user", "content": _build_user_content(user_message, attachments)})
         return msgs
 
 
@@ -1097,6 +1249,118 @@ def state_dict(tree: "ct.ConversationTree | None" = None, inline: bool = True) -
     return data
 
 
+# ── 会话导出 (任务1: GET /api/sessions/:id/export?format=json|txt) ────────
+def _export_tree_data(sess: dict) -> dict:
+    """构造**自包含**的导出树 JSON (节点内联 messages, v5_memory_id 清零).
+
+    与 /api/sessions/import 的输入格式对齐: {v, schema, root_id, current_id,
+    trunk_id, nodes[]}。对话本体从 V5 store 回读内联进节点, v5_memory_id 置 0 →
+    导入时由 _migrate_tree 按 messages 重新入库, 导出文件不依赖原 store 中的旧 id
+    (换机/换库也能完整恢复消息历史, 含 thinking/tool_calls/usage —— 这些本就随
+    to_dict 落在节点上)。
+    """
+    t = _load_tree_for(sess["persist_key"])
+    if t is None:
+        return {
+            "v": 0, "schema": "super-conv-2.0", "root_id": "root",
+            "current_id": "root", "trunk_id": None,
+            "nodes": [{"id": "root", "parent_id": None, "children": [], "depth": 0,
+                       "branch_label": None, "v5_memory_id": 0, "summary": "",
+                       "node_type": "trunk", "is_valid": True, "messages": []}],
+        }
+    data = json.loads(t.serialize())
+    ids = [n.get("v5_memory_id", 0) for n in data["nodes"] if n.get("v5_memory_id")]
+    try:
+        batch = t._load_fn(ids) if ids else {}
+    except Exception:
+        batch = {}
+    for n in data["nodes"]:
+        mid = n.get("v5_memory_id", 0)
+        raw = batch.get(mid, "")
+        if raw:
+            try:
+                msgs = json.loads(raw)
+                n["messages"] = msgs if isinstance(msgs, list) else [{"role": "system", "content": raw}]
+            except json.JSONDecodeError:
+                n["messages"] = [{"role": "system", "content": raw}]
+        else:
+            n["messages"] = []
+        n["v5_memory_id"] = 0  # 自包含: 不依赖原 V5 store id
+    return data
+
+
+def _export_payload(sess: dict) -> dict:
+    """JSON 导出完整载荷 —— 结构即 /api/sessions/import 的 POST body."""
+    return {
+        "tree": _export_tree_data(sess),
+        "session_id": sess["id"],
+        "name": sess.get("title") or sess["id"],
+        "exported_at": time.time(),
+    }
+
+
+def _truncate_txt(s: str, n: int = 200) -> str:
+    s = (s or "").strip()
+    return s if len(s) <= n else s[:n] + "… (截断)"
+
+
+def _export_txt(sess: dict) -> str:
+    """TXT 压缩可读版导出 (参考 hermes-studio ExportCompressor, 纯 Python 实现).
+
+    每条消息单行, 长内容截断; 节点带分支标签 / 摘要 / 思考 / 工具 / 用量。
+    """
+    data = _export_tree_data(sess)
+    nodes = {n["id"]: n for n in data.get("nodes", [])}
+    trunk_id = data.get("trunk_id")
+    lines = ["Ikaros 对话树导出".center(48), ""]
+    lines.append("会话: %s" % (sess.get("title") or sess["id"]))
+    lines.append("会话 ID: %s" % sess["id"])
+    lines.append("导出时间: %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    lines.append("节点数: %d" % len(nodes))
+    if trunk_id:
+        lines.append("主线终点: %s" % trunk_id)
+    lines.append("=" * 48)
+
+    # 按分支分组, 组内沿节点顺序 (序列化顺序 = 创建顺序)
+    by_branch: dict[str, list] = {}
+    for n in data.get("nodes", []):
+        by_branch.setdefault(n.get("branch_label") or "main", []).append(n)
+
+    for branch, group in by_branch.items():
+        lines.append("")
+        lines.append("── 分支 [%s] · %d 节点 ──" % (branch, len(group)))
+        for n in group:
+            depth = n.get("depth", 0)
+            summary = _truncate_txt(n.get("summary") or "", 80)
+            head = "#%d %s" % (depth, summary) if summary else "#%d" % depth
+            if n.get("id") == trunk_id:
+                head += " ★"
+            lines.append("[%s] %s" % (n.get("node_type", "trunk"), head))
+            for m in n.get("messages", []):
+                role = (m.get("role") or "?").strip()
+                content = m.get("content", "")
+                if isinstance(content, (dict, list)):
+                    content = json.dumps(content, ensure_ascii=False)
+                content = _truncate_txt(str(content))
+                if role == "system":
+                    continue
+                lines.append("    %s> %s" % (role, content))
+            if n.get("thinking"):
+                lines.append("    thinking> %s" % _truncate_txt(n["thinking"], 160))
+            for tc in n.get("tool_calls", []):
+                tname = tc.get("name", "?")
+                targs = _truncate_txt(json.dumps(tc.get("args", {}), ensure_ascii=False), 100)
+                tstatus = "ok" if tc.get("ok") else ("fail" if tc.get("ok") is False else "…")
+                lines.append("    tool> %s(%s) → %s" % (tname, targs, tstatus))
+            if n.get("usage"):
+                u = n["usage"]
+                tok = u.get("total_tokens") or u.get("completion_tokens") or 0
+                lines.append("    usage> %s tokens" % tok)
+    lines.append("")
+    lines.append("=" * 48)
+    return "\n".join(lines)
+
+
 # ── B5: supervisor 端点 (9100 面板 herdr 卡片驱动) ───────────────────────
 _supervisor = None
 _SUPERVISOR_OVERRIDE = None  # 测试注入用 (FakeSupervisor)
@@ -1232,6 +1496,14 @@ def _spawn_gateway() -> dict:
             "result": f"gateway 进程存活 (PID {proc.pid}) 但 :8642 30s 内未就绪, 见 tmp/gateway8642.log"}
 
 
+def _tool_duration_ms(collector: dict, tcid: str) -> int | None:
+    """按 tcid 逆序找注册时戳, 返回工具执行耗时 ms (任务5). 找不到返回 None."""
+    for _tc in reversed(collector.get("tool_calls", [])):
+        if _tc.get("id") == tcid and _tc.get("timestamp"):
+            return int((time.time() - _tc["timestamp"]) * 1000)
+    return None
+
+
 def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
     """执行 chat 降级工具, 返回 {ok, result}. 除 gateway_ensure / ikaros_restart_gateway /
     ikaros_herdr (白名单) 外均为只读/安全."""
@@ -1305,6 +1577,8 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
     """
     if not HERMES_AGENT_URL:
         raise RuntimeError("HERMES_AGENT_URL not configured")
+    # 任务2: 含图片内容块 → 直连 gateway :8642 (bridge 会拍平 content, 图片无法透传)
+    target_url = HERMES_GATEWAY_CHAT_URL if _messages_have_images(messages) else HERMES_AGENT_URL
     body = json.dumps({
         "model": model or HERMES_AGENT_MODEL,
         "messages": messages,
@@ -1313,7 +1587,7 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
         "stream": True,
     }).encode("utf-8")
     req = urllib.request.Request(
-        HERMES_AGENT_URL, data=body,
+        target_url, data=body,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {HERMES_AGENT_KEY}",
@@ -1381,6 +1655,7 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
                                 if _tc.get("id") == tcid:
                                     _tc["result_summary"] = str(result_txt)[:500]
                                     _tc["success"] = True
+                                    _tc["duration"] = _tool_duration_ms(collector, tcid)
                                     matched = True
                                     break
                         if not matched:
@@ -1388,10 +1663,12 @@ def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | N
                                 if _tc.get("name") == tool:
                                     _tc["result_summary"] = str(result_txt)[:500]
                                     _tc["success"] = True
+                                    _tc["duration"] = _tool_duration_ms(collector, tcid)
                                     break
                     yield {
                         "type": "tool_result", "id": tcid, "ok": ok,
                         "result": result_txt,
+                        "duration": _tool_duration_ms(collector, tcid),
                     }
                 return
             # 命名事件: 模型推理思考流 (hermes.reasoning) — gateway 从模型 reasoning 字段透出
@@ -1483,9 +1760,11 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
         q = ""
         for m in reversed(messages):
             if m.get("role") == "user":
-                q = (m.get("content") or "").strip()
+                # 任务2: content 可能是 ContentBlock 列表, 拍平成纯文本取检索词
+                q = _flatten_openai_content(m.get("content") or "").strip()
                 break
         if q:
+            t0 = time.time()
             res = _execute_chat_tool("memory_search",
                                      json.dumps({"query": q[:200]}, ensure_ascii=False),
                                      node_id)
@@ -1495,12 +1774,13 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
                     "id": tcid, "name": "memory_search",
                     "params": {"query": q[:80]},
                     "result_summary": str(res["result"])[:500],
-                    "success": True, "timestamp": time.time(),
+                    "success": True, "timestamp": t0,
                 })
                 yield {"type": "tool_call", "id": tcid, "name": "memory_search",
                        "args": {"query": q[:80]}}
                 yield {"type": "tool_result", "id": tcid, "ok": True,
-                       "result": res["result"]}
+                       "result": res["result"],
+                       "duration": _tool_duration_ms(collector, tcid)}
                 msgs.insert(0, {
                     "role": "system",
                     "content": "[树域记忆预检索 (降级链)]\n" + str(res["result"])[:1500],
@@ -1541,7 +1821,8 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
                     _tc["success"] = bool(res.get("ok", False))
                     break
             yield {"type": "tool_result", "id": tcid, "ok": bool(res.get("ok", False)),
-                   "result": res.get("result", "")}
+                   "result": res.get("result", ""),
+                   "duration": _tool_duration_ms(collector, tcid)}
             tool_msgs.append({
                 "role": "tool", "tool_call_id": tcid,
                 "content": json.dumps(res, ensure_ascii=False),
@@ -1622,6 +1903,55 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
     except Exception as e:
         yield {"type": "error", "message": f"本地模型也不可用（{e}）"}
         sys.stderr.write(f"[ct] fallback failed ({e})\n")
+
+
+# ── 任务2: multipart/form-data 上传解析 (纯标准库, 无 cgi 依赖) ─────────
+def _parse_multipart(body: bytes, boundary: str) -> list[tuple[dict, bytes]]:
+    """解析 multipart/form-data 报文为 [(headers, content), ...].
+
+    边界拆分按 RFC 2046 的 ``\\r\\n--<boundary>`` 分隔, 二进制内容中的 CRLF 不会被误剥;
+    文件内容里的 ``\\r\\n--<boundary>`` 命中概率可忽略 (boundary 为随机串).
+    """
+    bnd = boundary.encode("utf-8")
+    parts: list[tuple[dict, bytes]] = []
+    for seg in body.split(b"\r\n--" + bnd):
+        if not seg:
+            continue
+        if seg.startswith(b"--"):  # 末段终止符 "--boundary--"
+            continue
+        if b"\r\n\r\n" in seg:
+            header_block, content = seg.split(b"\r\n\r\n", 1)
+        else:
+            header_block, content = seg, b""
+        headers: dict = {}
+        for line in header_block.split(b"\r\n"):
+            if b":" in line:
+                k, v = line.split(b":", 1)
+                headers[k.decode("utf-8", "replace").strip().lower()] = v.decode("utf-8", "replace").strip()
+        parts.append((headers, content))
+    return parts
+
+
+def _random_hex_filename(original: str) -> str:
+    """8 字节随机 hex 文件名 (16 hex 字符) + 原扩展名, 防冲突/防注入."""
+    ext = Path(original).suffix.lower()
+    if len(ext) > 12 or not re.fullmatch(r"\.[A-Za-z0-9]+", ext):
+        ext = ""
+    return uuid.uuid4().hex[:16] + ext
+
+
+def _save_upload(raw: bytes, original_name: str) -> dict | None:
+    """保存上传字节 → {url,name,size}; 超限/非法返回 None (调用方给错误提示)."""
+    if len(raw) > _UPLOAD_MAX_BYTES:
+        return None
+    safe = Path(original_name).name
+    if not safe or safe.startswith("."):
+        return None
+    fname = _random_hex_filename(safe)
+    dest = _UPLOAD_DIR / fname
+    dest.write_bytes(raw)
+    return {"ok": True, "url": f"/uploads/{fname}", "name": safe,
+            "size": len(raw)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1874,6 +2204,30 @@ class Handler(BaseHTTPRequestHandler):
                     t = _make_tree_for(sess["persist_key"])
                     t.init([{"role": "system", "content": "会话已恢复。"}])
                 self._send_json(state_dict(t, inline=True))
+            elif path.startswith("/api/sessions/") and path.endswith("/export"):
+                # 任务1: 会话导出 (JSON 完整历史 / TXT 压缩可读版)
+                sid = urllib.parse.unquote(path[len("/api/sessions/"):-len("/export")])
+                if not sid:
+                    self._send_json({"error": "session_id required"}, 400)
+                    return
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if sess is None:
+                    self._send_json({"error": "session not found"}, 404)
+                    return
+                fmt = (self._q("format") or "json").lower()
+                if fmt == "json":
+                    self._send_json(_export_payload(sess))
+                elif fmt == "txt":
+                    body = _export_txt(sess).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Disposition",
+                                     f'attachment; filename="session-{sid}.txt"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._send_json({"error": "format must be json or txt"}, 400)
             elif path == "/api/health":
                 # 连接状态探测: gateway 主通道 / 本地 LLM 降级链 / DeepSeek key
                 health = {"gateway": False, "local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
@@ -1986,21 +2340,61 @@ class Handler(BaseHTTPRequestHandler):
         ensure_tree()
         path = self.path.split("?", 1)[0]
         try:
+            # 任务2: multipart 上传先于 JSON body 解析 (multipart 不是 JSON,
+            # _body() 会 json.loads 失败; 且 body 只能读一次)
+            ctype = self.headers.get("Content-Type", "")
+            if path == "/api/upload" and ctype.lower().startswith("multipart/form-data"):
+                m = re.search(r"boundary=([^;]+)", ctype)
+                if not m:
+                    self._send_json({"error": "multipart boundary missing"}, 400)
+                    return
+                boundary = m.group(1).strip().strip('"')
+                try:
+                    length = int(self.headers.get("Content-Length", "0") or "0")
+                except ValueError:
+                    self._send_json({"error": "invalid Content-Length"}, 400)
+                    return
+                # 提前拦截: 整体报文超限 (文件本身 + 表单开销余量)
+                if length > _UPLOAD_MAX_BYTES + (2 * 1024 * 1024):
+                    self._send_json(
+                        {"error": f"文件过大(>{_UPLOAD_MAX_BYTES // (1024 * 1024)}MB)"}, 413)
+                    return
+                body = self.rfile.read(length)
+                name, raw = "", b""
+                for headers, content in _parse_multipart(body, boundary):
+                    disp = headers.get("content-disposition", "")
+                    if 'name="file"' in disp or "filename=" in disp:
+                        fm = re.search(r'filename="([^"]*)"', disp)
+                        if fm:
+                            name = fm.group(1)
+                        raw = content
+                        break
+                if not name or not raw:
+                    self._send_json({"error": "file part (name=file) required"}, 400)
+                    return
+                res = _save_upload(raw, name)
+                if res is None:
+                    self._send_json(
+                        {"error": f"文件过大(>{_UPLOAD_MAX_BYTES // (1024 * 1024)}MB)"}, 413)
+                    return
+                self._send_json(res)
+                return
             data = self._body()
             if path == "/api/init":
                 build_demo()
                 self._send_json(state_dict())
             elif path == "/api/add_turn":
-                _tree.add_turn(
-                    messages=data.get("messages", []),
-                    parent_id=data.get("parent_id"),
-                    branch_label=data.get("branch_label"),
-                    state=data.get("state"),
-                    config=data.get("config"),
-                    title=data.get("title"),
-                )
-                _touch_active_session()
-                self._send_json(state_dict())
+                with _lock:
+                    _tree.add_turn(
+                        messages=data.get("messages", []),
+                        parent_id=data.get("parent_id"),
+                        branch_label=data.get("branch_label"),
+                        state=data.get("state"),
+                        config=data.get("config"),
+                        title=data.get("title"),
+                    )
+                    _touch_active_session()
+                    self._send_json(state_dict())
             elif path == "/api/branch_from":
                 _tree.branch_from(
                     node_id=data["node_id"],
@@ -2009,58 +2403,63 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_json(state_dict())
             elif path == "/api/fork":
-                node = _tree.fork_branch(
-                    fork_point_id=data["node_id"],
-                    branch_label=data.get("branch_label", "branch"),
-                    messages=data.get("messages", []),
-                    state=data.get("state"),
-                    config=data.get("config"),
-                    title=data.get("title"),
-                    thinking=data.get("thinking", ""),
-                    tool_calls=[ct.ToolCall(**tc) for tc in data.get("tool_calls", [])],
-                    usage=data.get("usage") or {},
-                    skills_used=data.get("skills_used") or [],
-                )
-                self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
+                with _lock:
+                    node = _tree.fork_branch(
+                        fork_point_id=data["node_id"],
+                        branch_label=data.get("branch_label", "branch"),
+                        messages=data.get("messages", []),
+                        state=data.get("state"),
+                        config=data.get("config"),
+                        title=data.get("title"),
+                        thinking=data.get("thinking", ""),
+                        tool_calls=[ct.ToolCall(**tc) for tc in data.get("tool_calls", [])],
+                        usage=data.get("usage") or {},
+                        skills_used=data.get("skills_used") or [],
+                    )
+                    self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
             elif path == "/api/conclude":
-                node = _tree.conclude_branch(
-                    node_id=data["node_id"],
-                    conclusions=data.get("conclusions", []),
-                )
-                self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
+                with _lock:
+                    node = _tree.conclude_branch(
+                        node_id=data["node_id"],
+                        conclusions=data.get("conclusions", []),
+                    )
+                    self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
             elif path == "/api/merge":
-                bid = data.get("branch_id") or data.get("source_id")
-                tid = data.get("trunk_id") or data.get("target_id")
-                if not bid or not tid:
-                    self._send_json({"error": "branch_id and trunk_id required"}, 400)
-                    return
-                # 前端 "Merge to Trunk" 传 '__trunk__' → 主线终点 (trunk_id), 无则沿祖先链
-                # S1: 优先 trunk_id (唯一真源), 不再沿 node_type 猜 (旧逻辑会命中 root 或误标 trunk)
-                if tid == "__trunk__":
-                    bnode = _tree.get_node(bid)
-                    if _tree.trunk_id and _tree.get_node(_tree.trunk_id):
-                        tid = _tree.trunk_id
-                    else:
-                        cur = bnode.parent_id if bnode else None
-                        tid = None
-                        while cur:
-                            cn = _tree.get_node(cur)
-                            if cn and (cn.id == _tree.trunk_id or
-                                       (cn.node_type == "trunk" and cn.id != _tree.root_id)):
-                                tid = cn.id
-                                break
-                            cur = cn.parent_id if cn else None
-                        if not tid:
-                            self._send_json({"error": "no trunk ancestor found"}, 400)
-                            return
-                _tree.merge_branch(branch_node_id=bid, trunk_target_id=tid)
-                self._send_json({"ok": True, "state": state_dict()})
+                with _lock:
+                    bid = data.get("branch_id") or data.get("source_id")
+                    tid = data.get("trunk_id") or data.get("target_id")
+                    if not bid or not tid:
+                        self._send_json({"error": "branch_id and trunk_id required"}, 400)
+                        return
+                    # 前端 "Merge to Trunk" 传 '__trunk__' → 主线终点 (trunk_id), 无则沿祖先链
+                    # S1: 优先 trunk_id (唯一真源), 不再沿 node_type 猜 (旧逻辑会命中 root 或误标 trunk)
+                    if tid == "__trunk__":
+                        bnode = _tree.get_node(bid)
+                        if _tree.trunk_id and _tree.get_node(_tree.trunk_id):
+                            tid = _tree.trunk_id
+                        else:
+                            cur = bnode.parent_id if bnode else None
+                            tid = None
+                            while cur:
+                                cn = _tree.get_node(cur)
+                                if cn and (cn.id == _tree.trunk_id or
+                                           (cn.node_type == "trunk" and cn.id != _tree.root_id)):
+                                    tid = cn.id
+                                    break
+                                cur = cn.parent_id if cn else None
+                            if not tid:
+                                self._send_json({"error": "no trunk ancestor found"}, 400)
+                                return
+                    _tree.merge_branch(branch_node_id=bid, trunk_target_id=tid)
+                    self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/unmerge":
-                _tree.unmerge_branch(data.get("node_id") or data.get("branch_id"))
-                self._send_json({"ok": True, "state": state_dict()})
+                with _lock:
+                    _tree.unmerge_branch(data.get("node_id") or data.get("branch_id"))
+                    self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/abandon":
-                _tree.abandon_branch(data["node_id"])
-                self._send_json({"ok": True, "state": state_dict()})
+                with _lock:
+                    _tree.abandon_branch(data["node_id"])
+                    self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/node/exec_state":
                 # B2: 设置节点执行状态 (supervisor / 测试经此驱动事件流)
                 nid = data.get("node_id")
@@ -2086,8 +2485,9 @@ class Handler(BaseHTTPRequestHandler):
                     "state": state_dict(),
                 })
             elif path == "/api/jump_to":
-                _tree.jump_to(data["node_id"])
-                self._send_json(state_dict())
+                with _lock:
+                    _tree.jump_to(data["node_id"])
+                    self._send_json(state_dict())
             elif path == "/api/prune":
                 try:
                     _tree.prune(data["node_id"])
@@ -2134,8 +2534,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 self._send_json({"ok": True, "mem": mem})
             elif path == "/api/upload":
-                # 附件上传: base64 JSON {name, data_b64} -> data/conversation-tree-uploads/
-                import base64
+                # 旧 base64 JSON 通道 (兼容; multipart 由 do_POST 入口处理)
                 name = (data.get("name") or "").strip()
                 b64 = data.get("data_b64") or ""
                 if not name or not b64:
@@ -2151,15 +2550,11 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     self._send_json({"error": "invalid base64"}, 400)
                     return
-                if len(raw) > 20 * 1024 * 1024:
-                    self._send_json({"error": "file too large (>20MB)"}, 413)
+                res = _save_upload(raw, safe)
+                if res is None:
+                    self._send_json({"error": f"文件过大(>{_UPLOAD_MAX_BYTES // (1024*1024)}MB)"}, 413)
                     return
-                # 重名加时间戳前缀，避免覆盖
-                dest = _UPLOAD_DIR / safe
-                if dest.exists():
-                    dest = _UPLOAD_DIR / f"{int(time.time())}-{safe}"
-                dest.write_bytes(raw)
-                self._send_json({"ok": True, "url": f"/uploads/{dest.name}", "size": len(raw)})
+                self._send_json(res)
             elif path == "/api/model_switch":
                 # POST: {"mode":"hermes"|"ikaros"|"","model":"<名>"}
                 mode = (data.get("mode") or "").strip()
@@ -2177,6 +2572,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 parent_id = data.get("parent_id")
                 branch_label = data.get("branch_label")
+                # 任务2: 附件引用列表 [{name,url,isImage}] → ContentBlock 协议
+                attachments = data.get("attachments")
+                if not isinstance(attachments, list) or not attachments:
+                    attachments = None
 
                 # chat 接入 Ikaros V5: 人格 + 树感知压缩 + 树域语义记忆 (fail-open)
                 # H3: 捕获局部 tree 引用, 贯穿整条 chat 生命周期, 使并发会话切换
@@ -2192,7 +2591,8 @@ class Handler(BaseHTTPRequestHandler):
                     errored = False
                     try:
                         messages = build_chat_messages_v5(target_id, user_message,
-                                                          collector=collector, tree=tree)
+                                                          collector=collector, tree=tree,
+                                                          attachments=attachments)
                     except Exception as e:
                         yield f"data: {json.dumps({'type': 'error', 'message': f'build messages failed: {e}'}, ensure_ascii=False)}\n\n"
                         return
