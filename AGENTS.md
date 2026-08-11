@@ -20,6 +20,7 @@
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，面板 `herdr` 组件按需启动） |
 
 Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
+Added (2026-08-11): **pi 纳入 V5 核心** — `~/.omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工：Hermes = 助理（对话/记忆/人格），pi = 工作引擎（编码/任务执行）**。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
 Removed (do not re-add): voice bridge (ports 7870 / 7871).

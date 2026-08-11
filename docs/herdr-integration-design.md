@@ -512,3 +512,20 @@ herdr agent list   # 状态 idle / working
 3. `agent prompt --wait` 对 omp 等待超时是已知现象，内容正常返回，直接 `read` 即可。
 4. omp 在 `E:\` 启动会报 gitnexus MCP 连接失败（噪音，不致命）。
 5. 旧 agent pane 用 `pane close` 清理（没有 `agent close` 命令）。
+
+## §12.10 pi ↔ V5 记忆打通（2026-08-11，pi 纳入 V5 核心）
+
+**定位**：Hermes = 助理（对话/记忆/人格）；pi = 工作引擎（编码/任务执行）。pi 干活时直接读写 V5 记忆。
+
+**机制**：`~/.omp/agent/mcp.json`（omp 用户级 MCP 配置）挂载 `ikaros-v5-memory`：
+- command: `E:\Ikaros\runtime\portable-python\python.exe E:\Ikaros\core\memory_v5\mcp_server.py`
+- env: IKAROS_ROOT / HERMES_ROOT / HERMES_HOME + `V5_MCP_TOOL_GROUPS=memory,self,care,vitality,relationship,skill,project`（全量组）
+- 生效范围：omp 用户级配置，herdr pane 与 CLI 直调均生效（herdr pane 的 omp 也读 ~/.omp/）
+
+**实测**（2026-08-11）：
+- `omp -p "v5_memory_stats"` → 真实统计（events 3169）
+- 语义检索"token优化" → 5 条精确召回（含 pi 评估记忆 #3065）
+- v5_self_model / v5_relationship → 身份/关系数据正确
+- herdr 常驻 pi：v5_* 工具列表可用，检索"跨会话记忆" top1=#715
+
+**注意**：pi 的 omp 会尝试加载项目根 gitnexus MCP（连不上报 Transport closed，无害）。
