@@ -96,7 +96,7 @@ HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119"
 # Hermes agent runtime 端点.
 # 默认走 Ikaros 自有的 studio 式「0 侵入」包装层 core/hermes-bridge (:8650) —— 它透明代理
 # 纯净 Hermes gateway(:8642) 的原生 session-chat 端点, 并把 reasoning/工具/正文翻译成
-# 对话树方言. 这样 core/hermes 工作树可保持 100% 纯净 (无 api_server.py 补丁).
+# 对话树方言. 这样 runtime/hermes-agent 工作树可保持 100% 纯净 (无 api_server.py 补丁).
 # bridge 不可达时本服务自动降级到本地 DeepSeek (见 health probe + 流式降级逻辑), 不会硬崩.
 # 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示;
 # 亦可覆盖为直连 :8642 (http://127.0.0.1:8642/v1/chat/completions) 绕过 bridge.
@@ -181,7 +181,7 @@ def _load_hermes_config():
 def _hermes_model_context(model: str) -> int:
     """从 hermes 模型元数据表获取**实际** context window (2026-08-03)。
 
-    复用 core/hermes/agent/model_metadata.DEFAULT_CONTEXT_LENGTHS (hermes 权威
+    复用 runtime/hermes-agent/agent/model_metadata.DEFAULT_CONTEXT_LENGTHS (hermes 权威
     模型参数表: deepseek-v4-flash/pro=1M, claude-opus-4.8=1M 等), 最长键优先模糊匹配;
     "hermes" 是 gateway 抽象名 → 用 hermes 配置的 model.default 查真实模型。
     失败回退 CT_CONTEXT_WINDOW。
@@ -1466,7 +1466,7 @@ def _spawn_gateway() -> dict:
     root = Path(os.environ.get("IKAROS_ROOT",
                                str(Path(__file__).resolve().parent.parent.parent)))
     py = root / "runtime" / "portable-python" / "python.exe"
-    cwd = root / "core" / "hermes"
+    cwd = root / "runtime" / "hermes"
     log = root / "tmp" / "gateway8642.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)

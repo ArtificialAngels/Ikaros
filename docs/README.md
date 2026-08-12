@@ -14,7 +14,7 @@
 | [neko-deep-analysis.md](neko-deep-analysis.md) | 2026-07-27 | N.E.K.O 模块深度分析（**保持独立，合并 V5 建议已作废**） | 32KB |
 | [neko-chat-architecture.md](neko-chat-architecture.md) | 2026-07-25 | N.E.K.O 前端聊天系统架构（记忆/会话/主动搭话前端实现） | 13KB |
 | [harness-engineering-notes.md](harness-engineering-notes.md) | 2026-07-15 | 运行链 / harness 工程笔记 | 2KB |
-| [hermes-agent-full-survey.md](hermes-agent-full-survey.md) | 2026-07-11 | Hermes Agent 全量调研（注：`data/hermes-agent/` 为用户态目录，已迁移至 `core/hermes`） | 10KB |
+| [hermes-agent-full-survey.md](hermes-agent-full-survey.md) | 2026-07-11 | Hermes Agent 全量调研（注：`data/hermes-agent/` 为用户态目录，已迁移至 `runtime/hermes-agent`） | 10KB |
 | [thirdspace-integration.md](thirdspace-integration.md) | 2026-07-20 | ThirdSpace Vault 集成指南 | 4KB |
 
 > **架构图三件套**（交互式 HTML，放 `docs/`）：`module-dependency-map.html`（模块依赖关系）/ `architecture-overview.html`（架构全景）/ `folder-tree.html`（文件夹层级）。全部基于 2026-07-27 真实扫描生成。
@@ -24,7 +24,7 @@
 ### Hermes 集成与更新（Ikaros 套在 Hermes 之上的解耦 / 维护）
 - [hermes-bridge-design.md](hermes-bridge-design.md) — studio 式「0 侵入」包装层设计（bridge :8650 → 纯净 gateway :8642，对话树默认通道）
 - [hermes-ikaros-patches.md](hermes-ikaros-patches.md) — Hermes 集成补丁全貌（A/B 类 3-way 重放 + ikaros_v5 外置插件机制 `§6b`）
-- [hermes-update-integrity.md](hermes-update-integrity.md) — 更新不冲掉配置/插件的两层安全（EXTERNAL_PLUGIN 机制，core/hermes 的 git 操作碰不到外置插件）
+- [hermes-update-integrity.md](hermes-update-integrity.md) — 更新不冲掉配置/插件的两层安全（EXTERNAL_PLUGIN 机制，runtime/hermes-agent 的 git 操作碰不到外置插件）
 - [ikaros-as-hermes-agent-proposal.md](ikaros-as-hermes-agent-proposal.md) — Ikaros 作为「套在 Hermes 之上的智能体」解耦方案（已实施 + 2026-08-05 验证）
 
 ### V5 规格与迁移

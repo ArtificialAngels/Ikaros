@@ -16,7 +16,7 @@ import time
 
 sys.path.insert(0, "E:/Ikaros/data/hermes-agent/plugins/ikaros_v5")
 sys.path.insert(0, "E:/Ikaros/core")
-sys.path.insert(0, "E:/Ikaros/core/hermes")
+sys.path.insert(0, "E:/Ikaros/runtime/hermes-agent")
 os.environ["IKAROS_ROOT"] = "E:/Ikaros"
 
 from memory_provider import IkarosV5MemoryProvider

@@ -4,7 +4,7 @@ that the Ikaros conversation-tree (``core/conversation-tree/server.py``) expects
 WHY THIS EXISTS
 ---------------
 Ikaros runs Hermes as a pristine, unmodified downstream (studio-style: zero
-source intrusion into ``core/hermes``). The conversation-tree chat UI consumes a
+source intrusion into ``runtime/hermes-agent``). The conversation-tree chat UI consumes a
 custom SSE dialect emitted by two Ikaros patches on Hermes' OpenAI-wire
 ``/v1/chat/completions`` path (``gateway/platforms/api_server.py`` +
 ``agent/conversation_loop.py``):
@@ -35,7 +35,7 @@ different event vocabulary:
                                                                    # no delta preceded
 
 This module maps the native vocabulary onto the conversation-tree dialect so
-the thinking block + tool cards keep working with ``core/hermes`` 100% pristine.
+the thinking block + tool cards keep working with ``runtime/hermes-agent`` 100% pristine.
 It is a pure, dependency-free translator — fully unit-testable offline.
 
 SSE frame format (matches Hermes' ``_sse_frame`` + the conversation-tree parser,

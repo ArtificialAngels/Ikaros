@@ -41,7 +41,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(os.environ.get("IKAROS_ROOT", r"E:/Ikaros")).resolve()
-HERMES = ROOT / "core" / "hermes"
+HERMES = ROOT / "runtime" / "hermes"
 VENV_PY = HERMES / "venv" / "Scripts" / "python.exe"
 PP = ROOT / "runtime" / "portable-python"
 HERMES_HOME = ROOT / "data" / "hermes-agent"
@@ -385,7 +385,7 @@ def _run_restart_gateway() -> str:
     killed = _kill_port(8642)
     out.extend(killed or ["(未发现占用 :8642 的进程)"])
     time.sleep(1)
-    # 2) 用 hermes venv python 拉起 gateway (cwd=core/hermes); 早退则重试一次
+    # 2) 用 hermes venv python 拉起 gateway (cwd=runtime/hermes-agent); 早退则重试一次
     log = GATEWAY_LOG
     log.parent.mkdir(parents=True, exist_ok=True)
     env = _build_env()
@@ -450,7 +450,7 @@ def _run_restart_gateway() -> str:
     killed = _kill_port(8642)
     out.extend(killed or ["(未发现占用 :8642 的进程)"])
     time.sleep(1)
-    # 2) 用 hermes venv python 拉起 gateway (cwd=core/hermes)
+    # 2) 用 hermes venv python 拉起 gateway (cwd=runtime/hermes-agent)
     log = GATEWAY_LOG
     log.parent.mkdir(parents=True, exist_ok=True)
     env = _build_env()
@@ -564,7 +564,7 @@ SCHEMAS: list[dict] = [
     {"type": "function", "function": {
         "name": "ikaros_restart_gateway",
         "description": "重启 Hermes gateway (:8642): 杀掉占用进程 → 用 hermes venv python 拉起"
-                       "`-m hermes_cli.main gateway run --replace` (cwd=core/hermes, 完整 env) "
+                       "`-m hermes_cli.main gateway run --replace` (cwd=runtime/hermes-agent, 完整 env) "
                        "→ 轮询 /health 就绪。当 gateway 挂了需要恢复工具链时调用。",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {

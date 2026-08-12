@@ -49,7 +49,7 @@ PORT_TABLE = [
     (":48911", "Neko 主前端", "core/neko/app/main_server.py", "✅"),
     (":48912", "Neko 记忆服务", "core/neko/app/memory_server.py", "✅"),
     (":48915", "Neko Agent 服务", "core/neko/app/agent_server.py", "✅"),
-    (":9119", "Hermes Dashboard", "core/hermes/.../web_server.py", "✅"),
+    (":9119", "Hermes Dashboard", "runtime/hermes-agent/.../web_server.py", "✅"),
     (":8088", "Hermes 猫爪", "bin/hermes_paw_bridge.py", "✅"),
     (":48920", "对话树面板", "core/conversation-tree/server.py (后端 conversation_tree 引擎)", "✅"),
 ]
@@ -71,7 +71,7 @@ CORE_LAYERS = [
         ("core/control-panel/", "Electron 桌面壳（拉 :9100）"),
     ]),
     ("🛠️ 基础设施", [
-        ("core/hermes/", "Hermes Agent（原 hermes-agent，已搬迁）"),
+        ("runtime/hermes-agent/", "Hermes Agent（原 hermes-agent，已搬迁）"),
         ("core/dashboard/", "控制面板 Web UI"),
         ("core/env/", "环境配置/CLI/初始化"),
         ("core/conversation-tree/", "对话树面板（:48920）"),
@@ -476,7 +476,7 @@ const T = {
         "        <span class=\"badge b-purple\">基础设施</span><span class=\"badge b-green\">前端</span><span class=\"badge b-amber\">数据</span></span>\n"
         "    </div>\n\n"
         "    <div class=\"tree\" id=\"tree\"></div>\n\n"
-        "    <div class=\"note\">说明：<code>core/hermes/</code> 内置完整 Hermes 工程（含 node_modules/venv，未在树中展开）；\n"
+        "    <div class=\"note\">说明：<code>runtime/hermes-agent/</code> 内置完整 Hermes 工程（含 node_modules/venv，未在树中展开）；\n"
         "      <code>core/neko/</code> 为独立完整前端工程；<code>data/</code> 含模型权重（仅在顶层标注）。\n"
         "      虚线折叠项可点击展开。</div>\n"
         "  </div>\n\n"
@@ -528,12 +528,12 @@ def render_dep_map() -> str:
         <text x="460" y="224" text-anchor="middle" class="sub">记忆/情感/认知引擎</text>
         <text x="460" y="244" text-anchor="middle" class="sub">包名 memory_v5</text>
         <text x="460" y="264" text-anchor="middle" class="sub">data/v5: v5.db+chroma+人格JSON</text>
-        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 core/hermes</text>
+        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 runtime/hermes-agent</text>
       </g>
 
       <g class="node">
         <rect x="680" y="180" width="200" height="80" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
-        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · core/hermes</text>
+        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/hermes-agent</text>
         <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 云端 LLM</text>
         <text x="780" y="244" text-anchor="middle" class="sub">含 venv + ikaros_v5 桥插件</text>
       </g>

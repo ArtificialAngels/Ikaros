@@ -29,7 +29,7 @@ EXCLUDE_PATH_FRAGMENTS = (
     os.sep + ".git" + os.sep,
     "__pycache__",
     os.sep + "runtime" + os.sep,
-    "core/hermes" + os.sep + "venv",
+    "runtime/hermes-agent" + os.sep + "venv",
     "core" + os.sep + "hermes" + os.sep + "venv",
 )
 

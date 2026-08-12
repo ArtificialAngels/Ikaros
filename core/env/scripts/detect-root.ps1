@@ -32,7 +32,7 @@ function Find-IkarosRoot {
     $dir = Get-Location
     while ($dir -ne $null) {
         $hasPython = Test-Path "$dir\runtime\portable-python\python.exe"
-        $hasHermes = Test-Path "$dir\core/hermes"
+        $hasHermes = Test-Path "$dir\runtime/hermes-agent"
         $hasEnv = Test-Path "$dir\core\env"
         if ($hasPython -and $hasHermes -and $hasEnv) {
             return (Resolve-Path $dir).Path

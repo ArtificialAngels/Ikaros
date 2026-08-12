@@ -20,14 +20,14 @@ Hermes Agent 能力覆盖 QwenPaw 的"系统操作 / 多模态解析 / 工具调
 （agent.tool_executor 真能跑 shell / 工具，且自带 skills / MCP / 云端 LLM），
 且和 Ikaros 共用同一套 Hermes 基础设施。
 
-运行（需在 core/hermes 的 Python 环境下，以便 import run_agent）：
+运行（需在 runtime/hermes-agent 的 Python 环境下，以便 import run_agent）：
     HERMES_PAW_BASE_URL=http://127.0.0.1:8080/v1 HERMES_PAW_MODEL=Qwen3-1.7B \
         python hermes_paw_bridge.py
 若不设 HERMES_PAW_BASE_URL / HERMES_PAW_MODEL，则交给 Hermes Agent 使用其
 自身默认 provider 配置（通常即你已在用的云端 LLM）。
 
 环境变量：
-    HERMES_AGENT_ROOT    core/hermes 包根目录 (默认 E:\\Ikaros\\core/hermes)
+    HERMES_AGENT_ROOT    runtime/hermes-agent 包根目录 (默认 E:\\Ikaros\\runtime/hermes-agent)
     HERMES_PAW_BASE_URL  OpenAI 兼容 base_url (默认 None -> Hermes 默认)
     HERMES_PAW_MODEL     模型名 (默认 None -> Hermes 默认)
     HERMES_PAW_API_KEY   API Key (默认 None)
@@ -43,8 +43,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# ---- 让 core/hermes 包可导入 ------------------------------------------------
-HERMES_AGENT_ROOT = os.environ.get("HERMES_AGENT_ROOT", r"E:\Ikaros\core\hermes")
+# ---- 让 runtime/hermes-agent 包可导入 ------------------------------------------------
+HERMES_AGENT_ROOT = os.environ.get("HERMES_AGENT_ROOT", r"E:\Ikaros\runtime\hermes-agent")
 if HERMES_AGENT_ROOT not in sys.path:
     sys.path.insert(0, HERMES_AGENT_ROOT)
 
@@ -57,8 +57,8 @@ logger = logging.getLogger("hermes_paw_bridge")
 try:
     from run_agent import AIAgent
 except Exception as exc:  # pragma: no cover
-    logger.error("无法导入 core/hermes 的 AIAgent: %s", exc)
-    logger.error("请确认在 core/hermes 的 Python 环境下运行本桥。")
+    logger.error("无法导入 runtime/hermes-agent 的 AIAgent: %s", exc)
+    logger.error("请确认在 runtime/hermes-agent 的 Python 环境下运行本桥。")
     raise
 
 from fastapi import FastAPI, Request
@@ -296,7 +296,7 @@ _HTML_PAGE = """<!DOCTYPE html>
 
   <div class="card">
     <div class="status"><span class="dot"></span><b>运行中</b>
-        <span style="color:var(--muted)">· 提供商 core/hermes · 兼容 QwenPaw API</span></div>
+        <span style="color:var(--muted)">· 提供商 runtime/hermes-agent · 兼容 QwenPaw API</span></div>
     <div class="kv" id="kv">加载中…</div>
   </div>
 

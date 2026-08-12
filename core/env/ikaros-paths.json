@@ -19,10 +19,10 @@
     "logs": "data/logs"
   },
   "hermes": {
-    "agent": "core/hermes",
+    "agent": "runtime/hermes-agent",
     "home": "data/hermes-agent",
     "bridge": "bridge",
-    "core": "core/hermes"
+    "core": "runtime/hermes-agent"
   },
   "memory": {
     "root": "core/memory_v5",

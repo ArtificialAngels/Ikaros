@@ -12,8 +12,8 @@ bin/bootstrap-venvs.py  —  Ikaros Python 环境引导工具（仅脚手架 / �
      - 角色: WorkBuddy 自带的嵌入式 Python，用于运行本仓库的辅助脚本。
              注意：路径不含 python.exe，脚本会自动补上。
   2. Hermes venv
-     - 优先: core/hermes/venv
-     - 回退: core/hermes/venv（防止 core/hermes 尚未完成迁移时找不到）
+     - 优先: runtime/hermes-agent/venv
+     - 回退: runtime/hermes-agent/venv（防止 runtime/hermes-agent 尚未完成迁移时找不到）
      - 角色: 承载 hermes dashboard / fastapi 服务的独立虚拟环境。
      - !! 关键固定依赖: pydantic-core==2.46.4
         执行 `pip install -U` 或重建 venv 时，如果没有精确固定此版本，
@@ -62,16 +62,16 @@ MANAGED_PYTHON = MANAGED_PYTHON_DIR / "python.exe"
 # 3) 运行时 portable Python（可选）
 RUNTIME_PYTHON = REPO_ROOT / "runtime" / "portable-python" / "python.exe"
 
-# Hermes venv 候选位置（优先 core/hermes/venv，回退 core/hermes/venv）
+# Hermes venv 候选位置（优先 runtime/hermes-agent/venv，回退 runtime/hermes-agent/venv）
 HERMES_VENV_CANDIDATES = [
-    REPO_ROOT / "core" / "hermes" / "venv",
-    REPO_ROOT / "core/hermes" / "venv",
+    REPO_ROOT / "runtime" / "hermes" / "venv",
+    REPO_ROOT / "runtime/hermes-agent" / "venv",
 ]
 
 # Hermes 的 requirements.txt 候选位置（与 venv 候选一一对应顺序）
 HERMES_REQUIREMENTS_CANDIDATES = [
-    REPO_ROOT / "core" / "hermes" / "requirements.txt",
-    REPO_ROOT / "core/hermes" / "requirements.txt",
+    REPO_ROOT / "runtime" / "hermes" / "requirements.txt",
+    REPO_ROOT / "runtime/hermes-agent" / "requirements.txt",
 ]
 
 # 4) Neko venv（桌面宠物三个后端服务）

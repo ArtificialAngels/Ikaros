@@ -10,12 +10,12 @@
 | 项目 | **Ikaros** | `ikaros`（路径/脚本前缀） | 品牌首字母大写；文件系统用小写 `ikaros-*` |
 | 桌面宠 / 前端 | **N.E.K.O**（品牌，带点） | `neko`（目录 `apps/neko/`、包、变量） | 品牌 **N.E.K.O**；代码一律小写 `neko` |
 | 灵魂核心 | V5（版本代号） | `memory_v5`（包）/ `v5`（db + MCP 工具前缀） | 见 §3 |
-| 基础设施/Agent 框架 | Hermes | `hermes`（目录 `core/hermes/`、变量、provider） | 品牌 **Hermes**；代码小写 `hermes` |
+| 基础设施/Agent 框架 | Hermes | `hermes`（目录 `runtime/hermes-agent/`、变量、provider） | 品牌 **Hermes**；代码小写 `hermes` |
 
 ## 2. 大小写铁律
 
 1. **代码标识符一律小写 + 下划线**：`neko`、`memory_v5`、`hermes`、`ikaros`。
-   - 目录：`apps/neko/`、`core/memory_v5/`、`core/hermes/`、`core/control-panel/`。
+   - 目录：`apps/neko/`、`core/memory_v5/`、`runtime/hermes-agent/`、`core/control-panel/`。
    - Python 包：`import memory_v5`、`import hermes`。（旧 `import v5` 已废弃。）
 2. **品牌用规定大小写**：
    - 项目名写 **Ikaros**（文档/UI 文案）。

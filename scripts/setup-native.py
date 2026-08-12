@@ -59,10 +59,10 @@ def build_paths():
             "logs": resolve("data/logs"),
         },
         "hermes": {
-            "agent": resolve("core/hermes"),
+            "agent": resolve("runtime/hermes-agent"),
             "home": resolve("data/hermes-agent"),
             "bridge": resolve("bridge"),
-            "core": resolve("core/hermes"),
+            "core": resolve("runtime/hermes-agent"),
         },
         "memory": {
             "root": resolve("core/memory_v5"),

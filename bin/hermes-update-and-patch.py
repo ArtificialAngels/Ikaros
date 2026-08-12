@@ -4,7 +4,7 @@
 hermes-update-and-patch.py
 ==========================
 
-将 ``core/hermes`` 更新到新版 upstream 后，稳定地重新打上 Ikaros 定制补丁。
+将 ``runtime/hermes-agent`` 更新到新版 upstream 后，稳定地重新打上 Ikaros 定制补丁。
 
 实现 ``docs/hermes-ikaros-patches.md`` §2「两步法」协议：
 
@@ -59,7 +59,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 SCRIPT = Path(__file__).resolve()
 IKAROS_ROOT = SCRIPT.parent.parent                      # E:/Ikaros
-REPO = IKAROS_ROOT / "core" / "hermes"                  # hermes 子仓库
+REPO = IKAROS_ROOT / "runtime" / "hermes"                  # hermes 子仓库
 # 防御：确保 HERMES_HOME 指向 E:/Ikaros/data/hermes-agent，避免脚本内 hermes/uv 子进程
 # 因调用方未注入 HERMES_HOME 而回退平台默认 AppData/Local/hermes（会把第二份家目录写到 C 盘）。
 # 见 2026-08-04：9100 面板「更新并打补丁」未给子进程传 env，导致 bootstrap 落到 C 盘。
@@ -72,7 +72,7 @@ if not (_hermes_home and len(_hermes_home) >= 3 and _hermes_home[1] == ":"):
 SPEC = IKAROS_ROOT / "docs" / "hermes-ikaros-patches.md"
 STATE_FILE = IKAROS_ROOT / "tmp" / "hermes-patch-state.json"
 BACKUP_PREFIX = "ikaros-hermes-backup"
-# 补丁源文件目录（被 Ikaros 主仓库 git 跟踪，不依赖 core/hermes 的 git 状态）。
+# 补丁源文件目录（被 Ikaros 主仓库 git 跟踪，不依赖 runtime/hermes-agent 的 git 状态）。
 # hermes reset --hard / git clean 不会影响这里；仓库损坏重建后也能直接恢复。
 PATCH_SOURCE_DIR = IKAROS_ROOT / "patches" / "hermes"
 ALLOWED_UNTracked = {"config.yaml"}                     # 本地运行配置，允许存在、不碰
@@ -112,7 +112,7 @@ B_CLASS_MARKERS = {}
 
 # 外置插件：源在 patches/hermes/plugins/ikaros_v5/（Ikaros 主仓 git 跟踪），
 # 运行时部署到 data/hermes-agent/plugins/ikaros_v5/（$HERMES_HOME，gitignore 的数据区）。
-# hermes 更新 reset --hard 只影响 core/hermes，外置插件天然不受影响。
+# hermes 更新 reset --hard 只影响 runtime/hermes-agent，外置插件天然不受影响。
 EXTERNAL_PLUGIN_SRC = PATCH_SOURCE_DIR / "plugins" / "ikaros_v5"
 EXTERNAL_PLUGIN_DST = IKAROS_ROOT / "data" / "hermes-agent" / "plugins" / "ikaros_v5"
 EXTERNAL_PLUGIN_MARKER = "class IkarosV5ContextEngine"
@@ -406,7 +406,7 @@ def ensure_b_class(d: str) -> None:
 def ensure_external_plugins() -> None:
     """外置 ikaros_v5 插件：patches 源 → $HERMES_HOME/plugins/ikaros_v5/（幂等）。
 
-    hermes 更新 reset --hard 只影响 core/hermes；此部署保证 data 区的运行时
+    hermes 更新 reset --hard 只影响 runtime/hermes-agent；此部署保证 data 区的运行时
     插件始终与 patches 源一致（缺失即补、代表文件含 marker 即跳过）。
     """
     repr_path = EXTERNAL_PLUGIN_DST / "__init__.py"
@@ -534,7 +534,7 @@ root = os.environ.get("IKAROS_ROOT")
 if not root:
     print("FAIL: IKAROS_ROOT 未设置")
     sys.exit(1)
-# 确保可被 import：core/hermes(agent/plugins/hermes_cli) 与 core(memory_v5 包)
+# 确保可被 import：runtime/hermes-agent(agent/plugins/hermes_cli) 与 core(memory_v5 包)
 sys.path.insert(0, os.path.join(root, "core"))
 for p in os.environ.get("PYTHONPATH", "").split(os.pathsep):
     if p and p not in sys.path:
@@ -592,7 +592,7 @@ def verify_ikaros_v5_runtime(python_exe: Path) -> tuple[bool, str]:
     env = dict(os.environ)
     env["IKAROS_ROOT"] = str(IKAROS_ROOT)
     env["PYTHONPATH"] = os.pathsep.join([
-        str(REPO),                   # core/hermes -> agent/plugins/hermes_cli
+        str(REPO),                   # runtime/hermes-agent -> agent/plugins/hermes_cli
         str(IKAROS_ROOT / "core"),   # memory_v5 包
     ])
     proc = run_cmd([str(python_exe), "-c", _IKAROS_V5_RUNTIME_CHECK],
@@ -770,12 +770,12 @@ def rebuild_tui() -> tuple[bool, str]:
     tui_dir = REPO / "ui-tui"
     if not tui_dir.is_dir():
         return False, ("ui-tui/ 缺失（hermes update 可能误删 tracked 文件）；"
-                       "请先 `cd core/hermes && git restore -- ui-tui` 后重试")
+                       "请先 `cd runtime/hermes-agent && git restore -- ui-tui` 后重试")
     env = dict(os.environ)
     npm = _resolve_npm()
     if not npm:
         return False, ("找不到 npm（Node 未安装或未在 PATH）；"
-                       f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev "
+                       f"手动：cd runtime/hermes-agent && npm install --workspace ui-tui --include=dev "
                        f"&& npm run build -w ui-tui")
     try:
         # 1) 安装 ui-tui 依赖（reconcile，尽量避开沙箱批量删除闸门）
@@ -787,7 +787,7 @@ def rebuild_tui() -> tuple[bool, str]:
         if proc.returncode != 0:
             tail = proc.stderr.strip()[-400:]
             return False, (f"npm install --workspace ui-tui 失败(rc={proc.returncode})：{tail}；"
-                           f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev")
+                           f"手动：cd runtime/hermes-agent && npm install --workspace ui-tui --include=dev")
         # 2) 用 esbuild 构建单文件 bundle（dist 仅 1 文件，不触发批量删除闸门）
         proc = run_cmd(
             [npm, "run", "build", "-w", "ui-tui"],
@@ -796,10 +796,10 @@ def rebuild_tui() -> tuple[bool, str]:
         if proc.returncode != 0:
             tail = proc.stderr.strip()[-400:]
             return False, (f"npm run build -w ui-tui 失败(rc={proc.returncode})：{tail}；"
-                           f"手动：cd core/hermes && npm run build -w ui-tui")
+                           f"手动：cd runtime/hermes-agent && npm run build -w ui-tui")
     except Exception as e:  # 含沙箱删除闸门抛出的 RuntimeError
         return False, (f"TUI 重建异常：{e!r}；"
-                       f"手动：cd core/hermes && npm install --workspace ui-tui --include=dev "
+                       f"手动：cd runtime/hermes-agent && npm install --workspace ui-tui --include=dev "
                        f"&& npm run build -w ui-tui")
     entry = tui_dir / "dist" / "entry.js"
     if not entry.is_file() or entry.stat().st_size == 0:
@@ -811,7 +811,7 @@ def rebuild_tui() -> tuple[bool, str]:
 # 收尾：验证 + 更新 §0（不提交，overlay 保留为未提交工作树）
 # --------------------------------------------------------------------------- #
 def finalize(target_sha: str, ikaros_commit: str, python_exe: Path) -> bool:
-    """收尾（**不再 commit**：2026-08-05 起 core/hermes 保持纯净 upstream，
+    """收尾（**不再 commit**：2026-08-05 起 runtime/hermes-agent 保持纯净 upstream，
     Ikaros 定制只作为未提交 working-tree overlay 存在，便于随时 reset --hard 重放）。
 
     - target_sha    : 当前 upstream HEAD（纯 upstream，= 新的 Upstream tip）
@@ -827,7 +827,7 @@ def finalize(target_sha: str, ikaros_commit: str, python_exe: Path) -> bool:
         log("验证未通过，终止收尾（overlay 保持未提交，可修复后重试或回滚）。")
         return False
 
-    # —— 关键变更：不提交任何 Ikaros 单提交，保持 core/hermes 历史 100% upstream ——
+    # —— 关键变更：不提交任何 Ikaros 单提交，保持 runtime/hermes-agent 历史 100% upstream ——
     # overlay 作为未提交工作树改动保留，hermes 直接运行它。
     # §0 指针：Upstream tip = target_sha（纯 upstream HEAD）；
     #          Ikaros 补丁提交 = ikaros_commit（overlay 源，永不指向 HEAD）。
@@ -844,9 +844,9 @@ def finalize(target_sha: str, ikaros_commit: str, python_exe: Path) -> bool:
     else:
         log(f"[warn] TUI 重建未完成（不影响 overlay；9119 chat 仍可用既有 bundle）：{msg_tui}")
     clear_state()
-    log(f"完成。core/hermes HEAD = 纯 upstream {target_sha[:8]}；"
+    log(f"完成。runtime/hermes-agent HEAD = 纯 upstream {target_sha[:8]}；"
         f"Ikaros overlay 未提交（源 = {ikaros_commit[:8]}），由 patches/hermes/ 经 --apply 重放。")
-    log("注意：未自动 push（且不再往 core/hermes 历史写 Ikaros 提交）。")
+    log("注意：未自动 push（且不再往 runtime/hermes-agent 历史写 Ikaros 提交）。")
     return True
 
 
@@ -945,7 +945,7 @@ def step_light_patch(base: str, ikaros: str, python_exe: Path, spec_text: str) -
         log("轻量补丁后仍缺失，回滚。")
         run_git(["reset", "--hard", "HEAD"], check=False)
         return 2
-    # 2026-08-05 起：轻量补丁**不再提交**（保持 core/hermes 历史纯净 upstream）。
+    # 2026-08-05 起：轻量补丁**不再提交**（保持 runtime/hermes-agent 历史纯净 upstream）。
     # overlay 作为未提交工作树改动保留，hermes 直接运行它。
     log("轻量补丁已就位（未提交 working-tree overlay，纯 upstream 历史保持干净）。")
     return 0

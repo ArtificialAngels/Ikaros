@@ -14,7 +14,7 @@
 | :48911 | Neko main frontend | `apps/neko/app/main_server/` (包, `python -m app.main_server`) |
 | :48912 | Neko memory server | `apps/neko/app/memory_server/` (包, `python -m app.memory_server`) |
 | :48915 | Neko agent server | `apps/neko/app/agent_server/` (包, `python -m app.agent_server`) |
-| :9119 | Hermes Dashboard (cloud LLM gateway) | `core/hermes/.../web_server.py` |
+| :9119 | Hermes Dashboard (cloud LLM gateway) | `runtime/hermes-agent/.../web_server.py` |
 | :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，面板 `herdr` 组件按需启动） |
@@ -44,7 +44,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；`rules_retriever` 保持独立意图通道。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
 
 ## Hermes 插件外置（2026-08-04）
-- **ikaros_v5 上下文引擎 + 记忆提供方已外置为 Hermes 用户插件**，不再存在于 `core/hermes` 仓库内（零源码侵入）。
+- **ikaros_v5 上下文引擎 + 记忆提供方已外置为 Hermes 用户插件**，不再存在于 `runtime/hermes-agent` 仓库内（零源码侵入）。
 - 运行时位置 `data/hermes-agent/plugins/ikaros_v5/`（= `$HERMES_HOME/plugins/`，gitignore 数据区，hermes 更新不影响）；规范源 `patches/hermes/plugins/ikaros_v5/`，由 `bin/hermes-update-and-patch.py` 的 `ensure_external_plugins()` 幂等部署。
 - 两条原生发现链路：context engine 走通用插件系统（`plugin.yaml` 显式 `kind: standalone` + `register()` 调 `register_context_engine`，须在 config `plugins.enabled` 列表）；memory provider 走 memory 系统 user 目录扫描（`load_memory_provider("ikaros_v5")`）。
 - 激活配置（`data/hermes-agent/config.yaml`）：`context.engine: ikaros_v5`、`memory.provider: ikaros_v5`、`plugins.enabled: [ikaros_v5]`。Dashboard 枚举走 upstream `plugins_cmd._discover_context_engines`（自动含插件注册引擎）。
@@ -54,7 +54,8 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always go through the watchdog.
 - ❌ Never auto-commit / auto-push without an explicit user instruction.
 - ❌ After editing `bin/cloud_chat.py`, restart the control panel — it caches `cloud_chat`, changes won't take effect otherwise.
-- ❌ Don't edit `hermes-agent` code (being relocated to `core/hermes` by another agent); docs refer to it as `core/hermes`.
+- ❌ Don't edit `runtime/hermes-agent` directly — it's the hermes-agent upstream worktree (git clone, kept 100% 纯净). Ikaros 定制改走 `patches/hermes/`（`bin/hermes-update-and-patch.py` 幂等重打）或 `core/hermes-bridge/`（0 侵入包装层）。
+- ✅ hermes 迁移已完成（2026-08-12 验证）：源码 `runtime/hermes-agent/`（venv 同步，editable install），HERMES_HOME 数据 `data/hermes-agent/`，env 与全部启动器已指向新位置；健康测试全绿（gateway :8642 / dashboard :9119 / CLI v0.20.0 / paw :8088）。旧树残留已清理。
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。

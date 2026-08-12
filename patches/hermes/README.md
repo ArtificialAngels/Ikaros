@@ -1,7 +1,7 @@
 # patches/hermes/ — Ikaros 对 hermes-agent 的定制补丁源文件
 
-> **用途**：当 `core/hermes` 更新到新版 upstream 后，从这里把补丁文件复制回 hermes 工作树并 commit。
-> 放在这里而不是 `core/hermes` 下面，是为了防止 hermes `git reset --hard` / `git clean` 时被误删。
+> **用途**：当 `runtime/hermes-agent` 更新到新版 upstream 后，从这里把补丁文件复制回 hermes 工作树并 commit。
+> 放在这里而不是 `runtime/hermes-agent` 下面，是为了防止 hermes `git reset --hard` / `git clean` 时被误删。
 
 ## 目录结构
 
@@ -37,8 +37,8 @@ patches/hermes/
 python bin/hermes-update-and-patch.py --apply
 
 # 如果只想想手动恢复补丁（不 fetch upstream）
-cp -r patches/hermes/* core/hermes/
-cd core/hermes && git add -A && git commit -m "feat(hermes): apply Ikaros integration patches"
+cp -r patches/hermes/* runtime/hermes-agent/
+cd runtime/hermes-agent && git add -A && git commit -m "feat(hermes): apply Ikaros integration patches"
 ```
 
 ## 相关文件

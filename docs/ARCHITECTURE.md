@@ -27,7 +27,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 │  self_model / affect / relationship / narrative / dissonance │
 ├─────────────────────────────────────────────────────────────┤
 │      L1: 基础设施 (Hermes Infrastructure) — 逻辑分组           │
-│  core/hermes/ — Agent 框架 (Skills / MCP)                    │
+│  runtime/hermes-agent/ — Agent 框架 (Skills / MCP)                    │
 │  hermes-bridge :8650 → 纯净 gateway :8642 (tools/skills)     │
 │  bin/ikaros-memory-watchdog — 本地 LLM :8080 + Embed :8587   │
 ├─────────────────────────────────────────────────────────────┤
@@ -90,11 +90,11 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 
 ### 1.5 Hermes 接入：studio 式「0 侵入」Bridge（2026-08-05，commit b6c8e13）
 
-对话树与 Hermes 的接入改为**独立进程包装**，`core/hermes` 工作树保持纯净：
+对话树与 Hermes 的接入改为**独立进程包装**，`runtime/hermes-agent` 工作树保持纯净：
 
 - **组件**：`core/hermes-bridge/`（纯 stdlib SSE 翻译桥：`translate.py` / `server.py` / `inject_ikaros_paths.py`）+ 启动器 `bin/hermes-bridge.py`，监听 **:8650**。设计文档见 `docs/hermes-bridge-design.md`。
 - **链路**：`:48920` 继续调 OpenAI-wire `/v1/chat/completions`（**零前端改动**）→ bridge → 纯净 Hermes gateway `:8642` 原生 session-chat 端点 → bridge 把 `reasoning / tool.progress / 正文` 翻译成 48920 方言（`hermes.reasoning` / `hermes.tool.progress` / OpenAI chunks / `[DONE]`）。
-- **overlay 精简**：`core/hermes` 工作树补丁从 10 个降到 **3 个且全部不可约**：
+- **overlay 精简**：`runtime/hermes-agent` 工作树补丁从 10 个降到 **3 个且全部不可约**：
   1. `hermes_cli/web_server.py` — Hermes 原生 Dashboard 接线（9119 网关用途报废）
   2. `cron/scheduler.py` — 对运行版 hermes 深度适配（还原崩 cron）
   3. `agent/conversation_loop.py` — reasoning 源头正确性修复（bridge 依赖它产出干净推理，不能在翻译层修）
@@ -163,7 +163,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_LABEL_EMOTION_PROVIDER` | `local` / `deepseek` | 情感标注 LLM |
 | `IKAROS_MODULES` | `%IKAROS_ROOT%\modules` | 模块目录（扩展挂载点） |
 | `IKAROS_LOGS` | `%IKAROS_ROOT%\data\logs` | 统一日志目录 |
-| `IKAROS_HERMES_AGENT` | `%IKAROS_ROOT%\core\hermes` | Hermes Agent 代码根（relocated from `hermes-agent`） |
+| `IKAROS_HERMES_AGENT` | `%IKAROS_ROOT%\runtime\hermes-agent` | Hermes Agent 代码根（relocated from `hermes-agent`） |
 | `IKAROS_HERMES_HOME` | `%IKAROS_ROOT%\data\hermes-agent` | Hermes 用户态数据 / 会话目录 |
 
 ### 2.4 PYTHONHOME 安全门
@@ -495,8 +495,8 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
 ```
 1. portable-python 用于所有 Ikaros 原生组件
    → E:\Ikaros\runtime\portable-python\python.exe
-2. Hermes Agent venv 用于 Hermes Agent 相关操作（正在迁至 `core/hermes/`，路径以实际为准）
-   → E:\Ikaros\core\hermes\venv\Scripts\python.exe
+2. Hermes Agent venv 用于 Hermes Agent 相关操作（正在迁至 `runtime/hermes-agent/`，路径以实际为准）
+   → E:\Ikaros\runtime\hermes-agent\venv\Scripts\python.exe
 3. Neko venv 用于 Neko 前端相关操作
    → E:\Ikaros\apps\neko\.venv\Scripts\python.exe
 4. 不得在三个 venv 间混合使用

@@ -3,7 +3,7 @@
 
 WHY
 ---
-Ikaros 把 Hermes 当纯净下游跑 (core/hermes 不改性源码). 上游 OpenAI-wire
+Ikaros 把 Hermes 当纯净下游跑 (runtime/hermes-agent 不改性源码). 上游 OpenAI-wire
 ``/v1/chat/completions`` 原生就流 ``delta.content`` + ``event: hermes.tool.progress``
 (工具卡), 但**故意不接 reasoning** (gateway/platforms/api_server.py:4101 注释明示).
 上游另一条原生端点 ``/api/sessions/{id}/chat/stream`` (Dashboard 自己用的) 则
@@ -15,7 +15,7 @@ Ikaros 把 Hermes 当纯净下游跑 (core/hermes 不改性源码). 上游 OpenA
 内部驱动 Hermes 原生 session-chat 端点, 用 ``translate.py`` 把原生 SSE 翻译成
 对话树方言 (``hermes.reasoning`` / ``hermes.tool.progress`` / OpenAI chunks / ``[DONE]``).
 
-结果: core/hermes 工作树保持 100% 纯净; ikaros_v5 的思考/工具体验完全留在 Ikaros 自有代码.
+结果: runtime/hermes-agent 工作树保持 100% 纯净; ikaros_v5 的思考/工具体验完全留在 Ikaros 自有代码.
 
 ENDPOINTS
 --------

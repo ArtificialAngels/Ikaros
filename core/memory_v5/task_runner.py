@@ -55,8 +55,8 @@ def call_async(text: str, optimized: Optional[str] = None) -> dict:
 def _resolve_hermes() -> Optional[str]:
     """稳健定位 hermes.exe: 优先 PATH (shutil.which), 回退项目 venv.
 
-    Hermes 已归位 core/hermes (原 hermes-agent). 主路径走 PATH 解析,
-    次选回退 core/hermes/venv/Scripts/hermes.exe。
+    Hermes 已归位 runtime/hermes-agent (原 hermes-agent). 主路径走 PATH 解析,
+    次选回退 runtime/hermes-agent/venv/Scripts/hermes.exe。
     """
     import shutil as _shutil
     _cand = _shutil.which("hermes.exe") or _shutil.which("hermes")

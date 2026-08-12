@@ -76,7 +76,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 - **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 Qwen3-1.7B 仅作兜底,懒加载不占常驻资源。
 - **Hermes Dashboard** — `:9119` Web UI,管理 LLM 后端 / 会话 / 模型。
 - **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
-- **隐私优先** — `data/`、`core/hermes/`（上游干净副本）、`core/neko/resources/`、`runtime/`、`.env`、IDE 状态全在 `.gitignore`。
+- **隐私优先** — `data/`、`runtime/hermes-agent/`（上游干净副本）、`core/neko/resources/`、`runtime/`、`.env`、IDE 状态全在 `.gitignore`。
 
 ---
 
@@ -109,7 +109,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 | 目录 | 上游 | 是否入库 |
 |------|------|---------|
 | `core/neko/` | [Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 否(`.gitignore`) |
-| `core/hermes/` | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 否 |
+| `runtime/hermes-agent/` | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 否 |
 | `runtime/` | llama.cpp + CUDA 工具链 | 否 |
 | `data/hermes-agent/skills/...` (MCP) | 各类 MCP 服务器 | 否 |
 
@@ -217,7 +217,7 @@ Ikaros\
 | **llama.cpp** | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 LLM 推理 | MIT |
 | **Qwen** | [QwenLM/Qwen](https://github.com/QwenLM/Qwen) | 本地模型 | Apache 2.0 |
 
-`core/hermes\` 与 `core/neko\` 是上游的干净副本(经 `UPSTREAM.md` 清单拉取),本项目所有二次开发放在 `core/memory_v5/`、`bin/`、`core/dashboard/` 下（注：`hermes-agent`→`core/hermes`、`core/v5`→`core/memory_v5`，均于 2026-07-26 重命名）。
+`runtime/hermes-agent\` 与 `core/neko\` 是上游的干净副本(经 `UPSTREAM.md` 清单拉取),本项目所有二次开发放在 `core/memory_v5/`、`bin/`、`core/dashboard/` 下（注：`hermes-agent`→`runtime/hermes-agent`、`core/v5`→`core/memory_v5`，均于 2026-07-26 重命名）。
 
 ---
 
@@ -239,7 +239,7 @@ Ikaros\
 - 🐍 **N.E.K.O 解释器捆绑** — 将 Python 3.11.15 随树捆绑到 `runtime\portable-python311\`,neko 的 `.venv` 基础解释器（home）指向它,**不再依赖 `%APPDATA%\uv\python` 或系统 Python**,满足 U 盘即插即用(上游 `requires-python` 仍钉 `==3.11.*`,#2516 未修,切勿升 3.12)。
 - 🔧 **venv 联动重建** — `bin\bootstrap-venvs.py` 新增 neko 分支:换盘符后普通运行即自动检测 `pyvenv.cfg` 的 `home` 与 editable `.pth` 是否漂移当前盘符,漂移则重指路径 + 拷解释器 DLL 进 `Scripts\`,**保留已装的 ~200 个 cp311 轮子,无需联网重装**;`--force` 强制重指,venv 完全缺失则 `pip install -e .` 完整创建(需联网)。
 - 🔄 **neko 源码同步** — `core\neko` 同步为最新 `N.E.K.O-main` 快照(保留 `N.E.K.O.exe` 与 CEF 运行库),修复了旧 editable 指针悬空(指向已删的 `exProject`)导致 venv 起不来的问题。
-- 📝 文档同步:本 README 更正 `core/v5`→`core/memory_v5`、`hermes-agent/`→`core/hermes`,并补充 `bootstrap-venvs.py` 用法。
+- 📝 文档同步:本 README 更正 `core/v5`→`core/memory_v5`、`hermes-agent/`→`runtime/hermes-agent`,并补充 `bootstrap-venvs.py` 用法。
 
 ### 2026-07-26 — 架构收缩 / 去噪音
 - 🗑️ **自思考循环 `think.py` 删除** — 定时自循环产出的都是噪音,组件与定时任务一并剔除;`metacog` 仅保留手动/按需反思。

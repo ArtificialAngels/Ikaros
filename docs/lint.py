@@ -12,7 +12,7 @@ from the current implementation:
        (served by `python -m hermes_cli.main gateway run`; the legacy
         bin/hermes-api-server.py script is UNUSED — do not call it "active")
   (c) literal core/v5 (should be core/memory_v5)
-  (d) hermes-agent/ as a *code* path (should be core/hermes; data/hermes-agent
+  (d) hermes-agent/ as a *code* path (should be runtime/hermes-agent; data/hermes-agent
       user-state dir is allowed and NOT flagged)
 
 Historical reports may still contain the old names for traceability; they are
@@ -128,7 +128,7 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
         # mapping-table rows (old -> new shown side by side) are intentional
         if OLD_CORE_PATH in line and "core/memory_v5" in line:
             matched = [m for m in matched if m != OLD_CORE_PATH]
-        if OLD_HERMES_CODE in line and "core/hermes" in line:
+        if OLD_HERMES_CODE in line and "runtime/hermes-agent" in line:
             matched = [m for m in matched if m != OLD_HERMES_CODE]
         if rel in HERMES_PATCH_EXEMPT_FILES:
             matched = [m for m in matched if m != OLD_HERMES_CODE]

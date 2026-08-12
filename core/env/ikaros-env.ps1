@@ -24,7 +24,7 @@ $env:IKAROS_LOGS         = "$env:IKAROS_ROOT\data\logs"
 $env:IKAROS_DATA_MODELS  = "$env:IKAROS_ROOT\data\models"
 
 # ---- Step 3: Hermes 组件路径 ----
-$env:IKAROS_HERMES_AGENT = "$env:IKAROS_ROOT\core/hermes"
+$env:IKAROS_HERMES_AGENT = "$env:IKAROS_ROOT\runtime/hermes-agent"
 $env:IKAROS_HERMES_HOME  = "$env:IKAROS_ROOT\data\hermes-agent"
 $env:IKAROS_BRIDGE       = "$env:IKAROS_ROOT\bridge"
 $env:IKAROS_HERMES       = "$env:IKAROS_ROOT\hermes"

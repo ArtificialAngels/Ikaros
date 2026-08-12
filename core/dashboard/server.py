@@ -68,7 +68,7 @@ INDEX_HTML = HERE / "index.html"
 ASSETS_DIR = HERE / "assets"
 
 # ── Hermes 版本 / Ikaros 补丁 控制（需求 §9：9100 面板更新控制 + 9119 启动预检）──
-HERMES_AGENT_DIR = HERMES_ROOT / "core" / "hermes"
+HERMES_AGENT_DIR = HERMES_ROOT / "runtime" / "hermes"
 HERMES_PATCH_SPEC = HERMES_ROOT / "docs" / "hermes-ikaros-patches.md"
 HERMES_PATCH_SCRIPT = HERMES_ROOT / "bin" / "hermes-update-and-patch.py"
 POLL_INTERVAL = 0.8  # seconds between file polls for SSE
@@ -108,7 +108,7 @@ COMPONENTS = [
      "panel_url": "http://127.0.0.1:48920/"},
     {"id": "hermes_bridge", "name": "Hermes 包装层 (Studio Bridge)", "category": "Backend",
      "desc": "studio 式「0 侵入」包装层 :8650 —— 透明代理纯净 Hermes gateway(:8642) 原生 "
-             "session-chat, 把 reasoning/工具/正文翻译为对话树方言, 使 core/hermes 工作树 100% 纯净. "
+             "session-chat, 把 reasoning/工具/正文翻译为对话树方言, 使 runtime/hermes-agent 工作树 100% 纯净. "
              "对话树(:48920) 默认经此通道; 不可达时对话树自动降级本地 DeepSeek.",
      "ports": [8650], "markers": ["hermes-bridge"],
      "panel_url": "http://127.0.0.1:8650/health"},
@@ -155,12 +155,12 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_CONFIG"] = s(root / "config")
     e["IKAROS_MODULES"] = s(root / "modules")
     e["IKAROS_LOGS"] = s(root / "data" / "logs")
-    e["IKAROS_HERMES_AGENT"] = s(root / "core/hermes")
+    e["IKAROS_HERMES_AGENT"] = s(root / "runtime/hermes-agent")
     e["IKAROS_HERMES_HOME"] = s(root / "data" / "hermes-agent")
     e["HERMES_ROOT"] = s(root)
-    e["HERMES_BIN"] = s(root / "core/hermes" / "venv" / "Scripts" / "hermes.exe")
-    e["HERMES_AGENT_CLI_PYTHON"] = s(root / "core/hermes" / "venv" / "Scripts" / "python.exe")
-    e["HERMES_AGENT_BRIDGE_PYTHON"] = s(root / "core/hermes" / "venv" / "Scripts" / "python.exe")
+    e["HERMES_BIN"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "hermes.exe")
+    e["HERMES_AGENT_CLI_PYTHON"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "python.exe")
+    e["HERMES_AGENT_BRIDGE_PYTHON"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "python.exe")
     e["HERMES_AGENT_NODE"] = s(root / "runtime" / "node" / "node.exe")
     e["IKAROS_MEMORY"] = s(root / "core/memory_v5")
     e["IKAROS_MEMORY_DATA"] = s(root / "core/memory_v5" / "data")
@@ -226,7 +226,7 @@ def build_env(root: pathlib.Path) -> dict:
 
     e["PYTHONIOENCODING"] = "utf-8"
     e["PYTHONUTF8"] = "1"
-    e["PYTHONPATH"] = s(root) + ";" + s(root / "core/hermes")
+    e["PYTHONPATH"] = s(root) + ";" + s(root / "runtime/hermes-agent")
     e["NODE_PATH"] = s(root / "runtime" / "node" / "node_modules")
 
     # HERMES_* 兼容
@@ -239,7 +239,7 @@ def build_env(root: pathlib.Path) -> dict:
     # 完全跳过首次启动的 `npm install --workspace ui-tui`。否则在沙箱/离线环境
     # npm install 会被安全删除闸门拦截 → _make_tui_argv 走 sys.exit(1) →
     # web chat 报 "Chat unavailable: 1"。dist 与根 node_modules 均已就绪。
-    e["HERMES_TUI_DIR"] = s(root / "core/hermes" / "ui-tui")
+    e["HERMES_TUI_DIR"] = s(root / "runtime/hermes-agent" / "ui-tui")
 
     # PATH: 把项目目录前置到继承的 PATH 之上
     path_parts = [
@@ -740,7 +740,7 @@ def _sync_hermes_web_stamp(root):
     返回 True 表示已对齐（跳过构建），False 表示不干预。
     """
     try:
-        hermes_dir = root / "core" / "hermes"
+        hermes_dir = root / "runtime" / "hermes"
         web_dir = hermes_dir / "web"
         dist_dir = hermes_dir / "hermes_cli" / "web_dist"
         stamp_file = root / "data" / "hermes-agent" / "web-ui-build-stamp.json"
@@ -772,13 +772,13 @@ def _spawn_hermes_dashboard(root, env, wait, no_open):
     """用 hermes 控制台脚本拉起 dashboard（:9119，同一端口）。
 
     必须用 hermes 自有的 venv 里的 hermes.exe（hermes_cli 装在里面），且把
-    core/hermes 顶层目录加进 PYTHONPATH。不加 --skip-build —— 按需求从
+    runtime/hermes-agent 顶层目录加进 PYTHONPATH。不加 --skip-build —— 按需求从
     `hermes --help` 取原生命令（`hermes dashboard [--no-open]`）；若环境离线导致
     npm 构建失败，9119 起不来，需先在有网处预构建 web_dist 或显式加回 --skip-build。
     """
     # 注：0 侵入后（studio bridge + 不可约 overlay 由 bin/hermes-update-and-patch.py
     # --apply 自动维护），9119 启动不再做补丁预检；补丁更新统一走面板「更新 Hermes」。
-    hermes_dir = root / "core" / "hermes"
+    hermes_dir = root / "runtime" / "hermes"
     venv_py = hermes_dir / "venv" / "Scripts" / "python.exe"
     hermes_bin = hermes_dir / "venv" / "Scripts" / "hermes.exe"
     if not venv_py.exists():
@@ -790,7 +790,7 @@ def _spawn_hermes_dashboard(root, env, wait, no_open):
     cwd = str(root)
     (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
     child_env = dict(env or {})
-    # hermes_cli 在 core/hermes 顶层, 必须显式加入 sys.path
+    # hermes_cli 在 runtime/hermes-agent 顶层, 必须显式加入 sys.path
     hermes_root_str = str(hermes_dir)
     existing = child_env.get("PYTHONPATH", "")
     paths = [p for p in existing.split(";") if p]
@@ -866,7 +866,7 @@ def stop_component_hermes_dashboard(root, env):
 
 # ── Hermes 版本 / Ikaros 补丁 控制（需求 §9）──────────────────────────
 def _git_hermes(args):
-    """在 core/hermes 仓库内跑 git（隐藏窗口）。"""
+    """在 runtime/hermes-agent 仓库内跑 git（隐藏窗口）。"""
     return subprocess.run(
         ["git", *args], cwd=str(HERMES_AGENT_DIR),
         capture_output=True, text=True, creationflags=CREATE_NO_WINDOW,
@@ -887,7 +887,7 @@ def _parse_spec_pointers() -> "tuple[str, str] | None":
 
 
 def _hermes_git_healthy() -> bool:
-    """core/hermes 的 .git 是否健康（有 refs/heads/main 且 rev-parse 不 fallback 到父仓库）。
+    """runtime/hermes-agent 的 .git 是否健康（有 refs/heads/main 且 rev-parse 不 fallback 到父仓库）。
 
     当 refs/ 目录被删时，git 会向上爬到父仓库 E:\\Ikaros，导致所有 hermes git
     命令实际操作的是主仓库——必须提前检测并短路，否则补丁检测会误报。
@@ -1022,7 +1022,7 @@ UPSTREAM_REPOS = {
         "name": "Hermes Agent",
         "url": "https://github.com/NousResearch/hermes-agent",
         "branch": "main",
-        "local": HERMES_ROOT / "core" / "hermes",
+        "local": HERMES_ROOT / "runtime" / "hermes",
     },
     "neko": {
         "name": "N.E.K.O",
@@ -1344,7 +1344,7 @@ def start_component_qwenpaw(root, env, wait):
         bridge = os.path.join(root, "bin", "hermes_paw_bridge.py")
         hermes_py = (
             os.environ.get("HERMES_AGENT_PYTHON")
-            or r"E:\Ikaros\core\hermes\venv\Scripts\python.exe"
+            or r"E:\Ikaros\runtime\hermes-agent\venv\Scripts\python.exe"
         )
         if os.path.exists(bridge):
             cmd = hermes_py + " " + bridge
@@ -1374,7 +1374,7 @@ def start_component_qwenpaw(root, env, wait):
     )
     if resolved_base_url:
         child_env["HERMES_PAW_BASE_URL"] = resolved_base_url
-    child_env.setdefault("HERMES_AGENT_ROOT", r"E:\Ikaros\core\hermes")
+    child_env.setdefault("HERMES_AGENT_ROOT", r"E:\Ikaros\runtime\hermes-agent")
     child_env.setdefault("HERMES_PAW_PORT", "8088")
     parts = cmd.split()
     try:
@@ -1753,7 +1753,7 @@ def _usage_report(days: int = 30) -> dict:
 
 
 # ── Cron / Kanban 管理 (任务4): 读直连数据, 写操作走 hermes CLI 保持语义一致 ──
-_HERMES_CLI = [str(ROOT / "core" / "hermes" / "venv" / "Scripts" / "python.exe"),
+_HERMES_CLI = [str(ROOT / "runtime" / "hermes" / "venv" / "Scripts" / "python.exe"),
                "-m", "hermes_cli.main"]
 
 

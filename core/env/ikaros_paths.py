@@ -45,7 +45,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "logs": "data/logs",
     },
     "hermes": {
-        "agent": "core/hermes",
+        "agent": "runtime/hermes-agent",
         "home": "data/hermes-agent",
         "core": "hermes",
     },
@@ -113,7 +113,7 @@ def _detect_root() -> Path:
     # 2) 从脚本位置推导（core/detect-root/ → 项目根）
     script_dir = Path(__file__).resolve().parent  # core/env/
     ikaros_root = script_dir.parent.parent  # 项目根
-    markers = ["runtime/portable-python/python.exe", "core/hermes", "core/env"]
+    markers = ["runtime/portable-python/python.exe", "runtime/hermes-agent", "core/env"]
     if all((ikaros_root / m).exists() for m in markers):
         return ikaros_root
 
@@ -381,7 +381,7 @@ class IkarosPaths:
         # Hermes 兼容变量
         env["HERMES_ROOT"] = root
         env["HERMES_HOME"] = self.get("hermes.home", str(self.root / "data/hermes-agent"))
-        env["HERMES_AGENT_ROOT"] = self.get("hermes.agent", str(self.root / "core/hermes"))
+        env["HERMES_AGENT_ROOT"] = self.get("hermes.agent", str(self.root / "runtime/hermes-agent"))
         env["HERMES_PYTHON"] = env["IKAROS_PYTHON"]
 
         # LLM / Embedding

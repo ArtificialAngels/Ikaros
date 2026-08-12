@@ -27,7 +27,7 @@ set "IKAROS_MODULES=%IKAROS_ROOT%\modules"
 set "IKAROS_LOGS=%IKAROS_ROOT%\data\logs"
 
 REM ---- Hermes Agent paths ----
-set "IKAROS_HERMES_AGENT=%IKAROS_ROOT%\core/hermes"
+set "IKAROS_HERMES_AGENT=%IKAROS_ROOT%\runtime/hermes-agent"
 set "IKAROS_HERMES_HOME=%IKAROS_ROOT%\data\hermes-agent"
 
 REM Point the Hermes Agent service dependencies at our environment.

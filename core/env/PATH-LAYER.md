@@ -96,7 +96,7 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 
 | Key | 作用 |
 |---|---|
-| `hermes.agent` | upstream 源码(只读,`core/hermes/`) |
+| `hermes.agent` | upstream 源码(只读,`runtime/hermes-agent/`) |
 | `hermes.home` | 运行时数据(`data/hermes-agent/`,含 auth.json state.db 等) |
 | `hermes.bridge` | 桥接层(`bridge/`) |
 | `hermes.core` | ikaros 自有 Python 包(`hermes/`) |
@@ -149,7 +149,7 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 
 ## 5. HERMES 兼容变量 (`HERMES_*` — 旧脚本)
 
-> 12 个 `HERMES_*` 变量是 Ikaros v3 之前的"老 core/hermes"项目使用的命名空间。
+> 12 个 `HERMES_*` 变量是 Ikaros v3 之前的"老 runtime/hermes-agent"项目使用的命名空间。
 > 为**不破坏历史脚本**而保留 —— 它们的值 1:1 镜像 `IKAROS_*`。
 
 | Ikaros | HERMES 兼容 | 同指向 |
@@ -165,7 +165,7 @@ Ikaros 是**便携项目** —— U 盘 / 不同盘符都能跑。 这要求:
 | `IKAROS_LOGS` | `HERMES_LOGS` | `data/logs/` |
 | `IKAROS_CONFIG\hermes.yaml` | `HERMES_CONFIG` | 路径到 `hermes.yaml` |
 | `IKAROS_MEMORY_MODELS` | `HERMES_MODELS` | `models/` |
-| `IKAROS_HERMES_AGENT` | `HERMES_AGENT_ROOT` | `core/hermes/` |
+| `IKAROS_HERMES_AGENT` | `HERMES_AGENT_ROOT` | `runtime/hermes-agent/` |
 
 ---
 

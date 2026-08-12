@@ -3,7 +3,7 @@
 
 让对话树(:48920)继续调它熟悉的 OpenAI-wire /v1/chat/completions (零前端改动),
 内部驱动纯净 Hermes gateway(:8642) 的原生 session-chat 端点, 把 reasoning/工具/
-正文翻译为对话树方言. core/hermes 工作树因此可保持 100% 纯净.
+正文翻译为对话树方言. runtime/hermes-agent 工作树因此可保持 100% 纯净.
 
 运行:  python bin/hermes-bridge.py
 环境变量 (均可选, 有上游默认值):

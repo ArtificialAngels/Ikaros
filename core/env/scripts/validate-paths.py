@@ -142,7 +142,7 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     # ---- Hermes 组件 ----
     checks.append(PathCheck(
         "Hermes Agent 源码",
-        str(root / "core/hermes"),
+        str(root / "runtime/hermes-agent"),
         critical=True, must_be_dir=True
     ))
     checks.append(PathCheck(

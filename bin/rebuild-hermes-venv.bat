@@ -7,7 +7,7 @@ rem IMPORTANT: close the Hermes dashboard and cd out of the venv dir first,
 rem or the old venv cannot be removed (its files are locked by a running process).
 
 set "ROOT=%~dp0.."
-set "HERMES=%ROOT%\core\hermes"
+set "HERMES=%ROOT%\runtime\hermes-agent"
 set "VENV=%HERMES%\venv"
 set "UV=%ROOT%\runtime\portable-python\Scripts\uv.exe"
 set "PY=%ROOT%\runtime\portable-python\python.exe"

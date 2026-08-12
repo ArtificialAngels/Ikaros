@@ -12,7 +12,7 @@ _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
 for p in (str(_ROOT / "bin"),
          str(_ROOT / "core/memory_v5"),
-         str(_ROOT / "core/hermes")):
+         str(_ROOT / "runtime/hermes-agent")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
