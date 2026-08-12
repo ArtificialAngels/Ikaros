@@ -47,7 +47,7 @@
 ## 阶段 5 · 架构大迁移（07-31）
 
 - **07-31 目录大改**：`core/v5` → `core/memory_v5`（包名 memory_v5，契约 v5.db/v5_* 不变）
-  `hermes-agent/` → `core/hermes`（独立嵌套仓库，**永不 push**）
+  `hermes-agent/` → `core/hermes`（当时方案；**实际 08-05 最终迁移到 `runtime/hermes-agent/`**，见 docs/ARCHITECTURE.md §1.5）
 - **chat 接入 V5 三件套**：
   1. `build_ikaros_persona()` — axiom + SOUL 白名单抽取 + self_model 心绪
   2. `build_tree_aware_context` — 树感知压缩（非线性截断）

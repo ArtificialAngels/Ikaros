@@ -9,19 +9,19 @@
 
 🧠 **项目记忆库**:`AGENTS.md` — 架构 / 决策 / gotcha / 历史
 📦 **上游清单**:`UPSTREAM.md` — 有上游的组件怎么拉、落哪、是否入库
-📖 **身体文档**:`data/hermes-agent/ikaros-identity/Ikaros-body.md` — 进程 / 端口 / 数据 / 模块
+📖 **架构文档**:`docs/ARCHITECTURE.md` — 分层 / 端口 / 数据流 / 路径注册表
 
 ---
 
 ## 🎯 一句话
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-control.bat` 拉起 **控制面板 :9100**,一键启动 **桌宠 + 记忆 + 前端**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由配置决定,默认 Qwen3-1.7B + nomic-embed-text)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-control.bat` 拉起 **控制面板 :9100**,一键启动 **桌宠 + 记忆 + 前端**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前 Phi-4-mini + nomic-embed)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
 
 > **仓库是「瘦身版」**:本云端仓库只保留 **Ikaros 原生代码 + 配置 + 上游清单/拉取/配置脚本**。所有「有上游」的组件(N.E.K.O 桌宠、Hermes Agent、runtime 工具链、各类 MCP)**不入库**,统一由 `scripts/fetch-upstreams.py` 拉取、`scripts/setup-native.py` 落地配置。详见 `UPSTREAM.md`。
 
 ---
 
-## 🖼️ 架构 (控制面板统一调度, 2026-07-26)
+## 🖼️ 架构 (控制面板统一调度, 2026-08-12)
 
 ```
                     ┌──── 控制面板 :9100 ────┐
@@ -33,19 +33,20 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
        ▼                       ▼                           ▼
 ┌─────────────┐      ┌──────────────────┐      ┌────────────────────┐
 │ Memory      │      │ N.E.K.O 前端      │      │ Hermes Dashboard   │
-│ :8587 embed │◄────►│ :48911 (React +   │◄────►│ :9119 (云端 LLM     │
-│ :8080 LLM*  │      │  Live2D/VRM/MMD)  │      │  后端 / Web UI)     │
-└──────┬──────┘      │ + :48912 mem      │      └─────────┬──────────┘
-       │             │ + :48915 agent    │                │
-       ▼             └────────┬──────────┘                ▼
-┌─────────────┐               │                  ┌──────────────────┐
-│ V5 数据层   │               ▼
-│ v5.db +     │      ┌──────────────────┐
-│ ChromaDB    │      │ QwenPaw :8088    │
-└─────────────┘      │ (猫爪工具臂)      │
+│ :8587 embed │◄────►│ :48911 (React +   │      │ :9119 (管理面板)    │
+│ :8080 LLM*  │      │  Live2D/VRM/MMD)  │      └─────────┬──────────┘
+└──────┬──────┘      │ + :48912 mem      │                │
+       │             │ + :48915 agent    │      ┌─────────▼──────────┐
+       ▼             └────────┬──────────┘      │ Hermes Bridge :8650│
+┌─────────────┐               │                 │   → gateway :8642  │
+│ V5 数据层   │               ▼                 │   (完整 tools/skills)│
+│ v5.db +     │      ┌──────────────────┐      └────────────────────┘
+│ ChromaDB    │      │ 对话树 :48920     │
+└─────────────┘      │ QwenPaw :8088    │
                      └──────────────────┘
 
 * :8080 本地 LLM 为懒加载: 看门狗只监测端口, 模型在 agent 首次调用时热载入。
+* 对话树 :48920 的 ikaros/hermes 双模式默认走 Hermes Bridge :8650 → 纯净 gateway :8642(完整 tools/skills 循环), 不可达时降级本地 DeepSeek + 只读工具回路。
 ```
 
 ### 核心端口
@@ -54,29 +55,33 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 |------|------|------|------|
 | **9100** | 控制面板 | `bin/ikaros-control.bat` Web UI 启动器 | ✅ 常驻 |
 | **8587** | Memory (nomic-embed) | embedding 768 dim, V5 记忆写入/召回 | ✅ 常驻 |
-| **8080** | 本地模型 (Local LLM) | Qwen3-1.7B,**懒加载**(agent 调用时热载入);面板可切换模型 | ⏸ 按需 |
+| **8080** | 本地模型 (Local LLM) | Phi-4-mini,**懒加载**(agent 调用时热载入);面板可切换模型 | ⏸ 按需 |
 | **48911** | N.E.K.O 前端 | React 聊天 + Live2D/VRM/MMD 多形态 Avatar | ✅ |
 | **48912** | N.E.K.O Memory | N.E.K.O 记忆服务 | ✅ |
 | **48915** | N.E.K.O Agent | 键鼠/浏览器/OpenClaw 工具臂 | ✅ |
-| **9119** | Hermes Dashboard | LLM 后端管理 + Web UI | ✅ |
+| **8642** | Hermes gateway | 纯净 Agent 运行时,完整 tools/skills 循环(`hermes_cli.main gateway run`) | ✅ |
+| **8650** | Hermes Bridge | studio 式「0 侵入」包装层,对话树默认通道 | ✅ |
+| **48920** | 对话树 | Explore.poker 风格树形对话面板(`core/conversation-tree/server.py`) | ✅ |
+| **9119** | Hermes Dashboard | 管理面板(`core/hermes/.../web_server.py`),**已非 LLM 网关** | ✅ |
 | **8088** | QwenPaw | 猫爪服务端(Hermes Agent 驱动) | ✅ |
 
-> **已移除**:语音桥 `:7870`/`:7871`(2026-07-24)、独立记忆 sidecar `:9587`(2026-07-26)、自思考循环 `think.py`(2026-07-26)、Hermes API 网关 `:8642`(2026-07-26)、控制面板 Soul Sync 守护与 Persona Sync `v5-sync-persona.py`(2026-07-26,前者由 V5 每轮自同步覆盖,后者不再需要)——均为噪音或冗余,已从架构剔除。
+> **已移除**:语音桥 `:7870`/`:7871`(2026-07-24)、独立记忆 sidecar `:9587`(2026-07-26)、自思考循环 `think.py`(2026-07-26)、控制面板 Soul Sync 守护与 Persona Sync `v5-sync-persona.py`(2026-07-26,前者由 V5 每轮自同步覆盖,后者不再需要)——均为噪音或冗余,已从架构剔除。`:8642` 曾于 07-26 移除,现**已重新启用**为 Hermes gateway(2026-08-05)。
 
 ---
 
 ## ✨ 特性
 
-- **零系统依赖** — 自带两个便携 Python:主运行 **3.12.10**(`runtime\portable-python\`)+ N.E.K.O 专用 **3.11.15**(`runtime\portable-python311\`,捆绑随树,不依赖 uv 缓存 / 系统 Python);llama.cpp Windows 二进制 + DLL(`runtime/`)、N.E.K.O 桌宠(`core/neko`,上游)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
-- **U 盘即插即用** — 项目根路径由控制面板自动解析(`E:\` / `F:\` / `G:\` 自适应),写盘符硬编码立刻挂掉。
+- **零系统依赖** — 自带便携 Python **3.12.10**(`runtime\portable-python\`)为主运行、N.E.K.O 专用 **3.11.15**(`runtime\portable-python311\`,捆绑随树)+ N.E.K.O venv(`apps/neko\.venv`)、Hermes venv(`runtime\hermes-agent\venv`);llama.cpp Windows 二进制 + DLL(`runtime/llama/`)、N.E.K.O 桌宠(`apps/neko`,上游)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
+- **U 盘即插即用** — 项目根路径由 `bin/ikaros-env.sh/.bat`(权威源,自锚定)自动解析,写盘符硬编码立刻挂掉;换盘符后 `bin/bootstrap-venvs.py` 自动重指各 venv。
 - **N.E.K.O 桌宠** — React 聊天窗 + 多形态 Avatar(Live2D / VRM / MMD)+ 插件系统 + 工具臂(QwenPaw)。Electron 桌面壳一键启动。
 - **控制面板统一调度** — `:9100` Web UI 一键启停全部组件,无需记一堆 `.bat`。
-- **本地记忆系统 (V5)** — SQLite(FTS5 关键词)+ Chroma(向量语义)+ 时间范围 **三路融合召回**(`min_fused_score` 默认 0.3);`store()` 实时写入、`consolidate/distill/reflect` 经云端 LLM 归约。无 Qdrant 依赖。
+- **本地记忆系统 (V5)** — SQLite(FTS5 关键词)+ Chroma(向量语义)+ 时间范围 **三路融合召回**(`min_fused_score` 默认 0.3),统一入口 `unified_retrieve(scope=auto|semantic|lexical|graph|tree|temporal)`;`store()` 实时写入、`consolidate/distill/reflect` 经云端 LLM 归约。无 Qdrant 依赖。
 - **5D 认知注入** — `cogno_5d.py` 在每轮对话注入时间/设备/地理/情绪/上下文锚点。
-- **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 Qwen3-1.7B 仅作兜底,懒加载不占常驻资源。
-- **Hermes Dashboard** — `:9119` Web UI,管理 LLM 后端 / 会话 / 模型。
+- **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 Phi-4-mini 仅作兜底,懒加载不占常驻资源。
+- **对话树** — `:48920` 树形对话面板,多轮/分支对话以可折叠树呈现;对话树 / Hermes 接入走 Hermes Bridge `:8650` → 纯净 gateway `:8642`(完整 tools/skills 循环)。
+- **Hermes 插件外置** — V5 上下文引擎 + 记忆提供方外置为 Hermes 用户插件(`data/hermes-agent/plugins/ikaros_v5/`,规范源 `patches/hermes/plugins/ikaros_v5/`),零源码侵入。
 - **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
-- **隐私优先** — `data/`、`runtime/hermes-agent/`（上游干净副本）、`core/neko/resources/`、`runtime/`、`.env`、IDE 状态全在 `.gitignore`。
+- **隐私优先** — `data/`、`runtime/`、`apps/neko/.venv/`、`.env`、IDE 状态全在 `.gitignore`。
 
 ---
 
@@ -88,7 +93,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 1. git clone https://github.com/ArtificialAngels/Ikaros.git
 2. cd Ikaros
 3. python scripts/fetch-upstreams.py     ← 拉取上游(neko / hermes-agent / runtime / mcp)
-4. python scripts/setup-native.py        ← 落地 paths.json + hermes config
+4. python scripts/setup-native.py        ← 落地 ikaros-env + hermes config
 5. bin\ikaros-control.bat                ← 拉起控制面板 :9100, 点 start 启动整栈
 ```
 
@@ -108,9 +113,9 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 | 目录 | 上游 | 是否入库 |
 |------|------|---------|
-| `core/neko/` | [Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 否(`.gitignore`) |
+| `apps/neko/` | [Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 否(仅源码/配置入库, `.venv` gitignore) |
 | `runtime/hermes-agent/` | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 否 |
-| `runtime/` | llama.cpp + CUDA 工具链 | 否 |
+| `runtime/` | llama.cpp + CUDA 工具链 + bun/omp + herdr | 否 |
 | `data/hermes-agent/skills/...` (MCP) | 各类 MCP 服务器 | 否 |
 
 完整清单、URL、落点、获取方式见 **`UPSTREAM.md`**。
@@ -126,9 +131,9 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 | 模型 | 用途 | 端口 | 加载方式 |
 |------|------|------|---------|
 | nomic-embed-text-v2-moe | embedding (768 dim) | :8587 | 常驻 |
-| Qwen3-1.7B Q4_K_M | 本地 LLM 推理兜底 | :8080 | **懒加载**(agent 首次调用时热载入) |
+| Phi-4-mini-instruct Q4_K_M | 本地 LLM 推理兜底 | :8080 | **懒加载**(agent 首次调用时热载入) |
 
-> 模型权重**不包含在本仓库**,由 `scripts/fetch-upstreams.py` 或手动从 HuggingFace / ModelScope 下载,落点见 `core/memory_v5/models/model_config.json`（注：原 `core/v5/`，2026-07-26 重命名）。
+> 模型权重**不包含在本仓库**,由 `scripts/fetch-upstreams.py` 或手动从 HuggingFace / ModelScope 下载,落点与当前生效模型见 `core/memory_v5/models/model_config.json`。
 
 ---
 
@@ -144,11 +149,7 @@ DEEPSEEK_API_KEY=sk-...
 
 ### 本地模型 / 端口
 
-见 `core/memory_v5/models/model_config.json`(本地模型单一事实来源；原 `core/v5/`，2026-07-26 重命名)与 `core/env/ikaros-paths.json`(原生路径注册,相对 `IKAROS_ROOT`)。
-
-### 国内网络慢 / 需要代理
-
-见 [docs/附录-镜像与代理.md](docs/附录-镜像与代理.md)。
+见 `core/memory_v5/models/model_config.json`(本地模型单一事实来源)与 `bin/ikaros-env.sh/.bat`(环境权威源,设置全部 `IKAROS_*`;Hermes 侧上游镜像在 `data/hermes-agent/.env`,手工同步)。
 
 ---
 
@@ -165,6 +166,7 @@ DEEPSEEK_API_KEY=sk-...
 | 记忆服务状态 | `bin\llama-help.py --status` |
 | 本地 LLM 热载入 | `bin\llama-help.py --hotload` |
 | 查看模型配置 | `bin\llama-help.py --config` |
+| Hermes 更新 | 控制面板 :9100 → hermes 卡片「更新 Hermes」(`bin\hermes-update-and-patch.py --apply`) |
 
 ---
 
@@ -172,17 +174,20 @@ DEEPSEEK_API_KEY=sk-...
 
 ```
 Ikaros\
-├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + llama-help + bootstrap-venvs.py
+├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + ikaros-env(环境权威) + llama-help
 ├── core\                 ← 核心系统
-│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思)  [原 core/v5, 2026-07-26 重命名]
+│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思) + 48 个 v5_* MCP 工具
 │  ├── dashboard\         ← 控制面板 Web UI (:9100)
-│  ├── env\               ← 环境配置/CLI/初始化脚本
-│  ├── hermes\            ← Hermes Agent 核心 (上游干净副本, git ignored)  [原 hermes-agent/, 2026-07-26 迁移]
-│  └── neko\              ← N.E.K.O 核心组件 (上游, git ignored)
+│  ├── env\               ← Python 侧环境引导副本 (ikaros-paths.json / llama_resolver.py)
+│  ├── conversation-tree\ ← 对话树面板后端 (:48920)
+│  ├── hermes-bridge\     ← Hermes Bridge (:8650, studio 式 0 侵入包装层)
+│  └── control-panel\     ← Electron 桌面壳 (与 apps/neko 前端服务职责不同)
+├── apps\neko\            ← ★ N.E.K.O 前端服务 (FastAPI + React, 上游, .venv gitignored)
 ├── config\               ← 配置文件 (identity/ hermes.yaml)
-├── data\                 ← ★ 运行时数据 (全部 git ignored)
+├── data\                 ← ★ 运行时数据 (全部 git ignored; hermes-agent 用户态在这里)
 ├── docs\                 ← 文档
-├── runtime\              ← 运行时依赖 (git ignored): portable-python(3.12.10) + portable-python311(3.11.15)
+├── runtime\              ← 运行时依赖 (git ignored): portable-python(3.12.10) + portable-python311(3.11.15) + node + bun + llama + herdr + hermes-agent(工作树) + MCPServe
+├── patches\hermes\       ← Hermes overlay 补丁 (3 个不可约) + ikaros_v5 插件规范源
 ├── scripts\              ← 上游拉取 / 原生配置脚本
 ├── tests\                ← 测试
 ├── UPSTREAM.md           ← 上游组件清单
@@ -200,6 +205,7 @@ Ikaros\
 | 桌宠没出现 | `netstat -ano \| findstr :48911` 看 N.E.K.O 前端是否起 |
 | 记忆召回弱 | `bin\llama-help.py --status` 看 `:8587` 心跳 |
 | 本地 LLM 没反应 | `bin\llama-help.py --hotload` 手动热载入 `:8080` |
+| 对话树只有 4 个只读工具 | 说明走了降级链:`:8642` gateway 未就绪或 bridge `:8650` 没起,不是工具没挂 |
 | 端口被占 | `netstat -ano \| findstr :8587` / `:8080` / `:48911` |
 | 云端 API 失败 | 检查 `.env` 的 API Key |
 | USB 盘符变了 | `python bin\bootstrap-venvs.py` 重指 neko/hermes venv 路径(首选);必要时 `scripts/setup-native.py --check` 重新校验原生路径 |
@@ -217,7 +223,7 @@ Ikaros\
 | **llama.cpp** | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 LLM 推理 | MIT |
 | **Qwen** | [QwenLM/Qwen](https://github.com/QwenLM/Qwen) | 本地模型 | Apache 2.0 |
 
-`runtime/hermes-agent\` 与 `core/neko\` 是上游的干净副本(经 `UPSTREAM.md` 清单拉取),本项目所有二次开发放在 `core/memory_v5/`、`bin/`、`core/dashboard/` 下（注：`hermes-agent`→`runtime/hermes-agent`、`core/v5`→`core/memory_v5`，均于 2026-07-26 重命名）。
+`runtime/hermes-agent\` 与 `apps/neko\` 是上游工作树(经 `UPSTREAM.md` 清单拉取),本项目所有二次开发放在 `core/memory_v5/`、`bin/`、`core/dashboard/` 下（注：`hermes-agent`→`runtime/hermes-agent` 于 2026-08-05、`core/v5`→`core/memory_v5` 于 2026-07-31 重命名）。
 
 ---
 
@@ -235,10 +241,30 @@ Ikaros\
 
 ## 📈 更新日志
 
+### 2026-08-12 — 文档/脚本同步清理
+- 📝 `README.md` / `docs/ARCHITECTURE.md` 全面同步:本地模型 Phi-4-mini、`:8642` gateway 重新启用、补 `:8650` / `:48920` / `:9119` 端口、`bin/ikaros-env.sh/.bat` 为环境权威源、补 `runtime/bun/`(omp) 与对话树 S1/S2/S4 改造。
+- 🔧 `bin/bootstrap-venvs.py` 修复 stale 路径:`core/neko` → `apps/neko`(真实 venv 位置),清理不存在的 `runtime/hermes/` 候选。
+- 🗑️ 删除过时文档与死目录(详见 git log)。
+
+### 2026-08-11 — env 收敛 + omp 便携化
+- 📦 **IKAROS_* 全部收敛到 `bin/ikaros-env.sh/.bat`**(自锚定),Hermes 侧上游镜像 `data/hermes-agent/.env`;注册表 `IKAROS_*` 清零。
+- 🚀 **omp 便携化** — omp 可执行迁到 `runtime/bun/bin/omp.exe`,配置仍在 `C:\Users\PZS0X\.omp\`。
+
+### 2026-08-10 — herdr 接入 omp
+- 🤖 herdr agent `pi` = omp(oh-my-pi 17.2.12, go-deepseek 通道),`pi` 纳入 V5 核心,经 `~/.omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP。
+
+### 2026-08-05 — Hermes Bridge + runtime/hermes-agent 迁移
+- 🌉 **Hermes Bridge `:8650`** — studio 式「0 侵入」包装层,对话树 ikaros/hermes 双模式默认走 bridge → 纯净 gateway `:8642`(完整 tools/skills 循环)。
+- 📦 **`hermes-agent/` → `runtime/hermes-agent/`**(工作树 + venv);Hermes 用户态数据在 `data/hermes-agent/`。
+- 🔌 **ikaros_v5 插件外置**(08-04):V5 上下文引擎 + 记忆提供方外置为 Hermes 用户插件,零源码侵入。
+
+### 2026-08-01 — 统一检索 + 对话树得兼
+- 🧭 **`unified_retrieve(scope=auto)` 统一检索入口** — 语义不足自动补图扩散路;`temporal_graph` supersede 接入 `dissonance._record_dissonance`(矛盾旧事实 `valid_to` 失效 + 降权)。
+- 💬 对话树 ikaros/hermes 双模式统一走 Hermes gateway `:8642`;降级链升级为完整工具循环(4 只读工具 + `MAX_TOOL_ROUNDS=4`)。
+
 ### 2026-07-30 — N.E.K.O venv 便携化 + venv 联动重建
 - 🐍 **N.E.K.O 解释器捆绑** — 将 Python 3.11.15 随树捆绑到 `runtime\portable-python311\`,neko 的 `.venv` 基础解释器（home）指向它,**不再依赖 `%APPDATA%\uv\python` 或系统 Python**,满足 U 盘即插即用(上游 `requires-python` 仍钉 `==3.11.*`,#2516 未修,切勿升 3.12)。
 - 🔧 **venv 联动重建** — `bin\bootstrap-venvs.py` 新增 neko 分支:换盘符后普通运行即自动检测 `pyvenv.cfg` 的 `home` 与 editable `.pth` 是否漂移当前盘符,漂移则重指路径 + 拷解释器 DLL 进 `Scripts\`,**保留已装的 ~200 个 cp311 轮子,无需联网重装**;`--force` 强制重指,venv 完全缺失则 `pip install -e .` 完整创建(需联网)。
-- 🔄 **neko 源码同步** — `core\neko` 同步为最新 `N.E.K.O-main` 快照(保留 `N.E.K.O.exe` 与 CEF 运行库),修复了旧 editable 指针悬空(指向已删的 `exProject`)导致 venv 起不来的问题。
 - 📝 文档同步:本 README 更正 `core/v5`→`core/memory_v5`、`hermes-agent/`→`runtime/hermes-agent`,并补充 `bootstrap-venvs.py` 用法。
 
 ### 2026-07-26 — 架构收缩 / 去噪音
@@ -247,7 +273,7 @@ Ikaros\
 - 🗑️ **弃用组件清理** — 旧 Rust 启动器 `core/env/ikaros-cli/`、legacy `ikaros-think.bat` / `ikaros-start.bat`、孤儿 `supervisor_persist.py`、过时 think 文档全部删除。
 - 📦 **仓库瘦身** — 上游组件(neko/runtime/hermes-agent/mcp)移出 git 跟踪,云端只留原生代码 + `UPSTREAM.md` 清单 + `scripts/fetch-upstreams.py` + `scripts/setup-native.py`。
 - 🧠 **V5 记忆文档化** — `docs/ARCHITECTURE.md` 校正三路融合、`:8080` 懒加载、结构化守卫;阈值 `min_fused_score` 实配 0.3。
-- 🎛️ **控制面板 `:9100` 重构** — `:8080` 与 `:8587` 拆分为两个独立控制格(本地模型 / Memory),均支持面板切换模型;N.E.K.O 三服务合并为「N.E.K.O 服务组」(可一键启动,亦能分开控制),桌面壳 `neko_desktop` 独立;删除 Hermes API `:8642` 网关及脚本、控制面板 Soul Sync 守护与 Persona Sync `v5-sync-persona.py`(前者由 V5 每轮自同步覆盖,后者不再需要)。
+- 🎛️ **控制面板 `:9100` 重构** — `:8080` 与 `:8587` 拆分为两个独立控制格(本地模型 / Memory),均支持面板切换模型;N.E.K.O 三服务合并为「N.E.K.O 服务组」(可一键启动,亦能分开控制),桌面壳 `neko_desktop` 独立;删除 Hermes API `:8642` 网关及脚本(后于 08-05 以纯净 gateway 形式重新启用)、控制面板 Soul Sync 守护与 Persona Sync `v5-sync-persona.py`(前者由 V5 每轮自同步覆盖,后者不再需要)。
 
 ### 2026-07-24 — 控制面板定型 + 去语音
 - 🗑️ **语音桥 `:7870`/`:7871` 移除** — 语音链路从主架构剔除。
@@ -273,5 +299,5 @@ Ikaros\
 
 ---
 
-*当前架构: 控制面板 :9100 → 本地模型(:8080 可切模型) + Memory(:8587 可切模型) + N.E.K.O 服务组(:48911/:48912/:48915 一键启停) + Hermes Dashboard :9119 + QwenPaw :8088(N.E.K.O 桌面壳独立)*
+*当前架构: 控制面板 :9100 → 本地模型(:8080 可切模型) + Memory(:8587 可切模型) + N.E.K.O 服务组(:48911/:48912/:48915 一键启停) + Hermes Bridge :8650 → gateway :8642 + 对话树 :48920 + Hermes Dashboard :9119 + QwenPaw :8088*
 *启动: `bin\ikaros-control.bat` · 故障看: `bin\llama-help.py --status`*

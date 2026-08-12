@@ -62,23 +62,21 @@ MANAGED_PYTHON = MANAGED_PYTHON_DIR / "python.exe"
 # 3) 运行时 portable Python（可选）
 RUNTIME_PYTHON = REPO_ROOT / "runtime" / "portable-python" / "python.exe"
 
-# Hermes venv 候选位置（优先 runtime/hermes-agent/venv，回退 runtime/hermes-agent/venv）
+# Hermes venv 候选位置（仅 runtime/hermes-agent/venv，2026-08-05 迁移后唯一位置）
 HERMES_VENV_CANDIDATES = [
-    REPO_ROOT / "runtime" / "hermes" / "venv",
     REPO_ROOT / "runtime/hermes-agent" / "venv",
 ]
 
 # Hermes 的 requirements.txt 候选位置（与 venv 候选一一对应顺序）
 HERMES_REQUIREMENTS_CANDIDATES = [
-    REPO_ROOT / "runtime" / "hermes" / "requirements.txt",
     REPO_ROOT / "runtime/hermes-agent" / "requirements.txt",
 ]
 
 # 4) Neko venv（桌面宠物三个后端服务）
 #    .venv 位于 apps/neko 下；基础解释器用随树捆绑的 3.11.15（runtime/portable-python311）。
 #    editable 源码根 = apps/neko；editable .pth 文件名保持 pip 生成的约定名。
-NEKO_VENV = REPO_ROOT / "core" / "neko" / ".venv"
-NEKO_SRC = REPO_ROOT / "core" / "neko"
+NEKO_VENV = REPO_ROOT / "apps" / "neko" / ".venv"
+NEKO_SRC = REPO_ROOT / "apps" / "neko"
 NEKO_BUNDLED_PY311 = REPO_ROOT / "runtime" / "portable-python311" / "python.exe"
 NEKO_EDITABLE_PTH = NEKO_VENV / "Lib" / "site-packages" / "_editable_impl_n_e_k_o.pth"
 # venv 解释器壳依赖的 DLL（拷进 Scripts/ 做双保险，换机器更稳）
