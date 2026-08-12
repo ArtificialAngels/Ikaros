@@ -410,3 +410,9 @@ target/
 core/memory_v5/data/
 core/neko/resources/app.asar
 .codebase-memory/
+
+# === 2026-08-12: 缓存/交接/运行时数据 (不入库) ===
+.cad_mcp/
+.playwright-mcp/
+TASK.md
+core/memory_v5/reflect/data/
