@@ -18,6 +18,16 @@ sys.path.insert(0, str(_HERE.parent.parent))  # core  (memory_v5 包所在)
 import memory_v5.conversation_tree as ct  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _tmp_v5_data_dir(tmp_path, monkeypatch):
+    """隔离持久化: 树 JSON 写入 tmp 而非真实 data/v5 (防测试污染生产数据目录).
+
+    2026-08-14: 此前各 persist_key (test_tree / st / test_ctx / test_schema ...)
+    直接把 JSON 写到 core/memory_v5/data/v5/, 污染生产数据目录.
+    """
+    monkeypatch.setattr(ct, "V5_DATA_DIR", tmp_path)
+
+
 # ────────────────────────── Mock V5 Store ──────────────────────────
 class MockStore:
     """内存 store: 模拟 V5 store.store / get_batch / search 接口."""

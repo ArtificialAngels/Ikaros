@@ -23,7 +23,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 ├─────────────────────────────────────────────────────────────┤
 │      L2: 智能体层 (Soul) — 逻辑分组                             │
 │  core/memory_v5/ — V5 自我认知引擎 (包名 memory_v5)            │
-│  orchestrator (双模) → cloud_chat → cogno_5d → metacog      │
+│  对话树双模式 (ikaros/hermes) → bridge :8650 → gateway :8642   │
 │  self_model / affect / relationship / narrative / dissonance │
 ├─────────────────────────────────────────────────────────────┤
 │      L1: 基础设施 (Hermes Infrastructure) — 逻辑分组           │
@@ -49,7 +49,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 
 | 端口 | 服务 | 路径 | 启动方式 |
 |------|------|------|---------|
-| :9100 | 控制面板 Web UI | `core/dashboard/server.py` | `bin/ikaros-control.bat` |
+| :9100 | 控制面板 Web UI | `core/dashboard/server.py` | `bin/ikaros-control-panel.bat` |
 | :8587 | Embedding (本地) | `bin/ikaros-memory-watchdog.py` | 面板 memory 组件 |
 | :8080 | 本地 LLM（当前 Phi-4-mini，**懒加载**） | `bin/ikaros-memory-watchdog.py` | 看门狗**仅被动监测端口**，不主动拉起模型；模型由 agent 首次调用本地 LLM 时经 `ensure_local_llm()` 热载入（`bin/llama-help.py --hotload` 可手动触发） |
 | :48911 | Neko 主前端 | `apps/neko/app/main_server/` (包, `python -m app.main_server`) | 面板 neko 组件 |
@@ -90,7 +90,7 @@ Ikaros 是一个**完全自包含的 AI 桌宠系统**，核心引擎为 V5 灵�
 - **S2 降级工具协议（2026-08-04）**：降级链从「纯文本补全」升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮；模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
 - **S4 SSE chunked（2026-08-04）**：`_send_sse` 手动 `Transfer-Encoding: chunked`（HTTP/1.1 标准客户端不再等 EOF 挂起）。
 - **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针，真实记忆在 `v5.db`。
-- **与 V5 集成**：`hermes_provider.push_to_conversation_tree()` 在记忆写入后静默推送节点（`core/memory_v5/hermes_provider.py:343`）；`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话（`.hermes_history`）批量导入对话树（需重启服务重载内存树）。
+- **与 V5 集成**：~~`hermes_provider.push_to_conversation_tree()` 在记忆写入后静默推送节点~~ ⚠️ 2026-08-14：`hermes_provider.py` 已随重构删除，推送链当前**无实现**（恢复/删承诺待定）；`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话（`.hermes_history`）批量导入对话树（需重启服务重载内存树）。
 - **LLM 路由（2026-08-05 更新）**：`/api/chat` 的 **ikaros / hermes 两种模式默认走 Hermes Bridge :8650**（OpenAI-wire `/v1/chat/completions`；bridge 内部驱动纯净 Hermes gateway :8642 原生 session-chat，跑完整 tools/skills 循环）。区别只在 tree 端注入的 system 内容：hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（gateway core 的 SOUL 即人格，不重复注入）；ikaros 模式注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。**主链路工具由 gateway 提供（完整）**；bridge/gateway 不可达时降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ **4 只读工具**回路，并通过 SSE `warn` 事件（黄色提示条）向前端提示降级——**遇到「只有 4 工具」说明走了降级，根因是 :8642 未就绪或 bridge 没起，不是工具没挂**。bridge 的 SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
 - **触控/平板模式（2026-08-10）**：全局 touch-action 策略（手势区 none：画布/节点/卡组头/白板/3D 查看器；滚动区 pan-y + overscroll-behavior:contain）；画布单指平移/双指捏合 + 可交互元素分流（不拦截、保留原生 mouse 合成）；长按手势（~500ms：树节点/组卡 → 右键菜单、L1 小卡 → 直接 L3；位移 10px 取消；吃原生 contextmenu/click 防双菜单）；卡组头部 pointer 事件拖拽（鼠标/触控/笔统一）；触控最小目标 ≥40px（`@media (pointer:coarse)`）；软键盘避让（visualViewport → `--kb-h` 输入区上移）；safe-area-inset 边距（刘海屏）；平板竖屏树面板收窄（--tree-w:220px）。
 - **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `cloud_chat.build_system_prompt`（桌宠）/ Hermes（SOUL.md）/ chat tree 三处使用。
@@ -179,7 +179,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_MEMORY` | `%IKAROS_ROOT%\core\memory_v5` | V5 代码根 |
 | `IKAROS_MEMORY_DATA` | `%IKAROS_ROOT%\core\memory_v5\data` | V5 数据根（`v5.db`、JSON 拓扑） |
 | `IKAROS_MEMORY_MODELS` | `%IKAROS_ROOT%\core\memory_v5\models` | 本地模型目录 |
-| `IKAROS_MEMORY_SCRIPT` | `%IKAROS_ROOT%\core\memory_v5\v5\store.py` | V5 存储脚本入口 |
+| `IKAROS_MEMORY_SCRIPT` | `%IKAROS_ROOT%\core\memory_v5\store.py` | V5 存储脚本入口 |
 | `IKAROS_MODEL_EMBEDDING` | `...\models\nomic-embed-text-v2-moe.f32.gguf` | Embedding 模型 |
 | `IKAROS_MODEL_LLM` | `...\models\Phi-4-mini-instruct-Q4_K_M.gguf` | 本地 LLM 默认模型（实际由 `model_config.json` 决定） |
 | `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\b10000-cuda` | llama.cpp 目录（`.bat` 默认 CUDA13；跨设备自动选择见 `core/env/llama_resolver.py`） |
@@ -346,8 +346,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 模块 | 职责 | 入口 |
 |------|------|------|
-| `orchestrator.py` | agent/companion 双模路由 | `agent_loop(history=[])` |
-| `bin/cloud_chat.py` | companion 主链 + system prompt 组装 + LLM 路由 | `cloud_chat_sync(text, history)` |
+| ~~`orchestrator.py` / `bin/cloud_chat.py`~~ | ⚠️ 2026-08-14：已随重构删除（对话树双模式 + bridge :8650 → gateway :8642 接替 agent 能力；memory_api / v5_* MCP 工具接替记忆读写） | — |
 | `self_model.py` | 持久自我模型 + schema 版本 + revision 追踪 + json_lock | `SelfModel.load() / .save()` |
 | `affect.py` | 6D PAD+TLS 情感状态 | `AffectState.load() / .save()` |
 | `metacog.py` | 真 LLM 内省 + 哲思循环 | `metacog_cycle()` |
@@ -373,17 +372,16 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `app/memory_server/` (`python -m app.memory_server`) | :48912 | 持久记忆服务器 |
 | `app/agent_server/` (`python -m app.agent_server`) | :48915 | Agent/Tool 执行服务器 |
 
-集成点: `main_logic/ikaros_integration.py` → 对接 Ikaros V5 orchestrator。
+集成点: `main_logic/ikaros_integration.py` → 对接 Ikaros V5（memory_api / v5_* MCP 工具）。
 
 ### 4.3 bin/ — 启动器和桥接
 
 | 文件 | 职责 |
 |------|------|
-| `ikaros-control.bat` | 双击启动控制面板 :9100 |
-| `ikaros-control-panel.bat` | 启动 Electron 桌面壳 + 面板后端 |
+| `ikaros-control-panel.bat` | 双击启动控制面板 :9100（只起面板后端+开浏览器，不拉全栈） |
 | `ikaros-env.sh` / `ikaros-env.bat` | **环境权威源**（自锚定，设置全部 IKAROS_*；Hermes 上游镜像 `data/hermes-agent/.env`） |
-| `cloud_chat.py` | V5 companion 主链 (LLM 路由 + 高信号检测) |
-| `ikaros-memory-watchdog.py` | 管理 :8587 embed + :8080 LLM (CFG 退避) |
+| ~~`cloud_chat.py`~~ | ⚠️ 2026-08-14 已删除（companion 主链由对话树双模式 + bridge :8650 → gateway :8642 接替） |
+| `ikaros-memory-watchdog.py` | 管理 :8587 embed + :8080 LLM（崩溃退避 + 心跳/主日志轮转） |
 | `wd_import.py` | 按路径 importlib 加载看门狗模块（文件名含连字符） |
 | `llama-help.py` | llama-server 辅助（`--hotload` 手动热载本地 LLM） |
 | `ikaros-soul-sync.py` | V5 → SOUL.md 同步 |
@@ -400,16 +398,12 @@ setlocal 不可用（被 call 的子批中会丢失）
 ### 5.1 对话流
 
 ```
-用户输入 (Neko 前端 :48911)
-  → main_logic/core.py (ikaros_integration 嫁接点)
-    → orchestrator.run(history=...) [companion 模式]
-      → cloud_chat.py (system prompt 组装 + LLM 路由)
-        → Hermes Bridge :8650 → 纯净 gateway :8642 (完整 tools/skills 循环, 首选)
-          → 失败回退 → 本地 :8080 (Phi-4-mini, model_config.json 决定)
-            → 失败回退 → cloud_chat 返回"走神"文案
-      → cogno_5d.enrich_reply() (5D 增强)
-    → orchestrator 返回 reply
-  → reply 流式推送到 Neko 前端
+用户输入 (对话树 :48920 / Neko 前端 :48911)
+  → ikaros / hermes 双模式 (build_system_prompt 组装 persona/树域记忆)
+    → Hermes Bridge :8650 → 纯净 gateway :8642 (完整 tools/skills 循环 + V5 记忆注入, 首选)
+      → 失败回退 → 本地 DeepSeek 直连 (CT_DEEPSEEK_MODEL, 只读工具回路)
+        → 本地 :8080 (Phi-4-mini, model_config.json 决定, 懒加载)
+  → reply 流式推送 (SSE: content/reasoning/tool 生命周期/usage)
 ```
 
 ### 5.2 记忆流
@@ -435,7 +429,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 - `v5.db`（SQLite + FTS5）：结构化记忆主存储（**唯一真相源**）。`memory` 表存长期记忆条目（含 PAD 情感指纹 `pad_p/a/d`、`character` 角色隔离、`reinforcement/disputation` 证据评分）；另有 `reflections` / `events` / `user_directives` / `anti_repeat` 表；实体图谱 6 张 `eg_*` 表（**已启用**：抽取 + 传播激活 + 整合；**时效已接入 2026-08-01**：`valid_from`/`valid_to` 列由 `temporal_graph.apply_migration()` 幂等 ALTER，`dissonance.py` 检测矛盾时 `supersede` 旧事实，检索侧 `unified_retrieve(scope="temporal")` 过滤过期值，见 §5.2.5，零图库依赖）。
   - ⚠️ `v5.db` 无数字化的 schema-version 守卫，版本演进靠 `store.py` 的**幂等 DDL**（`conn()` 中先 `executescript(SCHEMA)` 再按需 `ALTER TABLE ADD COLUMN`）。schema 版本守卫仅存在于 JSON 状态层（`self_model.json` 等带 `schema_version: 5.1.0`，由 `SelfModel.load` 校验）。
 - `chroma/`（ChromaDB 持久化，768 维 `nomic-embed-text-v2-moe` 向量，由 :8587 嵌入）：记忆向量索引，集合名 `ikaros_v5`（cosine），**纯派生，可由 v5.db 重建**（维护脚本 `tmp/rebuild_chroma.py`；运行时有 `vector_sync` op 做幂等全量 upsert 作为崩溃恢复安全网）。运行时代码无自动 HNSW drop-rebuild。
-- **三路融合阈值**：`memory_retrieval.retrieve` 的 `min_fused_score` 线上生效值 = **0.3**（在 `core/memory_v5/preprocess_config.yaml` 标定，原 0.6 会把有效召回全过滤掉）；权重 `vector 0.7 / fts 0.3`，时间命中给强初始分 1.0。`search.fused_search` 是另一套硬编码双路（fta 0.3/vec 0.7），由 `provider_bridge` 的 Hermes `v5search` 桥调用。
+- **三路融合阈值**：`memory_retrieval.retrieve` 的 `min_fused_score` 线上生效值 = **0.3**（在 `core/memory_v5/preprocess_config.yaml` 标定，原 0.6 会把有效召回全过滤掉）；权重 `vector 0.7 / fts 0.3`，时间命中给强初始分 1.0。`search.fused_search` 是另一套硬编码双路（fta 0.3/vec 0.7）；⚠️ 2026-08-14：其旧调用方 `provider_bridge` 已删除（死代码），当前无调用者。
 
 > ⚠️ 历史残留：仓库根部曾有一个 0 字节的孤立文件 `core/memory_v5/v5.db`（无任何代码引用，真实库在 `data/v5/v5.db`），已于 2026-07-24 清理删除。
 
@@ -456,7 +450,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 融合计分：`fused = fts*w_fts + vec*w_vec + time*1.0` → 乘时间衰减（下限 0.2）→ 乘类型 boost → 乘频率/反馈 boost（阶段 4：`frequency_weight` log2 加权 / `reinforcement_weight` / `freshness_weight` 7 天新鲜度 / `long_term_boost` 永久记忆，config 可关）→ `exclude` 已知信息置 `-1` → **过滤 `score >= min_fused_score`**（线上 = `0.3`，yaml 标定）。
 附加：20s TTL 短缓存（高频短句跳过 embedding）；Vault 兜底（结果 <3 条时回退搜 ThirdSpace `03-知识/`、`02-日记/`）。
 
-> 注：`search.fused_search` 是**另一套**硬编码双路（fts 0.3 / vec 0.7），由 `provider_bridge` 的 Hermes `v5search` 桥调用，与 `retrieve` 不是同一份代码。
+> 注：`search.fused_search` 是**另一套**硬编码双路（fts 0.3 / vec 0.7），与 `retrieve` 不是同一份代码；旧调用方 `provider_bridge` 已于 2026-08-14 删除。
 
 **统一路由层（2026-08-01 新增，借鉴 cognee recall auto-scope）**：`unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)` 是统一检索入口，`scope="auto"` 语义不足时自动补图扩散路（`entity_graph_search`，`graph_min_score` 过滤）；`scope="tree"` 走树域加权（`tree_scoped_retrieve`，需注入 tree+node_id，缺失降级 auto）；`scope="temporal"` 走 `retrieve_temporal` 过滤已失效事实。调用方（`memory_api` fuse 路径、conversation-tree 的 `memory_search` 工具）已切换；`rules_retriever` 保持独立意图通道不动。
 

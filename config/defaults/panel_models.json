@@ -1,5 +1,5 @@
 {
   "_note": "STATIC TEMPLATE — no secrets. This file is committed to git as a default example for panel model selection. Runtime overrides live in data/config/panel_models.json (gitignored) and are merged over this file by core/env/config.py load_config('panel_models').",
-  "local_model": "Qwen3-1.7B",
+  "local_model": "Phi-4-mini",
   "memory": "nomic-embed"
 }

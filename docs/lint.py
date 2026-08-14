@@ -31,6 +31,19 @@ DELETED_FILES = (
     "think.py",
     "supervisor_persist.py",
     "bin/v5-sync-persona.py",
+    # 2026-08-14 重构删除: 旧 companion 链 + 死代码 + 旧启动器
+    "bin/ikaros-control.bat",
+    "bin/cloud_chat.py",
+    "bin/ikaros-soul-sync.py",
+    "bin/soul_refine.py",
+    "bin/night-watchdog.py",
+    "core/memory_v5/orchestrator.py",
+    "core/memory_v5/hermes_provider.py",
+    "core/memory_v5/hermes_client.py",
+    "core/memory_v5/router.py",
+    "core/memory_v5/task_runner.py",
+    "core/memory_v5/provider_bridge.py",
+    "core/memory_v5/drivers.py",
 )
 DELETED_PORTS = (":7870", ":7871")
 OLD_CORE_PATH = "core/v5"  # should now be core/memory_v5
@@ -48,6 +61,10 @@ THINK_EXEMPT_FILES = {
 HISTORICAL_EXEMPT_FILES = {
     "conversation-flow-fix-report-2026-07-25.md",
     "conversation-flow-upgrade-plan.md",
+    "conversation-flow-test-report.md",
+    "evolution-path-2026-08-02.md",
+    "ikaros-as-hermes-agent-proposal.md",
+    "hermes-agent-full-survey.md",
 }
 # historical patch manifest; legitimately references hermes-agent venv paths
 # (it records Ikaros-specific patches against the upstream hermes-agent repo).
@@ -55,10 +72,11 @@ HERMES_PATCH_EXEMPT_FILES = {
     "hermes-ikaros-patches.md",
 }
 RESEARCH_DIR = "research"
-# lines carrying a 2026-07-2x correction note keep old names for traceability
-CORRECTION_MARK = "2026-07-2"
+# lines carrying a 2026-07-2x / 2026-08-1x correction note keep old names
+# for traceability
+CORRECTION_MARKS = ("2026-07-2", "2026-08-1")
 # lines that merely DESCRIBE a deletion / obsolete state are exempt
-OBSOLETE_DESC_MARKS = ("🗑️", "已删除", "勿引用", "移除", "已移除", "NousResearch/hermes-agent",
+OBSOLETE_DESC_MARKS = ("🗑️", "已删除", "随重构删除", "勿引用", "移除", "已移除", "NousResearch/hermes-agent",
                        "github.com", "📦", "🎛️", "lint.py", "重命名", "搬迁", "移出")
 
 
@@ -94,7 +112,7 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
     for i, raw in enumerate(text.splitlines(), start=1):
         line = raw.rstrip("\n")
         # exempt historical reports that carry a correction note on the line
-        if CORRECTION_MARK in line:
+        if any(mark in line for mark in CORRECTION_MARKS):
             continue
         # exempt lines that only DESCRIBE a deletion / obsolete state / external repo
         if any(mark in line for mark in OBSOLETE_DESC_MARKS):
@@ -122,9 +140,10 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
         # dated historical reports keep original paths (top note explains mapping)
         if rel in HISTORICAL_EXEMPT_FILES:
             matched = [m for m in matched if m in ("think.py", "supervisor_persist.py")]
-        # CHANGELOG entries are historical by nature
+        # CHANGELOG entries are historical records: deleted-file names appear
+        # as dated milestones, never actionable drift; keep path/port checks.
         if rel == "CHANGELOG.md":
-            matched = [m for m in matched if m not in ("think.py", "supervisor_persist.py")]
+            matched = [m for m in matched if m not in DELETED_FILES]
         # mapping-table rows (old -> new shown side by side) are intentional
         if OLD_CORE_PATH in line and "core/memory_v5" in line:
             matched = [m for m in matched if m != OLD_CORE_PATH]
@@ -140,6 +159,11 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
 
 
 def main() -> int:
+    # Windows GBK 控制台打印含 ❌/中文的 WARN 行会 UnicodeEncodeError
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     all_hits: list[tuple[str, int, str]] = []
     for target in iter_targets():
         all_hits.extend(scan_file(target))

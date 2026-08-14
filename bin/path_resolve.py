@@ -49,9 +49,9 @@ def self_locate():
 def validate_root(root):
     if not root:
         return False
-    if not os.path.isfile(os.path.join(root, "core", "hermes", "venv", "pyvenv.cfg")):
+    if not os.path.isfile(os.path.join(root, "runtime", "hermes-agent", "venv", "pyvenv.cfg")):
         return False
-    if not os.path.isfile(os.path.join(root, "bin", "ikaros-control.bat")):
+    if not os.path.isfile(os.path.join(root, "bin", "ikaros-control-panel.bat")):
         return False
     return True
 
@@ -80,7 +80,7 @@ def guid_to_letter():
 
 def venv_matches_root(root):
     # finder 文件名带 hermes 版本号(0.19.0→0.19.1 会变)，不能硬编码——用 glob 匹配
-    site_pkgs = os.path.join(root, "core", "hermes", "venv", "Lib", "site-packages")
+    site_pkgs = os.path.join(root, "runtime", "hermes-agent", "venv", "Lib", "site-packages")
     try:
         import glob as _glob
         finders = _glob.glob(os.path.join(site_pkgs, "__editable___hermes_agent_*_finder.py"))
@@ -140,7 +140,7 @@ def locate_via_everything(root):
         log("es.exe not found in candidates; skipping Everything search")
         return None
     try:
-        r = subprocess.run([es, "ikaros-control.bat"], capture_output=True,
+        r = subprocess.run([es, "ikaros-control-panel.bat"], capture_output=True,
                            encoding="utf-8", errors="ignore", shell=False, timeout=30)
         out = (r.stdout or "") + (r.stderr or "")
         if "IPC not found" in out or out.strip().startswith("Error"):
@@ -148,7 +148,7 @@ def locate_via_everything(root):
             return None
         for line in out.splitlines():
             line = line.strip()
-            if "ikaros-control.bat" in line.lower() and os.path.isfile(line):
+            if "ikaros-control-panel.bat" in line.lower() and os.path.isfile(line):
                 cand = os.path.dirname(os.path.dirname(line))  # parent of bin/
                 if validate_root(cand):
                     log("Everything found Ikaros at %s" % cand)

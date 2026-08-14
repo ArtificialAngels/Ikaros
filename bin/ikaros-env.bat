@@ -14,7 +14,7 @@ set "IKAROS_LLAMA_VERSION=b10000-cuda"
 set "IKAROS_LOGS=%IKAROS_ROOT%\data\logs"
 set "IKAROS_MEMORY_DATA=%IKAROS_ROOT%\core\memory_v5\data"
 set "IKAROS_MEMORY_MODELS=%IKAROS_ROOT%\core\memory_v5\models"
-set "IKAROS_MEMORY_SCRIPT=%IKAROS_ROOT%\core\memory_v5\v5\store.py"
+set "IKAROS_MEMORY_SCRIPT=%IKAROS_ROOT%\core\memory_v5\store.py"
 set "IKAROS_MEMORY=%IKAROS_ROOT%\core\memory_v5"
 set "IKAROS_MODEL_EMBEDDING=%IKAROS_ROOT%\core\memory_v5\models\nomic-embed-text-v2-moe.f32.gguf"
 set "IKAROS_MODEL_LLM=%IKAROS_ROOT%\core\memory_v5\models\Phi-4-mini-instruct-Q4_K_M.gguf"
@@ -33,8 +33,9 @@ set "IKAROS_PORT_LLM=8080"
 set "IKAROS_PYTHON=%IKAROS_ROOT%\runtime\portable-python\python.exe"
 set "IKAROS_RUNTIME=%IKAROS_ROOT%\runtime"
 set "IKAROS_RUST=%IKAROS_ROOT%\runtime\rust"
-untimeunin;%IKAROS_ROOT%
-untime
-ode
-ode_modulesunin;%PATH%"
+rem omp / bun 便携二进制 (2026-08-12: omp 从 C:\Users\PZS0X\.bun 迁到 runtime/bun)
+rem omp 便携配置 (2026-08-13): 配置目录迁出 C 盘, 锚定 %IKAROS_ROOT%\data\omp
+rem PI_CODING_AGENT_DIR = agent 目录绝对路径覆盖(走 path.resolve); PI_CONFIG_DIR 走 path.join 遇绝对路径不重置, 勿用
+set "IKAROS_OMP_AGENT=%IKAROS_ROOT%\data\omp\agent"
+set "PI_CODING_AGENT_DIR=%IKAROS_OMP_AGENT%"
 set "PATH=%IKAROS_ROOT%\runtime\bun\bin;%IKAROS_ROOT%\runtime\node\node_modules\bun\bin;%PATH%"

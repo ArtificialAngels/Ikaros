@@ -68,7 +68,7 @@ MANIFEST = [
         "name": "model-nomic-embed",
         "desc": "nomic-embed-text-v2-moe f32 GGUF (embedding)",
         "method": "release",
-        "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe/resolve/main/nomic-embed-text-v2-moe.f32.gguf",
+        "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe-GGUF/resolve/main/nomic-embed-text-v2-moe.f32.gguf",
         "local": "core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf",
         "mirror": "hf",
         "optional": True,

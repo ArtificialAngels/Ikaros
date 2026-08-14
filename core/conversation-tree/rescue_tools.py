@@ -324,7 +324,7 @@ def _build_env() -> dict:
     e["HERMES_AGENT_BRIDGE_PYTHON"] = str(VENV_PY)
     e["IKAROS_MEMORY"] = str(ROOT / "core" / "memory_v5")
     e["IKAROS_MEMORY_DATA"] = str(ROOT / "core" / "memory_v5" / "data")
-    e["IKAROS_MEMORY_SCRIPT"] = str(ROOT / "core" / "memory_v5" / "v5" / "store.py")
+    e["IKAROS_MEMORY_SCRIPT"] = str(ROOT / "core" / "memory_v5" / "store.py")
     e["HERMES_TUI_DIR"] = str(HERMES / "ui-tui")
     e["PYTHONPATH"] = str(ROOT) + ";" + str(HERMES)
     e["PYTHONUTF8"] = "1"

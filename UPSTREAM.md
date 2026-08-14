@@ -64,7 +64,6 @@
 | `runtime/llama/` | llama.cpp (b10000-cuda) | `ggml-org/llama.cpp` | release |
 | `runtime/gopeed/` | 下载器 | `GopeedOrg/gopeed` | release |
 | `runtime/aria2/` | 下载兜底 | `aria2/aria2` | release |
-| `runtime/qdrant/` | 向量库（可选）| `qdrant/qdrant` | release |
 | `runtime/memos/` | 记忆服务（可选）| `usememos/memos` | release |
 | `runtime/everything/` | Everything MCP | `voidtools/everything` | release |
 | `runtime/MCPServe/` | 多个 MCP 服务 | 见下「MCP 清单」| git/release |
@@ -109,7 +108,7 @@ REM 2) 落地原生配置（写 neko 环境变量/桥、生成 hermes config、�
 python scripts/setup-native.py
 
 REM 3) 启动（控制面板会按需拉起 embed :8587；:8080 懒加载）
-bin/ikaros-control.bat
+bin/ikaros-control-panel.bat
 ```
 
 ## 本地忽略汇总（`.gitignore` 已覆盖）

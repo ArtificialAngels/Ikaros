@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 模块依赖关系图 (2026-07-30)</title>
+<title>Ikaros 模块依赖关系图 (2026-08-14)</title>
 <style>
   :root{
     --bg:#ffffff; --panel:#f6f8fb; --line:#d9e1ec; --ink:#1f2a37; --muted:#66748a;
@@ -50,7 +50,7 @@
 <body>
 <header>
   <h1>Ikaros 模块依赖关系图</h1>
-  <p>快照日期 2026-07-30 · 实线=运行时调用依赖，紫色虚线=记忆/状态写入，箭头方向=依赖指向。
+  <p>快照日期 2026-08-14 · 实线=运行时调用依赖，紫色虚线=记忆/状态写入，箭头方向=依赖指向。
   数据均经真实代码/端口扫描核对（非凭记忆）。</p>
 </header>
 <div class="wrap">
@@ -74,7 +74,7 @@
 
       <g class="node">
         <rect x="40" y="180" width="200" height="150" rx="10" fill="var(--front-bg)" stroke="var(--front)"></rect>
-        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · core/neko</text>
+        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · apps/neko</text>
         <text x="140" y="224" text-anchor="middle" class="sub">:48911 React 聊天 + Avatar</text>
         <text x="140" y="244" text-anchor="middle" class="sub">:48912 自有 memory_server</text>
         <text x="140" y="264" text-anchor="middle" class="sub">:48915 Agent (键鼠/浏览器)</text>
@@ -88,13 +88,13 @@
         <text x="460" y="224" text-anchor="middle" class="sub">记忆/情感/认知引擎</text>
         <text x="460" y="244" text-anchor="middle" class="sub">包名 memory_v5</text>
         <text x="460" y="264" text-anchor="middle" class="sub">data/v5: v5.db+chroma+人格JSON</text>
-        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 core/hermes</text>
+        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 runtime/hermes-agent</text>
       </g>
 
       <g class="node">
         <rect x="680" y="180" width="200" height="80" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
-        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · core/hermes</text>
-        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 云端 LLM</text>
+        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/hermes-agent</text>
+        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 管理面板（非 LLM 网关）</text>
         <text x="780" y="244" text-anchor="middle" class="sub">含 venv + ikaros_v5 桥插件</text>
       </g>
 
@@ -109,8 +109,8 @@
 
       <g class="node">
         <rect x="360" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
-        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · bin/cloud_chat.py</text>
-        <text x="460" y="536" text-anchor="middle" class="sub">companion 模式统一入口</text>
+        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · Hermes Bridge :8650 → gateway :8642</text>
+        <text x="460" y="536" text-anchor="middle" class="sub">ikaros/hermes 双模式（完整 tools/skills 循环）</text>
       </g>
 
       <g class="node">
@@ -206,11 +206,11 @@
 
 <p class="note">
   <b>如何读这张图：</b>控制面板 :9100 是总开关，编排全部组件。
-  用户对话由 neko 前端经 <code>bin/cloud_chat.py</code> 主链进入；
-  主链优先走 Hermes 云端 LLM（:9119），本地 :8080 兜底；
+  用户对话由对话树 :48920 双模式（ikaros/hermes）进入，默认经 <code>Hermes Bridge :8650</code> → 纯净 gateway :8642（完整 tools/skills 循环 + V5 记忆注入）；
+  gateway 不可达 → 降级本地 DeepSeek 直连；本地 :8080 仅按需懒加载；
   每一轮都会<b>轻写</b> V5（紫色虚线）并在后台跑 reflect 提炼；
-  V5 把检索能力<b>单向</b>暴露给 neko（neko 不回写）；
-  V5 经 <code>push_to_conversation_tree()</code> 把节点推送到对话树 :48920；
+  V5 把检索能力经 <code>memory_api / v5_* MCP</code> 暴露（neko/pi 不回写）；
+  ⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 <code>push_to_conversation_tree()</code>）已随 hermes_provider 删除，当前无实现；
   V5 的 latest_thought 同步到 ThirdSpace 双轨库。
     Herdr（coding-agent 终端多路复用器）使用命名管道，无 TCP 端口。
   <br><br>

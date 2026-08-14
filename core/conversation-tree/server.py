@@ -92,7 +92,6 @@ for _ep in _ENV_PATHS:
         pass
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
-HERMES_CHAT_URL = os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119").rstrip("/") + "/v1/chat/completions"
 # Hermes agent runtime 端点.
 # 默认走 Ikaros 自有的 studio 式「0 侵入」包装层 core/hermes-bridge (:8650) —— 它透明代理
 # 纯净 Hermes gateway(:8642) 的原生 session-chat 端点, 并把 reasoning/工具/正文翻译成
@@ -344,7 +343,7 @@ def _urlopen_with_timeout(req, connect_timeout: int = LLM_CONNECT_TIMEOUT,
 
 def _call_llm(messages: list[dict], agent: str = "ikaros",
               collector: "dict | None" = None) -> tuple[str, dict]:
-    """三层 chat 补全 (DeepSeek → Hermes Dashboard → Local LLM) 降级链路.
+    """两层 chat 补全 (DeepSeek → Local LLM) 降级链路.
 
     返回 (content, usage). 任一 provider 成功即返回; 全部失败抛 RuntimeError.
     collector 非 None 时把用量写入 collector["usage"] (供 SSE usage 事件).
@@ -385,29 +384,7 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
     else:
         errors.append("DeepSeek: no API key")
 
-    # 2) Hermes Dashboard
-    try:
-        h_body = json.dumps({
-            "model": "hermes", "messages": messages,
-            "max_tokens": 2048, "temperature": 0.7, "stream": False,
-        }).encode("utf-8")
-        req = urllib.request.Request(HERMES_CHAT_URL, data=h_body,
-                                     headers={"Content-Type": "application/json"})
-        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"].get("content", "")
-            usage = data.get("usage", {}) or {}
-            if content.strip():
-                if collector is not None:
-                    collector["usage"] = usage
-                return content.strip(), usage
-            errors.append("Hermes returned empty content")
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        errors.append(f"Hermes: {e}")
-    except Exception as e:
-        errors.append(f"Hermes unexpected: {e}")
-
-    # 3) Local LLM
+    # 2) Local LLM
     try:
         l_body = json.dumps({
             "model": "local-llm", "messages": messages,
@@ -492,11 +469,11 @@ def _call_llm_tools(
     tools: list[dict],
     collector: "dict | None" = None,
 ) -> tuple[str, dict, list]:
-    """带 tools 协议的三层补全 (S2): 返回 (content, usage, tool_calls).
+    """带 tools 协议的两层补全 (S2): 返回 (content, usage, tool_calls).
 
     - DeepSeek 层支持 tools (OpenAI function-calling 兼容), 模型可返回 tool_calls;
-    - Hermes Dashboard / Local LLM 不支持 tools 协议时返回空 content 由上层降级,
-      因此本函数只对 DeepSeek 传 tools, 其余两层回退普通补全 (不带 tools)。
+    - Local LLM 不支持 tools 协议时返回空 content 由上层降级,
+      因此本函数只对 DeepSeek 传 tools, 本地层回退普通补全 (不带 tools)。
     - 返回的 tool_calls 为原始 OpenAI 格式列表:
       [{"id":..., "type":"function", "function":{"name":..., "arguments":"{...}"}}, ...]
     """
@@ -536,29 +513,7 @@ def _call_llm_tools(
     else:
         errors.append("DeepSeek: no API key")
 
-    # 2) Hermes Dashboard (不带 tools, 模型只出正文)
-    try:
-        h_body = json.dumps({
-            "model": "hermes", "messages": messages,
-            "max_tokens": 2048, "temperature": 0.7, "stream": False,
-        }).encode("utf-8")
-        req = urllib.request.Request(HERMES_CHAT_URL, data=h_body,
-                                     headers={"Content-Type": "application/json"})
-        with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"].get("content", "")
-            usage = data.get("usage", {}) or {}
-            if content.strip():
-                if collector is not None:
-                    collector["usage"] = usage
-                return content.strip(), usage, []
-            errors.append("Hermes returned empty content")
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        errors.append(f"Hermes: {e}")
-    except Exception as e:
-        errors.append(f"Hermes unexpected: {e}")
-
-    # 3) Local LLM (不带 tools)
+    # 2) Local LLM (不带 tools)
     try:
         l_body = json.dumps({
             "model": "local-llm", "messages": messages,

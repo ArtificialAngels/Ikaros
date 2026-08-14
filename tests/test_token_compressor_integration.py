@@ -8,7 +8,7 @@ test_token_compressor_integration.py — token_compressor 接入 hermes 插件�
   2) 回退路径: 当 compress_retrieval_block 抛异常时, 自动回退原始 text[:150] 硬截断, 不崩
 
 运行:
-  core/hermes/venv/Scripts/python.exe tests/test_token_compressor_integration.py
+  runtime/hermes-agent/venv/Scripts/python.exe tests/test_token_compressor_integration.py
 """
 from __future__ import annotations
 
@@ -18,8 +18,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-_CORE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core"))
-_HERMES = os.path.join(_CORE, "hermes")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_CORE = os.path.join(_ROOT, "core")
+_HERMES = os.path.join(_ROOT, "runtime", "hermes-agent")  # 2026-08-14: hermes 已从 core/hermes 迁入 runtime/
 _PLUGIN_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "data", "hermes-agent", "plugins", "ikaros_v5"))
 sys.path.insert(0, _HERMES)   # for `agent` package

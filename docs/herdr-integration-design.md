@@ -220,7 +220,7 @@ class CodingAgentSupervisor:
 | `core/herdr/client.py` | `HerdrClient`（CLI/socket 封装） |
 | `core/herdr/supervisor.py` | `CodingAgentSupervisor`（编排 + 状态机） |
 | `core/herdr/config.py` | socket 路径解析 + 默认 kind 列表 |
-| `core/memory_v5/orchestrator.py` 或 `apps/neko/app/agent_server.py` | 接入 supervisor（调用点） |
+| ~~`core/memory_v5/orchestrator.py`~~（⚠️ 2026-08-14 已删除）或 `apps/neko/app/agent_server.py` | 接入 supervisor（调用点） |
 | `core/conversation-tree/server.py` | `/api/chat` 增加「执行类」分支（可选） |
 | `core/dashboard/index.html` / `panel.html` | herdr 卡片 UI |
 | `docs/ARCHITECTURE.md` | 端口/组件表增加 herdr（提交时同步，遵循 doc-drift 规则） |
@@ -490,7 +490,7 @@ GET /api/events   (text/event-stream, HTTP/1.1, 15s 心跳)
 
 **安装**：`bun install -g @oh-my-pi/pi-coding-agent`（bun 在 `E:\Ikaros\runtime\node\node_modules\bun\bin`，已写入用户 PATH）。
 
-**go-deepseek 通道**：`~/.omp/agent/models.yml` 注册 provider `go-deepseek`（baseUrl `https://opencode.ai/zen/go/v1`，api `openai-completions`，apiKey 引用 env `OPENCODE_GO_API_KEY`）；key 本体放 `~/.omp/.env`（**必须**：omp 的 dotenv 只在进程启动 cwd 读取，`--cwd` flag 不生效；pane 里 cwd 是 `E:\`，读不到 `E:\Ikaros\.env`，会 401）。
+**go-deepseek 通道**：`data/omp/agent/models.yml` 注册 provider `go-deepseek`（baseUrl `https://opencode.ai/zen/go/v1`，api `openai-completions`，apiKey 引用 env `OPENCODE_GO_API_KEY`）；key 本体放 `data/omp/agent/.env`（2026-08-13 起 omp 配置目录经 `PI_CODING_AGENT_DIR` 锚定到项目 `data/omp/agent`，agent 级 .env 随目录解析，不依赖 cwd）。
 
 **启动/派活**：
 ```bash
@@ -517,10 +517,10 @@ herdr agent list   # 状态 idle / working
 
 **定位**：Hermes = 助理（对话/记忆/人格）；pi = 工作引擎（编码/任务执行）。pi 干活时直接读写 V5 记忆。
 
-**机制**：`~/.omp/agent/mcp.json`（omp 用户级 MCP 配置）挂载 `ikaros-v5-memory`：
+**机制**：`data/omp/agent/mcp.json`（omp agent 级 MCP 配置，经 `PI_CODING_AGENT_DIR` 锚定）挂载 `ikaros-v5-memory`：
 - command: `E:\Ikaros\runtime\portable-python\python.exe E:\Ikaros\core\memory_v5\mcp_server.py`
 - env: IKAROS_ROOT / HERMES_ROOT / HERMES_HOME + `V5_MCP_TOOL_GROUPS=memory,self,care,vitality,relationship,skill,project`（全量组）
-- 生效范围：omp 用户级配置，herdr pane 与 CLI 直调均生效（herdr pane 的 omp 也读 ~/.omp/）
+- 生效范围：omp agent 级配置，herdr pane 与 CLI 直调均生效（herdr pane 的 omp 也经 `PI_CODING_AGENT_DIR` 读 `data/omp/agent/`）
 
 **实测**（2026-08-11）：
 - `omp -p "v5_memory_stats"` → 真实统计（events 3169）

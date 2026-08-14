@@ -31,12 +31,12 @@ TODAY = datetime.date.today().isoformat()  # e.g. 2026-07-30
 # (The :9100 panel itself is the host, listed separately in the port table.)
 SERVICES = [
     ("9100", "控制面板", "组件编排中枢 · 一键启停 + CUDA 装配 + 模型切换", "Infra"),
-    ("8080", "本地 LLM", "Qwen3-1.7B · 懒加载（调用时热载入）", "Backend"),
+    ("8080", "本地 LLM", "Phi-4-mini · 懒加载（调用时热载入）", "Backend"),
     ("8587", "Embedding 向量", "nomic 嵌入 · 看门狗管理", "Backend"),
     ("48911", "Neko 主前端", "React 聊天 + Avatar（Live2D/VRM/MMD）", "Frontend"),
     ("48912", "Neko 记忆服务", "独立 SQLite+Chroma 记忆系统", "Frontend"),
     ("48915", "Neko Agent 服务", "键鼠/浏览器/OpenClaw 控制", "Frontend"),
-    ("9119", "Hermes Dashboard", "云端 LLM 网关 + Web UI + skills/MCP", "Infra"),
+    ("9119", "Hermes Dashboard", "管理面板（非 LLM 网关）· skills/MCP 浏览", "Infra"),
     ("8088", "Hermes 猫爪", "bin/hermes_paw_bridge.py · Agent 驱动", "Backend"),
     ("48920", "对话树面板", "Explore.poker 风格树形对话 · 后端=conversation_tree 引擎", "Frontend"),
 ]
@@ -44,12 +44,12 @@ SERVICES = [
 # Full port mapping table (TCP ports + the named-pipe component).
 PORT_TABLE = [
     (":9100", "控制面板 Web UI", "core/dashboard/server.py", "✅"),
-    (":8080", "本地 LLM (Qwen3-1.7B, 懒加载)", "bin/ikaros-memory-watchdog.py → llama-server", "⚠️ 懒加载"),
+    (":8080", "本地 LLM (Phi-4-mini, 懒加载)", "bin/ikaros-memory-watchdog.py → llama-server", "⚠️ 懒加载"),
     (":8587", "Embedding (nomic)", "bin/ikaros-memory-watchdog.py", "⚠️"),
-    (":48911", "Neko 主前端", "core/neko/app/main_server.py", "✅"),
-    (":48912", "Neko 记忆服务", "core/neko/app/memory_server.py", "✅"),
-    (":48915", "Neko Agent 服务", "core/neko/app/agent_server.py", "✅"),
-    (":9119", "Hermes Dashboard", "runtime/hermes-agent/.../web_server.py", "✅"),
+    (":48911", "Neko 主前端", "apps/neko/app/main_server.py", "✅"),
+    (":48912", "Neko 记忆服务", "apps/neko/app/memory_server.py", "✅"),
+    (":48915", "Neko Agent 服务", "apps/neko/app/agent_server.py", "✅"),
+    (":9119", "Hermes Dashboard", "runtime/hermes-agent/.../web_server.py", "✅ 管理面板，非 LLM 网关"),
     (":8088", "Hermes 猫爪", "bin/hermes_paw_bridge.py", "✅"),
     (":48920", "对话树面板", "core/conversation-tree/server.py (后端 conversation_tree 引擎)", "✅"),
 ]
@@ -67,7 +67,7 @@ CORE_LAYERS = [
         ("core/memory_v5/data/v5/", "人格+记忆库（v5.db+chroma）"),
     ]),
     ("🐾 前端与桌宠", [
-        ("core/neko/", "Neko 主服务（独立完整，不合并 V5）"),
+        ("apps/neko/", "Neko 主服务（独立完整，不合并 V5）"),
         ("core/control-panel/", "Electron 桌面壳（拉 :9100）"),
     ]),
     ("🛠️ 基础设施", [
@@ -81,15 +81,15 @@ CORE_LAYERS = [
 
 DATA_FLOW = [
     "用户在 <b>Neko 前端 :48911</b>（React+Avatar）发起对话",
-    "Neko 经 <code>bin/cloud_chat.py</code> 主链 → 路由到 companion 模式（云端 Chat 优先）",
-    "<b>Hermes Dashboard :9119</b> 提供云端 LLM；本地兜底走 <code>:8080</code>（调用时懒加载热载入）；对话树 <code>:48920</code> 直连 DeepSeek",
+    "对话树 <code>:48920</code> 双模式（ikaros/hermes）默认走 <b>Hermes Bridge :8650</b> → 纯净 gateway <code>:8642</code>（完整 tools/skills 循环 + V5 记忆注入）",
+    "gateway 不可达 → 降级本地 DeepSeek 直连 + 只读工具回路；本地 <code>:8080</code> 仅按需懒加载",
     "逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型",
-    "V5 经 <code>get_ikaros_memories()</code> <b>单向</b> 暴露检索给 Neko；Neko 数据不回写 V5；V5 经 <code>push_to_conversation_tree()</code> 推送节点到 :48920",
+    "V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索；⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 push_to_conversation_tree）已随 hermes_provider 删除，当前无实现",
     "ThirdSpace 同步 <code>bin/sync-thirdspace-v5.py</code> 把 thought 写入 <code>data/thirdspace-vault/</code>（双轨知识库）",
 ]
 
 BOUNDARY_NOTES = [
-    ("warn", "⚠️ neko 保持独立：", "core/neko 完整保留，不引入对 memory_v5 的代码依赖，不搬移 neko 内部 memory/ 模块。迁移脚本与方案文档已删除。"),
+    ("warn", "⚠️ neko 保持独立：", "apps/neko 完整保留，不引入对 memory_v5 的代码依赖，不搬移 neko 内部 memory/ 模块。迁移脚本与方案文档已删除。"),
     ("ok", "✅ v5.db 契约保留：", "包已重命名 v5→memory_v5，但 DB 文件名 v5.db、40 个 v5_* MCP 工具名是对外契约，不改。"),
     ("warn", "⚠️ v5-memory 独立仓库：", "E:\\v5-memory 是从 core/memory_v5 抽离的开源插件版（无运行数据），两份手动同步，改主工程不影响开源版。"),
     ("ok", "✅ 严禁裸跑 llama-server：", "缺 CUDA DLL 会 SIGSEGV，一律走看门狗/控制面板启动。"),
@@ -299,8 +299,7 @@ def render_overview() -> str:
     <div style="font-size:13px;opacity:.95">一键启停所有组件，装配 CUDA 环境，模型切换持久化</div>
     <div class="row">
       <div class="chip"><b>:9100</b><span>core/dashboard/server.py（纯 stdlib）</span></div>
-      <div class="chip"><b>bin/ikaros-control.bat</b><span>双击拉起面板</span></div>
-      <div class="chip"><b>bin/ikaros-control-panel.bat</b><span>Electron 桌面壳</span></div>
+      <div class="chip"><b>bin/ikaros-control-panel.bat</b><span>双击拉起面板 :9100（只起面板，不拉全栈）</span></div>
     </div>
   </div>
 
@@ -363,10 +362,10 @@ const T = {
       {n:"ArtificialAngel.ico"}, {n:"Artificialangel.png"}, {n:"Artificialangeljpg.jpg"}, {n:"Artificialangelmini.png"}
     ]},
     {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
-      {n:"ikaros-control.bat", k:true, c:"拉控制面板"}, {n:"ikaros-control-panel.bat", c:"Electron 壳"},
-      {n:"cloud_chat.py", k:true, c:"companion 主链"}, {n:"ikaros-memory-watchdog.py", k:true, c:":8080+:8587 看门狗"},
-      {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
-      {n:"ikaros-soul-sync.py", c:"生成 SOUL.md"}, {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
+      {n:"ikaros-control-panel.bat", k:true, c:"拉控制面板 :9100"}, 
+      {n:"ikaros-memory-watchdog.py", k:true, c:":8080+:8587 看门狗"},
+      {n:"hermes-gateway.py", c:":8642 gateway 启动器"}, {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
+      {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
       {n:"ikaros-fastdl.py", c:"Gopeed 下载 (按需)"}, {n:"import-hermes-to-convtree.py", c:"Hermes→对话树 :48920"},
       {n:"neko-start.bat / neko-stop.bat", c:"Neko 启停"},
       {n:"rebuild_chroma_v5.py", c:"重建向量库"}, {n:"bootstrap-venvs.py", c:"venv 引导"}, {n:"secret-scan.py", c:"密钥扫描"},
@@ -379,10 +378,9 @@ const T = {
     {n:"core/", c:"核心系统（8 模块）", b:"核心", open:true, children:[
       {n:"memory_v5/", k:true, c:"V5 灵魂引擎 (包名 memory_v5)", b:"核心", open:true, children:[
         {n:"__init__.py", k:true, c:"包根 · __version__"}, {n:"store.py / search.py", k:true, c:"记忆读写/检索"},
-        {n:"affect.py / vitality.py / drivers.py", c:"情感/精力/驱动"},
+        {n:"affect.py / vitality.py", c:"情感/精力"},
         {n:"self_model.py / metacog.py / relationship.py", c:"自我/元认知/关系"},
-        {n:"orchestrator.py / router.py / task_runner.py", c:"编排/路由"},
-        {n:"hermes_provider.py", c:"Hermes 桥 / 推送对话树"}, {n:"mcp_server.py", c:"40 个 v5_* 工具"},
+        {n:"mcp_server.py", k:true, c:"48 个 v5_* 工具"},
         {n:"reflect/", c:"后台整合流水线"}, {n:"cogno_extensions/", c:"认知扩展"},
         {n:"models/", c:"模型配置"}, {n:"services/", c:"start-*.bat"}, {n:"data/", k:true, c:"运行态记忆", b:"数据", open:true, children:[
           {n:"v5/", k:true, c:"人格+记忆库", children:[
@@ -477,7 +475,7 @@ const T = {
         "    </div>\n\n"
         "    <div class=\"tree\" id=\"tree\"></div>\n\n"
         "    <div class=\"note\">说明：<code>runtime/hermes-agent/</code> 内置完整 Hermes 工程（含 node_modules/venv，未在树中展开）；\n"
-        "      <code>core/neko/</code> 为独立完整前端工程；<code>data/</code> 含模型权重（仅在顶层标注）。\n"
+        "      <code>apps/neko/</code> 为独立完整前端工程；<code>data/</code> 含模型权重（仅在顶层标注）。\n"
         "      虚线折叠项可点击展开。</div>\n"
         "  </div>\n\n"
         f"  <footer>Ikaros Folder Tree · 由 tools/gen_architecture_html.py 于 {TODAY} 生成 · 数据来自实际目录扫描</footer>\n"
@@ -514,7 +512,7 @@ def render_dep_map() -> str:
 
       <g class="node">
         <rect x="40" y="180" width="200" height="150" rx="10" fill="var(--front-bg)" stroke="var(--front)"></rect>
-        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · core/neko</text>
+        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · apps/neko</text>
         <text x="140" y="224" text-anchor="middle" class="sub">:48911 React 聊天 + Avatar</text>
         <text x="140" y="244" text-anchor="middle" class="sub">:48912 自有 memory_server</text>
         <text x="140" y="264" text-anchor="middle" class="sub">:48915 Agent (键鼠/浏览器)</text>
@@ -534,7 +532,7 @@ def render_dep_map() -> str:
       <g class="node">
         <rect x="680" y="180" width="200" height="80" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
         <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/hermes-agent</text>
-        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 云端 LLM</text>
+        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 管理面板（非 LLM 网关）</text>
         <text x="780" y="244" text-anchor="middle" class="sub">含 venv + ikaros_v5 桥插件</text>
       </g>
 
@@ -549,8 +547,8 @@ def render_dep_map() -> str:
 
       <g class="node">
         <rect x="360" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
-        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · bin/cloud_chat.py</text>
-        <text x="460" y="536" text-anchor="middle" class="sub">companion 模式统一入口</text>
+        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · Hermes Bridge :8650 → gateway :8642</text>
+        <text x="460" y="536" text-anchor="middle" class="sub">ikaros/hermes 双模式（完整 tools/skills 循环）</text>
       </g>
 
       <g class="node">
@@ -646,11 +644,11 @@ def render_dep_map() -> str:
 
 <p class="note">
   <b>如何读这张图：</b>控制面板 :9100 是总开关，编排全部组件。
-  用户对话由 neko 前端经 <code>bin/cloud_chat.py</code> 主链进入；
-  主链优先走 Hermes 云端 LLM（:9119），本地 :8080 兜底；
+  用户对话由对话树 :48920 双模式（ikaros/hermes）进入，默认经 <code>Hermes Bridge :8650</code> → 纯净 gateway :8642（完整 tools/skills 循环 + V5 记忆注入）；
+  gateway 不可达 → 降级本地 DeepSeek 直连；本地 :8080 仅按需懒加载；
   每一轮都会<b>轻写</b> V5（紫色虚线）并在后台跑 reflect 提炼；
-  V5 把检索能力<b>单向</b>暴露给 neko（neko 不回写）；
-  V5 经 <code>push_to_conversation_tree()</code> 把节点推送到对话树 :48920；
+  V5 把检索能力经 <code>memory_api / v5_* MCP</code> 暴露（neko/pi 不回写）；
+  ⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 <code>push_to_conversation_tree()</code>）已随 hermes_provider 删除，当前无实现；
   V5 的 latest_thought 同步到 ThirdSpace 双轨库。
     Herdr（coding-agent 终端多路复用器）使用命名管道，无 TCP 端口。
   <br><br>

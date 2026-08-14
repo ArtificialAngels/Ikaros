@@ -15,7 +15,7 @@
 
 ## 🎯 一句话
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-control.bat` 拉起 **控制面板 :9100**,一键启动 **桌宠 + 记忆 + 前端**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前 Phi-4-mini + nomic-embed)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-control-panel.bat` 拉起 **控制面板 :9100**,一键启动 **桌宠 + 记忆 + 前端**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前 Phi-4-mini + nomic-embed)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
 
 > **仓库是「瘦身版」**:本云端仓库只保留 **Ikaros 原生代码 + 配置 + 上游清单/拉取/配置脚本**。所有「有上游」的组件(N.E.K.O 桌宠、Hermes Agent、runtime 工具链、各类 MCP)**不入库**,统一由 `scripts/fetch-upstreams.py` 拉取、`scripts/setup-native.py` 落地配置。详见 `UPSTREAM.md`。
 
@@ -25,7 +25,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 ```
                     ┌──── 控制面板 :9100 ────┐
-                    │  bin/ikaros-control.bat │
+                    │  bin/ikaros-control-panel.bat │
                     │  一键启停全部组件         │
                     └──────────┬─────────────┘
                                │ start
@@ -53,7 +53,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 | Port | 组件 | 用途 | 状态 |
 |------|------|------|------|
-| **9100** | 控制面板 | `bin/ikaros-control.bat` Web UI 启动器 | ✅ 常驻 |
+| **9100** | 控制面板 | `bin/ikaros-control-panel.bat` Web UI 启动器 | ✅ 常驻 |
 | **8587** | Memory (nomic-embed) | embedding 768 dim, V5 记忆写入/召回 | ✅ 常驻 |
 | **8080** | 本地模型 (Local LLM) | Phi-4-mini,**懒加载**(agent 调用时热载入);面板可切换模型 | ⏸ 按需 |
 | **48911** | N.E.K.O 前端 | React 聊天 + Live2D/VRM/MMD 多形态 Avatar | ✅ |
@@ -94,7 +94,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 2. cd Ikaros
 3. python scripts/fetch-upstreams.py     ← 拉取上游(neko / hermes-agent / runtime / mcp)
 4. python scripts/setup-native.py        ← 落地 ikaros-env + hermes config
-5. bin\ikaros-control.bat                ← 拉起控制面板 :9100, 点 start 启动整栈
+5. bin\ikaros-control-panel.bat                ← 拉起控制面板 :9100, 点 start 启动整栈
 ```
 
 > `scripts/fetch-upstreams.py` 支持 `--list` / `--dry-run` / 按名拉取;`setup-native.py` 支持 `--check` 校验。详见 `UPSTREAM.md`。
@@ -102,7 +102,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 ### 在你现在的电脑上(已经解压过)
 
 ```
-1. 双击 bin\ikaros-control.bat
+1. 双击 bin\ikaros-control-panel.bat
 2. 浏览器开 http://127.0.0.1:9100, 点 start
 3. 桌宠 / 前端自动启动, 开始对话
 ```
@@ -157,7 +157,7 @@ DEEPSEEK_API_KEY=sk-...
 
 | 用途 | 命令 |
 |------|------|
-| 拉起控制面板 | `bin\ikaros-control.bat` |
+| 拉起控制面板 | `bin\ikaros-control-panel.bat` |
 | 一键启动整栈 | 控制面板 :9100 → 点 `start` |
 | 停止全部 | 控制面板 :9100 → 点 `stop` / 各组件 `stop` |
 | 拉取上游 | `python scripts/fetch-upstreams.py` |
@@ -241,6 +241,9 @@ Ikaros\
 
 ## 📈 更新日志
 
+### 2026-08-13 — omp 配置迁出 C 盘
+- 📦 **omp 便携化补齐** — 配置目录从 `C:\Users\PZS0X\.omp\` 迁到 `data/omp/agent/`(agent.db / mcp.json / models.yml / config.yml / .env),经 `PI_CODING_AGENT_DIR` 锚定项目;`PI_CONFIG_DIR`(path.join 遇绝对路径不重置)+ junction 方案弃用。
+
 ### 2026-08-12 — 文档/脚本同步清理
 - 📝 `README.md` / `docs/ARCHITECTURE.md` 全面同步:本地模型 Phi-4-mini、`:8642` gateway 重新启用、补 `:8650` / `:48920` / `:9119` 端口、`bin/ikaros-env.sh/.bat` 为环境权威源、补 `runtime/bun/`(omp) 与对话树 S1/S2/S4 改造。
 - 🔧 `bin/bootstrap-venvs.py` 修复 stale 路径:`core/neko` → `apps/neko`(真实 venv 位置),清理不存在的 `runtime/hermes/` 候选。
@@ -300,4 +303,4 @@ Ikaros\
 ---
 
 *当前架构: 控制面板 :9100 → 本地模型(:8080 可切模型) + Memory(:8587 可切模型) + N.E.K.O 服务组(:48911/:48912/:48915 一键启停) + Hermes Bridge :8650 → gateway :8642 + 对话树 :48920 + Hermes Dashboard :9119 + QwenPaw :8088*
-*启动: `bin\ikaros-control.bat` · 故障看: `bin\llama-help.py --status`*
+*启动: `bin\ikaros-control-panel.bat` · 故障看: `bin\llama-help.py --status`*

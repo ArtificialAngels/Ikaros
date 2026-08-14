@@ -211,7 +211,7 @@ button,input,textarea,select{font-family:var(--font-sans);}
 a, .clickable, [role="button"], .nav-item, .session-item, .node-card,
 .theme-swatch, .settings-nav-item, .settings-btn, .send-btn, .attach-btn,
 .model-chip, .icon-btn, .header-btn, .node-handle, .edge-add, .tool-dock-btn,
-.branch-prune, .concept-term, .deck-card, .cmd-item, .cmd-panel, .cmd-group,
+.branch-prune, .concept-term, .cmd-item, .cmd-panel, .cmd-group,
 .tool-dock-head, .tool-dock-body .tool-card, .mini-node, .mini-map,
 .settings-modal .settings-nav-item, .settings-dialog button, .modal button,
 .dialog button, .toast, .chip{cursor:var(--cur-link)!important}
@@ -221,7 +221,6 @@ button, .btn, .tool-dock-btn, .dock-btn, .card-actions button, .morph-header .he
 :disabled, .disabled, [aria-disabled="true"], .btn:disabled, button:disabled{cursor:var(--cur-unavail)!important}
 .node-handle{cursor:var(--cur-cross)!important}
 .tool-dock-resize, .tool-dock-resize.top, .tool-dock-resize.bottom{cursor:var(--cur-ns)!important}
-.deck-card{cursor:var(--cur-link)!important}
 /* 拖拽/缩放: 保留现有 !important 规则 (优先级最高, 不被上方覆盖) */
 .dragging-node, body.dragging-node *{cursor:var(--cur-move)!important}
 /* 画布 pan: 悬停画布空白用默认箭头; 按住拖拽 (panning 类) 时切换为移动手型 */
@@ -392,7 +391,7 @@ position:relative}
   padding:0 14px;border-bottom:none;background:transparent;
   flex-shrink:0;cursor:default;user-select:none}
 /* 主卡: header 为 absolute 浮层 (对话列表贴卡顶, 组件由 JS 挂入聚焦节点) */
-.deck-card .chat-topbar{position:absolute;top:0;left:0;right:0;z-index:40}
+.mini-thread.focus .chat-topbar{position:absolute;top:0;left:0;right:0;z-index:40}
 .chat-topbar::after{content:'';position:absolute;bottom:0;left:14px;right:14px;height:1px;
 background:linear-gradient(90deg,transparent,var(--brand),transparent);opacity:0;
 transition:opacity .3s var(--ease-out)}
@@ -401,8 +400,6 @@ transition:opacity .3s var(--ease-out)}
 flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.2px}
 .chat-topbar-title b{color:var(--brand);font-weight:800}
 .chat-topbar-title .cur{color:var(--brand);text-shadow:0 0 8px color-mix(in srgb,var(--brand) 40%,transparent)}
-/* L3 #card 有 zoom:0.8, 文字基准 ×1.25 补偿 (15px×0.8=12px 视觉), clamp 上下限与 L2 一致 (视觉 12-24) */
-.deck-card.l3 .chat-topbar{font-size:clamp(calc(15px/var(--ui-scale,1)),15px,calc(30px/var(--ui-scale,1)))}
 /* mini 卡 (浏览卡): 流式定位在卡内顶部; 按钮 = L2 规格缩小 20% (24.19px); 同全透明无边框 */
 .mini-thread .chat-topbar{position:static;background:transparent;padding:0 10px 0 12px;z-index:40}   /* 与主卡同 z-40 (渐变层之上) */
 .mini-thread .header-btn{width:24.19px;height:24.19px;border-width:2px}
@@ -428,8 +425,8 @@ transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),trans
 .messages-area{flex:1;overflow:hidden;position:relative;padding:0;display:flex;flex-direction:column}
 /* 无级滚动内容层: JS 引擎 (惯性+回弹+拖动) 控制 translateY */
 .messages-scroll{flex:1;display:flex;flex-direction:column;gap:14px;padding:0 2% 0;will-change:transform;transform:translateY(0)}
-/* 多卡 mini-thread: 与主卡同一配置 (背景/渐变/上横条完全一致, 不区分主卡与浏览卡)
-   背景 = .deck-card 同款 var(--bg-card); 渐变 = .chat-body 同款 (96px 五段 + 40px 底); header z-40 同主卡 */
+/* 多卡 mini-thread: 每卡面板同构 (焦点 .focus = 主卡含输入区, 其余 = mini 浏览卡)
+   背景 var(--bg-card); 渐变 96px 五段 + 40px 底; header z-40 焦点 absolute */
 .mini-thread{position:absolute;inset:0;display:flex;flex-direction:column;
   background:var(--bg-card)}
 .mini-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:0 2% 0;position:relative;   /* 与主卡 messages-scroll 一致 */
@@ -451,8 +448,8 @@ transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),trans
 .chat-body::after{content:'';position:absolute;bottom:0;left:0;right:0;height:40px;pointer-events:none;z-index:30;
   background:linear-gradient(to top,var(--bg-card) 0,transparent 100%)}
 /* 过渡动画期间隐藏渐变层 (每帧全宽重绘开销大), 形变结束后淡入恢复 */
-.deck-card.animating .chat-body::before,.deck-card.animating .chat-body::after{opacity:0;transition:opacity .15s}
-.chat-body::before,.chat-body::after{transition:opacity .35s ease .15s}
+.mini-thread.animating::before,.mini-thread.animating::after{opacity:0;transition:opacity .15s}
+.mini-thread::before,.mini-thread::after{transition:opacity .35s ease .15s}
 .ctx-note{font-size:11px;color:var(--text-quaternary);text-align:center;font-family:var(--font-mono)}
 /* 空态欢迎界面 */
 .chat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
@@ -770,7 +767,7 @@ body.deck-open .node-card.is-card.l3{width:calc(min(820px,92vw) - var(--deck-w,4
 .input-area{position:absolute;left:0;right:0;bottom:0;z-index:40;
   padding:12px 16px 14px;border-top:none;
   background:color-mix(in srgb,var(--bg-card) 40%,transparent)}
-.deck-card.l2 .input-area{display:none}   /* L2 预览形态不显示输入框 */
+.mini-thread.focus.l2 .input-area{display:none}   /* 焦点 L2 不显示输入框 (L3 才可输入); DOM 恒在 → inputField 恒存在 */
 /* 按钮与输入区轴向分布 (垂直居中于输入框容器): 附件/发送 34px 按钮中心 = 容器 50% 线 */
 /* 按钮行: 默认贴底两端对称 (左组: 上传/联网, 右组: AI模型/发送, 中间留空给文本框);
    输入超两行时 top 移到输入框下方 + 两组均匀分布 (过渡动画)
@@ -1019,27 +1016,20 @@ border:1.5px solid var(--border-std);border-radius:7px}
 .settings-btn.primary:hover{filter:brightness(1.1)}
 
 
-/* ═══ 统一视图：L1/L2/L3 = 同一张卡片在画布上的三种形态 ═══
-   只有一份 DOM (#card). 通过 .app.mode-* 在三种形态间无缝形变, 绝非多层窗口/堆叠:
-   L1 = 节点形态 (画布可见、可拖动)
-   L2 = 节点自身长大为中等卡: 显示标题+摘要预览 + ↗ 展开
-   L3 = 同一节点继续长大为放大卡: 显示完整对话 + ⤢ 缩小
-   核心: .deck-card chat 容器移入聚焦 .node-card (canvasLayer 内), 由节点 width/height 1s 过渡形变,
-   随画布缩放/平移天然同步 — 放大画布时节点与卡片一起放大, 不会露出独立 L1 (不再是浮层堆叠)。
-   L2↔L3: l2-preview 与 chat-body 交叉淡入淡出; 周围节点沿径向让位 (reflowAroundCard)。 */
-/* 卡片容器: 默认藏在隐藏 holder, 打开时移入聚焦节点 (节点本身长大成卡片, 随画布缩放, 不另起浮层) */
-#cardHolder{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none}
-/* .deck-card 始终填满其父节点卡片 (尺寸形变由 .node-card.is-card 驱动, 无 translate/scale 自我定位) */
-/* 边框画在外层 .node-card.is-card 上 (仅受 canvasZoom 缩放, 不受 .deck-card 内容 zoom 0.8 影响), 此处不再设 border */
+/* ═══ 统一视图：L1/L2/L3 = 同一张卡片在画布上的三种形态 (2026-08-12 架构重构 A+B) ═══
+   每张节点卡都是完整动态标准容器: 焦点面板 (.mini-thread.focus) = 主卡 (含输入区, id 转移机制),
+   其余展开卡 (.mini-thread) = mini 浏览卡 (非焦点输入区隐藏但 DOM 恒在)。无 #card 迁移 —
+   面板常驻各自容器, 焦点切换 = id 转移 + .focus 类, 结构上消灭空壳卡。
+   L1 = 节点形态 (画布可见、可拖动) | L2 = 中等卡 (对话预览) | L3 = 大卡 (完整对话 + 输入区)
+   核心: .mini-thread 面板由 .node-card.is-card 尺寸驱动, FLIP 形变, 随画布缩放/平移天然同步。 */
+/* 边框画在外层 .node-card.is-card 上 (仅受 canvasZoom 缩放; 面板内容实时渲染, 无 zoom 位图缩放) */
 /* 阴影由 hover 浮起特效提供 (.node-card.is-card:hover), 默认无阴影 */
-.deck-card{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg-card);border:none;border-radius:18px;overflow:hidden;box-shadow:none;will-change:opacity;transform:none;opacity:1;pointer-events:auto;transition:opacity .3s ease-in-out}
-#card{position:absolute;inset:0;width:100%;height:100%;z-index:1}
 /* 聚焦节点自身 = 卡片: 尺寸由 width/height 过渡 1s 长大 (L1节点→L2小卡→L3大卡, 同一 DOM, 随画布缩放) */
 .node-card.is-card{
   width:min(440px,76vw);height:min(360px,62vh);
   --scale:1;padding:0;overflow:hidden;border-radius:18px;
   background:var(--bg-card);   /* 卡片底色: mini 上横条透明时透出与主卡一致的浅色卡片背景 */
-  /* 主题色边框: 画在外层仅受 canvasZoom 缩放 (L3 内容 zoom 0.8 不影响它), 实际宽度由 applyTransform 按 canvasZoom 反算 (目标视觉 3.5px) */
+  /* 主题色边框: 画在外层仅受 canvasZoom 缩放 (面板内容实时渲染不缩放), 实际宽度由 applyTransform 按 canvasZoom 反算 (目标视觉 3.5px) */
   border:3.5px solid color-mix(in srgb,var(--brand) 18%,transparent);
   /* 默认无阴影 (不悬浮); hover 时浮起阴影过渡出现 */
   box-shadow:none;
@@ -1053,47 +1043,23 @@ border:1.5px solid var(--border-std);border-radius:7px}
    !important 压过 .node-card.current 的常驻光晕 (否则 current 节点 hover 无变化) */
 .node-card.is-card:hover{box-shadow:0 14px 34px rgba(0,0,0,.32),0 4px 10px rgba(0,0,0,.2)!important}
 .node-card.is-card.l3{width:min(820px,92vw);height:min(680px,86vh)}
-/* L3 内容整体缩小 20%: 卡片尺寸不动, 内部布局/字体走 zoom (布局级重排, 文字不模糊) */
-/* zoom 会同时缩放 border-radius/border: 补偿使视觉 R 角与 node-card(18px) 一致, 边框视觉 2.5px 不随缩放变化 */
-.node-card.is-card.l3 #card{zoom:.8;border-radius:22.5px}
+/* L3 = 完整对话 + 输入区: 内容实时渲染 (2026-08-12 弃用 zoom:0.8 — zoom 是位图缓存根源, display 切换会残留残影) */
+/* border-radius 直接 18px 与 node-card 一致 (无 zoom 缩放补偿) */
 .node-card.is-card .node-depth,.node-card.is-card .node-label,.node-card.is-card .node-tags,.node-card.is-card .node-handle,.node-card.is-card .node-fold{display:none}
 .node-card.is-card.current{animation:none}
 /* 头部浮于预览层之上, 保证按钮始终可点 (标准组件, 主卡 absolute 已定义在上方) */
 .chat-body{flex:1;display:flex;flex-direction:column;min-height:0;position:relative;opacity:1;transition:opacity .3s var(--ease-out)}
-/* L2 预览层: 绝对覆盖在 chat-body 之上, 仅 L2 形态可见; 与完整对话交叉淡入淡出 = 同一张卡的内容形态切换 */
-.deck-card .l2-preview{position:absolute;inset:0;top:56px;left:0;right:0;bottom:0;display:flex;flex-direction:column;padding:8px 22px 20px;background:var(--bg-card);opacity:0;pointer-events:none;transition:opacity .3s var(--ease-out);z-index:3}
-/* 内容形态切换由 .deck-card 上的 .l2/.l3 类驱动 (与节点尺寸形变同源) */
-/* L2 = 快速浏览对话列表 (无输入框/无预览层); L3 = 完整对话 */
-.deck-card.l2 .chat-body{opacity:1;pointer-events:auto}
-.deck-card.l2 .l2-preview{opacity:0;pointer-events:none}
-.deck-card.l2 .input-area{display:none}
-/* L2 快速浏览: 纯对话内容, 无卡片头部 (伊卡洛斯·Ikaros) / 无操作按钮 (Copy/Retry/Branch/Fav) / 无气泡操作 */
-.deck-card.l2 .ai-card .card-header,.deck-card.l2 .ai-card .card-footer{display:none}
-.deck-card.l2 .bubble-actions{display:none}
-/* L2 字体缩小 20% (快速浏览字号) */
-.deck-card.l2 .messages-scroll{font-size:80%}
-.deck-card.l2 .l2-preview{opacity:0;pointer-events:none}
-.deck-card.l3 .chat-body{opacity:1;pointer-events:auto}
-.deck-card.l3 .l2-preview{opacity:0;pointer-events:none}
-#card:not(.l2):not(.l3) .chat-body,#card:not(.l2):not(.l3) .l2-preview{opacity:0;pointer-events:none}
-.morph-header{flex-shrink:0;transition:padding .25s var(--ease-out)}
-.deck-card.l2 .morph-header,.deck-card.l3 .morph-header{padding:8px 12px}
+/* L2 = 快速浏览对话列表 (无输入框); L3 = 完整对话 + 输入区 */
+.mini-thread.l2 .chat-topbar,.mini-thread.l3 .chat-topbar{padding:8px 12px}
 /* 按钮尺寸已由标准组件固定 (30.24px 绝对) — L2 形态缩小 20% (24.19px) */
-.deck-card.l2 .header-btn{width:24.19px;height:24.19px}
-.deck-card.l2 .header-btn svg{width:11.28px;height:11.28px}
 /* 头部按钮按形态显隐: ↗ 仅 L2, ⤢ 仅 L3, branch/prune 仅 L3 */
-#cardExpandBtn{display:none}
-.deck-card.l2 #cardExpandBtn{display:inline-flex}
-#cardCollapseBtn{display:none}
-.deck-card.l3 #cardCollapseBtn{display:inline-flex}
+[data-fid="cardExpandBtn"]{display:none}
+.mini-thread.l2 [data-fid="cardExpandBtn"]{display:inline-flex}
+[data-fid="cardCollapseBtn"]{display:none}
+.mini-thread.l3 [data-fid="cardCollapseBtn"]{display:inline-flex}
 .branch-prune{display:none}
-.deck-card.l3 .branch-prune{display:inline-flex}
-/* L2 紧凑预览卡 */
-.l2-preview{flex:1;overflow:hidden;padding:20px 22px;display:flex;flex-direction:column;font-family:var(--font-sans)}
-.l2-title{font-size:17px;font-weight:600;color:var(--text-primary);margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-sans)}
-.l2-snippet{flex:1;font-size:14px;line-height:1.75;color:var(--text-secondary);display:-webkit-box;-webkit-line-clamp:14;-webkit-box-orient:vertical;overflow:hidden;font-family:var(--font-sans)}
-.l2-snippet:empty::before{content:'(该节点暂无内容)';color:var(--text-quaternary)}
-.l2-hint{margin-top:14px;font-size:12px;color:var(--text-quaternary);display:flex;align-items:center;gap:6px;font-family:var(--font-sans)}
+.mini-thread.focus .branch-prune{display:inline-flex}   /* branch/prune 仅焦点面板 (操作目标 = 当前节点) */
+/* L2 预览层已废弃 (L2 = 对话列表快速浏览) */
 /* ═══ poker 输入栏: 原版结构 (样式由 assets/poker-input.css 提供) ═══ */
 #inputMain.dragover{border-color:rgb(var(--color-brand));
   box-shadow:-4px 8px 24px rgba(0,0,0,.3),0 0 0 3px rgba(var(--color-brand)/.22)}
@@ -1144,23 +1110,25 @@ border:1.5px solid var(--border-std);border-radius:7px}
   overflow:hidden;pointer-events:auto;
 }
 /* mini 卡升级 L3: 与主卡同规格的完整标准容器 (输入框 + 发送, 绑定各自节点) */
-.mini-thread .l2-preview{flex:1;overflow:hidden;padding:12px 22px 20px;display:flex;flex-direction:column;
-  background:var(--bg-card);font-family:var(--font-sans)}   /* 与主卡同款 L2 预览形态 */
-.mini-thread .l2-title{font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:10px}
-.mini-thread .l2-snippet{font-size:13px;color:var(--text-secondary);line-height:1.7;white-space:pre-wrap}
-.mini-thread.l3 .l2-preview{display:none}
-.mini-thread:not(.l3) .mini-body{display:none}
 .mini-thread:not(.l3) .mini-input{display:none}
-.mini-thread.l3{zoom:0.8;width:125%;height:125%}   /* 与主卡 #card zoom:0.8 统一: 内容缩放一致 (zoom 缩布局, 尺寸 125% 补偿) */
+.mini-thread.l3{width:100%;height:100%;border-radius:18px}   /* 内容实时渲染 (2026-08-12 弃用 zoom:0.8 — 位图缓存残影根源,
+   圆角 18px 直接与 node-card 一致, 无缩放补偿) */
 .mini-input{display:none;padding:6px 12px 12px;border-top:1px solid var(--border-std);flex-shrink:0;
   position:relative;animation:input-breathe 4s ease-in-out infinite}   /* 呼吸阴影与主卡同款 */
 .mini-thread.l3 .mini-input{display:block}
+/* 2026-08-12 焦点≠currentId 回归: 焦点面板输入框 = 模板 input-area (id 转移机制),
+   mini-input 必须隐藏 — 否则焦点 L3 卡同时显示 input-area + mini-input = 双输入框
+   (循环点击焦点切换后实测: 焦点卡 inputArea:block + miniInput:block + textareas:2) */
+.mini-thread.focus .mini-input{display:none}
+.mini-thread.focus.l2 .mini-input{display:none}
+/* 2026-08-12 重构 A: 每卡面板同构含输入区 (data-fid), 非焦点面板隐藏 (DOM 恒在 → inputField 恒存在, 零防御)
+   焦点 L2 由上方规则隐藏 (.mini-thread.focus.l2 .input-area) */
+.mini-thread:not(.focus) .input-area{display:none}
 /* 空态品牌字: 卡内 (主卡 L2/L3 模式 + mini 卡) 恒 28px 视觉 — 除以 --ui-scale(=canvas zoom) 反补偿,
-   保证任意缩放/多开时不再撑破卡片 (56px 原样 × zoom 1.4 可达 78px); L3 内容另有 zoom:0.8, 系数 ×1.25 抵消;
+   保证任意缩放/多开时不再撑破卡片 (56px 原样 × zoom 1.4 可达 78px); 内容实时渲染无 zoom (2026-08-12 弃用 35px ×1.25 抵消);
    画布空白欢迎页 (L1 模式) 保持 56px 设计 */
 .mode-l2 .chat-empty .empty-brand,.mode-l3 .chat-empty .empty-brand,
 .mini-thread .chat-empty .empty-brand{font-size:calc(28px/var(--ui-scale,1));letter-spacing:8px;text-indent:8px}
-.mode-l3 .chat-empty .empty-brand,.mini-thread.l3 .chat-empty .empty-brand{font-size:calc(35px/var(--ui-scale,1))}
 .mini-input.marquee::before{content:'';position:absolute;inset:-2px;border-radius:26px;padding:2px;pointer-events:none;
   opacity:.85;z-index:1;animation:marquee-rotate 3.2s linear infinite;
   background:conic-gradient(from var(--mangle),transparent 0deg,var(--logo-blue) 80deg,var(--logo-pink) 170deg,transparent 260deg,transparent 360deg);
@@ -1303,76 +1271,6 @@ border:1.5px solid var(--border-std);border-radius:7px}
 
   <!-- Main Chat / Card Stage: L2/L3 同一张卡片无缝形变 -->
   <main class="main mode-l1" id="mainPanel">
-    <div id="cardHolder" hidden>
-      <!-- 同一张卡片: L1 收起为节点 / L2 中等预览 / L3 放大完整对话 (单 DOM, 形态切换) -->
-      <!-- #card 默认藏在隐藏 holder, 打开时移入聚焦 .node-card, 由节点 width/height 1s 形变长大 (随画布缩放) -->
-      <div id="card" class="deck-card" onmousedown="event.stopPropagation()">
-        <header class="chat-topbar morph-header" id="chatHeader" ondblclick="if(cardLevel==='l2')setCardLevel('l3');else if(cardLevel==='l3')setCardLevel('l2')" onmousedown="headerDragStart2(event)">
-          <span class="chat-topbar-title" id="breadcrumb"></span>
-          <div class="chat-topbar-actions">
-            <button class="header-btn branch-prune" data-i18n-title="btn.branch" title="从当前创建分支" onclick="branchFromCurrent()">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/></svg>
-            </button>
-            <button class="header-btn branch-prune" data-i18n-title="btn.prune" title="修剪（删除分支）" onclick="pruneCurrent()">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
-            <button class="header-btn" id="cardExpandBtn" data-i18n-title="btn.expand" title="放大查看完整对话 (L3)" onclick="setCardLevel('l3')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-            </button>
-            <button class="header-btn" id="cardCollapseBtn" data-i18n-title="btn.collapse" title="缩小 (L2)" onclick="setCardLevel('l2')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
-            </button>
-            <button class="header-btn" id="cardTreeBtn" data-i18n-title="btn.tree" title="返回 Tree (L1)" onclick="setCardLevel('l1')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="6" height="6" rx="1"/><rect x="13" y="16" width="6" height="6" rx="1"/><path d="M8 8v3a3 3 0 0 0 3 3h2a3 3 0 0 1 3 3v2"/></svg>
-            </button>
-          </div>
-        </header>
-        <input type="file" id="fileInput" multiple hidden onchange="pickFiles(this)">
-        <!-- L3 完整对话形态 (卡片放大时显示) -->
-        <div class="chat-body" id="chatBody">
-          <div class="messages-area" id="messagesArea"><div class="messages-scroll" id="messagesScroll"></div></div>
-          <div class="drop-overlay" id="dropOverlay">⇩ 松开以上传附件</div>
-        </div><!-- /chatBody -->
-        <!-- 输入区: 在 chat-body 之外 (不受上下虚化 mask 影响), 始终浮于对话框之上 -->
-        <div class="input-area">
-          <div class="bg-transparent p-4 relative z-20">
-            <div class="relative shadow-card rounded-[28px] p-3 flex flex-col gap-3 transition-colors input-main-theme" id="inputMain">
-              <div class="overflow-x-auto" id="attachRow" style="display:none">
-                <div class="flex gap-2 min-w-max pb-1" id="attachChips"></div>
-              </div>
-              <div class="relative w-full transition-[height] duration-500 ease-[cubic-bezier(0.2,0,0,1)]">
-                <textarea id="inputField" class="block h-full w-full bg-transparent scrollbar-inputarea text-primary text-base leading-5 resize-none outline-none placeholder:truncate placeholder:select-none placeholder-input px-0 py-1 overflow-y-auto" style="font-family:var(--font-sans)" rows="1" placeholder="探索一切...... (Enter = 换行) | (Shift+Enter = 发送)" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
-              </div>
-              <!-- 按钮行: 左组(上传/联网) + 右组(AI模型/发送), 中间留空给文本框;
-                   默认贴底两端对称; 输入超两行时移到输入框下方均匀分布 (过渡动画) -->
-              <div class="input-btn-row" id="btnRow">
-                <div class="btn-group">
-                  <button class="input-btn-theme h-[34px] w-[34px] rounded-full transition-colors flex items-center justify-center flex-shrink-0" id="attachBtn" data-i18n-title="btn.attach" title="上传文件" onclick="document.getElementById('fileInput').click()">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                  </button>
-                  <button class="input-btn-theme web-search-btn h-[34px] w-[34px] rounded-full transition-colors flex items-center justify-center flex-shrink-0" id="webSearchBtn" data-i18n-title="btn.websearch" title="启用联网" onclick="toggleWebSearch()" aria-pressed="false">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-                  </button>
-                </div>
-                <div class="btn-group">
-                  <button class="input-btn-theme h-[34px] w-[34px] rounded-full flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="modelChip" title="切换模型" onclick="openModelDropdown()"><span id="mcLabel" class="select-none font-bold">AI</span></button>
-                  <button class="input-btn-theme h-[34px] w-[34px] flex items-center justify-center rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors" id="sendBtn" data-i18n-title="btn.send" title="发送消息 (Enter)" onclick="sendMessage()">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="cmd-chips" id="cmdChips"></div>
-          <input type="file" id="fileInput" multiple class="hidden" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="display:none">
-        </div><!-- /inputArea -->
-        <!-- L2 预览形态已废弃 (L2 = 快速浏览对话列表), 元素保留备用 -->
-        <div class="l2-preview" id="l2Preview" style="display:none">
-          <div class="l2-title" id="l2Title"></div>
-          <div class="l2-snippet" id="l2Snippet"></div>
-        </div>
-      </div>
-    </div>
   </main>
   <!-- 万用工具卡组 (Artifact Deck): 独立三态卡片组, 悬浮右侧, 展开时让位 -->
   <div id="cardDeck" class="card-deck" hidden>
@@ -1922,8 +1820,9 @@ function mdRender(src){
         const id=tgt.getAttribute('data-id');
         if(id)window.__deckSetLevel(id,'l3');
       }else if(canvasBlank&&e.pointerType==='touch'){
-        if(cardLevel==='l3')setCardLevel('l2');
-        else if(cardLevel==='l2')setCardLevel('l1');
+        const flv=_focusLevel();
+        if(flv==='l3')setCardLevel('l2');
+        else if(flv==='l2')setCardLevel('l1');
       }
       return;
     }
@@ -2235,30 +2134,23 @@ function applyTransform(){
   layer.style.setProperty('--ui-scale', zoom);   // 卡片文字/间距按缩放规范上下限 (clamp 用)
   // 视觉恒定: canvas zoom 会缩放卡片边框/按钮, 这里按 zoom 反算实际 CSS 值
   // 目标视觉: L2/L3 卡片边框 2.5px, 输入框边框 3px(加粗1倍), 按钮 28px(L3)/22.4px(L2, 视觉等大)
-  const cardEl=document.getElementById('card');
+  const cardEl=_panelOf(_focusId()||(tree&&tree.currentId));   // 焦点面板 = 主卡 (2026-08-12 重构 A: 无 #card, 面板在节点内; 焦点优先, currentId 可能被 installState 重置)
   if(cardEl){
-    // 边框画在外层 .node-card.is-card (仅受 canvasZoom 缩放, 不受 #card 内容 zoom 0.8 影响):
+    // 边框画在外层 .node-card.is-card (仅受 canvasZoom 缩放; 面板内容实时渲染无位图缩放):
     // 视觉 3.5px 恒定 → CSS = 3.5 / canvasZoom
     const node=cardEl.closest('.node-card');
     if(node&&node.classList.contains('is-card')){
       node.style.borderWidth=(3.5/zoom)+'px';
     }
-    const isL3=cardEl.classList.contains('l3');
-    // #card 自身 zoom 0.8 (仅 L3) 会再缩放边框: CSS = 目标视觉 / (自身zoom × canvas zoom)
-    const innerZoom=isL3?0.8:1;
-    const im=document.getElementById('inputMain');
-    if(im)im.style.borderWidth=(3/(innerZoom*zoom))+'px';
+    const im=cardEl.querySelector('.input-area');   // data-fid="inputMain" 在外壳 .input-area 上
+    if(im)im.style.borderWidth=(3/zoom)+'px';   // 边框画在面板上仅受 canvasZoom (内容实时渲染, 无 zoom 位图缩放)
     const btns=cardEl.querySelectorAll('.header-btn');
     // 按钮为绝对大小 (CSS 固定 30.24px), 不反算缩放 — 随画布缩放自然变化
-    // 上横条标题字号反算: 视觉恒 12px (L2/L3 标题不随比例缩放; L3 含 zoom 0.8 补偿 — 主卡 #card 与 mini L3 同)
-    const tb=document.getElementById('chatHeader');
-    if(tb)tb.style.fontSize=(12/(innerZoom*zoom))+'px';
-    document.querySelectorAll('.mini-thread .chat-topbar').forEach(t=>{
-      const mnode=t.closest('.mini-thread');
-      const mz=(mnode&&mnode.classList.contains('l3'))?0.8:1;
-      t.style.fontSize=(12/(mz*zoom))+'px';
-    });
   }
+  // 上横条标题字号反算: 视觉恒 12px (L2/L3 标题不随比例缩放, 无内容 zoom — 实时渲染)
+  document.querySelectorAll('.mini-thread .chat-topbar').forEach(t=>{
+    t.style.fontSize=(12/zoom)+'px';
+  });
   const zi=document.getElementById('zoomInfo');if(zi)zi.textContent=Math.round(zoom*100)+'%';
   miniUpdateViewport();
   // 卡片已是聚焦节点子元素 (canvasLayer 内), 随画布缩放/平移天然同步, 无需手动跟随
@@ -2278,9 +2170,10 @@ function renderNodes(){
   Array.from(layer.children).forEach(el=>existing.set(el.dataset.id,el));
   const frag=document.createDocumentFragment();
   tree.nodes.forEach(n=>{
-    // 聚焦卡片节点 + 多卡 mini 卡: 不重建, 保留子元素 (mini-thread/#card) 与 is-card 形态
+    // 聚焦卡片节点 + 多卡 mini 卡: 不重建, 保留子元素 (mini-thread 面板) 与 is-card 形态
     // (避免 doJump→installState→renderAll 把卡片重置回 180px 导致形变闪烁/清空 mini 卡)
-    if((n.id===tree.currentId && cardLevel!=='l1')||_cards.has(n.id)){
+    // 2026-08-12: 仅 _cards 登记节点跳过 — currentId 可能被 installState 重置为后端值 (无面板), 不应跳过 (残留空壳 is-card)
+    if(_cards.has(n.id)){
       const el=existing.get(n.id);
       if(el){
         const p=dispPos(n.id);
@@ -2295,7 +2188,7 @@ function renderNodes(){
         existing.delete(n.id);
         return;                         // 保留元素与子元素, 直接复用
       }
-      // 无既有元素则落到下方正常创建 (首次), 由 reattachCard 兜底挂载 #card
+      // 无既有元素则落到下方正常创建 (首次), 由 renderAll 的 ensurePanel 兜底补建面板
     }
     const p=dispPos(n.id);if(!p)return;
     const cls=nodeCardCls(n);
@@ -2316,19 +2209,22 @@ function renderGroupNodes(){
   Array.from(layer.children).forEach(el=>existing.set(el.dataset.id,el));
   const frag=document.createDocumentFragment();
   _topicGroups.forEach(g=>{
-    const expanded=expandedGroups.has(g.id);
+    // 2026-08-12 重构 A: 含面板/焦点节点的组强制展开 — 面板内嵌节点 el, 折叠会销毁宿主
+    const holdsPanel=g.nodes.some(n=>_cards.has(n.id)||(n.id===_focusId()&&_focusLevel()!=='l1'));
+    const expanded=expandedGroups.has(g.id)||holdsPanel;
     if(expanded){
       // 展开组: 组内节点逐卡渲染; 组头额外挂"折叠组"按钮
       g.nodes.forEach(n=>{
-        // 聚焦卡片节点: 跳过重建, 保留 #card 子元素与 is-card 尺寸 (同 renderNodes)
-        if(n.id===tree.currentId && cardLevel!=='l1'){
+        // 聚焦卡片节点 + 多卡 mini 卡: 跳过重建, 保留 mini-thread 面板与 is-card 尺寸 (同 renderNodes)
+        if(_cards.has(n.id)){
           const el=existing.get(n.id);
           if(el){
             const p=nodePositions[n.id];
             if(p){ el.style.setProperty('--nx',p.x+'px'); el.style.setProperty('--ny',p.y+'px'); }
             el.classList.add('is-card');
-            el.classList.toggle('l2', cardLevel==='l2');
-            el.classList.toggle('l3', cardLevel==='l3');
+            const miniEl=_cards.get(n.id);                       // mini 是等级权威: 宿主卡类随面板同步
+            if(miniEl){ el.classList.toggle('l3',miniEl.classList.contains('l3')); el.classList.toggle('l2',!miniEl.classList.contains('l3')); }
+            else if(n.id===_focusId()){ el.classList.toggle('l2',_focusLevel()==='l2'); el.classList.toggle('l3',_focusLevel()==='l3'); }
             existing.delete(n.id);
             return;
           }
@@ -2477,7 +2373,7 @@ function renderEdges(posOverride){
   // 显示坐标: 优先动画插值覆盖 → reflow 位移覆盖 → 基础布局
   const P=id=>{const o=posOverride&&posOverride.get(id);return o||dispPos(id);};
   // 聚焦卡 (L2/L3) 尺寸远大于普通节点: 端点连到卡片边缘而非节点边缘
-  const cardId=tree.currentId, cardLv=cardLevel;
+  const cardId=_focusId()||tree.currentId, cardLv=_focusLevel();   // 焦点卡优先 (焦点 ≠ currentId 时连线端点仍按卡半高; 等级读实际类)
   const halfH=id=>{ if(cardId&&id===cardId&&(cardLv==='l2'||cardLv==='l3'))return cardTargetSize(cardLv).h/2; return NODE_H/2; };
   // Parent-child edges (vertical: parent bottom-center → child top-center)
   tree.nodes.forEach(n=>{
@@ -2515,7 +2411,7 @@ function animateEdges(fromMap){
   // 性能: 先按终点渲染建好 DOM (path 带 data-from/to), 动画期间只更新 d 属性, 不每帧重建 innerHTML
   renderEdges();
   const svg=document.getElementById('edgesSvg');
-  const cardId=tree.currentId,cardLv=cardLevel;
+  const cardId=_focusId()||tree.currentId,cardLv=_focusLevel();   // 焦点卡优先
   const halfH=id=>{ if(cardId&&id===cardId&&(cardLv==='l2'||cardLv==='l3'))return cardTargetSize(cardLv).h/2; return NODE_H/2; };
   const paths=svg?svg.querySelectorAll('path.edge-path'):[];
   (function step(now){
@@ -2664,7 +2560,7 @@ function onNodeMouseDown(e,nodeId){
   const p=nodePositions[nodeId];if(!p)return;
   const startX=e.clientX,startY=e.clientY,startPX=p.x,startPY=p.y;
   // 卡片模式 (L2/L3): 节点拖动禁用 — 只有焦点卡 (上横条) 可拖; 单击仅选中 (双击展开/切换)
-  if(cardLevel!=='l1')return;
+  if(_focusLevel()!=='l1')return;
   document.body.style.userSelect='none';
   document.body.classList.add('dragging-node');
   document.body.style.webkitUserSelect='none';
@@ -2961,15 +2857,15 @@ function toast(msg){
       document.querySelectorAll('.node-handle.dragging').forEach(h=>h.classList.remove('dragging'));
     }
   });
-  // 卡内滚轮统一拦截 (capture 阶段): 任何 L2/L3 卡 (焦点卡 #card / mini 浏览卡) 内滚动绝不缩放画布
-  // 焦点卡 → 无级滚动引擎 (惯性+回弹); mini 卡 → 原生滚动 (不禁默认)
+  // 卡内滚轮统一拦截 (capture 阶段): 任何 L2/L3 卡 (焦点面板 / mini 浏览卡) 内滚动绝不缩放画布
+  // 焦点面板 (.focus) → 无级滚动引擎 (惯性+回弹); mini 卡 → 原生滚动 (不禁默认)
   document.addEventListener('wheel',e=>{
     const t=e.target;
     if(!t||!t.closest)return;
     const card=t.closest('.node-card.is-card.l2,.node-card.is-card.l3');
     if(!card)return;
     e.stopPropagation();                          // 阻断 wrap bubble 的画布缩放分支
-    if(card.querySelector('.mini-thread')){       // mini 卡: 同主卡无级滚动引擎 (每卡独立实例, 惯性+回弹)
+    if(card.querySelector('.mini-thread:not(.focus)')){   // mini 卡: 原生滚动 (每卡独立实例, 惯性+回弹)
       e.preventDefault();
       const nid=card.getAttribute('data-id');
       const body=card.querySelector('.mini-body');
@@ -2983,8 +2879,9 @@ function toast(msg){
   wrap.addEventListener('dblclick',e=>{
     const t=e.target;
     if(t&&t.closest&&t.closest('.node-card,.header-btn,button'))return;
-    if(cardLevel==='l3')setCardLevel('l2');
-    else if(cardLevel==='l2')setCardLevel('l1');
+    const flv=_focusLevel();
+    if(flv==='l3')setCardLevel('l2');
+    else if(flv==='l2')setCardLevel('l1');
   });
   wrap.addEventListener('wheel',e=>{
     // 鼠标在 L2/L3 卡片内: 滚轮 = 无级滚动对话列表 (惯性+回弹), 不缩放画布
@@ -3182,10 +3079,11 @@ function autoCenterCurrent(){
   const w=wrap.clientWidth,h=wrap.clientHeight;
   // 目标 zoom: 默认窗口适配 (L1 树视图); L2/L3 卡片模式按卡片尺寸适配, 保证卡片完整显示在视口内
   let tz;
-  if(cardLevel==='l3'){
+  const flv=_focusLevel();
+  if(flv==='l3'){
     const cw=Math.min(820,w*0.92), ch=Math.min(680,h*0.86);
-    tz=Math.min(1.25,Math.max(0.35,Math.min(w/cw,h/ch)*0.92));  // 卡片尺寸不动, 内容缩放走 CSS zoom
-  }else if(cardLevel==='l2'){
+    tz=Math.min(1.25,Math.max(0.35,Math.min(w/cw,h/ch)*0.92));  // 卡片尺寸不动, 内容实时渲染 (无 CSS zoom)
+  }else if(flv==='l2'){
     const cw=Math.min(440,w*0.76), ch=Math.min(360,h*0.62);
     tz=Math.min(1.4,Math.max(0.35,Math.min(w/cw,h/ch)*0.95));
   }else{
@@ -3269,43 +3167,31 @@ function renderAll(){
   renderEdges();
   // 对话渲染拆帧: 大块 markdown/DOM 构建 (~100ms) 不与卡片 FLIP 形变动画抢主线程 —
   // L2/L3 时延迟到动画结束后渲染; L1 时卡片在 holder 内, 对话无需渲染
-  if(cardLevel==='l2'||cardLevel==='l3'){
+  const flv=_focusLevel();
+  if(flv==='l2'||flv==='l3'){
     const ma=document.getElementById('messagesArea');
-    // 仅当切换到不同节点时显示 loading (流式完成/同节点刷新保留实时内容, 不闪)
-    if(ma&&ma.getAttribute('data-node')!==tree.currentId){
-      const sc=document.getElementById('messagesScroll');
-      if(sc)sc.innerHTML='<div class="chat-empty"><div class="empty-orb">⏳</div><div class="empty-sub">正在加载对话内容…</div></div>';
+    // 仅当切换到不同节点时显示 loading (流式完成/同节点刷新保留实时内容, 不闪); 焦点判定 _focusId (currentId 可能被 installState 重置)
+    if(ma&&ma.getAttribute('data-node')!==(_focusId()||tree.currentId)){
+      ma.innerHTML='<div class="chat-empty"><div class="empty-orb">⏳</div><div class="empty-sub">正在加载对话内容…</div></div>';
     }
     if(_threadTimer)clearTimeout(_threadTimer);
-    _threadTimer=setTimeout(()=>{_threadTimer=null;renderThread();},cardLevel==='l3'?650:200);
+    _threadTimer=setTimeout(()=>{_threadTimer=null;renderThread();},flv==='l3'?650:200);
   }
   renderHeader();
   miniLayout();
   applyTransform();
-  reattachCard();        // 若处于 L2/L3, 确保 chat 容器挂回聚焦节点并恢复 is-card 形态 (渲染重入兜底)
+  // 渲染重入兜底: 处于 L2/L3 时确保焦点面板存在 (焦点面板优先 — currentId 可能被 installState 重置为后端值, 与焦点卡解耦)
+  if(flv!=='l1'&&tree){
+    const fid=_focusId()||tree.currentId;
+    const mini=ensurePanel(fid,tree.nodes.get(fid));
+    if(mini){   // 异常重建 (宿主 el 被 renderNodes 重建丢类) 时补宿主卡形态类
+      const ne=mini.closest('.node-card');
+      if(ne){ne.classList.add('is-card');ne.classList.toggle('l3',mini.classList.contains('l3'));ne.classList.toggle('l2',!mini.classList.contains('l3'));}
+    }
+  }
   updateLogoBatch();     // k/r 一键缩小按钮随卡状态刷新
   updateThreadPad();     // L3 对话列表下极限 (渲染重建 thread-space 后同步)
   bumpIdle();
-}
-
-/* 渲染重入兜底: 重渲染后若仍处于 L2/L3, 把 chat 容器挂回聚焦节点并恢复 is-card 形态
-   (renderNodes/renderGroupNodes 已对聚焦卡片节点跳过重建以保护 #card, 此函数处理兜底/首次挂载) */
-function reattachCard(){
-  if(cardLevel==='l1'||!tree||!tree.currentId) return;
-  const ne=document.querySelector('.node-card[data-id="'+CSS.escape(tree.currentId)+'"]');
-  const card=document.getElementById('card');
-  const holder=document.getElementById('cardHolder');
-  if(!ne||!card||!holder) return;
-  // 安全迁移 (与 setCardLevel 一致): 从任意父节点摘下再挂到聚焦节点
-  if(card.parentElement && card.parentElement!==ne){ card.parentElement.removeChild(card); }
-  if(card.parentElement!==ne){ ne.appendChild(card); }
-  ne.classList.add('is-card');
-  ne.classList.toggle('l2', cardLevel==='l2');
-  ne.classList.toggle('l3', cardLevel==='l3');
-  ne.style.transition='transform .65s cubic-bezier(.22,1,.36,1),box-shadow .25s,opacity .25s';
-  ne.style.setProperty('--scale','1');
-  card.classList.toggle('l2', cardLevel==='l2');
-  card.classList.toggle('l3', cardLevel==='l3');
 }
 
 /* ===== M1: 惰性拉取节点对话内容 (state 改为 inline=0 后, 仅路径节点按需填充) ===== */
@@ -3329,7 +3215,7 @@ async function hydratePath(path){
 
 /* L2 预览刷新: hydrate 完成后调用 — 摘要同源 nodeSummary, 有消息时附消息数 (预览反映真实内容) */
 function updateL2Preview(){
-  if(cardLevel!=='l2'||!tree)return;
+  if(_focusLevel()!=='l2'||!tree)return;
   const node=tree.nodes.get(tree.currentId);
   if(!node)return;
   const ls=document.getElementById('l2Snippet');
@@ -3342,66 +3228,69 @@ function updateL2Preview(){
   ls.textContent=s;
 }
 
-/* ═══ 对话列表无级滚动引擎 (L2/L3 通用): 惯性滑动 + 边界回弹 + 左键拖动 ═══
-   messages-area 禁用原生滚动 (overflow:hidden), 内容层 .messages-scroll 由 translateY 控制 */
+/* ═══ 对话列表滚动 (L2/L3 通用): 统一 scrollTop ═══
+   2026-08-12 重构 A: 焦点面板 = messagesArea (mini-body, data-fid 转移后全局 id 指向焦点面板)
+   mini 卡 = 各自 .mini-body 原生滚动 (miniScWheel); 焦点面板 = 无级惯性 + 回弹 + 左键拖动
+   scrollTick 每帧吸收外部 scrollTop 变更 (sendMessage/renderThread 直接设 scrollTop 后惯性续动不跳回) */
 const _sc={o:0,v:0,ra:null,drag:false,lastY:0,lastT:0,hist:[]};
+function _scrollBox(){return document.getElementById('messagesArea')||document.getElementById('chatBody');}
 function scrollMax(){
-  const a=document.getElementById('messagesArea'),s=document.getElementById('messagesScroll');
-  if(!a||!s)return 0;
-  return Math.max(0,s.scrollHeight-a.clientHeight);
+  const b=_scrollBox();if(!b)return 0;
+  return Math.max(0,b.scrollHeight-b.clientHeight);
 }
-function scrollGet(){return -_sc.o;}
+function scrollGet(){const b=_scrollBox();return b?b.scrollTop:0;}
 function scrollTo(y){
-  _sc.o=-Math.max(0,Math.min(scrollMax(),y));
-  const s=document.getElementById('messagesScroll');
-  if(s)s.style.transform=`translateY(${_sc.o}px)`;
+  const b=_scrollBox();if(!b)return;
+  b.scrollTop=Math.max(0,Math.min(scrollMax(),y));
+  _sc.o=b.scrollTop;
 }
 function scrollTick(){
-  const a=document.getElementById('messagesArea'),s=document.getElementById('messagesScroll');
-  if(!a||!s){_sc.ra=null;return;}
+  const b=_scrollBox();if(!b){_sc.ra=null;return;}
   const max=scrollMax();
+  if(b.scrollTop!==_sc.o)_sc.o=b.scrollTop;   // 吸收外部变更 (sendMessage/renderThread 直接设 scrollTop)
   // 边界回弹: 超出范围时弹簧衰减回界内
-  if(_sc.o>0){_sc.o*=0.82;_sc.v=0;if(_sc.o<1)_sc.o=0;}          // 顶部回弹, 接近 0 时 snap 停
-  else if(_sc.o<-max){const over=-max-_sc.o;_sc.o=-max+over*0.82;_sc.v=0;if(over<1)_sc.o=-max;}  // 底部回弹
+  if(_sc.o>max){_sc.o=max;_sc.v=0;}
+  else if(_sc.o<0){_sc.o=0;_sc.v=0;}
   // 惯性衰减
   _sc.o+=_sc.v;_sc.v*=0.93;
-  if(Math.abs(_sc.v)<0.3&&_sc.o<=0&&_sc.o>=-max){_sc.o=Math.max(-max,Math.min(0,_sc.o));_sc.ra=null;}
-  else{
-    s.style.transform=`translateY(${_sc.o}px)`;
-    _sc.ra=requestAnimationFrame(scrollTick);
-  }
-  s.style.transform=`translateY(${_sc.o}px)`;
+  if(Math.abs(_sc.v)<0.3&&_sc.o<=max&&_sc.o>=0){_sc.o=Math.max(0,Math.min(max,_sc.o));_sc.ra=null;}
+  else{_sc.ra=requestAnimationFrame(scrollTick);}
+  if(Math.abs(b.scrollTop-_sc.o)>0.5)b.scrollTop=_sc.o;
 }
 function scrollBy(dy){
   _sc.v+=dy*0.3;                       // wheel 每事件增量进速度 → 无级滑动 (不逐事件跳变)
-  _sc.o+=dy;
+  const b=_scrollBox();
+  _sc.o=(b?b.scrollTop:0)+dy;
+  if(b)b.scrollTop=_sc.o;
   if(!_sc.ra)scrollTick();
 }
 function scrollStop(){_sc.v=0;if(_sc.ra){cancelAnimationFrame(_sc.ra);_sc.ra=null;}}
-/* 拖动绑定 (chat-body 内, L2/L3 通用) */
+/* 拖动绑定: appRoot 委托式 — 焦点面板随时可变 (id 转移), 不能绑一次; 仅焦点面板 .mini-body 内生效 */
 function bindScrollDrag(){
-  const cb=document.getElementById('chatBody');
-  if(!cb||cb.__scrollDragBound)return;
-  cb.__scrollDragBound=true;
-  cb.addEventListener('pointerdown',e=>{
+  const root=document.getElementById('appRoot');
+  if(!root||root.__scrollDragBound)return;
+  root.__scrollDragBound=true;
+  root.addEventListener('pointerdown',e=>{
     if(_sc.drag)return;
     if(e.button!==0)return;
     const t=e.target;
-    if(t&&t.closest&&t.closest('button,input,textarea,select,a,.bubble-act,.card-action-btn'))return;  // 交互控件不拖动
+    if(!t||!t.closest)return;
+    const body=t.closest('.mini-thread.focus .mini-body');
+    if(!body)return;
+    if(t.closest('button,input,textarea,select,a,.bubble-act,.card-action-btn'))return;  // 交互控件不拖动
     _sc.drag=true;_sc.lastY=e.clientY;_sc.lastT=performance.now();_sc.hist=[];
     scrollStop();
-    cb.setPointerCapture&&cb.setPointerCapture(e.pointerId);
+    body.setPointerCapture&&body.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
-  cb.addEventListener('pointermove',e=>{
+  root.addEventListener('pointermove',e=>{
     if(!_sc.drag)return;
     const dy=e.clientY-_sc.lastY;
     _sc.lastY=e.clientY;
-    _sc.o+=dy;
+    _sc.o=scrollGet()+dy;
     _sc.hist.push([e.clientY,performance.now()]);
     if(_sc.hist.length>6)_sc.hist.shift();
-    const s=document.getElementById('messagesScroll');
-    if(s)s.style.transform=`translateY(${_sc.o}px)`;
+    const b=_scrollBox();if(b)b.scrollTop=_sc.o;
   });
   const end=()=>{
     if(!_sc.drag)return;
@@ -3415,8 +3304,8 @@ function bindScrollDrag(){
     _sc.hist=[];
     if(!_sc.ra)scrollTick();
   };
-  cb.addEventListener('pointerup',end);
-  cb.addEventListener('pointercancel',end);
+  root.addEventListener('pointerup',end);
+  root.addEventListener('pointercancel',end);
 }
 
 /* ===== Chat Thread (M1 自修复: 消息未内联时先拉取再渲染) ===== */
@@ -3456,9 +3345,9 @@ function buildThreadHtml(nodeId){
 }
 function renderThread(){
   const area=document.getElementById('messagesArea');
-  if(!area)return;   // 卡片尚未挂载到节点时跳过, reattachCard 后会重渲染
+  if(!area)return;   // 面板尚未挂载到节点时跳过, renderAll 兜底 ensurePanel 后会重渲染
   const sc=document.getElementById('messagesScroll')||area;
-  const path=tree.getPath();
+  const path=tree.getPath(_focusId()||undefined);   // 焦点面板渲染焦点节点 (currentId 可能被 installState 重置 ≠ 焦点)
   if(!path.length){
     // 空态: 无路径时的欢迎界面
     sc.innerHTML=`<div class="chat-empty">
@@ -3591,9 +3480,11 @@ function highlightConcepts(s,isCur){
   return s.replace(/(GTO|Nash equilibrium|neural network|attention|self-play|policy|equilibrium|game theory)/gi,'<span class="'+cls+'">$1</span>');
 }
 function renderHeader(){
-  const path=tree.getPath();
+  const path=tree.getPath(_focusId()||undefined);   // 焦点面板面包屑 (currentId 可能被 installState 重置 ≠ 焦点)
   const crumbs=path.map((n,i)=>i===path.length-1?`<span class="cur">${escapeHtml(nodeText(n))}</span>`:`<b>${escapeHtml(nodeText(n))}</b>`);
-  document.getElementById('breadcrumb').innerHTML='Path: '+crumbs.join(' <span style="opacity:.4">›</span> ');
+  // 2026-08-12 重构 A: breadcrumb 随焦点面板转移 (data-fid) — 组视图无面板时跳过 (防御 null)
+  const bcEl=document.getElementById('breadcrumb');
+  if(bcEl)bcEl.innerHTML='Path: '+crumbs.join(' <span style="opacity:.4">›</span> ');
   // (branch-banner 已按用户要求移除)
   const cur=tree.current;
   const ti=document.getElementById('treeInfo');
@@ -3785,7 +3676,7 @@ let chatSending=false, activeChat=null;
 function abortActiveChat(){
   if(activeChat){try{activeChat.abort()}catch(_){ }activeChat=null;}
 }
-async function doJump(id){abortActiveChat();try{await API.jumpTo(id)}catch(e){console.warn('[jump]',e)}finally{lastJumpId=null}await refresh()}
+async function doJump(id){abortActiveChat();try{await API.jumpTo(id)}catch(e){console.warn('[jump]',e)}finally{lastJumpId=null}await refresh();if(_focusLevel()!=='l1'&&tree&&tree.currentId){const jid=tree.currentId,flv=_focusLevel();if(_focusId()!==jid)setCardLevel(flv,jid);else scheduleReflow(jid,flv)}}   // 2026-08-12: 跳转后焦点面板迁移到目标节点 (面板常驻节点, 复用 setCardLevel 完整焦点切换); 已焦点则仅推挤让位
 function focusInput(){document.getElementById('inputField').focus()}
 // 阶段 4.1: 降级/警告黄色提示条 (不中断流, 区别于 error 红色)
 function showWarnBanner(turn,msg){
@@ -3817,13 +3708,16 @@ async function sendMessage(){
   }
   // F13: branchLabel 取"实际父节点"的分支名 —— fork 到非当前节点时,
   // 旧逻辑恒取 tree.current.label, 导致 branch: 标签打错分支
-  const labelSrc=(branchParentId&&tree.nodes.get(branchParentId))||tree.current;
+  // 2026-08-12: 焦点面板 (输入框所在) 可能 ≠ currentId (installState 重置), 发送挂焦点节点
+  const fcId=_focusId()||tree.currentId;
+  const fcNode=tree.nodes.get(fcId)||tree.current;
+  const labelSrc=(branchParentId&&tree.nodes.get(branchParentId))||fcNode;
   const branchLabel=labelSrc?(labelSrc.branchLabel||'main'):'main';
-  const parentId=branchParentId||undefined;
+  const parentId=branchParentId||fcId||undefined;
   pushInputHist(text);
   // 乐观创建: 用户气泡 + 空 AI 卡 + 空 extras 容器 (思考/工具实时注入)
   const area=document.getElementById('messagesArea');
-  const depth=tree.current?tree.current.depth+1:1;
+  const depth=fcNode?fcNode.depth+1:1;
   const turn=document.createElement('div');turn.className='turn';
   const userBubbleHtml=mdRender(fullText)||escapeHtml(fullText);
   turn.innerHTML=`<div class="turn-head"><span class="turn-badge">#${depth} ${branchLabel||'main'}</span></div>
@@ -3945,14 +3839,8 @@ function scheduleMarquee(){   // 跑马灯: 偶尔触发 (随机 18-40s), 蓝粉
     scheduleMarquee();
   },18000+Math.random()*22000);
 }
-function updateThreadPad(){   // L3: 对话列表下极限 = 原始 96px + 输入框上边界到卡底距离 + 余量 (最后一条不被输入框遮挡)
-  const card=document.getElementById('card');
-  if(!card)return;
-  const sp=card.querySelector('.thread-space');
-  if(!sp)return;
-  const ia=card.querySelector('.input-area');
-  if(!ia||!card.classList.contains('l3')){ sp.style.height='96px'; return; }
-  sp.style.height=(96+ia.offsetHeight+16)+'px';   // offsetHeight 与 thread-space 同在 #card 坐标系 (含 zoom 0.8)
+function updateThreadPad(){   // 2026-08-12 重构 A: 焦点面板输入区是 body 的兄弟元素 (flex 布局, body flex:1 滚动),
+  return;                     // thread-space 96px 静态占位即可 — 无输入框避让需求 → no-op
 }
 /* 主卡输入框自动增高 + 3 行布局切换
    实现已统一到组件函数 ikAutoResize (与 mini 输入框同一套滞回/均匀分布算法),
@@ -4345,13 +4233,13 @@ function runSlash(cmd){
   f.value='';autoResize(f);updateInputMeta(f);
   if(c.run)c.run();
 }
-// 未匹配 / 命令时提示
-document.getElementById('inputField').addEventListener('keydown',e=>{
-  if(e.key==='Tab'){
-    const t=document.getElementById('inputField').value;
+// 未匹配 / 命令时提示 (2026-08-12 重构 A: inputField id 随焦点面板转移 → document 委托)
+document.addEventListener('keydown',e=>{
+  if(e.key==='Tab'&&e.target&&e.target.id==='inputField'){
+    const t=e.target.value;
     if(t.startsWith('/')){
       const hit=SLASH_COMMANDS.find(x=>x.cmd.startsWith(t.toLowerCase()));
-      if(hit){e.preventDefault();document.getElementById('inputField').value=hit.cmd+' ';autoResize(document.getElementById('inputField'));updateInputMeta(document.getElementById('inputField'));}
+      if(hit){e.preventDefault();e.target.value=hit.cmd+' ';autoResize(e.target);updateInputMeta(e.target);}
     }
   }
 });
@@ -4490,7 +4378,8 @@ async function editAndResend(nodeId,idx){
   f.value=typeof m.content==='string'?m.content:JSON.stringify(m.content);
   autoResize(f);
   const target=n.parentId&&tree.nodes.get(n.parentId)?n.parentId:tree.rootId;
-  if(target&&target!==tree.currentId){
+  const fcId=_focusId()||tree.currentId;   // 焦点面板基准 (currentId 可能被 installState 重置)
+  if(target&&target!==fcId){
     doJump(target).then(()=>{
       branchParentId=tree.currentId;branchForkMode=true;
       f.placeholder=t('input.forkPrefix')+nodeText(tree.nodes.get(target))+'… (编辑重发)';
@@ -5362,154 +5251,158 @@ let cardLevel='l1';          // 'l1' | 'l2' | 'l3'
 let lastJumpId=null;         // 最近一次已发起的 doJump 目标 (currentId 本地同步后用于去重)
 
 function setCardLevel(level,nodeId,originEl){
-  const prevLevel=cardLevel;            // 记录旧等级 (尺寸变化判定: 展开/升级/收起会改变卡片尺寸)
-  const prevId=tree?tree.currentId:null;    // 记录上一个聚焦节点, 切换时清理其 is-card (避免留下空壳大卡)
+  const prevLevel=_focusLevel();            // 记录旧等级 (尺寸变化判定: 展开/升级/收起会改变卡片尺寸; 等级读焦点卡实际类)
+  const prevId=tree?(_focusId()||tree.currentId):null;    // 上一个聚焦节点 (焦点卡可能≠currentId: installState 重置后以焦点面板为准, 切换时卸其焦点)
   if(nodeId&&tree)tree.currentId=nodeId;    // 卡片锚 = 树当前节点 (单一状态源: 本地立即同步, doJump 持久化到后端)
-  const newId=tree?tree.currentId:null;
+  const newId=tree?(nodeId||_focusId()||tree.currentId):null;   // 无 id 关闭 (L1) 时关焦点面板而非 currentId
   cardLevel=level;
-  const app=document.getElementById('appRoot');
-  if(app){app.classList.remove('mode-l1','mode-l2','mode-l3');app.classList.add('mode-'+level);}
-  const main=document.getElementById('mainPanel');
-  if(main){main.classList.remove('mode-l1','mode-l2','mode-l3');main.classList.add('mode-'+level);}
-  // 同步同一张卡片的面包屑与 L2 预览 (L2/L3 共用一份 DOM)
+  applyModeClass(level);   // mode-l1/l2/l3 类统一收敛
   const node=newId&&tree?tree.nodes.get(newId):null;
-  const bc=document.getElementById('breadcrumb'); if(bc)bc.textContent=node?nodeText(node):'';
-  const lt=document.getElementById('l2Title'); if(lt)lt.textContent=node?nodeText(node):'';
-  const ls=document.getElementById('l2Snippet'); if(ls)ls.textContent=node?nodeSummary(node):'';
-  // 聚焦节点本身 = 卡片: 把 chat 容器移入/移出该节点, 用 is-card + .l2/.l3 类驱动尺寸形变
-  // (L1节点→L2小卡→L3大卡 是同一 DOM 元素的 width/height 1s 过渡, 随画布缩放, 不另起浮层)
-  const card=document.getElementById('card');
-  const holder=document.getElementById('cardHolder');
-  // 先清理上一个聚焦节点: 移除 is-card 与 --scale, 让其还原为普通节点 (卡片已迁出)
-  if(prevId && prevId!==newId){
-    const pe=document.querySelector('.node-card[data-id="'+CSS.escape(prevId)+'"]');
-    if(pe){
-      const pm=_cards.get(prevId);
-      if(pm){   // 旧焦点已转 mini (多开): mini 是等级权威, 宿主卡保留 is-card 尺寸, 类随 mini 同步 (防 L3 闪回 L2)
-        pe.classList.add('is-card');
-        pe.classList.toggle('l2', !pm.classList.contains('l3'));
-        pe.classList.toggle('l3', pm.classList.contains('l3'));
-        pe.style.setProperty('--scale','1');
+  const ne=newId?document.querySelector('.node-card[data-id="'+CSS.escape(newId)+'"]'):null;
+  // ═══ 2026-08-12 架构重构 A: 无 #card 迁移 — 面板常驻各自容器, 焦点切换 = id 转移 + .focus 类 ═══
+  // 旧焦点面板: 卸焦点 (转 mini 由 _cards 维持; 未转 mini 则移除面板并还原节点)
+  if(prevId&&prevId!==newId){
+    const pp=_panelOf(prevId);
+    if(pp){
+      pp.classList.remove('focus');
+      if(_cards.has(prevId)){
+        // 旧焦点转 mini: L3 补 mini-input (焦点时输入框来自模板 input-area, mini 卡输入框是 buildMiniInput)
+        if(pp.classList.contains('l3')&&!pp.querySelector('.mini-input'))buildMiniInput(prevId,pp);
       }else{
-        pe.classList.remove('is-card','l2','l3');
-        pe.style.removeProperty('--scale');
+        pp.remove();   // 降级/关闭场景: 面板整体移除, 节点还原 L1
+        const pe=document.querySelector('.node-card[data-id="'+CSS.escape(prevId)+'"]');
+        if(pe)pe.classList.remove('is-card','l2','l3');
       }
     }
   }
-  const ne=newId?document.querySelector('.node-card[data-id="'+CSS.escape(newId)+'"]'):null;
-  if(ne&&card){
-    // ═══ FLIP 形变 (业界标准: 消除 width/height layout 动画 → 全程 transform 合成器 60fps) ═══
-    // First: 记录当前视觉尺寸 → 切类 (width/height 立即到位, transition:none 防跳) → Invert: scale 倒回起点
-    // → 双 rAF 提交 Invert 帧后 Play: transform 过渡到 1 (同帧合并会跳过动画 = 闪烁)
-    const EASE='cubic-bezier(.22,1,.36,1)';
-    const TR='transform .65s '+EASE+',box-shadow .25s,opacity .25s';   // 不再过渡 width/height
-    const sf=parseFloat(ne.style.getPropertyValue('--scale'))||1;      // 当前画布缩放因子 (视觉乘数)
-    const fw=ne.offsetWidth, fh=ne.offsetHeight;                       // First
-    const base='translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%)';
-    const clearInline=()=>{ ne.style.removeProperty('width'); ne.style.removeProperty('height');
-      ne.style.removeProperty('transform'); ne.style.transition='';
-      ne.removeEventListener('transitionend',clearInline);
-      card.classList.remove('animating');               // 形变结束, 恢复渐变层
-      if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
-    const play=()=>{ ne.style.transition=TR; card.classList.add('animating');
-      ne.style.transform=base+' scale(1)';
-      ne.addEventListener('transitionend',clearInline); };
-    // 兜底: transitionend 可能因 display:none / 中途打断未触发, 0.75s 后强制清理内联残留
-    clearInline._t=setTimeout(clearInline,750);
-    ne.style.transition='none';                          // 类切换瞬间禁用一切过渡 (防声明式 scale 抢先)
-    if(level==='l1'){
-      card.classList.remove('l2','l3');
-      if(card.parentElement===ne){ ne.removeChild(card); if(holder)holder.appendChild(card); }
+  // 新焦点面板: 复用已有 (mini→焦点) 或新建
+  let panel=ne?_panelOf(newId):null;
+  if(ne&&!panel){
+    panel=ensurePanel(newId,node);   // 统一构建 (模板 + 渲染 + _cards 登记 + 拖动绑定)
+  }
+  if(panel)panel.classList.add('focus');
+  _transferFocusIds(newId);          // id 从旧面板卸下 → 新焦点面板 (旧函数 getElementById 零改动)
+  // 面包屑 (焦点面板内 data-fid 元素)
+  if(panel){
+    const bc=panel.querySelector('[data-fid="breadcrumb"]'); if(bc)bc.textContent=node?nodeText(node):'';
+  }
+  // ═══ FLIP 形变 (面板已在容器内: 只切类 + 尺寸过渡, 无迁移部分) ═══
+  const EASE='cubic-bezier(.22,1,.36,1)';
+  const TR='transform .65s '+EASE+',box-shadow .25s,opacity .25s';   // 不再过渡 width/height
+  const sf=parseFloat(ne?ne.style.getPropertyValue('--scale'):'1')||1;      // 当前画布缩放因子 (视觉乘数)
+  const fw=ne?ne.offsetWidth:0, fh=ne?ne.offsetHeight:0;                   // First: 形变前视觉尺寸
+  if(level==='l1'){
+    // 还原 L1: 焦点面板移除 (含 input-area), 节点还原普通形态
+    if(panel){ panel.remove(); _cards.delete(newId); }
+    if(ne){ ne.classList.remove('is-card','l2','l3'); ne.style.removeProperty('--scale'); }
+    if(ne&&fw>0){
       // Last: L1 自然尺寸 (auto 高度用克隆探针测量, 不改可见节点)
+      const base='translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%)';
+      const clearInline=()=>{ ne.style.removeProperty('width'); ne.style.removeProperty('height');
+        ne.style.removeProperty('transform'); ne.style.transition='';
+        ne.removeEventListener('transitionend',clearInline);
+        if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
+      const play=()=>{ ne.style.transition=TR; ne.style.transform=base+' scale(1)';
+        ne.addEventListener('transitionend',clearInline); };
+      clearInline._t=setTimeout(clearInline,750);
+      ne.style.transition='none';
       const probe=ne.cloneNode(true);
       probe.classList.remove('is-card','l2','l3');
       probe.style.cssText='position:absolute;visibility:hidden;left:-99999px;top:0;width:180px;height:auto;transform:none;--scale:1;margin:0;';
       document.body.appendChild(probe);
       const targetH=probe.offsetHeight;
       document.body.removeChild(probe);
-      ne.classList.remove('is-card','l2','l3');            // 类移除 → L1 尺寸立即到位 (无 width/height 过渡)
-      ne.style.removeProperty('--scale');
       ne.style.width='180px'; ne.style.height=targetH+'px';
       // Invert: 视觉倒回 L2/L3 起点 (scale = First视觉 / Last视觉)
       ne.style.transform=base+' scale('+((fw*sf)/180)+','+((fh*sf)/targetH)+')';
       void ne.offsetWidth;
       // Play: 双 rAF 确保 Invert 帧已渲染后再过渡 (同帧合并 = 无动画闪烁)
       requestAnimationFrame(()=>requestAnimationFrame(play));
-    }else{
-      // 安全迁移: 从任意当前父节点(holder 或某 .node-card)摘下再挂到新节点, 不依赖固定父节点
-      if(card.parentElement && card.parentElement!==ne){ card.parentElement.removeChild(card); }
-      if(card.parentElement!==ne){ ne.appendChild(card); }
-      card.classList.toggle('l2', level==='l2');            // #card 自身也带类, 驱动按钮显隐与内容形态切换 CSS
-      card.classList.toggle('l3', level==='l3');
-      // Last: 类加上后尺寸立即到位 (无过渡), 读实际 Last 尺寸
+    }
+  }else{
+    // L2/L3: 形态类 + FLIP (First = L1 当前尺寸 → Last = 卡尺寸)
+    if(ne&&panel){
+      panel.classList.toggle('l2', level==='l2');
+      panel.classList.toggle('l3', level==='l3');
+      const base='translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%)';
+      const clearInline=()=>{ ne.style.removeProperty('width'); ne.style.removeProperty('height');
+        ne.style.removeProperty('transform'); ne.style.transition='';
+        ne.removeEventListener('transitionend',clearInline);
+        if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
+      const play=()=>{ ne.style.transition=TR; ne.style.transform=base+' scale(1)';
+        ne.addEventListener('transitionend',clearInline); };
+      clearInline._t=setTimeout(clearInline,750);
+      ne.style.transition='none';                          // 类切换瞬间禁用一切过渡 (防声明式 scale 抢先)
       ne.classList.add('is-card');
       ne.classList.toggle('l2', level==='l2');
       ne.classList.toggle('l3', level==='l3');
       ne.style.setProperty('--scale','1');
       ne.style.removeProperty('width'); ne.style.removeProperty('height');
-      const lw=ne.offsetWidth, lh=ne.offsetHeight;
+      const lw=ne.offsetWidth, lh=ne.offsetHeight;         // Last
       // Invert: 视觉倒回 L1 起点
       ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';
       void ne.offsetWidth;
       // Play (双 rAF)
       requestAnimationFrame(()=>requestAnimationFrame(play));
       // 展开后卡片按视口适配 zoom (等形变动画完成再归位, 避免动画期间 zoom 抢跑)
-      setTimeout(()=>{ if(cardLevel===level && tree.currentId===newId) autoCenterCurrent(); },80);
+      setTimeout(()=>{ if(_focusLevel()===level && tree.currentId===newId) autoCenterCurrent(); },80);
+    }else if(ne){
+      ne.classList.add('is-card');
+      ne.classList.toggle('l2', level==='l2');
+      ne.classList.toggle('l3', level==='l3');
+      ne.style.setProperty('--scale','1');
     }
   }
-  // L3 (完整对话形态) 加载节点对话; L2 仅展示预览摘要, 但锚点核心 (currentId) 都要切换,
-  // 否则 autoCenterCurrent / 6s 静止归位仍以旧节点为锚 → 缩放后显示错位
-  // 注: currentId 已在函数头部本地同步, 此处用 lastJumpId 去重 (同节点重复进卡不重复发起 jump)
+  // L3 (完整对话形态) 加载节点对话; L2 仅展示预览摘要, 但锚点核心 (currentId) 都要切换
   if((level==='l3'||level==='l2') && newId && tree && lastJumpId!==newId){
     lastJumpId=newId;
-    // doJump→refresh→renderAll 是全量重渲染 (~120ms 长任务), 延迟到 FLIP 形变 + 归中动画都结束后执行,
-    // 避免与卡片动画抢主线程 (动画期间渲染 = 掉帧卡顿); 归中动画 ANIM_MS=1000ms (80ms 后启动)
     const jumpId=newId;
-    setTimeout(()=>{ if(cardLevel===level && tree && tree.currentId===jumpId) doJump(jumpId); },1150);
+    // doJump→refresh→renderAll 是全量重渲染 (~120ms 长任务), 延迟到 FLIP 形变 + 归中动画都结束后执行
+    setTimeout(()=>{ if(_focusLevel()===level && tree && tree.currentId===jumpId) doJump(jumpId); },1150);
   }
-  // 体积碰撞: 任何卡片触发尺寸变化 (L1→L2→L3 展开/升级/收起) 时触发推挤让位;
-  // 同等级切换节点 (尺寸不变) 仅在实际发生碰撞时才推挤, 避免无碰撞全局重排
+  // 体积碰撞: 尺寸变化触发推挤让位; 同等级切换节点仅在实际碰撞时推挤
   if(level==='l1'){ clearReflow(); renderEdges(); }
   else if(newId){
-    if(prevLevel!==level) scheduleReflow(newId, level);              // 尺寸变化 → 无条件让位 (批处理防重复触发)
-    else if(focusCardOverlaps(newId, level)) scheduleReflow(newId, level);  // 同尺寸 → 碰撞才推
+    if(prevLevel!==level) scheduleReflow(newId, level);
+    else if(focusCardOverlaps(newId, level)) scheduleReflow(newId, level);
   }
   updateLogoBatch();   // k/r 按钮随卡状态刷新
-  updateThreadPad();   // L3 对话列表下极限随输入框位置同步
 }
-/* 预检: 新焦点卡与任一展开卡是否发生体积碰撞 (无碰撞不触发全局重排序) */
-function focusCardOverlaps(id, level){
+/* 预检: 目标卡 (任意 id+level, 用显示位置) 与任一展开卡是否发生体积碰撞 (无碰撞不触发全局重排序) */
+function overlapsAnyCard(id, level){
   const ds=cardTargetSize(level);
-  const p=nodePositions[id];if(!p)return false;
+  const p=displayPositions[id]||nodePositions[id]; if(!p)return false;
   const dr={left:p.x-ds.w/2,right:p.x+ds.w/2,top:p.y-ds.h/2,bottom:p.y+ds.h/2};
   let hit=false;
   document.querySelectorAll('.node-card.is-card').forEach(el=>{
     const nid=el.getAttribute('data-id');
     if(nid===id)return;
-    const p2=nodePositions[nid];if(!p2)return;
+    const d=displayPositions[nid]||nodePositions[nid]; if(!d)return;
     const es=cardSizeOf(el);
-    const er={left:p2.x-es.w/2,right:p2.x+es.w/2,top:p2.y-es.h/2,bottom:p2.y+es.h/2};
+    const er={left:d.x-es.w/2,right:d.x+es.w/2,top:d.y-es.h/2,bottom:d.y+es.h/2};
     if(Math.min(dr.right,er.right)-Math.max(dr.left,er.left)>0 &&
        Math.min(dr.bottom,er.bottom)-Math.max(dr.top,er.top)>0)hit=true;
   });
   return hit;
 }
+/* 预检: 新焦点卡与任一展开卡是否发生体积碰撞 (无碰撞不触发全局重排序) */
+function focusCardOverlaps(id, level){ return overlapsAnyCard(id, level); }
 
 /* 焦点卡上横条拖动: 移动卡片位置 (非缩放); 与双击展开/缩小共存 */
 function setFocusCard(id){   // 焦点切换: 点击任意 L2/L3 卡上横条 → 该卡升为主卡 (等级保持), 原主卡降为 mini (等级保持)
-  if(!tree||tree.currentId===id)return;
-  const from=tree.currentId;
-  const curLevel=cardLevel;
+  if(!tree)return;
+  const fid=_focusId();
+  if(fid===id)return;   // 已焦点卡幂等 (currentId 可能被 installState 重置 ≠ 焦点, 不能只比 currentId)
+  const from=fid||tree.currentId;
+  const curLevel=_focusLevel();
   // 被点击卡的等级 (读实际类, 而非全局 cardLevel — mini L3 点击时应保持 L3)
   const tne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
   const targetLevel=(tne&&tne.classList.contains('l3'))?'l3':(curLevel==='l1'?'l2':curLevel);
   if(curLevel!=='l1'){
-    const card=document.getElementById('card');
-    const holder=document.getElementById('cardHolder');
-    if(card&&holder)holder.appendChild(card);   // #card 先移出原节点 (防 openMiniCard 双挂)
     if(from!==id&&_cards.size<8){               // 原焦点卡转 mini (保留等级), 上限防卡数爆炸
-      openMiniCard(from);
-      if(curLevel==='l3')miniUpgradeToL3(from);   // 标准升级路径: 挂 .mini-input + 同步 l3 类 + 体积碰撞 (修复 L3 mini 缺输入框)
+      openMiniCard(from);   // 2026-08-12: 无 #card 迁移 — 面板已在容器内, openMiniCard 复用/重建
+      const fm=_cards.get(from);
+      if(curLevel==='l3'&&fm&&!fm.classList.contains('l3'))miniUpgradeToL3(from);
     }
   }
   selectedNode=id;
@@ -5517,7 +5410,8 @@ function setFocusCard(id){   // 焦点切换: 点击任意 L2/L3 卡上横条 �
 }
 function headerDragStart2(e,nodeId){
   if(e.button!==0)return;
-  if(cardLevel==='l1')return;
+  // 2026-08-12 重构 A: 删除 L1 早退 — L1 模式可残留 mini 卡 (焦点卡关闭后), 其顶栏点击 = 升焦点 (setFocusCard 处理 L1 起点)
+  if(_focusLevel()==='l1'&&(!nodeId||_focusId()===nodeId))return;   // L1 且无明确目标 (非 mini 顶栏) 仍早退; 焦点判定 _focusId (currentId 残留的卡不该被挡)
   const btn=e.target.closest&&e.target.closest('.header-btn,button');
   if(btn)return;                                    // 按钮点击不触发拖动
   nodeId=nodeId||tree.currentId;                    // mini 卡拖动传自己的 id (泛化: 所有 L2/L3 卡上横条均可拖)
@@ -5546,8 +5440,8 @@ function headerDragStart2(e,nodeId){
     if(moved){
       manualPositions[nodeId]={x:p.x,y:p.y};                          // 持久化拖动结果
       collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
-    }else if(nodeId&&nodeId!==tree.currentId){
-      setFocusCard(nodeId);                                           // 点击上横条 = 焦点切换 (L2/L3 卡之间切换主卡)
+    }else if(nodeId&&_focusId()!==nodeId){
+      setFocusCard(nodeId);                                           // 点击上横条 = 焦点切换 (L2/L3 卡之间切换主卡; 焦点判定 _focusId)
     }
     bumpIdle();
   }
@@ -5607,6 +5501,7 @@ function syncCardPos(id,x,y){
 }
 function collidePushCards(dragId){
   const GAP=20, SKIN=6;
+  const fid=_focusId()||tree.currentId;   // 焦点卡锚 (currentId 可能被 installState 重置 ≠ 焦点)
   const cards=new Map();   // id -> {x,y,w,h} (中心坐标, 每轮实时位置) — 收集全部节点: L1/L2/L3 都是卡片, 统一体积碰撞
   document.querySelectorAll('.node-card').forEach(el=>{
     const nid=el.getAttribute('data-id');
@@ -5629,13 +5524,13 @@ function collidePushCards(dragId){
       let mva={x:0,y:0},mvb={x:0,y:0};
       if(ox<oy){                                            // MTV: 水平轴重叠更浅 → 水平分离
         const total=ox+GAP;
-        if(ida===dragId||ida===tree.currentId){ mvb={x:-dirX*total,y:0}; }        // 拖动卡/焦点卡固定 (质量无穷), b 全量远离
-        else if(idb===dragId||idb===tree.currentId){ mva={x:dirX*total,y:0}; }
+        if(ida===dragId||ida===fid){ mvb={x:-dirX*total,y:0}; }        // 拖动卡/焦点卡固定 (质量无穷), b 全量远离
+        else if(idb===dragId||idb===fid){ mva={x:dirX*total,y:0}; }
         else { mva={x:dirX*total/2,y:0}; mvb={x:-dirX*total/2,y:0}; }   // 双卡对半分
       }else{                                                // 垂直分离
         const total=oy+GAP;
-        if(ida===dragId||ida===tree.currentId){ mvb={x:0,y:-dirY*total}; }
-        else if(idb===dragId||idb===tree.currentId){ mva={x:0,y:dirY*total}; }
+        if(ida===dragId||ida===fid){ mvb={x:0,y:-dirY*total}; }
+        else if(idb===dragId||idb===fid){ mva={x:0,y:dirY*total}; }
         else { mva={x:0,y:dirY*total/2}; mvb={x:0,y:-dirY*total/2}; }
       }
       a.x+=mva.x;a.y+=mva.y;b.x+=mvb.x;b.y+=mvb.y;
@@ -5656,22 +5551,34 @@ function scheduleReflow(id, level){
   });
 }
 function reflowAroundCard(id, level){
+  // 无碰撞快速路径 (2026-08-12): 目标卡按目标尺寸与所有展开卡无重叠 → 零全局刷新。
+  // 否则 hover 快切/同尺寸切换也走 40 轮推挤 + ensureCardsInViewport 重适配 → 卡片位置必跳。
+  if(!overlapsAnyCard(id, level)){ ensureCardsInViewport(id); return; }
   // 快照当前显示位置 (连线动画起点: 与节点 CSS 1s 过渡同步)
   const fromMap=new Map();
   tree.nodes.forEach((n,nid)=>{const d=displayPositions[nid]||nodePositions[nid];if(d)fromMap.set(nid,{x:d.x,y:d.y});});
-  clearReflow();                                  // 先让上一态让位节点平滑归位, 随即重新计算 (整体 1s 连贯)
-  const p0=nodePositions[id]; if(!p0||!tree){ ensureCardsInViewport(id); return; }
+  // 2026-08-12 阶段 B (独立容器语义): 不再 clearReflow 全局复位 — 从当前显示位增量推挤,
+  // 只推实际与目标卡重叠的卡; 他卡之间既有的推挤/手动位置保持不动 (切焦点/升级不再牵动无关卡)。
+  // 降级回位 (2026-08-12 阶段 B): 正常路径由 miniUpgradeToL3 在改类前 delete displayPositions 先行归位;
+  // 此处兜底类时序异常 (reflow 到达时卡类已变, curLv===level 正常不触发)。关闭 (→L1) 由 setCardLevel 全量 clearReflow。
+  {
+    const curEl=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
+    const curLv=curEl&&curEl.classList.contains('l3')?'l3':(curEl&&curEl.classList.contains('l2')?'l2':'l1');
+    if(curLv!==level&&(curLv==='l3'||curLv==='l2')) delete displayPositions[id];
+  }
+  const p0=displayPositions[id]||nodePositions[id]; if(!p0||!tree){ ensureCardsInViewport(id); return; }   // 优先当前显示位 (升级 L3 时 mini 卡可能已被推挤过)
+  const fid=_focusId()||tree.currentId;   // 焦点卡锚 (currentId 可能被 installState 重置 ≠ 焦点卡)
   const sz=cardTargetSize(level);
   const CW=sz.w, CH=sz.h;                         // 聚焦卡本地尺寸 (= CSS px, 与 nodePositions 同坐标系)
   const MARGIN=44;                                // 卡片与周围卡片的留白
   const other=[];
   tree.nodes.forEach((n,nid)=>{
-    // 焦点卡 (currentId) 也是锚: mini 卡升级/重排时不被推挤 (保持焦点视觉位置)
-    if(nid!==id && nid!==tree.currentId && nodePositions[nid]) other.push(nid);
+    // 焦点卡也是锚: mini 卡升级/重排时不被推挤 (保持焦点视觉位置)
+    if(nid!==id && nid!==fid && nodePositions[nid]) other.push(nid);
   });
   // 工作副本 (聚焦卡固定为锚点, 不被推动; 焦点卡同样锚定)
   const pos={}; pos[id]={x:p0.x,y:p0.y};
-  if(id!==tree.currentId){ const cp=nodePositions[tree.currentId]; if(cp)pos[tree.currentId]={x:cp.x,y:cp.y}; }
+  if(id!==fid){ const cp=nodePositions[fid]; if(cp)pos[fid]={x:cp.x,y:cp.y}; }
   other.forEach(nid=>{ const d=displayPositions[nid]||nodePositions[nid]; pos[nid]={x:d.x,y:d.y}; });
   // 邻接 (父子 + mergeTarget 双向) → 结构弹簧让多父级/父子结构在推挤后仍可读
   const adj=new Map();
@@ -5687,12 +5594,12 @@ function reflowAroundCard(id, level){
       if(c){ pos[a].x+=(sx/c-pos[a].x)*SPRING; pos[a].y+=(sy/c-pos[a].y)*SPRING; }
     });
     // 1) 硬约束: 把每个其他卡片推出聚焦卡矩形 + 焦点卡矩形 (最小轴方向) — 碰撞盒按对方实际尺寸
-    const anchors=id===tree.currentId?[id]:[id,tree.currentId];
+    const anchors=id===fid?[id]:[id,fid];
     for(const nid of other){
       const q=pos[nid];
       const sn=cardSizeOf(document.querySelector('.node-card[data-id="'+CSS.escape(nid)+'"]'));
       for(const aid of anchors){
-        const pa=aid===id?p0:nodePositions[aid];
+        const pa=aid===id?pos[id]:nodePositions[aid];   // id 用实时位置 (可能已被焦点卡互斥约束推开)
         if(!pa)continue;
         const aw=aid===id?CW:cardSizeOf(document.querySelector('.node-card[data-id="'+CSS.escape(aid)+'"]')).w;
         const ah=aid===id?CH:cardSizeOf(document.querySelector('.node-card[data-id="'+CSS.escape(aid)+'"]')).h;
@@ -5704,6 +5611,24 @@ function reflowAroundCard(id, level){
           if(ox<oy){ q.x += dx>=0?ox:-ox; }
           else      { q.y += dy>=0?oy:-oy; }
         }
+      }
+    }
+    // 1.5) 升级/打开卡与焦点卡互斥 (2026-08-12): 焦点卡锚定不动, 新卡让位 — 多 L3 并存的根本保证。
+    //      旧逻辑把 id 与 currentId 都当锚点且互不推挤 → 第二个 L3 直接叠在焦点 L3 上被完全盖住。
+    if(id!==fid){
+      const q=pos[id], pa=nodePositions[fid];
+      if(pa){
+        const sa=cardSizeOf(document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]'));
+        const fa=cardSizeOf(document.querySelector('.node-card[data-id="'+CSS.escape(fid)+'"]'));
+        let dx=q.x-pa.x, dy=q.y-pa.y;
+        const ox=(fa.w+sa.w)/2+MARGIN-Math.abs(dx);
+        const oy=(fa.h+sa.h)/2+MARGIN-Math.abs(dy);
+        if(ox>0 && oy>0){
+          if(dx===0&&dy===0){ dx=0; dy=-1; }
+          if(ox<oy){ q.x += dx>=0?ox:-ox; }
+          else      { q.y += dy>=0?oy:-oy; }
+        }
+        pos[id]=q;
       }
     }
     // 2) 硬约束: 其他卡片两两互斥 (最小轴方向各退一半) — 碰撞盒按每节点实际尺寸 (卡/节点)
@@ -5723,7 +5648,9 @@ function reflowAroundCard(id, level){
     }
   }
   // 写回覆盖层并应用到 DOM (CSS 1s 过渡 = 平滑"挤开")
-  other.forEach(nid=>{
+  // id (升级/打开卡) 也可能被焦点卡互斥约束推开 → 必须一并写回, 否则升级后落回 nodePositions 旧位 (与焦点卡重叠)
+  const writeList = id===fid ? other : other.concat([id]);
+  writeList.forEach(nid=>{
     displayPositions[nid]={x:pos[nid].x,y:pos[nid].y};
     if(!_pushedNodes.has(nid)) _pushedNodes.set(nid,[nodePositions[nid].x,nodePositions[nid].y]);
     const el=document.querySelector('.node-card[data-id="'+CSS.escape(nid)+'"]');
@@ -5803,31 +5730,83 @@ function ensureCardsInViewport(focusId){
    非焦点卡 = 节点 is-card 形态 + 内嵌 .mini-thread 纯对话浏览, 可拖动/碰撞推挤 */
 const _cards=new Map();   // nodeId -> miniEl (展开的非焦点卡)
 function openNodeCard(id){
-  // 已有 mini 卡 → L2↔L3 切换 (标准容器内升级, 焦点卡不动); 焦点卡自身 → 关闭回 L1
+  // 焦点卡自身 → 关闭回 L1 (2026-08-12: 焦点卡也在 _cards, 焦点判断必须先于 mini 切换; 仅 _focusId — currentId 是后端当前节点, installState 重置后 ≠ 焦点, 参与判断会误伤)
+  if(_focusLevel()!=='l1'&&id===_focusId()){ setCardLevel('l1'); return; }
+  // 已有 mini 卡 → L2↔L3 切换 (标准容器内升级)
   if(_cards.has(id)){
     miniUpgradeToL3(id);
     return;
   }
-  // 焦点卡自身 → 关闭回 L1
-  if(cardLevel!=='l1'&&id===tree.currentId){ setCardLevel('l1'); return; }
   // 无焦点卡 (L1) → 正常单卡流程
-  if(cardLevel==='l1'){ setCardLevel('l2',id); return; }
+  if(_focusLevel()==='l1'){ setCardLevel('l2',id); return; }
   // 已有焦点卡 → 新开 mini 浏览卡 (焦点卡保持)
   openMiniCard(id);
 }
-function openMiniCard(id){
+/* ═══════════════════════════════════════════════════════════════════════════
+   统一面板模板 (2026-08-12 架构重构 A+B+C): 每张卡 (含焦点卡) 都是完整标准容器。
+   - 焦点面板 (唯一) 持有全局 id, 其余面板以 data-fid 标记 (见 _transferFocusIds)
+   - 面板 = chat-topbar (标题 + branch/prune/expand/collapse/tree 按钮) + mini-body
+   - branch/prune 仅焦点面板显示 (focus-only 类, CSS 显隐)
+   ═══════════════════════════════════════════════════════════════════════════ */
+function _panelInnerHTML(id,title){
+  return `<div class="chat-topbar" data-fid="chatHeader" onmousedown="headerDragStart2(event,'${id}')"><span class="chat-topbar-title" data-fid="breadcrumb">${escapeHtml(title)}</span><div class="chat-topbar-actions"><button class="header-btn branch-prune focus-only" title="从当前创建分支" onclick="branchFromCurrent()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/></svg></button><button class="header-btn branch-prune focus-only" title="修剪（删除分支）" onclick="pruneCurrent()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><button class="header-btn" data-fid="cardExpandBtn" title="放大查看完整对话 (L3)" onclick="setCardLevel('l3','${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button><button class="header-btn" data-fid="cardCollapseBtn" title="缩小 (L2)" onclick="miniUpgradeToL3('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg></button><button class="header-btn" data-fid="cardTreeBtn" title="返回 Tree (L1)" onclick="closeMiniCard('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="6" height="6" rx="1"/><rect x="13" y="16" width="6" height="6" rx="1"/><path d="M8 8v3a3 3 0 0 0 3 3h2a3 3 0 0 1 3 3v2"/></svg></button></div></div><div class="mini-body" data-fid="messagesArea"></div><div class="input-area" data-fid="inputMain"><div class="bg-transparent p-4 relative z-20"><div class="relative shadow-card rounded-[28px] p-3 flex flex-col gap-3 transition-colors input-main-theme"><div class="overflow-x-auto" data-fid="attachRow" style="display:none"><div class="flex gap-2 min-w-max pb-1" data-fid="attachChips"></div></div><div class="relative w-full transition-[height] duration-500 ease-[cubic-bezier(0.2,0,0,1)]"><textarea data-fid="inputField" class="block h-full w-full bg-transparent scrollbar-inputarea text-primary text-base leading-5 resize-none outline-none placeholder:truncate placeholder:select-none placeholder-input px-0 py-1 overflow-y-auto" style="font-family:var(--font-sans)" rows="1" placeholder="探索一切...... (Enter = 换行) | (Shift+Enter = 发送)" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea></div><div class="input-btn-row" data-fid="btnRow"><div class="btn-group"><button class="input-btn-theme h-[34px] w-[34px] rounded-full transition-colors flex items-center justify-center flex-shrink-0" data-fid="attachBtn" title="上传文件" onclick="document.getElementById('fileInput').click()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button><button class="input-btn-theme web-search-btn h-[34px] w-[34px] rounded-full transition-colors flex items-center justify-center flex-shrink-0" data-fid="webSearchBtn" title="启用联网" onclick="toggleWebSearch()" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></button></div><div class="btn-group"><button class="input-btn-theme h-[34px] w-[34px] rounded-full flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" data-fid="modelChip" title="切换模型" onclick="openModelDropdown()"><span data-fid="mcLabel" class="select-none font-bold">AI</span></button><button class="input-btn-theme h-[34px] w-[34px] flex items-center justify-center rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors" data-fid="sendBtn" title="发送消息 (Shift+Enter)" onclick="sendMessage()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div></div></div></div><div class="cmd-chips" data-fid="cmdChips"></div><input type="file" data-fid="fileInput" multiple class="hidden" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="display:none" onchange="pickFiles(this)"></div>`;
+}
+/* ═══════════════════════════════════════════════════════════════════════════
+   焦点面板 id 转移机制 (2026-08-12 架构重构 A): 每张卡的面板都是同构容器
+   (data-fid 标记元素), 焦点切换 = id 从旧面板卸下 → 按 data-fid 赋给新面板。
+   sendMessage/renderThread/updateThreadPad 等旧函数经 getElementById 零改动生效。
+   ═══════════════════════════════════════════════════════════════════════════ */
+const _FOCUS_IDS=['messagesArea','inputMain','inputField','attachRow','attachChips','btnRow','cmdChips','attachBtn','webSearchBtn','modelChip','mcLabel','sendBtn','chatHeader','breadcrumb','cardExpandBtn','cardCollapseBtn','cardTreeBtn','fileInput'];
+function _panelOf(id){   // 节点 → 面板元素 (含焦点面板; 未开卡返回 null)
+  if(!id)return null;
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  if(!ne||_cards.has(id))return;
-  try{
-  ne.classList.add('is-card','l2');
-  ne.style.setProperty('--scale','1');
-  ne.style.removeProperty('width');ne.style.removeProperty('height');
+  if(!ne)return null;
+  return ne.querySelector('.mini-thread');
+}
+function _focusId(){   // 焦点面板宿主 id (焦点卡 ≠ currentId 时优先; 无焦点面板返回 null)
+  const f=document.querySelector('.mini-thread.focus');
+  if(!f)return null;
+  const ne=f.closest('.node-card');
+  return ne?ne.dataset.id:null;
+}
+function _focusLevel(){   // 主卡 (焦点卡) 等级权威读法 — 卡元素 class 为唯一真源, 全局 cardLevel 仅作瞬态 fallback
+  const fid=_focusId();
+  if(fid){
+    const el=document.querySelector('.node-card[data-id="'+CSS.escape(fid)+'"]');
+    if(el&&el.classList.contains('l3'))return 'l3';
+    if(el&&el.classList.contains('l2'))return 'l2';
+    return 'l1';
+  }
+  return cardLevel||'l1';
+}
+function applyModeClass(level){   // mode-l1/l2/l3 类收敛 (setCardLevel / miniUpgradeToL3 / closeMiniCard 共用)
+  const app=document.getElementById('appRoot');
+  if(app){app.classList.remove('mode-l1','mode-l2','mode-l3');app.classList.add('mode-'+level);}
+  const main=document.getElementById('mainPanel');
+  if(main){main.classList.remove('mode-l1','mode-l2','mode-l3');main.classList.add('mode-'+level);}
+}
+function _transferFocusIds(targetId){   // 全量卸 id → 目标面板按 data-fid 赋 id (无目标 = 只卸不赋)
+  for(const fid of _FOCUS_IDS){
+    const el=document.getElementById(fid);
+    if(el&&el.dataset.fid===fid)el.removeAttribute('id');
+  }
+  const panel=_panelOf(targetId);
+  if(!panel)return;
+  for(const fid of _FOCUS_IDS){
+    const el=panel.querySelector('[data-fid="'+fid+'"]');
+    if(el)el.id=fid;
+  }
+}
+/* 统一面板构建 (焦点卡与 mini 卡共用): 模板 + 对话渲染 (hydrate 自修复) + _cards 登记 + 拖动绑定 */
+function ensurePanel(id,node){
+  const exist=_panelOf(id);   // 幂等: 面板已在容器内直接复用 (renderAll 兜底/重复触发安全)
+  if(exist)return exist;
+  const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
+  const title=node?(node.summary||nodeText(node)||'对话'):'对话';
   const mini=document.createElement('div');
   mini.className='mini-thread';
-  ne.appendChild(mini);
-  const node=tree.nodes.get(id);
-  const title=node?(node.summary||nodeText(node)||'对话'):'对话';
-  mini.innerHTML=`<div class="chat-topbar" onmousedown="headerDragStart2(event,'${id}')"><span class="chat-topbar-title">${escapeHtml(title)}</span><div class="chat-topbar-actions"><button class="header-btn" title="放大查看完整对话 (L3)" onclick="openNodeCard('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button><button class="header-btn" title="返回 Tree (L1)" onclick="closeMiniCard('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="6" height="6" rx="1"/><rect x="13" y="16" width="6" height="6" rx="1"/><path d="M8 8v3a3 3 0 0 0 3 3h2a3 3 0 0 1 3 3v2"/></svg></button></div></div><div class="l2-preview"><div class="l2-title">${escapeHtml(title)}</div><div class="l2-snippet">${escapeHtml(nodeSummary(node)||'')}</div></div><div class="mini-body"></div>`;
+  mini.innerHTML=_panelInnerHTML(id,title);
+  if(ne)ne.appendChild(mini);
   const body=mini.querySelector('.mini-body');
   const path=tree.getPath(id);
   // M1 自修复 (与 renderThread 同源): 消息未内联时先拉取再渲染, 避免空白/空态
@@ -5840,7 +5819,13 @@ function openMiniCard(id){
     hydratePath(path).then(()=>{
       if(_cards.get(id)===mini){
         const h2=buildThreadHtml(id);
-        if(h2)body.innerHTML=h2;
+        // 2026-08-12: h2=null (节点确无消息) 时也必须落空态品牌, 否则"正在加载"永久残留 = 内容错乱
+        body.innerHTML=h2||'<div class="chat-empty"><div class="empty-brand">IKAROS</div></div>';
+      }
+    }).catch(err=>{
+      console.warn('mini hydrate failed', id, err);
+      if(_cards.get(id)===mini){
+        body.innerHTML='<div class="chat-empty"><div class="empty-brand">IKAROS</div></div>';   // 拉取失败 → 空态品牌, 不永久转圈
       }
     });
   }else{
@@ -5848,15 +5833,32 @@ function openMiniCard(id){
   }
   _cards.set(id,mini);
   bindMiniScrollDrag(body,id);    // 与主卡同一行为: 鼠标拖动对话区 (L2 通用标准容器)
-  // 随鼠标快切主卡: 鼠标停驻卡上 300ms → 该卡升为主卡; 移出取消 (避免滑过误切)
-  mini.__hoverTimer=null;
-  mini.addEventListener('mouseenter',()=>{
-    clearTimeout(mini.__hoverTimer);
-    if(tree.currentId===id)return;
-    mini.__hoverTimer=setTimeout(()=>setFocusCard(id),300);
-  });
-  mini.addEventListener('mouseleave',()=>clearTimeout(mini.__hoverTimer));
-  scheduleReflow(id,'l2');          // 新卡推挤周围 (碰撞自适应, 批处理)
+  return mini;
+}
+function openMiniCard(id){
+  const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
+  if(!ne||_cards.has(id))return;
+  try{
+  // 保留宿主等级 (2026-08-12): 焦点 L3 卡降 mini 时直接建 L3 mini (含输入框), 不再先降 L2 再升 L3 → 消除尺寸抖动 + 多余 reflow
+  const keepL3=ne.classList.contains('l3');
+  ne.classList.add('is-card', keepL3?'l3':'l2');
+  ne.style.setProperty('--scale','1');
+  ne.style.removeProperty('width');ne.style.removeProperty('height');
+  const node=tree.nodes.get(id);
+  const mini=ensurePanel(id,node);   // 统一面板构建: 模板 + 渲染 + _cards 登记 + 拖动绑定
+  // 面板等级类与宿主同步 (CSS 显隐规则基于 .mini-thread.l2/.l3 — expand/collapse 按钮/bubble 精简等)
+  mini.classList.toggle('l2', !keepL3);
+  mini.classList.toggle('l3', keepL3);
+  // keepL3: 宿主原是 L3 → 直接挂完整输入框 (与 miniUpgradeToL3 升 L3 同规格);
+  // 焦点面板输入框来自模板 input-area (id 转移机制), 不建 mini-input (避免双输入框); 焦点判定 _focusId
+  if(keepL3&&_focusId()!==id&&!mini.querySelector('.mini-input')){
+    const scope=buildMiniInput(id,mini);
+    if(scope&&scope.box&&scope.box.__ikScope)ikSyncPad(scope.box.__ikScope);
+  }
+  // 2026-08-12: 移除 hover 自动升主卡 (原 mouseenter 300ms → setFocusCard)。
+  // 根因: 布局变动 (autoCenter 视口平移/推挤) 会把 mini 卡滑到鼠标下 → 无意悬停抢焦点 → 拉锯/空壳卡。
+  // 现仅保留手动路径: 双击卡 (openNodeCard) 升级。mini 卡 hover 保留纯视觉反馈, 不切焦点。
+  scheduleReflow(id,keepL3?'l3':'l2');   // 新卡推挤周围 (碰撞自适应, 批处理; 无碰撞时快速路径跳过)
   updateLogoBatch();                  // k/r 按钮随卡数刷新
   }catch(err){
     console.error('openMiniCard error', id, err);
@@ -5928,7 +5930,7 @@ function bindMiniScrollDrag(body,id){   // mini 卡对话区鼠标拖动 (与主
     }else sc.v=0;
     if(Math.abs(sc.v)>=0.3)miniScTick(id,body,sc);
     drag=null;
-    if(wasClick&&tree.currentId!==id)setFocusCard(id);   // 点击对话区 → 该卡成为主卡 (随鼠标快切)
+    if(wasClick&&_focusId()!==id)setFocusCard(id);   // 点击对话区 → 该卡成为主卡 (焦点判定 _focusId — currentId 是后端当前节点, 用它判断会把 currentId 卡点击挡掉)
   };
   body.addEventListener('pointerup',end);
   body.addEventListener('pointercancel',()=>{drag=null;miniScStop(id,body);});
@@ -5936,13 +5938,23 @@ function bindMiniScrollDrag(body,id){   // mini 卡对话区鼠标拖动 (与主
 function miniUpgradeToL3(id){   // mini 卡 L2↔L3 切换 (标准容器): 尺寸变化 + 输入框显隐, 触发体积碰撞
   const mini=_cards.get(id);if(!mini)return;
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  const toL3=!mini.classList.contains('l3');
+  const toL3 = !mini.classList.contains('l3');      // 目标态 = 取反当前 (collapse=降级, expand 走 setCardLevel 不经过此)
+  if(!toL3) delete displayPositions[id];   // 降级: 先回基础位 (nodePositions), 再按 L2 尺寸重排 — 他卡保持 (2026-08-12 阶段 B)
   mini.classList.toggle('l3',toL3);
-  if(ne)ne.classList.toggle('l3',toL3);
-  if(toL3&&!mini.querySelector('.mini-input')){   // 首次升 L3: 挂完整输入框 (同主卡四按钮布局, 绑定本节点)
+  mini.classList.toggle('l2',!toL3);            // 显式互补: 降级回 L2 时类完整 (CSS 虽用 :not(.l3), 保持一致性)
+  if(ne){
+    ne.classList.toggle('l3',toL3);
+    ne.classList.toggle('l2',!toL3);            // 关键: 只 toggle l3 会让降级卡丢 l2 类 → is-card 无等级 → 尺寸回落 180px 小卡叠在 L3 上
+  }
+  // 2026-08-12 架构重构 A: 焦点面板 L2↔L3 → 同步全局 cardLevel/mode 类 (仅 _focusId — currentId 是后端当前节点, 参与判断会把非焦点卡 collapse 误当全局降级)
+  if(_focusLevel()!=='l1'&&_focusId()===id){
+    cardLevel=toL3?'l3':'l2';
+    applyModeClass(cardLevel);   // 焦点卡 L2↔L3 → 主卡模式类
+  }
+  if(toL3&&_focusId()!==id&&!mini.querySelector('.mini-input')){   // 首次升 L3: 挂完整输入框 (同主卡四按钮布局, 绑定本节点); 焦点面板输入框来自模板 input-area
     buildMiniInput(id,mini);
   }
-  clearReflow();scheduleReflow(id,toL3?'l3':'l2');   // 尺寸变化 → 体积碰撞让位 (批处理)
+  scheduleReflow(id,toL3?'l3':'l2');   // 尺寸变化 → 体积碰撞让位 (批处理, 增量推挤: 降级仅自身回原始位, 他卡保持)
   updateLogoBatch();updateThreadPad();
   // 降级回 L2 时清掉避让 padding; 升 L3 时按当前输入框高度同步
   const mbox=mini.querySelector('.mini-input');
@@ -6027,13 +6039,22 @@ function miniSend(id,ta,box){   // mini L3 卡发送 (绑定自身节点, 与主
     refreshMiniCards();
   });
 }
-function closeMiniCard(id){
+function closeMiniCard(id){   // 关闭卡 (含焦点卡): 移除面板 + 节点还原; 焦点卡 → 内嵌回退 L1 + id 清空
+  const wasFocus=_focusId()===id;              // 提前记录 (卸焦点后 _focusId 失效)
   const mini=_cards.get(id);
   if(mini)mini.remove();
   _cards.delete(id);
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
   if(ne){ne.classList.remove('is-card','l2','l3');ne.style.removeProperty('--scale');}
-  clearReflow();renderEdges();
+  // 2026-08-12 架构重构 A: 焦点面板关闭 → 回退 L1 (id 全卸, 无焦点卡); 仅 _focusId — currentId 是后端当前节点, 参与判断会把非焦点卡关闭误当焦点回退
+  if(_focusLevel()!=='l1'&&wasFocus){
+    cardLevel='l1';
+    applyModeClass('l1');
+    _transferFocusIds(null);   // 只卸不赋: 焦点面板已移除
+  }
+  // 2026-08-12 阶段 B (独立容器语义): 焦点卡关闭 → 全量归位 (回树视图); 非焦点 mini 关闭 → 仅自身回原始位 (他卡保持)
+  if(wasFocus){ clearReflow(); } else { delete displayPositions[id]; }
+  renderEdges();
   updateLogoBatch();                  // k/r 按钮随卡数刷新
 }
 function refreshMiniCards(){          // 消息变化后刷新所有展开的 mini 卡
@@ -6043,10 +6064,11 @@ function refreshMiniCards(){          // 消息变化后刷新所有展开的 mi
     if(!body){                            // 旧结构兜底: 补 header + body 骨架
       const node=tree.nodes.get(id);
       const title=node?(node.summary||nodeText(node)||'对话'):'对话';
-      mini.innerHTML=`<div class="chat-topbar" onmousedown="headerDragStart2(event,'${id}')"><span class="chat-topbar-title">${escapeHtml(title)}</span><div class="chat-topbar-actions"><button class="header-btn" title="放大查看完整对话 (L3)" onclick="openNodeCard('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button><button class="header-btn" title="返回 Tree (L1)" onclick="closeMiniCard('${id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="6" height="6" rx="1"/><rect x="13" y="16" width="6" height="6" rx="1"/><path d="M8 8v3a3 3 0 0 0 3 3h2a3 3 0 0 1 3 3v2"/></svg></button></div></div><div class="l2-preview"><div class="l2-title">${escapeHtml(title)}</div><div class="l2-snippet">${escapeHtml(nodeSummary(node)||'')}</div></div><div class="mini-body"></div>`;
+      mini.innerHTML=_panelInnerHTML(id,title);
       body=mini.querySelector('.mini-body');
     }
     if(html&&body)body.innerHTML=html;
+    else if(body&&!html)body.innerHTML='<div class="chat-empty"><div class="empty-brand">IKAROS</div></div>';   // 2026-08-12: 无消息 → 空态品牌, 不残留"正在加载"
     bindMiniScrollDrag(body,id);      // 兜底重建后重新绑定拖动 (__dragBound 防重复)
   });
   ikSyncAllMiniPads();                // 重渲染清掉了 padding-bottom → 重新同步输入框避让
@@ -6062,7 +6084,7 @@ function updateLogoBatch(){
   if(showK){ b.textContent='k'; b.style.display='flex';
     b.title='一键缩小所有 L2 卡至 L1';
     b.onclick=e=>{ e.stopPropagation(); _cards.forEach((_,id)=>closeMiniCard(id));
-      if(cardLevel!=='l1')setCardLevel('l1'); updateLogoBatch(); };
+      if(_focusLevel()!=='l1')setCardLevel('l1'); updateLogoBatch(); };
   }else{ b.style.display='none'; b.onclick=null; }
   // r (k 下方 18.34px, 可同时显示)
   let rb=document.getElementById('logoBatchR');
@@ -6072,7 +6094,7 @@ function updateLogoBatch(){
     rb.style.display='flex';
     rb.title='一键缩小所有 L3 卡至 L2';
     rb.onclick=e=>{ e.stopPropagation(); _cards.forEach((_,id)=>closeMiniCard(id));
-      if(cardLevel==='l3')setCardLevel('l2'); updateLogoBatch(); };
+      if(_focusLevel()==='l3')setCardLevel('l2'); updateLogoBatch(); };
   }else if(rb){ rb.style.display='none'; rb.onclick=null; }
 }
 
@@ -6236,8 +6258,8 @@ function ikLayoutButtons(scope,tall){
   const row=box.querySelector('.mini-btn-row');
   if(!row)return;
   if(tall){
-    // 全程用 row 自身布局坐标系 (offsetWidth/offsetWidth 均未被 zoom 缩放),
-    // 不能混用 getBoundingClientRect (含 mini L3 zoom .8 × 画布 zoom) —— 混用会算出 2 倍中缝。
+    // 全程用 row 自身布局坐标系 (offsetWidth 不受画布 transform scale 影响),
+    // 不能混用 getBoundingClientRect (含画布 zoom) —— 混用会算出 2 倍中缝。
     const btn=row.querySelector('.mini-input-btn');
     const bw=btn?btn.offsetWidth:28;
     // 先清零内距再量, 避免上一轮 padding 计入可用宽导致逐次收敛
@@ -6253,7 +6275,7 @@ function ikLayoutButtons(scope,tall){
   }
 }
 /* 对话列表避让: 输入框高度变化 → 列表底部留白同步 (最后一条不被遮挡)
-   主卡走 updateThreadPad (thread-space); mini 走 .mini-body padding-bottom */
+   主卡 thread-space 96px 静态 (焦点面板输入区为兄弟元素, 无需避让 — updateThreadPad no-op); mini 走 .mini-body padding-bottom */
 function ikSyncPad(scope){
   if(!scope){updateThreadPad();return;}
   if(scope.kind==='main'){updateThreadPad();return;}
@@ -6285,7 +6307,8 @@ window.addEventListener('resize',()=>{
   if(_resizeTimer)clearTimeout(_resizeTimer);
   _resizeTimer=setTimeout(()=>{
     applyTransform();
-    if(cardLevel!=='l1' && tree && tree.currentId){ scheduleReflow(tree.currentId, cardLevel); }
+    const flv=_focusLevel();
+    if(flv!=='l1' && tree && tree.currentId){ scheduleReflow(tree.currentId, flv); }
     autoCenterCurrent();   // L2/L3 按新视口重新适配 zoom
   },120);
 });

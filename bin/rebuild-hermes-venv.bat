@@ -18,7 +18,11 @@ if exist "%VENV%" (
 )
 
 echo Creating fresh venv...
-"%UV%" venv --clear --python "%PY%" --system-site-packages "%VENV%"
+rem 2026-08-12: 去掉 --system-site-packages — venv 完全自包含（stdlib 在
+rem venv\Scripts\Lib 自带 + 依赖全装 venv 内）。继承 base 会混入 C 盘
+rem Roaming 用户级包（如 langsmith）且依赖 pyvenv.cfg home 的绝对路径
+rem （盘符变化即失效）。自包含后盘符/目录迁移零影响（同 omp 自锚定思路）。
+"%UV%" venv --clear --python "%PY%" "%VENV%"
 if errorlevel 1 (
   echo ERROR: uv venv failed rc=%errorlevel%
   exit /b 1

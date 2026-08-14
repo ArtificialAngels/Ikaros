@@ -460,7 +460,7 @@ var _mq = window.matchMedia('(max-width: 720px)');
 (_mq.addEventListener ? _mq.addEventListener('change', relayoutAll) : _mq.addListener(relayoutAll));
 
 /* 关键组件 -> bento 大卡 (非对称, 固定不随状态抖动) */
-var FEATURED = { control_panel:1, local_model:1, memory:1, neko_group:1, neko:1, hermes_dashboard:1, conversation_tree:1, herdr:1 };
+var FEATURED = { control_panel:1, local_model:1, memory:1, neko_group:1, neko:1, hermes_bridge:1, conversation_tree:1, herdr:1 };
 
 /* 组件卡片现统一挂在 #canvas 内(见 PanelManager) */
 var connDot=document.getElementById('connDot');
@@ -545,7 +545,7 @@ function buildCard(c) {
     if(c.panel_url){ inner+='<a class="btn" href="'+esc(c.panel_url)+'" target="_blank" style="text-decoration:none">面板</a>'; }
     inner+='</div>';
   }
-  if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
+  if((c.id==='hermes_bridge') || c.id==='neko_group'){
     inner+='<div class="hermes-patch" id="repo-'+c.id+'"></div>';
     if(c.id==='neko_group'){
       inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
@@ -577,10 +577,10 @@ function buildCard(c) {
     });
   }
   el.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.addEventListener('click',function(e){ e.stopPropagation(); doAction(c.id, b.dataset.act); }); });
-  if(c.id==='hermes_dashboard'){
+  if(c.id==='hermes_bridge'){
     var _hu=el.querySelector('#hermes-update-'+c.id); if(_hu)_hu.addEventListener('click', hermesUpdate);
   }
-  if((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group'){
+  if((c.id==='hermes_bridge') || c.id==='neko_group'){
     var _rc=el.querySelector('#repo-check-'+c.id); if(_rc)_rc.addEventListener('click', function(){ repoCheck(c.id); });
     var _rs=el.querySelector('#repo-sync-'+c.id); if(_rs)_rs.addEventListener('click', function(){ repoSync(c.id); });
   }
@@ -635,7 +635,7 @@ function updateCard(c) {
   var card=document.getElementById('card-'+c.id); if(!card)return;
   var isBusy=busy.has(c.id); card.classList.toggle('pending',isBusy);
   card.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.disabled=isBusy; });
-  if(((c.id==='hermes_dashboard'||c.id==='hermes_service') || c.id==='neko_group') && c.repo) updateRepoBox(c);
+  if(((c.id==='hermes_bridge') || c.id==='neko_group') && c.repo) updateRepoBox(c);
   if(c.id==='runtime' && c.runtime) updateRuntimeBox(c);
 }
 
@@ -647,7 +647,7 @@ async function doAction(id,act) {
 
 async function hermesUpdate() {
   // 0 侵入后 hermes 卡片只剩 repo 版本盒子，更新反馈复用它（refreshStatuses 会覆盖为最新版本）
-  var box=document.getElementById('repo-hermes_dashboard');
+  var box=document.getElementById('repo-hermes_bridge');
   if(box)box.innerHTML='<div class="hp-detail">更新 Hermes 中（可能需数十秒）…</div>';
   try{
     var r=await fetch('/api/hermes/update',{method:'POST'});
@@ -658,7 +658,7 @@ async function hermesUpdate() {
   }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
 }
 
-function repoNameOf(cid){ return cid==='hermes_dashboard' ? 'hermes' : 'neko'; }
+function repoNameOf(cid){ return cid==='hermes_bridge' ? 'hermes' : 'neko'; }
 function updateRepoBox(c) {
   var repo=c.repo; if(!repo)return;
   var box=document.getElementById('repo-'+c.id); if(!box)return;

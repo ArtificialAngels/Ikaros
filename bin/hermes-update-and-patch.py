@@ -59,7 +59,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 SCRIPT = Path(__file__).resolve()
 IKAROS_ROOT = SCRIPT.parent.parent                      # E:/Ikaros
-REPO = IKAROS_ROOT / "runtime" / "hermes"                  # hermes 子仓库
+REPO = IKAROS_ROOT / "runtime" / "hermes-agent"           # hermes 子仓库（2026-08-12 迁移：runtime/hermes → runtime/hermes-agent）
 # 防御：确保 HERMES_HOME 指向 E:/Ikaros/data/hermes-agent，避免脚本内 hermes/uv 子进程
 # 因调用方未注入 HERMES_HOME 而回退平台默认 AppData/Local/hermes（会把第二份家目录写到 C 盘）。
 # 见 2026-08-04：9100 面板「更新并打补丁」未给子进程传 env，导致 bootstrap 落到 C 盘。
@@ -95,6 +95,10 @@ A_CLASS_FILES = [
     "hermes_cli/web_server.py",
     "cron/scheduler.py",
     "agent/conversation_loop.py",
+    # tests/cron/test_scheduler.py（2026-08-12 恢复）：固定 cron session id 的
+    # 配套断言（== "cron_test-job"）。5610941 基线已适配；upstream 每次 reset 后
+    # 会还原成 startswith("cron_test-job_")，不重放则测试永远红。
+    "tests/cron/test_scheduler.py",
     # tools/mcp_tool.py 已消除（08-05）：IKAROS_* 自推导逻辑搬到
     # core/hermes-bridge/inject_ikaros_paths.py，由启动器 build_env()/bridge
     # 拉起前注入（setdefault，不覆盖权威值）。hermes 工作树不再含此补丁。
@@ -317,10 +321,16 @@ def derive_markers(base: str, ikaros: str) -> dict:
 
     这些签名行是 Ikaros 修改引入、upstream 不会删除的内容；校验时只要它们
     存在于工作树文件，即可证明该文件补丁已落地（与 commit 哈希解耦，稳定）。
+
+    base 先用 merge-base 收敛：§0 的 upstream tip 每次 --finalize 后推进，
+    直接用它会混入 upstream 自身删除的行（5610941 保留、新 tip 已删）→ 误报。
+    merge-base(base, ikaros) = Ikaros 补丁打点处的 upstream（如 f5be9236），
+    diff 只含纯定制，与 §0 指针解耦。
     """
+    mb = run_git(["merge-base", base, ikaros], check=True).stdout.strip()
     markers: dict = {}
     for f in A_CLASS_FILES:
-        proc = run_git(["diff", base, ikaros, "--", f], check=True)
+        proc = run_git(["diff", mb, ikaros, "--", f], check=True)
         sig: list[str] = []
         for line in proc.stdout.splitlines():
             if not line.startswith("+") or line.startswith("+++"):

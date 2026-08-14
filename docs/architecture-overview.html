@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 项目架构 · 2026-07-30</title>
+<title>Ikaros 项目架构 · 2026-08-14</title>
 <style>
   :root{
     --bg:#f5f7fa; --card:#ffffff; --ink:#1f2933; --muted:#647084;
@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Ikaros 项目架构全景</h1>
-  <div class="sub">快照日期 2026-07-30 · 控制面板 :9100 · 9 个常驻 TCP 服务 + Herdr 命名管道 · 已取消 neko→V5 合并计划</div>
+  <div class="sub">快照日期 2026-08-14 · 控制面板 :9100 · 9 个常驻 TCP 服务 + Herdr 命名管道 · 已取消 neko→V5 合并计划</div>
 
   <!-- 总入口 -->
   <div class="card panel">
@@ -84,8 +84,7 @@
     <div style="font-size:13px;opacity:.95">一键启停所有组件，装配 CUDA 环境，模型切换持久化</div>
     <div class="row">
       <div class="chip"><b>:9100</b><span>core/dashboard/server.py（纯 stdlib）</span></div>
-      <div class="chip"><b>bin/ikaros-control.bat</b><span>双击拉起面板</span></div>
-      <div class="chip"><b>bin/ikaros-control-panel.bat</b><span>Electron 桌面壳</span></div>
+      <div class="chip"><b>bin/ikaros-control-panel.bat</b><span>双击拉起面板 :9100（只起面板，不拉全栈）</span></div>
     </div>
   </div>
 
@@ -96,7 +95,7 @@
       <div class="svc"><div class="p">:9100</div><h3>控制面板</h3>
         <p>组件编排中枢 · 一键启停 + CUDA 装配 + 模型切换</p><span class="badge b-infra">Infra</span></div>
       <div class="svc"><div class="p">:8080</div><h3>本地 LLM</h3>
-        <p>Qwen3-1.7B · 懒加载（调用时热载入）</p><span class="badge b-back">Backend</span></div>
+        <p>Phi-4-mini · 懒加载（调用时热载入）</p><span class="badge b-back">Backend</span></div>
       <div class="svc"><div class="p">:8587</div><h3>Embedding 向量</h3>
         <p>nomic 嵌入 · 看门狗管理</p><span class="badge b-back">Backend</span></div>
       <div class="svc"><div class="p">:48911</div><h3>Neko 主前端</h3>
@@ -106,7 +105,7 @@
       <div class="svc"><div class="p">:48915</div><h3>Neko Agent 服务</h3>
         <p>键鼠/浏览器/OpenClaw 控制</p><span class="badge b-front">Frontend</span></div>
       <div class="svc"><div class="p">:9119</div><h3>Hermes Dashboard</h3>
-        <p>云端 LLM 网关 + Web UI + skills/MCP</p><span class="badge b-infra">Infra</span></div>
+        <p>管理面板（非 LLM 网关）· skills/MCP 浏览</p><span class="badge b-infra">Infra</span></div>
       <div class="svc"><div class="p">:8088</div><h3>Hermes 猫爪</h3>
         <p>bin/hermes_paw_bridge.py · Agent 驱动</p><span class="badge b-back">Backend</span></div>
       <div class="svc"><div class="p">:48920</div><h3>对话树面板</h3>
@@ -117,12 +116,12 @@
       <table>
         <tr><th>端口</th><th>服务</th><th>组件路径</th><th>状态</th></tr>
         <tr><td>:9100</td><td>控制面板 Web UI</td><td>core/dashboard/server.py</td><td>✅</td></tr>
-        <tr><td>:8080</td><td>本地 LLM (Qwen3-1.7B, 懒加载)</td><td>bin/ikaros-memory-watchdog.py → llama-server</td><td>⚠️ 懒加载</td></tr>
+        <tr><td>:8080</td><td>本地 LLM (Phi-4-mini, 懒加载)</td><td>bin/ikaros-memory-watchdog.py → llama-server</td><td>⚠️ 懒加载</td></tr>
         <tr><td>:8587</td><td>Embedding (nomic)</td><td>bin/ikaros-memory-watchdog.py</td><td>⚠️</td></tr>
-        <tr><td>:48911</td><td>Neko 主前端</td><td>core/neko/app/main_server.py</td><td>✅</td></tr>
-        <tr><td>:48912</td><td>Neko 记忆服务</td><td>core/neko/app/memory_server.py</td><td>✅</td></tr>
-        <tr><td>:48915</td><td>Neko Agent 服务</td><td>core/neko/app/agent_server.py</td><td>✅</td></tr>
-        <tr><td>:9119</td><td>Hermes Dashboard</td><td>core/hermes/.../web_server.py</td><td>✅</td></tr>
+        <tr><td>:48911</td><td>Neko 主前端</td><td>apps/neko/app/main_server.py</td><td>✅</td></tr>
+        <tr><td>:48912</td><td>Neko 记忆服务</td><td>apps/neko/app/memory_server.py</td><td>✅</td></tr>
+        <tr><td>:48915</td><td>Neko Agent 服务</td><td>apps/neko/app/agent_server.py</td><td>✅</td></tr>
+        <tr><td>:9119</td><td>Hermes Dashboard</td><td>runtime/hermes-agent/.../web_server.py</td><td>✅ 管理面板，非 LLM 网关</td></tr>
         <tr><td>:8088</td><td>Hermes 猫爪</td><td>bin/hermes_paw_bridge.py</td><td>✅</td></tr>
         <tr><td>:48920</td><td>对话树面板</td><td>core/conversation-tree/server.py (后端 conversation_tree 引擎)</td><td>✅</td></tr>
       </table>
@@ -141,12 +140,12 @@
         </div></div>
       <div class="layer"><div class="lh">🐾 前端与桌宠</div>
         <div class="items">
-          <span class="pill"><code>core/neko/</code> Neko 主服务（独立完整，不合并 V5）</span>
+          <span class="pill"><code>apps/neko/</code> Neko 主服务（独立完整，不合并 V5）</span>
           <span class="pill"><code>core/control-panel/</code> Electron 桌面壳（拉 :9100）</span>
         </div></div>
       <div class="layer"><div class="lh">🛠️ 基础设施</div>
         <div class="items">
-          <span class="pill"><code>core/hermes/</code> Hermes Agent（原 hermes-agent，已搬迁）</span>
+          <span class="pill"><code>runtime/hermes-agent/</code> Hermes Agent（原 hermes-agent，已搬迁）</span>
           <span class="pill"><code>core/dashboard/</code> 控制面板 Web UI</span>
           <span class="pill"><code>core/env/</code> 环境配置/CLI/初始化</span>
           <span class="pill"><code>core/conversation-tree/</code> 对话树面板（:48920）</span>
@@ -160,10 +159,10 @@
     <h2><span class="tag t-teal">数据流</span> 一次对话怎么走</h2>
     <div class="flow">
       <div class="step"><div class="dot">1</div><div>用户在 <b>Neko 前端 :48911</b>（React+Avatar）发起对话</div></div>
-      <div class="step"><div class="dot">2</div><div>Neko 经 <code>bin/cloud_chat.py</code> 主链 → 路由到 companion 模式（云端 Chat 优先）</div></div>
-      <div class="step"><div class="dot">3</div><div><b>Hermes Dashboard :9119</b> 提供云端 LLM；本地兜底走 <code>:8080</code>（调用时懒加载热载入）；对话树 <code>:48920</code> 直连 DeepSeek</div></div>
+      <div class="step"><div class="dot">2</div><div>对话树 <code>:48920</code> 双模式（ikaros/hermes）默认走 <b>Hermes Bridge :8650</b> → 纯净 gateway <code>:8642</code>（完整 tools/skills 循环 + V5 记忆注入）</div></div>
+      <div class="step"><div class="dot">3</div><div>gateway 不可达 → 降级本地 DeepSeek 直连 + 只读工具回路；本地 <code>:8080</code> 仅按需懒加载</div></div>
       <div class="step"><div class="dot">4</div><div>逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型</div></div>
-      <div class="step"><div class="dot">5</div><div>V5 经 <code>get_ikaros_memories()</code> <b>单向</b> 暴露检索给 Neko；Neko 数据不回写 V5；V5 经 <code>push_to_conversation_tree()</code> 推送节点到 :48920</div></div>
+      <div class="step"><div class="dot">5</div><div>V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索；⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 push_to_conversation_tree）已随 hermes_provider 删除，当前无实现</div></div>
       <div class="step"><div class="dot">6</div><div>ThirdSpace 同步 <code>bin/sync-thirdspace-v5.py</code> 把 thought 写入 <code>data/thirdspace-vault/</code>（双轨知识库）</div></div>
     </div>
   </div>
@@ -172,7 +171,7 @@
   <div class="card">
     <h2><span class="tag t-amber">边界与约定</span> 关键架构决策</h2>
     <div class="note" style="margin-bottom:10px">
-      <b>⚠️ neko 保持独立：</b> core/neko 完整保留，不引入对 memory_v5 的代码依赖，不搬移 neko 内部 memory/ 模块。迁移脚本与方案文档已删除。
+      <b>⚠️ neko 保持独立：</b> apps/neko 完整保留，不引入对 memory_v5 的代码依赖，不搬移 neko 内部 memory/ 模块。迁移脚本与方案文档已删除。
     </div>
     <div class="ok" style="margin-bottom:10px">
       <b>✅ v5.db 契约保留：</b> 包已重命名 v5→memory_v5，但 DB 文件名 v5.db、40 个 v5_* MCP 工具名是对外契约，不改。
@@ -185,7 +184,7 @@
     </div>
   </div>
 
-  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-07-30 生成 · 数据来自实际控制面板注册表与目录核查</footer>
+  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-08-14 生成 · 数据来自实际控制面板注册表与目录核查</footer>
 </div>
 </body>
 </html>

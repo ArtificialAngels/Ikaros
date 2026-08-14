@@ -42,12 +42,8 @@ def _load_cogno_5d():
 
 def _load_cloud_chat():
     """加载 bin/cloud_chat 真物 (cogno 5D + cloud_llm 接通)."""
-    try:
-        from cloud_chat import cloud_chat as _cloud_chat
-        return _cloud_chat
-    except Exception as e:
-        log.error("cloud_chat not available, falling back to local LLM: %s", e)
-        return None
+    # cloud_chat.py 已于 2026-08-13 废弃删除，恒返回 None（回退本地 LLM）。
+    return None
 
 
 def _load_goal_contract():

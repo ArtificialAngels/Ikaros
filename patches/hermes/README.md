@@ -27,8 +27,8 @@ patches/hermes/
 
 ## 补丁分类
 
-- **A 类（tracked 文件补丁）**：7 个文件，随 upstream 重打。`hermes-update-and-patch.py` 先尝试 `cherry-pick`，冲突时由 LLM 按 `docs/hermes-ikaros-patches.md` §5 的意图在新代码上重实现。
-- **B 类（插件 / 技能目录）**：3 个目录，原样复制到 hermes 工作树，不打补丁。
+- **A 类（tracked 文件补丁）**：4 个文件，随 upstream 重打（`cron/scheduler.py`、`hermes_cli/web_server.py`、`agent/conversation_loop.py`、`tests/cron/test_scheduler.py`）。`hermes-update-and-patch.py` 先尝试 3-way 重放，冲突时由 LLM 按 `docs/hermes-ikaros-patches.md` §5 的意图在新代码上重实现。
+- **B 类（插件 / 技能目录）**：0 个（已清空；ikaros_v5 外置为 Hermes 用户插件，源在 `patches/hermes/plugins/ikaros_v5/`）。
 
 ## 使用方式
 

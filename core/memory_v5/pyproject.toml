@@ -22,17 +22,14 @@ dev = [
     "mypy>=1.10",
 ]
 
-[project.scripts]
-ikaros-mem-v5 = "v5.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["v5*"]
+include = ["memory_v5*"]
 
 [tool.pytest.ini_options]
-testpaths = ["v5/tests"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
 
 [tool.setuptools.package-data]
-v5 = ["py.typed"]
+memory_v5 = ["py.typed"]

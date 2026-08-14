@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_dashboard_server.py — 9100 面板 server.py 缓存与接口验证 (8-04)
 
 背景: UI 重构时发现 /api/components 轮询 4-5s, 根因是 hermes_patch_status /
@@ -138,11 +138,13 @@ class TestDashboardFunctions(unittest.TestCase):
         self.assertIsInstance(st, list)
         self.assertGreater(len(st), 0)
         ids = {c["id"] for c in st}
-        for cid in ("local_model", "memory", "hermes_dashboard", "neko_group"):
+        # 2026-08-14: hermes_service/hermes_dashboard 组件已在面板重构中移除
+        # (9119 改由 Hermes 自身管理), 新增 hermes_bridge (:8650) 组件。
+        for cid in ("local_model", "memory", "hermes_bridge", "neko_group"):
             self.assertIn(cid, ids, f"缺少组件 {cid}")
-        hermes = next(c for c in st if c["id"] == "hermes_dashboard")
-        self.assertIn("hermes_patch", hermes)
-        self.assertIn("repo", hermes)
+        bridge = next(c for c in st if c["id"] == "hermes_bridge")
+        self.assertIn("ports", bridge)
+        self.assertEqual(bridge["ports"], [8650])
 
 
 class TestUIAssets(unittest.TestCase):

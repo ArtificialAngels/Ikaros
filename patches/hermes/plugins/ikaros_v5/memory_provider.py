@@ -259,9 +259,11 @@ class IkarosV5MemoryProvider(MemoryProvider):
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """每轮对话后把 user+assistant 对存回 V5 记忆。
+        """每轮对话后写回 V5：存对话 + PAD/情绪 + 关系 + 推送对话树。
 
         非阻塞：daemon 线程后台写，不拖慢 Hermes 回复。
+        2026-08-14：恢复旧 hermes_provider._do_sync_turn 的步骤 3/4/5/7
+        （PAD 更新、情绪因果、关系追踪、树推送），此前重构后只剩存对话。
         """
         if not self._v5_loaded:
             return
@@ -283,6 +285,46 @@ class IkarosV5MemoryProvider(MemoryProvider):
                 logger.debug("sync_turn: stored conversation turn")
             except Exception as e:
                 logger.warning("sync_turn store failed: %s", e)
+
+            # ── 恢复: PAD 更新 + 情绪因果 (旧 hermes_provider step 3/4) ──
+            try:
+                from memory_v5 import affect as _affect_mod
+                state = _affect_mod.AffectState.load()
+                old_pad = (state.pleasure, state.arousal, state.dominance)
+                _affect_mod.apply_event(user_content)
+                new_state = _affect_mod.AffectState.load()
+                new_pad = (new_state.pleasure, new_state.arousal, new_state.dominance)
+                if old_pad != new_pad and new_pad != (0.0, 0.0, 0.0):
+                    try:
+                        from memory_v5 import emotional_memory as _em_mod
+                        _em_mod.maybe_record_emotion(old_pad, new_pad, user_content)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug("sync_turn PAD update failed: %s", e)
+
+            # ── 恢复: 关系追踪 (旧 hermes_provider step 5) ──
+            try:
+                from memory_v5 import relationship as _rel_mod
+                _rel_mod.track_interaction(0.3)
+            except Exception as e:
+                logger.debug("sync_turn relationship failed: %s", e)
+
+            # ── 恢复: 推送对话树 :48920 (旧 hermes_provider step 7, 静默失败) ──
+            try:
+                import http.client as _hc
+                _conn = _hc.HTTPConnection("127.0.0.1", 48920, timeout=3)
+                _body = json.dumps({
+                    "messages": [
+                        {"role": "user", "content": user_content},
+                        {"role": "assistant", "content": assistant_content},
+                    ]
+                })
+                _conn.request("POST", "/api/add_turn", body=_body,
+                              headers={"Content-Type": "application/json"})
+                _conn.getresponse().read()
+            except Exception:
+                pass
 
         threading.Thread(target=_store, daemon=True).start()
 

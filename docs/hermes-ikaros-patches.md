@@ -8,8 +8,8 @@
 
 > **核心约定（2026-08-05 起）**：`runtime/hermes-agent` 仓库**永远保持纯净 upstream**——Ikaros 定制补丁**绝不进入 `runtime/hermes-agent` 的 git 历史**。补丁只以两种形式存在：① `patches/hermes/` 下的**补丁源文件**（被 Ikaros 主仓 git 跟踪，是事实源）；② 运行时由 `bin/hermes-update-and-patch.py --apply` 把 `patches/hermes/` 的 delta **重放到 `runtime/hermes-agent` 工作树，作为未提交的 working-tree overlay**（9 个 A 类文件 modified + 1 个 B 类目录 added），hermes 直接跑这个 overlay。因此 `runtime/hermes-agent` 的 `git status` 永远显示这些 overlay 改动（**这是预期、正确的**），`git log` 永远是纯 upstream。
 
-- **Upstream tip**（`runtime/hermes-agent` 当前 HEAD，纯净 upstream 提交）：`f5be9236e00ddf2f2a412697f267078fc4ee068e`
-- **Ikaros 补丁提交（overlay 源，不并入 HEAD）**：分支 `ikaros-patches-backup` → `5610941565c11f8e77a8a19691ea7253f20a659f`（最后一个带 Ikaros 补丁的已知良好提交）。它**不被 `runtime/hermes-agent` 的 HEAD 引用**，纯粹用于需要时整体恢复 overlay（`git checkout ikaros-patches-backup -- .`）或作为 `git diff <upstream_tip> <ikaros_commit>` 的 `theirs` 端计算 delta。**本段值是脚本运行的事实来源，不要手工改错。**
+- **Upstream tip**（`runtime/hermes-agent` 当前 HEAD，纯净 upstream 提交）：`222465d84709379b65173b0283a6eea87516acfa`
+- **Ikaros 补丁提交**（overlay 源，不并入 HEAD）：分支 `ikaros-patches-backup` → `5610941565c11f8e77a8a19691ea7253f20a659f`（最后一个带 Ikaros 补丁的已知良好提交）。它**不被 `runtime/hermes-agent` 的 HEAD 引用**，纯粹用于需要时整体恢复 overlay（`git checkout ikaros-patches-backup -- .`）或作为 `git diff <upstream_tip> <ikaros_commit>` 的 `theirs` 端计算 delta。**本段值是脚本运行的事实来源，不要手工改错。**
 - **补丁事实源（overlay 内容来源）**：`patches/hermes/`（被 Ikaros 主仓 git 跟踪），镜像 `runtime/hermes-agent` 结构，含 9 个 A 类补丁文件 + 1 个 B 类技能目录 + 外置插件源 ikaros_v5（§6b）。
 - **为什么不再 commit 单提交**：旧方案用 `finalize()` 把 overlay 提交成 `runtime/hermes-agent` 的一个 Ikaros 单提交，导致 upstream `git reset --hard` / `git log` 里混着 Ikaros 提交；且本腐败仓库的 `reset --hard` 偶发删 working-tree 文件（恢复用 `git checkout ikaros-patches-backup -- .`）。新方案让 `runtime/hermes-agent` 历史 100% upstream，overlay 始终是未提交工作树——`--apply` 每次 `reset --hard <upstream>` 后重放，干净可重入。
 
@@ -54,8 +54,8 @@ Ikaros 对 hermes 的定制分两类：
 - 验证（§4）任一失败 → 回滚备份 tag，报告失败。
 
 ## 3. 允许改动范围（allowlist，硬约束）
-- 文件（A 类，9 个，与引擎 `A_CLASS_FILES` 严格一致）：`cron/scheduler.py`、`hermes_cli/web_server.py`、`plugins/context_engine/__init__.py`、`scripts/run_tests.sh`、`scripts/run_tests_parallel.py`、`tests/cron/test_scheduler.py`、`agent/conversation_loop.py`、`gateway/platforms/api_server.py`、`tools/mcp_tool.py`
-- 目录（B 类，1 个）：`skills/creative/tldraw-skill/`
+- 文件（A 类，4 个，与引擎 `A_CLASS_FILES` 严格一致）：`cron/scheduler.py`、`hermes_cli/web_server.py`、`agent/conversation_loop.py`、`tests/cron/test_scheduler.py`（后者的适配断言随固定 cron session 补丁 3-way 重放，2026-08-12 恢复为 A 类）
+- 目录（B 类，0 个）：`B_CLASS_DIRS` 已清空（08-05 起；ikaros_v5 外置为 Hermes 用户插件，tldraw-skill 不再维护）
 - **除以上外，任何文件都不得改动。** LLM 兜底时必须显式声明此 allowlist，防止模型"热心"重写其他代码。
 - ⚠️ **08-04 起：ikaros_v5 不再属于仓库内补丁**——上下文引擎与记忆提供方已外置为 Hermes 用户插件（`$HERMES_HOME/plugins/ikaros_v5/`，源在 `patches/hermes/plugins/ikaros_v5/`），由 `ensure_external_plugins()` 部署，hermes 更新不影响。详见 §6。
 

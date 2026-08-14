@@ -1266,7 +1266,16 @@ class ConversationTree:
             # os.replace 原子替换目标, 并发写同一目标 = 最后一次赢, 不丢文件。
             tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:12]}.tmp")
             tmp.write_text(self.serialize(), encoding="utf-8")
-            tmp.replace(path)
+            # 2026-08-14: Windows 下目标文件可能被并发读者/杀软瞬时锁定,
+            # os.replace 抛 WinError 5 (access denied) → 短退避重试 (最多 4 次).
+            for _attempt in range(4):
+                try:
+                    tmp.replace(path)
+                    break
+                except OSError:
+                    if _attempt == 3:
+                        raise
+                    time.sleep(0.05 * (_attempt + 1))
         except Exception as exc:
             logger.warning("persist failed for %s: %s", self.persist_key, exc)
 

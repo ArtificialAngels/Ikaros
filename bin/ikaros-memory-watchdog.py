@@ -29,6 +29,8 @@ PID_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.pid"
 LOG_FILE = ROOT / "data" / "logs" / "ikaros-memory-watchdog.log"
 ENDPOINTS_FILE = ROOT / "core/memory_v5" / "data" / "endpoints.json"
 HEARTBEAT_FILE = ROOT / "data" / "logs" / "ikaros-heartbeat.jsonl"
+_HEARTBEAT_MAX_BYTES = 5 * 1024 * 1024  # 心跳 JSONL 轮转阈值 (2026-08-14)
+_HEARTBEAT_BACKUPS = 2                  # 轮转保留的历史份数
 
 # llama-server 二进制：按设备 CUDA 能力自动选择（llama_resolver 统一解析）
 try:
@@ -376,7 +378,7 @@ class MemoryWatchdog:
         except Exception as e:
             _log("[reflect] v4 cycle failed (non-fatal): %s", e)
 
-    def _crash_track(self, name: str, alive: bool) -> bool:
+    def _crash_track(self, name: str, alive: bool, reason: str = "") -> bool:
         """跟踪启动失败, 带退避机制. 返回 False 表示已禁用."""
         if alive:
             self._crash_counts[name] = 0
@@ -389,14 +391,17 @@ class MemoryWatchdog:
         self._crash_last_ts[name] = now
         if self._crash_counts[name] >= self._CRASH_LIMIT:
             self._crash_disabled[name] = True
+            # 2026-08-14: 写入真实失败原因而非 CFG 样板文案
+            # (8/13 曾因模型文件缺失被误标 "CFG killing ntdll.dll", 误导排查).
             self._CFG_FLAG.write_text(
-                f"llama-server ({name}) crashed {self._crash_counts[name]} times. "
-                f"Likely Windows CFG/Exploit Protection killing ntdll.dll.\n"
-                f"Fix (Admin PowerShell): Set-ProcessMitigation -Name llama-server.exe -Disable CFG\n",
+                f"llama-server ({name}) failed {self._crash_counts[name]} times in a row, "
+                f"auto-restart disabled.\n"
+                f"Last failure reason: {reason or 'unknown (see watchdog log)'}\n"
+                f"Fix: restore the model/binary, then DELETE this flag file to re-enable.\n",
                 encoding="utf-8",
             )
-            _log("[%s] Crashed %d times, disabled auto-restart (flag: %s)",
-                 name, self._crash_counts[name], self._CFG_FLAG)
+            _log("[%s] failed %d times, disabled auto-restart (flag: %s, reason: %s)",
+                 name, self._crash_counts[name], self._CFG_FLAG, reason or "unknown")
             return False
         return True
 
@@ -406,8 +411,14 @@ class MemoryWatchdog:
             embed_alive = self._service_ok(EMBED_PORT)
             if not embed_alive:
                 _log("[heartbeat] embed :8587 DEAD (port/health), restarting...")
+                if not EMBED_MODEL.exists():
+                    reason = f"embed model file missing: {EMBED_MODEL}"
+                elif not LLAMA_BIN.exists():
+                    reason = f"llama-server missing: {LLAMA_BIN}"
+                else:
+                    reason = "spawn/health failed (see watchdog log)"
                 ok = self._start_embed()
-                embed_alive = self._crash_track("embed", ok)
+                embed_alive = self._crash_track("embed", ok, reason)
             else:
                 self._crash_track("embed", True)
                 _log("[heartbeat] embed :8587 OK (port+health)")
@@ -437,6 +448,7 @@ class MemoryWatchdog:
         try:
             import json
             HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._rotate_heartbeat()
             ev = {
                 "event": "memory_watchdog",
                 "ts": time.time(),
@@ -450,6 +462,27 @@ class MemoryWatchdog:
                 f.write(json.dumps(ev, ensure_ascii=False) + "\n")
         except Exception as e:
             _log("[heartbeat] JSONL write failed: %s", e)
+
+    def _rotate_heartbeat(self) -> None:
+        """心跳 JSONL 轮转 (2026-08-14): 超过阈值时压栈改名, 只保留 _HEARTBEAT_BACKUPS 份.
+
+        此前纯追加无轮转, ikaros-heartbeat.jsonl 曾涨到 25MB (~0.86MB/天) 无限增长.
+        """
+        try:
+            if (not HEARTBEAT_FILE.exists()
+                    or HEARTBEAT_FILE.stat().st_size < _HEARTBEAT_MAX_BYTES):
+                return
+            for i in range(_HEARTBEAT_BACKUPS - 1, 0, -1):
+                src = HEARTBEAT_FILE.with_suffix(f".{i}.jsonl")
+                dst = HEARTBEAT_FILE.with_suffix(f".{i + 1}.jsonl")
+                if src.exists():
+                    dst.unlink(missing_ok=True)
+                    src.replace(dst)
+            HEARTBEAT_FILE.replace(HEARTBEAT_FILE.with_suffix(".1.jsonl"))
+            _log("[heartbeat] rotated %s (%.1f MB)",
+                 HEARTBEAT_FILE.name, _HEARTBEAT_MAX_BYTES / (1024 * 1024))
+        except Exception as e:
+            _log("[heartbeat] rotate failed: %s", e)
 
     def run_loop(self) -> None:
         """巡检主循环."""
@@ -548,6 +581,7 @@ def _setup_log():
     Returns: callable _log(fmt, *args, level=INFO) — 兼容 _log("msg") 和 _log.info("msg").
     """
     import logging
+    import logging.handlers  # RotatingFileHandler (2026-08-14 主日志轮转)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger("memory-watchdog")
@@ -558,10 +592,19 @@ def _setup_log():
         for h in list(logger.handlers):
             logger.removeHandler(h)
 
-    # 文件 handler
-    fh = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+    # 文件 handler — 2026-08-14: RotatingFileHandler (5MB, 保留 2 份)
+    # 此前纯 FileHandler 追加, ikaros-memory-watchdog.log 曾涨到 29MB (~2.7MB/天).
+    fh = logging.handlers.RotatingFileHandler(
+        str(LOG_FILE), maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8")
     fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    # RotatingFileHandler 按 stream.tell() 判轮转; 追加模式下新进程 tell()=0,
+    # 既存的大文件不会立即轮转 → 手动触发一次 (2026-08-14)
+    if LOG_FILE.exists() and LOG_FILE.stat().st_size > fh.maxBytes:
+        try:
+            fh.doRollover()
+        except OSError:
+            pass
     logger.addHandler(fh)
 
     # 终端 handler (启动阶段可见)
@@ -720,12 +763,15 @@ def main():
             import subprocess
             here = Path(__file__).resolve().parent
             print(f"[watchdog] Detaching... log: {LOG_FILE}")
-            log_f = open(LOG_FILE, "ab", buffering=0)
+            # 2026-08-14: 子进程 stdout 不再继承 log_f 句柄 —— 该句柄无
+            # FILE_SHARE_DELETE, 会锁住日志文件导致 RotatingFileHandler 的
+            # doRollover rename 失败。子进程自身经 RotatingFileHandler 写日志,
+            # stdout 仅冗余 (DEVNULL 即可)。
             proc = subprocess.Popen(
                 [sys.executable, str(here / "ikaros-memory-watchdog.py")],
                 stdin=subprocess.DEVNULL,
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 creationflags=(
                     getattr(subprocess, "DETACHED_PROCESS", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
