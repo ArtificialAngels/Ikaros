@@ -476,6 +476,129 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
     raise RuntimeError(f"store failed after retries: {last_err}") from last_err
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# upsert 写策略 (Phase 1, 2026-08-14)
+# 问题: 记忆系统"永远 INSERT"——写入前不查是否已有相似记忆, 同类观察无限堆积
+#       (user_trait 579 条雷同的机制性根源), 且"修改记忆"不是一等公民。
+# 方案: upsert() 写入口——同类型相似记忆存在则合并强化 (权重取高/内容取长/
+#       tags 并集/access+1), 否则新建。情境锚 (context_anchor) 供时间戳与
+#       后续召回/检索决策使用。
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _normalize_probe(content: str) -> str:
+    """相似查找探针: 取首标点前的子句 (变体共享的开头).
+
+    观察类记忆 ("哥哥偏好…，…") 的变体共享首子句; 用子句而非固定 14 字符,
+    保证探针能作为更短旧内容的子串被 LIKE 命中。
+    无标点则回退前 14 字符; 至少 6 字符。
+    """
+    s = " ".join((content or "").split())
+    for sep in "，。；;！？":
+        idx = s.find(sep)
+        if 6 <= idx <= 24:
+            return s[:idx]
+    return s[:14]
+
+
+def _cand_attr(cand, key):
+    """候选兼容访问: Memory 行(属性) 或 dict."""
+    if isinstance(cand, dict):
+        return cand.get(key)
+    try:
+        return getattr(cand, key)
+    except AttributeError:
+        return None
+
+
+def _find_similar(content: str, type: str, threshold: float,
+                  top_k: int = 10) -> int | None:
+    """找同类型、内容高度相似的既有记忆 (LIKE 子串召回 + difflib 全文本比对).
+
+    用 search_like (LIKE 字节子串) 而非 FTS: FTS5 对连续中文整串探针召回差
+    (实测 '主力' 0 命中), LIKE 对中文 100% 命中。返回命中 memory id; 无则 None。
+    """
+    import difflib
+    probe = _normalize_probe(content)
+    if not probe:
+        return None
+    try:
+        cands = search_like(probe, top_k=top_k, min_weight=0.0)
+    except Exception as exc:  # 不可用/异常时 fail-open (不阻塞写入)
+        logger.debug("upsert: similar-search failed (%s)", exc)
+        return None
+    norm_new = " ".join((content or "").split())
+    best_id, best_ratio, best_old = None, 0.0, ""
+    for cand in cands or []:
+        if (_cand_attr(cand, "type") or "fact") != type:
+            continue
+        old = " ".join((_cand_attr(cand, "content") or "").split())
+        ratio = difflib.SequenceMatcher(None, old, norm_new).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_id, best_old = ratio, _cand_attr(cand, "id"), old
+    if best_id is None:
+        return None
+    if best_ratio >= threshold:
+        return best_id
+    # 子串包含判定: 一者是另一者的子串且核心 >= 8 字符 (如旧 "哥哥偏好简短
+    # 直接的沟通" ⊂ 新 "…，说人话比修辞更有效") —— 明显同主题但 ratio 被
+    # 长度差拉低 (0.69), 应合并。
+    if len(best_old) >= 8 and best_old in norm_new:
+        return best_id
+    if len(norm_new) >= 8 and norm_new in best_old:
+        return best_id
+    return None
+
+
+def _merge_into(memory_id: int, content: str, type: str, weight: float,
+                tags: str, reinforcement: float = 0.0) -> int:
+    """合并强化既有记忆: 内容取更长者, 权重取高者, tags 并集, access+1, last_accessed=now."""
+    import time as _time
+    with conn() as c:
+        row = c.execute(
+            "SELECT content, weight, tags FROM memory WHERE id = ?", (memory_id,)
+        ).fetchone()
+        if row is None:  # 目标被并发删除: 降级为新建
+            return store(content, type=type, weight=weight, tags=tags,
+                         reinforcement=reinforcement)
+        old_content, old_weight, old_tags = row
+        merged_content = old_content if len(old_content or "") >= len(content) else content
+        merged_weight = max(float(old_weight or 0.0), float(weight))
+        merged_tags = " ".join(dict.fromkeys(f"{old_tags or ''} {tags}".split()))
+        c.execute(
+            "UPDATE memory SET content = ?, weight = ?, tags = ?, "
+            "  access_count = access_count + 1, last_accessed = ?, "
+            "  reinforcement = MIN(1.0, reinforcement + ?) WHERE id = ?",
+            (merged_content, merged_weight, merged_tags, _time.time(),
+             max(0.0, reinforcement), memory_id),
+        )
+        c.commit()
+    _sync_vector_best_effort(memory_id, merged_content, type, merged_tags, merged_weight)
+    _record_event_best_effort(memory_id, content[:100], type, "", "memory.updated")
+    return memory_id
+
+
+def upsert(content: str, type: str = "fact", weight: float = 0.6,
+           tags: str = "", *, similarity_threshold: float = 0.75,
+           reinforcement: float = 0.0, **kw) -> int:
+    """写记忆 (推荐写入口): 同类型相似记忆存在则合并强化, 否则新建.
+
+    Phase 1 (2026-08-14):
+      - 相似判定: LIKE 子句探针召回同类型候选 + difflib 全文本 ratio / 子串包含
+      - 命中 → _merge_into (修改记忆); 未命中 → store() (新建)
+      - **带 v5_key: 标签的写入跳过合并** (结构化记录以 key 为显式身份,
+        如项目笔记的 kind/domain, 内容相似也不应并表)
+    """
+    if "v5_key:" in tags:
+        return store(content, type=type, weight=weight, tags=tags,
+                     reinforcement=reinforcement, **kw)
+    existing = _find_similar(content, type, similarity_threshold)
+    if existing is not None:
+        return _merge_into(existing, content, type, weight, tags, reinforcement)
+    return store(content, type=type, weight=weight, tags=tags,
+                 reinforcement=reinforcement, **kw)
+
+
 def _sync_vector_best_effort(memory_id: int, content: str, type: str,
                              tags: str, weight: float) -> bool:
     """Best-effort sync this memory's vector into Chroma after DB write.

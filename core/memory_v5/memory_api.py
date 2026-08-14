@@ -75,7 +75,9 @@ class V5MemoryAPI:
             tag_set.append(f"v5_key:{key}")
         combined_tags = ",".join(dict.fromkeys(tag_set))
 
-        return _store.store(
+        # 2026-08-14 Phase 1: 走 upsert 写策略 (同类相似 → 合并强化, 否则新建),
+        # 根治"永远 INSERT"的雷同膨胀; 对话/事实/笔记均可受益。
+        return _store.upsert(
             content=content,
             type=memory_type,
             weight=max(0.0, min(1.0, float(importance))),

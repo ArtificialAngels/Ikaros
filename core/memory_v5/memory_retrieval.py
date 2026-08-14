@@ -425,8 +425,28 @@ def unified_retrieve(
 
 
 def _finish(merged: dict[str, dict], tk: int) -> list[dict]:
-    """排序截断 (fail-open: merged 可能为空)."""
+    """排序截断 (fail-open: merged 可能为空).
+
+    Phase 3 (2026-08-14): 时间锚定检索 ——
+      - now 用 context_anchor.now_epoch() 统一时间锚
+      - 默认排除已失效事实 (memory.valid_to < now), 与 temporal_graph
+        "检索永远取当前值" 设计意图一致; 列不存在/迁移未跑/查询失败 → fail-open
+        不过滤 (不阻塞检索)。
+    """
     out = [v for v in merged.values() if v["score"] > 0]
+    if not out:
+        return []
+    try:
+        from memory_v5.extensions.temporal_graph import _valid_to_map
+        from memory_v5.context_anchor import now_epoch
+        ids = [str(v["id"]) for v in out]
+        vt = _valid_to_map(ids, ("memory", "id"))
+        now = now_epoch()
+        out = [v for v in out
+               if vt.get(str(v["id"])) is None
+               or float(vt[str(v["id"])]) > now]
+    except Exception as exc:
+        logger.debug("_finish: temporal filter skipped (%s)", exc)
     out.sort(key=lambda x: -x["score"])
     return out[:tk]
 

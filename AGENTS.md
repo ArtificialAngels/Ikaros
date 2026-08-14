@@ -72,6 +72,22 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - **⚠️ 修复看门狗反思循环死链**：`_maybe_reflect` 原 import `v5.reflect.registry`（改名前的旧包名）自 v5→memory_v5 后一直 ModuleNotFoundError 被吞——**全部反思 op 数周未运行**。已改为 `memory_v5.reflect.registry`，首次真正跑通：promote 901 / cleanup 564（历史欠账一次补齐）。教训：改名后必须全局搜旧包名 import。
 - **⚠️ 修复合并时间戳缺口**：v5.db 合并时 chroma 派生行 created=0（未带 chroma created_at），被 cleanup 误归档 251 条（7 decision + 244 conversation）。已从 `tmp/chroma-docs-backup-20260814.json` 经 mapping 反查恢复 459 条时间戳 + 撤销误归档；真过期行由下次 cleanup 按正确时间戳重新归档。
 - **⚠️ 修复 promote/memory_promote 打架**：memory_promote 回收步原条件把"从未访问"（last_accessed=0）行无条件降级，与 promote_op 冲突（promote 901 → 立刻回收 901，全卡 short=0/long=0）。改为只回收"有访问史且 90 天未访问"；已恢复 697 条并验证 promote 落定（long_term=563）。另修 temporal_extract 缺 `import time`（一直 NameError 静默失败）。
+- **2026-08-14 Phase 1：记忆生命周期控制器起步（情境锚 + upsert 写策略）**——针对"记忆系统无感知（不知时间/何时记/何时改/何时调）"：
+  - `core/memory_v5/context_anchor.py`：情境锚 `now_context()`（epoch/时间叙事/周几/活动/前台窗口），复用 cogno_5d（时间作息+窗口活动），供后续召回决策与时间锚定检索
+  - `store.upsert()`：写策略——同类相似记忆存在则**合并强化**（权重取高/内容取长/tags 并集/access+1），否则新建；相似判定=LIKE 子句探针 + difflib ratio/子串包含；**带 v5_key: 标签的结构化写入跳过合并**
+  - `memory_api.store` 已切到 upsert（MCP v5_memory_store / 项目笔记等路径受益）
+  - 根治"永远 INSERT"的雷同膨胀机制性根源（dedup op 仍是空壳，但 upsert 在写入口挡掉了）
+  - 测试：tests/test_upsert.py 7 项（合并/新建/类型隔离/阈值/内容取长/reinforcement 上限/情境锚）
+- **2026-08-14 Phase 2：召回决策（should_recall）**——"什么时候该调用记忆"：
+  - `context_anchor.should_recall(user_text)`：线索词（记得/上次/回顾/关于/最近/remember...）**必召回**；寒暄/琐碎开头且 <20 字（你好/谢谢/晚安/ok）**跳过**；实质内容（>=8 字）**召回**
+  - 接入 Hermes 插件 `on_pre_compress`（规范源 + 运行时已部署，gateway 已重启）：寒暄不翻记忆（省 token + 免噪声），情感状态块恒保留
+  - 实测：你好/谢谢/晚安 → 不注入记忆；"回顾omp配置"→ 注入 ✓
+  - 测试：should_recall 4 项（线索/寒暄/实质/空）
+- **2026-08-14 Phase 3：时间锚定检索**——"时间锚点"落地：
+  - `memory_retrieval._finish`：统一出口接入时间锚——now 用 `context_anchor.now_epoch()` 统一；**默认排除已失效事实**（memory.valid_to < now，与 temporal_graph "检索永远取当前值" 意图一致）；列不存在/未迁移 → fail-open 不过滤
+  - live 库已跑 `temporal_graph.apply_migration()`（memory + eg 表补 valid_to，幂等）
+  - 实测：supersede 一条事实 → valid_to 落库，unified_retrieve 默认排除 ✓
+  - 测试：2 项（排除过期 / 未迁移 fail-open）
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。

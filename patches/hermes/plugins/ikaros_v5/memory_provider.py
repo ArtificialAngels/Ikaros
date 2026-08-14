@@ -420,7 +420,8 @@ class IkarosV5MemoryProvider(MemoryProvider):
         except Exception:
             pass
 
-        # 2) 检索相关记忆
+        # 2) 检索相关记忆 — Phase 2 (2026-08-14): should_recall 召回决策
+        #    寒暄/琐碎不翻记忆 (省 token + 免噪声); 线索词/实质内容才召回。
         try:
             query_text = ""
             for msg in reversed(messages):
@@ -429,6 +430,15 @@ class IkarosV5MemoryProvider(MemoryProvider):
                 if role == "user" and isinstance(content, str) and content.strip():
                     query_text = content.strip()[:200]
                     break
+
+            try:
+                from memory_v5.context_anchor import should_recall
+                if not should_recall(query_text):
+                    logger.debug("on_pre_compress: skip memory recall (not warranted)")
+                    query_text = ""
+            except Exception as _recall_err:
+                logger.debug("on_pre_compress: should_recall 不可用, 按旧行为召回 (%s)",
+                             _recall_err)
 
             if query_text:
                 results = self._v5_unified(query_text, top_k=5)
