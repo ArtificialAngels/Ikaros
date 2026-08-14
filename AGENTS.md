@@ -67,6 +67,11 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
   - 合并前备份：`tmp/v5-merged-prep/applied-backup/`（v5.live.before-merge.db + 树 JSON）
   - 合并源资料：7/31 备份 `tmp/backup-v5del-20260731-094553/v5.db`；chroma 元数据导出 `tmp/chroma-docs-backup-20260814.json`
 - **记忆→对话树推送链**（旧 `hermes_provider.push_to_conversation_tree`）当前无实现，恢复/删承诺待定；`:48920 /api/add_turn` 端点仍在，恢复补丁草稿 `tmp/push-chain-restore-draft.txt`。
+- **2026-08-14 记忆去重清理**：哲学味月度叙事 5 条 + user_trait 579→61（噪声/思维链泄漏 + 主导签名聚类去重）+ identity 5→1 + emotional_event 40→6 + conversation 脏行（ANSI/空）。1686→1127，FTS/chroma 全一致。备份：`tmp/v5.before-narrative-cleanup-*.db`、`tmp/v5.before-dedup-*.db`。
+- **2026-08-14 决策 A：反思管线 LLM 生成类停用**——`make_default_scheduler` 移除 consolidate/distill/reflect/narrative/self_discovery 5 个 op（无去重产生雷同 user_trait/哲学叙事/思维链泄漏，白烧 API）；情绪因果 `emotional_memory._generate_causal` 改纯规则（不调 LLM）。保留算法类：promote/cleanup/vector_sync/memory_promote/temporal_extract/reflection_promote/expire_directives。
+- **⚠️ 修复看门狗反思循环死链**：`_maybe_reflect` 原 import `v5.reflect.registry`（改名前的旧包名）自 v5→memory_v5 后一直 ModuleNotFoundError 被吞——**全部反思 op 数周未运行**。已改为 `memory_v5.reflect.registry`，首次真正跑通：promote 901 / cleanup 564（历史欠账一次补齐）。教训：改名后必须全局搜旧包名 import。
+- **⚠️ 修复合并时间戳缺口**：v5.db 合并时 chroma 派生行 created=0（未带 chroma created_at），被 cleanup 误归档 251 条（7 decision + 244 conversation）。已从 `tmp/chroma-docs-backup-20260814.json` 经 mapping 反查恢复 459 条时间戳 + 撤销误归档；真过期行由下次 cleanup 按正确时间戳重新归档。
+- **⚠️ 修复 promote/memory_promote 打架**：memory_promote 回收步原条件把"从未访问"（last_accessed=0）行无条件降级，与 promote_op 冲突（promote 901 → 立刻回收 901，全卡 short=0/long=0）。改为只回收"有访问史且 90 天未访问"；已恢复 697 条并验证 promote 落定（long_term=563）。另修 temporal_extract 缺 `import time`（一直 NameError 静默失败）。
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。

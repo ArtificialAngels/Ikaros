@@ -370,8 +370,11 @@ class MemoryWatchdog:
         try:
             sys.path.insert(0, str(ROOT / "core"))
             import importlib
-            # V5.1:
-            vr = importlib.import_module("v5.reflect.registry")
+            # V5.1: 2026-08-14 修复——原 `v5.reflect.registry` 是改名前的旧包名,
+            # 包已迁 memory_v5, 该 import 自改名后一直 ModuleNotFoundError 被
+            # 外层吞掉, 全部反思 op (含 promote/cleanup/vector_sync) 静默停摆。
+            # 另: make_default_scheduler 已按决策 A 停用 LLM 生成类 op。
+            vr = importlib.import_module("memory_v5.reflect.registry")
             sched = vr.make_default_scheduler()
             results = sched.run_all(force=force, continue_on_error=True)
             _log("[reflect] v4 cycle complete (force=%s): %s", force, results)

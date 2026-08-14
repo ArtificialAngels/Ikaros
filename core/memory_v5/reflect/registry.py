@@ -246,9 +246,14 @@ def make_memory_promote_op() -> ReflectOp:
             with store.conn() as c:
                 # 先回收: long_term=1 且 90 天零访问 → 降回 short_term
                 # (必须放在晋升前: 同一事务内刚晋升的行若 last_accessed=0 会立即被回收)
+                # 2026-08-14 修复: 原条件 `access_count=0 AND (last_accessed=0 OR ...)`
+                # 会把从未被访问的历史合并行 (last_accessed=0) 无条件降级,
+                # 与 promote_op 打架——promote 901 条 → memory_promote 立刻回收 901 条,
+                # 全部卡在 short=0/long=0。只回收"有访问史但 90 天未访问"的行。
                 cur2 = c.execute(
                     "UPDATE memory SET long_term = 0 WHERE long_term = 1 AND "
-                    "  access_count = 0 AND (last_accessed = 0 OR ? - last_accessed > 90 * 86400)",
+                    "  access_count = 0 AND last_accessed > 0 "
+                    "  AND (? - last_accessed > 90 * 86400)",
                     (now,),
                 )
                 demoted = getattr(cur2, "rowcount", 0) or 0
@@ -286,6 +291,7 @@ def make_temporal_extract_op() -> ReflectOp:
     def _fn() -> int:
         from memory_v5 import store
         import re as _re
+        import time  # 2026-08-14: 缺 import, op 一直 NameError 静默失败
         now = time.time()
         try:
             with store.conn() as c:
@@ -357,17 +363,22 @@ def make_temporal_extract_op() -> ReflectOp:
 # ─── 默认 scheduler (V5.2) ─────────────────────────────────
 
 def make_default_scheduler(state: ScheduleState | None = None) -> ReflectScheduler:
-    """构造 V5.2 scheduler, 包含所有原始 op + V5.2 新增 op."""
+    """构造 V5.2 scheduler.
+
+    2026-08-14 决策 A（用户拍板：反思管线 LLM 生成类没用）：
+    - 停用 5 个 LLM 生成 op：consolidate / distill / reflect / narrative / self_discovery
+      —— 无去重（dedup 从未实现）产生 579 条雷同 user_trait、哲学味叙事、
+      思维链泄漏的 emotional_event，且白烧云端 API。op 工厂函数保留，
+      需要时可手动调用 consolidate_conversations() / distill() / reflect()。
+    - 保留算法类 op：promote / cleanup / vector_sync / memory_promote /
+      temporal_extract / reflection_promote / expire_directives
+      （记忆生命周期基础设施，与 LLM 生成无关）。
+    """
     s = ReflectScheduler(state=state)
-    s.register(make_consolidate_op())
-    s.register(make_dedup_op())
+    s.register(make_dedup_op())          # 空壳 (V4 未实现), 保留占位
     s.register(make_promote_op())
-    s.register(make_distill_op())
-    s.register(make_reflect_op())
     s.register(make_cleanup_op())
     s.register(make_vector_sync_op())
-    s.register(make_narrative_op())
-    s.register(make_self_discovery_op())
     # V5.2 新增
     s.register(make_reflection_promote_op())
     s.register(make_expire_directives_op())
