@@ -18,7 +18,32 @@ core/ikaros-dsh/
 | `cordis.patch.yml` 里所有包名 / config 字段 | ✅ 已对照 dsh 源码确认 |
 | `dsh-mcp-client` 挂载 memory_v5（工具 → `mcp__ikaros-v5__v5_*`） | 待首次跑通 |
 | terminal / lsp 挂载 | 待首次跑通（lsp 需预装 language server） |
-| ikaros-memory 插件（召回/写回） | 骨架，`recallMemory`/`writeMemory` 待实现 |
+| ikaros-memory 插件（召回/写回） | ✅ 已实现（2026-08-18，动态 cordis 插件实测通过） |
+
+## ikaros-memory 插件（2026-08-18 已实现）
+
+**设计**：memory_v5 (Python) 保持 MCP server 形态（48 个 `v5_*` 工具给模型主动调用、
+被 dsh + pi 复用）；本插件 = harness 进程内「工程层」，补齐 MCP 做不了的主动能力。
+
+| 机制 | 实现 |
+|---|---|
+| 自动沉淀（写回） | `agent/turn-stopping` → `agent.session.deriveMessages()` 取本轮**真实** user/assistant（`source.kind==='user'` 过滤系统注入）→ 规则蒸馏 `Q:/A:` → `bin/v5_call.py store` 落盘（type=conversation, tags source:dsh, 走 upsert 防雷同） |
+| 召回注入 | `agent/pre-step` → `should_recall` 门控（线索词/寒暄/实质三级）→ `v5_call.py search` → `systemPrompt.context()` user-role 快照注入 |
+| 前缀缓存友好 | 静态纪律 `systemPrompt.section()`（字节稳定锚）；动态快照 `systemPrompt.context()`（内容变化只击穿快照本身，不用 agent.inject 破坏 KV 复用） |
+| 冷却/防抖 | 写回 5min 冷却 + 最短轮长 60 字（寒暄/琐碎跳过） |
+
+**文件**：
+- `src/index.ts` — 插件规范源（TypeScript，静态装配时构建）
+- `bin/v5_call.py` — Node→Python 桥接（直接 import memory_v5.memory_api，不经过 MCP 协议；search/store 双 op，stdout 输出 JSON，失败静默降级）
+- 动态验证版：cordis_define 定义 `ikaros-auto-memory`（plain JS 转译），实测：
+  - turn-stopping 写回 v5.db 成功（id=101908 等，已删污染记录）
+  - pre-step 注入 `[Ikaros 相关记忆]` 快照出现在模型上下文 ✓
+  - source.kind 过滤修复（v3 误用 String(source)，v6 改用 `source.kind==='user'`）
+
+**dsh API 要点**（实测确认，写插件时对照）：
+- `Message.source` 是**对象** `{kind:'user'|'plugin'|'model'|'tool'}`（dsh-llm message.d.ts），不是字符串
+- subprocess Service：`spawn({argv,cwd,stdio:{stdout:{collect:true}},graceMs})` → `handle.done: Promise` + `handle.collected.stdout.readFrom(0)`（**不是** EventEmitter 的 .on('close')）
+- 事件 agent-scoped：subagent 的 turn-stopping 不触发父 ctx 监听器；主会话触发
 
 ## 用法
 
