@@ -28,10 +28,18 @@ sys.path.insert(0, _CORE)     # for `memory_v5` package
 
 # 外置插件 (2026-08-04 起) 不在 hermes 仓库内：直接按文件路径加载，
 # 避免 core/hermes/plugins 的 regular package 遮蔽 runtime 的 namespace plugins。
+# 2026-08-18: hermes 已整体退役 (hermes-web-ui 独立桌面应用, 内嵌插件源 patches/ 已删),
+# 插件文件不存在时跳过本测试, 不再阻塞全量收集。
 import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location(
-    "ikaros_v5_memory_provider",
-    os.path.join(_PLUGIN_DIR, "memory_provider.py"))
+_PLUGIN_FILE = os.path.join(_PLUGIN_DIR, "memory_provider.py")
+
+if not os.path.isfile(_PLUGIN_FILE):
+    import pytest
+    pytest.skip(
+        f"hermes 插件已退役 (2026-08-18), 跳过集成测试: {_PLUGIN_FILE} 不存在",
+        allow_module_level=True)
+
+_spec = _ilu.spec_from_file_location("ikaros_v5_memory_provider", _PLUGIN_FILE)
 assert _spec is not None and _spec.loader is not None
 _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)

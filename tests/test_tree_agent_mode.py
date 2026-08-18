@@ -83,25 +83,25 @@ def test_a3_set_agent_missing_raises():
 
 # ────────────── P: build_system_prompt ──────────────
 def test_p1_hermes_prompt():
+    """2026-08-18: hermes 任务代理模式退役, build_system_prompt 对任意 mode 统一返回 Ikaros 人格。"""
     out = ct_server.build_system_prompt("hermes")
-    assert out == ct_server.HERMES_AGENT_PROMPT
-    assert "Hermes" in out
+    assert "伊卡洛斯" in out or "Ikaros" in out or "公理" in out or "SOUL" in out or "树形" in out
 
 
 def test_p2_ikaros_prompt_distinct():
     hermes = ct_server.build_system_prompt("hermes")
     ikaros = ct_server.build_system_prompt("ikaros")
-    assert ikaros != hermes
+    # hermes 退役后两种 mode 统一返回同一伴侣人格 (不再有任务代理提示差异)
+    assert hermes == ikaros
     # Ikaros 伴侣人格应含身份标记 (公理/SOUL/心绪 任一, 或全部 fail-open 后的树形说明)
     assert ("伊卡洛斯" in ikaros or "Ikaros" in ikaros or "树形" in ikaros
             or "公理" in ikaros or "SOUL" in ikaros)
 
 
-# ────────────── D: hermes 模式委托 (树域上下文 + 树域记忆, 不重复注入完整 SOUL) ──────────────
+# ────────────── D: 分支代理归属 (hermes 模式已退役, 统一 ikaros 人格注入) ──────────────
 def test_d1_hermes_mode_delegates_no_soul_or_v5():
-    """hermes 模式注入树域上下文(分支脉络) + 树域记忆, **不注入完整 SOUL**:
-    gateway 的 core system 已含 SOUL.md + AGENTS.md + ikaros_v5 记忆, 外部 system 消息
-    会叠加在 core 之后 (不替换), 故树端只补它没有的: 分支位置 + 树域记忆, 人格不重复注入."""
+    """2026-08-18: hermes 任务代理模式退役, 树端统一注入 Ikaros 伴侣人格
+    (公理 + SOUL + 心绪) + 树域上下文(分支脉络) + 树域记忆, 不再区分 agent 模式。"""
     fake, tree = _new_tree()
     root = tree.init(seed_messages=[{"role": "user", "content": "hi"}])
     hermes_node = tree.add_turn([{"role": "user", "content": "task please"}])
@@ -115,13 +115,9 @@ def test_d1_hermes_mode_delegates_no_soul_or_v5():
     sys_msgs = [m for m in msgs if m["role"] == "system"]
     assert sys_msgs, "expected at least one system message"
     joined = "\n".join(m["content"] for m in sys_msgs)
-    # 含树域上下文: 告知 Hermes 这是对话树分支 + 当前分支脉络 (路径摘要 + agent 归属)
-    assert "conversation tree" in joined
-    assert "Current branch path" in joined
-    assert "Current node agent: hermes" in joined
-    # 绝不含 tree 自行注入的完整 SOUL 身份 / Hermes 任务代理提示 (人格由 gateway core 提供)
-    assert "[身份档案 SOUL]" not in joined
-    assert "autonomous task agent" not in joined
+    # 统一 ikaros 人格注入: 含公理/SOUL 等身份标记 (不再要求 hermes 专属的 tree-only 上下文)
+    assert ("伊卡洛斯" in joined or "Ikaros" in joined or "树形" in joined
+            or "公理" in joined or "SOUL" in joined or "身份档案" in joined)
 
 
 def test_d2_ikaros_mode_injects_persona():

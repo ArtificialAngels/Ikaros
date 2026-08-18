@@ -124,14 +124,16 @@ class TreeScopedRetrieveTest(unittest.TestCase):
         self.tree = FakeTree()
 
     def _patch(self, monkeypatch_results):
+        # P6 收敛: tree_scoped_retrieve 已从 mr.retrieve 切到 unified_retrieve(scope="semantic"),
+        # monkeypatch 目标同步更新 (旧目标 mr.retrieve 已非调用点, patch 无效会打到真实检索)。
         import memory_v5.memory_retrieval as mr
-        self._orig = mr.retrieve
-        mr.retrieve = lambda query, top_k=5, character=None, **kw: monkeypatch_results
+        self._orig = mr.unified_retrieve
+        mr.unified_retrieve = lambda query, scope="semantic", top_k=5, character=None, **kw: monkeypatch_results
 
     def tearDown(self):
         import memory_v5.memory_retrieval as mr
         if hasattr(self, "_orig"):
-            mr.retrieve = self._orig
+            mr.unified_retrieve = self._orig
 
     def test_path_boost_and_limit(self):
         results = [

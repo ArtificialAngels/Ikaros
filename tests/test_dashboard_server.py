@@ -88,6 +88,7 @@ class TestTtlCache(unittest.TestCase):
 class TestDashboardFunctions(unittest.TestCase):
     """9100 关键函数: 缓存生效 + 返回结构完整。"""
 
+    @unittest.skip("hermes 已退役 (2026-08-18): server.py 已删除 hermes_patch_status, 验证目标不复存在")
     def test_hermes_patch_status_cached(self):
         server.hermes_patch_status.cache_clear()
         t0 = time.time()
@@ -119,6 +120,7 @@ class TestDashboardFunctions(unittest.TestCase):
         finally:
             server.tcp_probe = orig
 
+    @unittest.skip("hermes/neko 已退役 (2026-08-18): local_repo_version 已随 hermes 管理函数删除, 验证目标不复存在")
     def test_local_repo_version_cached_and_distinct(self):
         """按 name 区分: hermes 与 neko 各自缓存, 不串数据。"""
         server.local_repo_version.cache_clear()
@@ -138,13 +140,10 @@ class TestDashboardFunctions(unittest.TestCase):
         self.assertIsInstance(st, list)
         self.assertGreater(len(st), 0)
         ids = {c["id"] for c in st}
-        # 2026-08-14: hermes_service/hermes_dashboard 组件已在面板重构中移除
-        # (9119 改由 Hermes 自身管理), 新增 hermes_bridge (:8650) 组件。
-        for cid in ("local_model", "memory", "hermes_bridge", "neko_group"):
+        # 2026-08-18: hermes/neko 已整体退役, 面板组件收敛为
+        # local_model/memory/conversation_tree/dsh/herdr/runtime。
+        for cid in ("local_model", "memory", "conversation_tree", "dsh", "herdr", "runtime"):
             self.assertIn(cid, ids, f"缺少组件 {cid}")
-        bridge = next(c for c in st if c["id"] == "hermes_bridge")
-        self.assertIn("ports", bridge)
-        self.assertEqual(bridge["ports"], [8650])
 
 
 class TestUIAssets(unittest.TestCase):
