@@ -1,6 +1,6 @@
 """core/conversation-tree/server.py 会话导出 pytest 测试 (任务1).
 
-覆盖 (对标 hermes-studio ExportCompressor):
+覆盖 (对标 Hermes Studio 导出压缩设计 (已退役, 保留功能参考)):
 - GET /api/sessions/<id>/export?format=json   完整 JSON (节点内联 messages + thinking/tool_calls/usage)
 - GET /api/sessions/<id>/export?format=txt    压缩可读文本
 - 404 (会话不存在) / 400 (format 非法)

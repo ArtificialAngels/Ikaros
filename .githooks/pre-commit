@@ -21,11 +21,11 @@
 
 set -e
 
-HERMES_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 # Skip gracefully if we're committing a fix-eol.py itself -- the
 # tool does not exist on this branch any more, see AGENTS.md SS7.
-if [ ! -x "$HERMES_ROOT/portable-python/python.exe" ]; then
+if [ ! -x "$REPO_ROOT/portable-python/python.exe" ]; then
     # Fresh clone / CI: no portable-python.  We can still validate
     # the .bat / .ps1 files via POSIX sh, so do not skip entirely.
     :
@@ -34,8 +34,8 @@ fi
 # Hermes-owned script files: bin/*.{bat,ps1} + Ikaros-environment/*.{bat,ps1}
 # (AGENTS.md L113 mandate: cmd.exe parses .bat files; PowerShell
 # parses .ps1 files; both fail on LF-only input.)
-SCRIPT_PATHS="$HERMES_ROOT/bin"
-SCRIPT_PATHS="$SCRIPT_PATHS $HERMES_ROOT/Ikaros-environment"
+SCRIPT_PATHS="$REPO_ROOT/bin"
+SCRIPT_PATHS="$SCRIPT_PATHS $REPO_ROOT/Ikaros-environment"
 
 # A file is "good" if it has at least one CR within the first 256
 # bytes (any reasonable .bat has dozens).  We use a single grep that

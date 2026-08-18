@@ -5,10 +5,10 @@
 #   1. Self-locate Ikaros root via this script's own path (drive-letter independent).
 #   2. Map the known volume GUID -> current drive letter (read-only, no admin).
 #   3. If the launch location is invalid (folder moved), use Everything (es.exe,
-#      the same engine hermes's everything MCP wraps) to search for the real Ikaros.
+#      the same engine everything MCP wraps) to search for the real Ikaros.
 #   4. Pin the E: letter and create the C:\Ikaros volume-GUID mount (needs admin;
 #      best-effort, warns if not elevated).
-#   5. If the hermes venv's editable paths are stale (moved), rebuild it.
+#   5. (hermes venv rebuild 已随底座退役移除)
 #   6. Write data/config/ikaros_root.json and (if relocated) a flag for the .bat
 #      to re-exec the panel from the correct root.
 #
@@ -49,7 +49,7 @@ def self_locate():
 def validate_root(root):
     if not root:
         return False
-    if not os.path.isfile(os.path.join(root, "runtime", "hermes-agent", "venv", "pyvenv.cfg")):
+    if not os.path.isfile(os.path.join(root, "runtime", "portable-python", "python.exe")):
         return False
     if not os.path.isfile(os.path.join(root, "bin", "ikaros-control-panel.bat")):
         return False
@@ -77,51 +77,6 @@ def guid_to_letter():
                     return m.group(1) + ":"
     return None
 
-
-def venv_matches_root(root):
-    # finder 文件名带 hermes 版本号(0.19.0→0.19.1 会变)，不能硬编码——用 glob 匹配
-    site_pkgs = os.path.join(root, "runtime", "hermes-agent", "venv", "Lib", "site-packages")
-    try:
-        import glob as _glob
-        finders = _glob.glob(os.path.join(site_pkgs, "__editable___hermes_agent_*_finder.py"))
-    except Exception:
-        finders = []
-    if not finders:
-        return False
-    try:
-        with open(finders[0], "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception:
-        return False
-    m = re.search(r"'hermes_cli':\s*r?'([^']+)'", content)
-    if not m:
-        return False
-    val = m.group(1).replace("\\\\", "\\")
-    norm = root.replace("/", "\\")
-    return val.lower().startswith(norm.lower())
-
-
-def rebuild_venv(root):
-    bat = os.path.join(root, "bin", "rebuild-hermes-venv.bat")
-    if not os.path.isfile(bat):
-        log("rebuild script missing; cannot rebuild venv")
-        return False
-    env = dict(os.environ)
-    env["CODEBUDDY_SAFE_DELETE_SANDBOX"] = "0"
-    env["UV_CACHE_DIR"] = os.path.join(os.environ.get("TEMP", "C:\\tmp"), "uvcache")
-    log("rebuilding hermes venv (root=%s) ..." % root)
-    try:
-        r = subprocess.run(bat, shell=True, cwd=root, env=env,
-                           capture_output=True, encoding="utf-8", errors="ignore", timeout=600)
-        if r.returncode == 0:
-            log("venv rebuild OK")
-            return True
-        log("venv rebuild failed rc=%s: %s" % (r.returncode, (r.stderr or "")[-500:]))
-        log("venv rebuild stdout tail: %s" % (r.stdout or "")[-500:])
-        return False
-    except Exception as e:
-        log("venv rebuild exception: %s" % e)
-        return False
 
 
 def locate_via_everything(root):
@@ -199,7 +154,7 @@ def pin_and_mount(letter):
     return results
 
 
-def write_state(root, letter, resolved_via, venv_rebuilt, pin):
+def write_state(root, letter, resolved_via, pin):
     try:
         d = os.path.join(root, "data", "config")
         os.makedirs(d, exist_ok=True)
@@ -208,7 +163,6 @@ def write_state(root, letter, resolved_via, venv_rebuilt, pin):
             "volume_guid": IKAROS_VOLUME_GUID,
             "current_letter": letter,
             "resolved_via": resolved_via,
-            "venv_rebuilt": venv_rebuilt,
             "pin": pin,
             "ts": datetime.datetime.now().isoformat(timespec="seconds"),
         }
@@ -250,15 +204,11 @@ def main():
 
     venv_rebuilt = False
     if validate_root(root):
-        if venv_matches_root(root):
-            log("venv paths match current root; no rebuild needed")
-        else:
-            log("venv paths STALE (moved); rebuilding...")
-            venv_rebuilt = rebuild_venv(root)
+        pass
     else:
-        log("root invalid; skipping venv check")
+        log("root invalid")
 
-    write_state(root, letter, resolved_via, venv_rebuilt, pin)
+    write_state(root, letter, resolved_via, pin)
 
     if resolved_via in ("everything", "volume_guid") and \
        os.path.normcase(os.path.abspath(root)) != os.path.normcase(os.path.abspath(launch_root)):

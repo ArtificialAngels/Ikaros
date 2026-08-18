@@ -1,5 +1,5 @@
 # ============================================================
-# Hermes Agent .gitattributes
+# Ikaros .gitattributes
 # ============================================================
 # Controls how Git treats line endings and binary detection
 # across Windows / macOS / Linux clones. CRITICAL for portable
@@ -73,8 +73,5 @@ uv.lock             -diff merge=union
 *.psm1       linguist-language=PowerShell
 
 # --- Exclude vendored upstream from language stats (it's their code) ---
-/hermes-agent/*           linguist-vendored
-/hermes-web-ui/*          linguist-vendored
-/hermes-web-ui/node_modules/** linguist-vendored
 /runtime/*                linguist-vendored
 /portable-python/*        linguist-vendored

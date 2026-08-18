@@ -25,32 +25,12 @@ deps/tools/               # symlink to runtime tools (aria2c, gopeed)
 deps/node/                # symlink to runtime/node23 (Node.js)
 deps/llamacpp/            # mostly empty stub; junction content is in runtime/
 
-# --- Upstream clean copy: hermes (clone separately; tracked upstream) ---
-# `runtime/hermes-agent/` is a giant clean copy of the NousResearch/hermes-agent
-# upstream (Agent core / CLI), relocated from the old repo-root `hermes-agent/`.
-# It is tracked upstream and we just clone it into our workspace. The local
-# copy is NEVER committed here because:
-#   1. It is ~5000 files
-#   2. It is READ-ONLY for us (we modify in `modules/` not here)
-#   3. Upstream `git pull` would conflict with our local edits
-#   4. It is versioned upstream; pinning it in this repo would
-#      duplicate state that is already canonically versioned elsewhere.
-# To get a working copy, run:
-#     git clone https://github.com/NousResearch/hermes-agent.git runtime/hermes-agent
-runtime/hermes-agent/
-
-# Note: the EKKOLearnAI/hermes-web-ui WebUI is NOT a sibling clone anymore
-# (2026-06-15a). The runtime copy lives at runtime/node23/node_modules/
-# hermes-web-ui/ and is installed via `npm install -g hermes-web-ui` from
-# runtime/node23/. No dev-source folder is needed.
+runtime/hermes-agent/     # (已退役; runtime/ 已忽略, 保留以防历史残留)
 
 # --- Data directories (user state; never commit) ---
-# All per-user state lives under data/ and hermes/data/. Even though
+# All per-user state lives under data/. Even though
 # some files were committed before these rules were added, they are
 # EXCLUDED from future tracking (see `git rm --cached` in commit log).
-hermes/data/
-hermes/data/nextchat/
-tests/hermes/data/
 # IMPORTANT (2026-06-13 fix): use `data/**` (not `data/`) so the
 # `!data/models/*` negation below can actually re-include files in
 # data/models/. With the old `data/` pattern, git's "parent dir
@@ -93,8 +73,6 @@ secrets/
 *.dump
 *.corrupt.*.bak
 config.yaml.corrupt.*.bak
-# HERMES_ROOT cache (atomic write, written by bin/hermes-root.py persist)
-.hermes-root
 # NOTE: .githooks/ is intentionally NOT ignored here -- the versioned
 #       git hooks in this directory are meant to be tracked so they
 #       ship with the repo (see bin/install-git-hooks.bat).
@@ -298,6 +276,8 @@ tests/benchmark_*.py
 tests/check_model_*.py
 tests/clean_v3_*.py
 tests/smoke_*.py
+# 例外: smoke_ikaros_env.py 是 env 权威的正式测试 (2026-08-18 新增), 入库
+!tests/smoke_ikaros_env.py
 tests/test_ikaros_dojo_daily.py
 tests/test_sem_*.py
 # bin/oldcode/ 与 root oldcode/ 同源(都是历史旧数据,本地保留,不推)
@@ -399,16 +379,14 @@ data/thirdspace-vault/99-归档/
 # Model weights (multi-GB) — pulled locally, never pushed (per repo blob policy)
 *.gguf
 *.onnx_data
-# === 2026-07-27: apps/neko = N.E.K.O 上游桌宠前端 (Apache-2.0, github.com/Project-N-E-K-O/N.E.K.O) ===
-# 2026-08-12: 从 core/neko 迁到 apps/neko (apps = 自家应用壳层, core = 自有核心)
-# 本仓库不修改其源码, 集成走独立桥/启动脚本。由 scripts/fetch-upstreams.py 拉取; 清单见 UPSTREAM.md。
+# === 2026-08-18: N.E.K.O 桌宠已随底座退役移除 (apps/neko 已删除) ===
+# 保留 ignore 规则以防历史残留重新出现。
 apps/neko/
 
 # === build artifacts (NOT in git) ===
 # Rust cargo 构建产物 (含本仓库自带 core/env/*/target)
 target/
 core/memory_v5/data/
-core/neko/resources/app.asar
 .codebase-memory/
 
 # === 2026-08-12: 缓存/交接/运行时数据 (不入库) ===

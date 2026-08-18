@@ -1,3 +1,8 @@
+"""set_agent 继承/级联语义测试 (ikaros 单模式, hermes 值仅存量兼容).
+
+2026-08-18: hermes 任务代理退役, 但 conversation_tree.set_agent 仍接受
+'hermes' 值以兼容存量节点数据; server.py 端点已仅接受 ikaros。
+"""
 import sys, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
@@ -27,24 +32,25 @@ def check(name, cond):
 fake, tree = new_tree()
 root = tree.init(seed_messages=[{"role":"user","content":"hi"}])
 child = tree.add_turn([{"role":"user","content":"more"}])
-tree.set_agent(child.id, "hermes")
-check("A1 writes hermes", tree.nodes[child.id].agent == "hermes")
+tree.set_agent(child.id, "ikaros")
+check("A1 writes ikaros", tree.nodes[child.id].agent == "ikaros")
 raw = tree.serialize()
 t2 = ConversationTree.deserialize(raw, persist_key="t", data_dir=tree.data_dir)
-check("A1 persists across reload", t2.nodes[child.id].agent == "hermes")
+check("A1 persists across reload", t2.nodes[child.id].agent == "ikaros")
 
 fake, tree = new_tree()
 root = tree.init(seed_messages=[{"role":"user","content":"hi"}])
 child = tree.add_turn([{"role":"user","content":"more"}])
 tree.set_agent(child.id, "bogus-agent")
 check("A2 invalid -> ikaros", tree.nodes[child.id].agent == "ikaros")
+# 存量 hermes 值兼容 (conversation_tree 层)
 tree.set_agent(child.id, "  HERMES ")
-check("A2 normalize HERMES", tree.nodes[child.id].agent == "hermes")
+check("A2 normalize HERMES (legacy compat)", tree.nodes[child.id].agent == "hermes")
 
 fake, tree = new_tree()
 tree.init(seed_messages=[{"role":"user","content":"hi"}])
 try:
-    tree.set_agent("nope", "hermes")
+    tree.set_agent("nope", "ikaros")
     check("A3 missing raises", False)
 except ValueError:
     check("A3 missing raises", True)
@@ -52,12 +58,12 @@ except ValueError:
 # --- 新增: 新建子节点继承父 agent ---
 fake, tree = new_tree()
 root = tree.init(seed_messages=[{"role":"user","content":"hi"}])
-tree.set_agent(root.id, "hermes", cascade=False)
+tree.set_agent(root.id, "ikaros", cascade=False)
 child = tree.add_turn([{"role":"user","content":"x"}])
-check("add_turn inherits parent.agent", child.agent == "hermes")
+check("add_turn inherits parent.agent", child.agent == "ikaros")
 # fork 也继承
 fb = tree.fork_branch(fork_point_id=root.id, branch_label="b", messages=[{"role":"user","content":"y"}])
-check("fork_branch inherits parent.agent", fb.agent == "hermes")
+check("fork_branch inherits parent.agent", fb.agent == "ikaros")
 
 # --- 新增: cascade 同步已存在子树 ---
 fake, tree = new_tree()
@@ -67,16 +73,16 @@ c2 = tree.add_turn([{"role":"user","content":"b"}])      # c1 child
 check("children created before set = ikaros", c1.agent == "ikaros" and c2.agent == "ikaros")
 
 # 非级联: 改 root 不影响已存子树
-tree.set_agent(root.id, "hermes", cascade=False)
-check("root hermes (cascade=False)", tree.nodes[root.id].agent == "hermes")
+tree.set_agent(root.id, "ikaros", cascade=False)
+check("root ikaros (cascade=False)", tree.nodes[root.id].agent == "ikaros")
 check("c1 unchanged (cascade=False)", c1.agent == "ikaros")
 check("c2 unchanged (cascade=False)", c2.agent == "ikaros")
 
-# 级联: 改 c1 -> hermes, 其子树 c2 同步
+# 级联: 改 c1 -> hermes(存量兼容), 其子树 c2 同步
 tree.set_agent(c1.id, "hermes", cascade=True)
 check("c1 cascade -> hermes", c1.agent == "hermes")
 check("c2 cascade -> hermes", c2.agent == "hermes")
-check("root unaffected by child cascade", tree.nodes[root.id].agent == "hermes")
+check("root unaffected by child cascade", tree.nodes[root.id].agent == "ikaros")
 
 # 级联: 改 root -> ikaros, 整棵子树同步
 tree.set_agent(root.id, "ikaros", cascade=True)

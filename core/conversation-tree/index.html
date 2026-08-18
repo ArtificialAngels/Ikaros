@@ -344,7 +344,7 @@ color:var(--text-quaternary);background:rgba(128,128,128,.14);padding:0 5px;bord
 .node-card.is-card .card-anchor.out-bottom{bottom:0}
 /* 卡片连接状态徽标 (入/出数) */
 .node-card .tag-links{background:color-mix(in srgb,var(--brand) 14%,transparent);color:var(--brand);font-family:var(--font-mono)}
-/* 代理归属徽标 (ekko 模式): Hermes 用 opposite 品牌色, Ikaros 用低调灰 */
+/* 代理归属徽标: 统一 Ikaros (低调用色) */
 .node-card .agent-hermes{color:var(--brand-opposite);font-weight:600}
 .node-card .agent-ikaros{color:var(--text-quaternary)}
 
@@ -2745,7 +2745,7 @@ function nodeCardInner(n){
   ):'';
   return `
 
-    <div class="node-depth">#${n.depth} · ${n.branchLabel||'main'} · <span class="agent-${n.agent==='hermes'?'hermes':'ikaros'}">${n.agent==='hermes'?'⚙ Hermes':'✦ Ikaros'}</span></div>
+    <div class="node-depth">#${n.depth} · ${n.branchLabel||'main'} · <span class="agent-ikaros">✦ Ikaros</span></div>
     ${isHead?cardInfo:`<div class="node-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`}
     ${tags?`<div class="node-tags">${tags}</div>`:''}
     ${execWrap(n)}
@@ -3051,10 +3051,9 @@ function onNodeContextMenu(e,nodeId){
     }
   }
   items.push({divider:true});
-  // 代理归属 (ekko 模式): 该分支由 Ikaros 伴侣 / Hermes 任务代理作答
+  // 代理归属: 统一 Ikaros 伴侣
   const curAgent=n.agent||'ikaros';
-  items.push({label:'代理→Ikaros（伴侣）·含子树',action:'agentIkaros',icon:curAgent==='ikaros'?'✔':' '});
-  items.push({label:'代理→Hermes（任务）·含子树',action:'agentHermes',icon:curAgent==='hermes'?'✔':' '});
+  items.push({label:'代理→Ikaros（伴侣）·含子树',action:'agentIkaros',icon:curAgent==='ikaros'?'✔':' '});
   items.push({divider:true});
   items.push({label:'重命名',action:'rename',icon:'✎',disabled:isRoot});
   items.push({label:'复制摘要',action:'copy',icon:'⧉'});
@@ -3262,7 +3261,6 @@ async function handleCtxAction(action){
       break;
     }
     case 'agentIkaros':await API.setAgent(nid,'ikaros');await refresh();break;
-    case 'agentHermes':await API.setAgent(nid,'hermes');await refresh();break;
     case 'copy':copyNodeSummary(nid);break;
     case 'exportCard':exportShareCard();break;
     case 'rename':await renameNodePrompt(nid);break;
@@ -3345,7 +3343,7 @@ function exportShareCard(){
     ctx.fillText(lb,x-w/2+8*sc,y+2*sc,w-16*sc);
     // 深度/代理小字
     ctx.fillStyle='#777777';ctx.font='9px "Source Han Sans SC",monospace';
-    ctx.fillText('#'+n.depth+' · '+(n.agent==='hermes'?'hermes':'ikaros'),x-w/2+8*sc,y+h/2-6*sc);
+    ctx.fillText('#'+n.depth+' · ikaros',x-w/2+8*sc,y+h/2-6*sc);
   });
   // 下载
   const a=document.createElement('a');
@@ -4024,7 +4022,7 @@ function threadStatusBar(nodeId,nodes){
   if(!cur)return '';
   const card=tree.cardOfNode(nodeId||cur.id);
   const branchLabel=cur.branchLabel&&cur.branchLabel!=='main'?cur.branchLabel:'main';
-  const agent=cur.agent==='hermes'?'⚙ Hermes':'✦ Ikaros';
+  const agent='✦ Ikaros';
   const lineage=card&&card.branchingSourceId;
   const parts=[
     `<span class="st-item">#${cur.depth}</span>`,
@@ -4158,7 +4156,7 @@ function renderExtras(container,live){
 /* ===== 上下文用量 + 缓存可视化 (chat 底部状态条 + 历史节点小行) ===== */
 // 与 server.py 的 CT_CONTEXT_WINDOW 默认值保持一致 (env 可覆盖); 真实窗口优先用 CT_CTX_LIVE (模型元数据).
 const CT_CTX=64000;
-let CT_CTX_LIVE=0; // 2026-08-03: 从 hermes 模型元数据获取的实际 context window
+let CT_CTX_LIVE=0; // 2026-08-03: 实际 context window
 function fmtTok(n){
   n=Math.round(Number(n)||0);
   if(n>=1000)return (n/1000).toFixed(n>=10000?0:1)+'K';
@@ -4855,13 +4853,13 @@ async function refreshModelPicker(){
   CT_MODELS=cfg.available||[];
   // 当前值: 运行时覆盖优先, 否则默认模型
   let active=cur.model||'';
-  if(!active) active=defs[CT_MODELS[0]?CT_MODELS[0].mode:'hermes']||(CT_MODELS[0]?CT_MODELS[0].model:'');
+  if(!active) active=CT_MODELS[0]?CT_MODELS[0].model:'';
   if(!CT_MODELS.find(x=>x.model===active)) active=CT_MODELS[0]?CT_MODELS[0].model:'';
   CT_MODEL_ACTIVE=active;
   const it=CT_MODELS.find(x=>x.model===active);
   const label=modelBtnText(it);
   if(btn){ btn.textContent=label;
-    btn.title=it?(it.label+(it.context_window?('（上下文 '+fmtTok(it.context_window)+'）'):'')):'切换模型（走 Hermes Gateway）'; }
+    btn.title=it?(it.label+(it.context_window?('（上下文 '+fmtTok(it.context_window)+'）'):'')):'切换模型'; }
   // usageBar 删除后, 标签也同步到输入栏的模型 chip (若仍存在); mcLabel 固定为 AI 图标, 模型名进 title
   const chip=_focusEl('modelChip');
   if(chip){
@@ -4869,7 +4867,7 @@ async function refreshModelPicker(){
     if(l){l.textContent='AI';chip.title=label;}
     else chip.textContent=label;
   }
-  // 同步实际 context window (hermes 模型元数据) 供状态条使用
+  // 同步实际 context window 供状态条使用
   if(it&&it.context_window) CT_CTX_LIVE=it.context_window;
   renderModelDropdown();
 }
@@ -4917,7 +4915,7 @@ function renderModelDropdown(){
 async function onModelPick(it){
   if(!it)return;
   await fetch('/api/model_switch',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({mode:'hermes',model:it.model})});
+    body:JSON.stringify({mode:'ikaros',model:it.model})});
   CT_MODEL_ACTIVE=it.model;
   const btn=document.getElementById('modelPicker');
   const label=modelBtnText(it);
@@ -5434,9 +5432,9 @@ const I18N={
     'nav.permissions':'编辑权限','nav.shortcuts':'快捷键','nav.language':'语言','nav.layout':'布局',
     'sec.models.title':'可用模型','sec.assignment.title':'代理分配','sec.apikeys.title':'API 密钥','sec.colortheme.title':'颜色主题',
     'sec.permissions.title':'编辑权限','sec.shortcuts.title':'快捷键','sec.language.title':'语言','sec.layout.title':'布局',
-    'desc.models':'来自 Hermes Gateway 配置（config.yaml）。点击模型即切换当前会话使用。',
-    'desc.assignment':'当前节点由哪个代理作答：Ikaros 伴侣（对话/探索）或 Hermes 任务代理（工具/执行）。切换将应用到该节点及其子树。',
-    'desc.apikeys':'密钥由 Hermes Gateway 统一管理（data/hermes-agent/config.yaml / 环境变量），此处只读展示配置状态，不接触密钥本身。',
+    'desc.models':'来自 Ikaros 根 .env（DEEPSEEK_*）。点击模型即切换当前会话使用。',
+    'desc.assignment':'当前节点统一由 Ikaros 伴侣作答（对话/探索/工具）。',
+    'desc.apikeys':'密钥由根 .env 统一管理（DEEPSEEK_API_KEY 等），此处只读展示配置状态，不接触密钥本身。',
     'desc.colortheme':'选择全局颜色主题。将控制整个应用的强调色与配色方案。',
     'desc.permissions':'控制对话编辑与破坏性操作的行为。偏好保存在本地。',
     'desc.shortcuts':'对话树键盘快捷键（与当前实现一致）。',
@@ -5460,9 +5458,9 @@ const I18N={
     'nav.permissions':'Edit Permissions','nav.shortcuts':'Shortcuts','nav.language':'Language','nav.layout':'Layout',
     'sec.models.title':'Available Models','sec.assignment.title':'Agent Assignment','sec.apikeys.title':'API Keys','sec.colortheme.title':'Color Theme',
     'sec.permissions.title':'Edit Permissions','sec.shortcuts.title':'Shortcuts','sec.language.title':'Language','sec.layout.title':'Layout',
-    'desc.models':'From Hermes Gateway config (config.yaml). Click a model to switch the current session.',
-    'desc.assignment':'Which agent answers on the current node: Ikaros companion (chat/explore) or Hermes task agent (tools/execution). Applies to the node and its subtree.',
-    'desc.apikeys':'Keys are managed by Hermes Gateway (data/hermes-agent/config.yaml / env vars). Read-only status here; keys themselves are never exposed.',
+    'desc.models':'From Ikaros root .env (DEEPSEEK_*). Click a model to switch the current session.',
+    'desc.assignment':'All nodes are answered by the Ikaros companion (chat/explore/tools).',
+    'desc.apikeys':'Keys are managed by the root .env (DEEPSEEK_API_KEY etc.). Read-only status here; keys themselves are never exposed.',
     'desc.colortheme':'Choose a global color theme. This controls the accent color and palette across the entire app.',
     'desc.permissions':'Controls message editing and destructive actions. Preferences are stored locally.',
     'desc.shortcuts':'Keyboard shortcuts for the conversation tree (matching the current implementation).',
@@ -5621,7 +5619,7 @@ async function renderSettingsModels(){
   box.innerHTML='<div class="settings-desc">加载中…</div>';
   try{
     if(!CT_MODELS.length){const r=await fetch('/api/model_switch');const c=await r.json();CT_MODELS=c.available||[];}
-    if(!CT_MODELS.length){box.innerHTML='<div class="settings-desc">未发现可用模型（Hermes Gateway 配置为空）。</div>';return;}
+    if(!CT_MODELS.length){box.innerHTML='<div class="settings-desc">未发现可用模型（配置为空）。</div>';return;}
     box.innerHTML=CT_MODELS.map(it=>{
       const active=it.model===CT_MODEL_ACTIVE;
       return `<div class="settings-card model-pick ${active?'active':''}" onclick="pickSettingsModel(${JSON.stringify(it.model)})">
@@ -5667,14 +5665,14 @@ function renderAssignSection(){
   if(!el||!de)return;
   if(!n){el.textContent='当前节点：—';de.textContent='—';return;}
   el.textContent='当前节点：'+nodeText(n);
-  de.textContent='代理：'+(n.agent==='hermes'?'⚙ Hermes 任务代理':'✦ Ikaros 伴侣')+' · 深度 '+n.depth+(n.branchLabel?(' · 分支 '+n.branchLabel):'');
+  de.textContent='代理：✦ Ikaros 伴侣 · 深度 '+n.depth+(n.branchLabel?(' · 分支 '+n.branchLabel):'');
 }
 async function assignAgent(agent){
   if(!tree||!tree.currentId)return;
   await API.setAgent(tree.currentId, agent, true);
   await refresh();
   renderAssignSection();
-  toast('已分配: '+(agent==='hermes'?'Hermes 任务代理':'Ikaros 伴侣'));
+  toast('已分配: Ikaros 伴侣');
 }
 /* ── 编辑权限: localStorage 持久化 + 实际生效 ── */
 const PERM_KEY='conv-tree-perms';
@@ -7099,26 +7097,25 @@ window.addEventListener('resize',()=>{
         <button class="settings-nav-item" data-section="layout" onclick="showSettingsSection('layout')" data-i18n="nav.layout">布局</button>
       </nav>
       <div class="settings-content" id="settingsContent">
-        <!-- Available Models (真实: 来自 Hermes Gateway 配置, 点击切换当前会话模型) -->
+        <!-- Available Models (来自 Ikaros 根 .env / 运行时配置, 点击切换当前会话模型) -->
         <div class="settings-section active" data-section="models">
           <h3 data-i18n="sec.models.title">可用模型</h3>
-          <p class="settings-desc" data-i18n="desc.models">来自 Hermes Gateway 配置（config.yaml）。点击模型即切换当前会话使用。</p>
+          <p class="settings-desc" data-i18n="desc.models">来自 Ikaros 根 .env（DEEPSEEK_*）。点击模型即切换当前会话使用。</p>
           <div class="settings-models" id="settingsModels"><div class="settings-desc">加载中…</div></div>
         </div>
-        <!-- Agent Assignment (真实: 节点级代理分配, 对应右键菜单「代理→Ikaros/Hermes」) -->
+        <!-- Agent Assignment (节点级代理分配, 对应右键菜单「代理→Ikaros」) -->
         <div class="settings-section" data-section="assignment">
           <h3 data-i18n="sec.assignment.title">代理分配</h3>
-          <p class="settings-desc" data-i18n="desc.assignment">当前节点由哪个代理作答：Ikaros 伴侣（对话/探索）或 Hermes 任务代理（工具/执行）。切换将应用到该节点及其子树。</p>
+          <p class="settings-desc" data-i18n="desc.assignment">当前节点统一由 Ikaros 伴侣作答（对话/探索/工具）。</p>
           <div class="settings-row"><div><div class="settings-row-label" id="assignCurrent">当前节点：—</div><div class="settings-row-desc" id="assignCurrentDesc">—</div></div></div>
           <div style="display:flex;gap:8px;margin-top:10px">
             <button class="settings-btn primary" id="assignIkarosBtn" onclick="assignAgent('ikaros')">✦ Ikaros 伴侣</button>
-            <button class="settings-btn" id="assignHermesBtn" onclick="assignAgent('hermes')">⚙ Hermes 任务代理</button>
-          </div>
+            </div>
         </div>
-        <!-- API Keys (只读状态: 密钥由 Hermes Gateway 配置管理, 此处仅展示配置状态) -->
+        <!-- API Keys (只读状态: 密钥由根 .env 配置管理, 此处仅展示配置状态) -->
         <div class="settings-section" data-section="apikeys">
           <h3 data-i18n="sec.apikeys.title">API 密钥</h3>
-          <p class="settings-desc" data-i18n="desc.apikeys">密钥由 Hermes Gateway 统一管理（data/hermes-agent/config.yaml / 环境变量），此处只读展示配置状态，不接触密钥本身。</p>
+          <p class="settings-desc" data-i18n="desc.apikeys">密钥由根 .env 统一管理（DEEPSEEK_API_KEY 等），此处只读展示配置状态，不接触密钥本身。</p>
           <div id="settingsProviders"><div class="settings-desc">加载中…</div></div>
         </div>
         <!-- Color Theme (global controller) -->

@@ -1,12 +1,9 @@
 # ============================================================
-# Mavis + Hermes Agent — 完整 Python 依赖
+# Ikaros — Python 依赖 (便携环境 runtime/portable-python)
 # ============================================================
-
-# ---- Mavis 框架核心 ----
-# （按你的 Mavis 安装方式调整，常见情况：）
-# mavis==0.1.0           # 假设 PyPI 发布版
-# 或 git+https://github.com/your-org/mavis.git@main
-# 或本地: -e /opt/mavis
+# 2026-08-18: hermes-agent / N.E.K.O venv 已随底座退役移除,
+# 本清单收敛为 Ikaros 原生服务 (dashboard / conversation-tree / memory_v5)
+# 的 Python 依赖。工作引擎 dsh 为 npm 侧, 不在此清单。
 
 # ---- Web 框架 ----
 fastapi==0.115.0
@@ -24,7 +21,7 @@ google-generativeai==0.8.3
 # ---- Embedding & 向量库 ----
 chromadb==0.5.20
 sentence-transformers==3.2.1   # 可选：本地 embedding
-sqlite-vec==0.1.9              # SQLite vector search (hermes-agent 0.17.0+)
+sqlite-vec==0.1.9              # SQLite vector search
 
 # ---- 工具/工具集 ----
 httpx[http2]==0.27.2
@@ -41,15 +38,9 @@ typer==0.13.0              # CLI
 click==8.1.7
 structlog==24.4.0
 loguru==0.7.2
-croniter==6.0.0            # cron schedule calculator (used by hermes.cron)
-concurrent-log-handler==0.9.29  # thread-safe file logging (hermes-agent 0.17.0+)
+croniter==6.0.0            # cron schedule calculator
+concurrent-log-handler==0.9.29  # thread-safe file logging
 portalocker==3.2.0              # file locking (concurrent_log_handler dep)
 
 # ---- 安全 / 加密 ----
 cryptography==43.0.3
-
-# ============================================================
-# 依赖可复现性（dependency reproducibility）
-# ============================================================
-# hermes venv requires EXACT pydantic-core==2.46.4 (venv rebuild/`pip install -U` breaks hermes dashboard at import fastapi)
-pydantic-core==2.46.4

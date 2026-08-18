@@ -1,4 +1,4 @@
-"""tree_adapter 模块沙箱测试（hermes venv python 跑，离线、无 V5 存储依赖）。
+"""tree_adapter 模块沙箱测试（portable-python 跑，离线、无 V5 存储依赖）。
 
 覆盖：
   - tag_for_node 标签生成
@@ -11,7 +11,7 @@ import os
 import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core", "hermes")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "core")))
 
 from memory_v5.extensions import tree_adapter as ta
 

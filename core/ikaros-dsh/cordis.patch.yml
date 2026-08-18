@@ -1,4 +1,4 @@
-# Ikaros 工作引擎 —— dsh patch overlay
+# Ikaros 工作引擎 —— dsh patch overlay（规范源）
 #
 # 叠加在 dsh-headless 或 dsh-web 之上（dsh-base 已含 llm/session/tools/fs/
 # sandbox/subagent/compaction/skill/goal/workflow/ralph 等全部基础能力）。
@@ -8,30 +8,33 @@
 #   3) LSP 精确代码导航（lsp + lsp-stdio + tool-lsp）
 # 并覆盖 system-prompt 的 persona 为 Ikaros 工作引擎人格。
 #
+# 路径全部用 !!js 表达式从进程环境 IKAROS_ROOT 推导（bat 启动器注入），
+# 无盘符硬编码，整个项目可随 IKAROS_ROOT 移动。
+#
 # 用法（任选其一）：
-#   dsh --profile headless --patch "core/ikaros-dsh/cordis.patch.yml" "<task>"
-#   dsh web --patch "core/ikaros-dsh/cordis.patch.yml"
+#   bin/start-dsh-ikaros.bat                  → web GUI（自动加载用户层 patch）
+#   bin/start-dsh-ikaros.bat headless <task>  → one-shot 工作引擎（--patch 本文件）
+#   裸 dsh web：~/.dsh/profiles/web/cordis.patch.yml 已同步本文件（自动加载）
 
 - insert:
     # ── 1) memory_v5 长期记忆（MCP 直连） ─────────────────────────────
     # 48 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
-    # 与 pi 的 data/omp/agent/mcp.json 同源；路径用绝对形式，profile 移动后仍正确。
+    # 与 pi 的 data/omp/agent/mcp.json 同源；路径经 IKAROS_ROOT 推导。
     - id: memory-ikaros-v5
       name: '@deepseek-ai/dsh-mcp-client'
       config:
         serverName: ikaros-v5
         transport: stdio
-        command: 'E:\Ikaros\runtime\portable-python\python.exe'
-        args: ['E:\Ikaros\core\memory_v5\mcp_server.py']
+        command: !!js 'process.env.IKAROS_ROOT + "\\runtime\\portable-python\\python.exe"'
+        args:
+          - !!js 'process.env.IKAROS_ROOT + "\\core\\memory_v5\\mcp_server.py"'
         env:
-          IKAROS_ROOT: 'E:\Ikaros'
-          HERMES_ROOT: 'E:\Ikaros'
-          HERMES_HOME: 'E:\Ikaros\data\hermes-agent'
+          IKAROS_ROOT: !!js 'process.env.IKAROS_ROOT'
           V5_MCP_TOOL_GROUPS: 'memory,self,care,vitality,relationship,skill,project'
         failOnStartupError: false
         toolCallTimeoutMs: 60000
 
-    # ── 2) 持久 PTY 终端（hermes 缺失、dsh-base 默认不挂的能力） ──────
+    # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
     # 状态（cd/export/REPL）跨 tool 调用存活，SIGINT/超时/后台运行齐全。
     - id: terminal
@@ -44,9 +47,9 @@
         enableRunInBackground: true
 
     # ── 3) LSP 精确导航（定义/引用/实现/hover） ───────────────────────
-    # 需预装对应 language server（未装时 lsp 工具调用失败，不影响其他能力）：
-    #   typescript: npm i -g typescript-language-server typescript
-    #   python:     pip install pyright   （或 pip install python-lsp-server）
+    # typescript 经 npx 按需拉取；python 需预装 (pip install pyright) 后
+    # 取消下方注释的 python 段（未装时 python LSP 启动失败会中止 web 启动，
+    # 故默认不挂 python；typescript 不受影响）。
     - id: lsp
       name: '@deepseek-ai/dsh-lsp'
     - id: lsp-stdio
@@ -62,11 +65,11 @@
               '.js': 'javascript'
               '.jsx': 'javascriptreact'
               '.mjs': 'javascript'
-          python:
-            command: pyright-langserver
-            args: ['--stdio']
-            extensionToLanguage:
-              '.py': 'python'
+          # python:
+          #   command: pyright-langserver
+          #   args: ['--stdio']
+          #   extensionToLanguage:
+          #     '.py': 'python'
     - id: tool-lsp
       name: '@deepseek-ai/dsh-tool-lsp'
 

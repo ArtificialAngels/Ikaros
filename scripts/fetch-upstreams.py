@@ -11,9 +11,11 @@ fetch-upstreams.py — Ikaros 上游组件拉取脚本（幂等）
   - release:  走 bin/ikaros-fastdl.py (gopeed/aria2 + 镜像) 下载后解压
   - npm:      runtime/node 的 npm install（全局安装到 runtime/node_modules）
 
+2026-08-18: neko / hermes-agent / hermes-web-ui 上游条目已随底座退役移除。
+
 用法:
   python scripts/fetch-upstreams.py            # 拉全部
-  python scripts/fetch-upstreams.py neko      # 只拉 neko
+  python scripts/fetch-upstreams.py model-nomic-embed  # 只拉指定组件
   python scripts/fetch-upstreams.py --dry-run  # 不实际下载，打印将要做什么
   python scripts/fetch-upstreams.py --list     # 列出所有组件
 """
@@ -26,34 +28,6 @@ BIN = os.path.join(ROOT, "bin")
 # local: 相对 ROOT 的本地落点目录
 # method: git | release | npm
 MANIFEST = [
-    {
-        "name": "neko",
-        "desc": "N.E.K.O 桌宠前端 (Apache-2.0)",
-        "method": "git",
-        "url": "https://github.com/Project-N-E-K-O/N.E.K.O",
-        "local": "core/neko",
-        "branch": "main",
-        "patched": False,
-    },
-    {
-        "name": "hermes-agent",
-        "desc": "Hermes Agent 核心 (NousResearch)",
-        "method": "git",
-        "url": "https://github.com/NousResearch/hermes-agent",
-        "local": "hermes-agent",
-        "branch": "main",
-        "patched": False,
-    },
-    {
-        "name": "hermes-web-ui",
-        "desc": "Hermes Web UI (EKKOLearnAI, 可选)",
-        "method": "git",
-        "url": "https://github.com/EKKOLearnAI/hermes-web-ui",
-        "local": "data/webui-new/app",
-        "branch": "main",
-        "patched": False,
-        "optional": True,
-    },
     # ── 模型权重（多 GB）──
     {
         "name": "model-qwen3-1.7b",
@@ -65,8 +39,8 @@ MANIFEST = [
         "optional": True,
     },
     {
-        "name": "model-nomic-embed",
-        "desc": "bge-m3 Q8_0 GGUF (embedding; v2-moe 在 llama.cpp 下输出全零)",
+        "name": "model-bge-m3-embed",
+        "desc": "bge-m3 Q8_0 GGUF (embedding 权威; nomic-v1.5 中文语义弱, v2-moe 输出全零)",
         "method": "release",
         "url": "https://huggingface.co/nomic-ai/bge-m3-GGUF/resolve/main/bge-m3-q8_0.gguf",
         "local": "core/memory_v5/models/bge-m3-q8_0.gguf",

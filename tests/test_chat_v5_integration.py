@@ -11,7 +11,7 @@ import types
 import importlib.util
 from pathlib import Path
 
-# taskbus 在 hermes venv 不可用 -> mock, 不影响被测函数
+# taskbus 在便携 venv 不可用 -> mock, 不影响被测函数
 _tb = types.ModuleType("taskbus")
 _tb.EventBus = object
 _tb.exec_state_event = object

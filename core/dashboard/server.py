@@ -75,8 +75,8 @@ BOOT_PROFILE: list[str] = ["local_model", "memory"]
 # `ports` 用 TCP 探测；`markers` 用进程命令行子串匹配。任一命中即视为 running。
 COMPONENTS = [
     {"id": "local_model", "name": "本地模型 (Local LLM)", "category": "Backend",
-     "desc": "本地大语言模型 :8080（可切换模型）", "ports": [8080],
-     "model_kind": "llm", "markers": ["llama-server.exe"]},
+     "desc": "本地大语言模型 :8080（可切换模型；懒加载，未使用时可不启动）", "ports": [8080],
+     "model_kind": "llm", "markers": []},
     {"id": "memory", "name": "Memory Service", "category": "Backend",
      "desc": "Embedding 向量服务 :8587（可切换模型）", "ports": [8587],
      "model_kind": "embed", "markers": ["ikaros-memory-watchdog.py", "llama-server.exe"]},
@@ -87,7 +87,7 @@ COMPONENTS = [
     {"id": "dsh", "name": "工作引擎 (DSH)", "category": "Backend",
      "desc": "DeepSeek Harness 底座 :3080 —— Web GUI（--patch 加载 Ikaros overlay: "
              "memory_v5 MCP + 终端 + LSP + persona）；headless 模式跑 one-shot 任务",
-     "ports": [3080], "markers": ["dsh"],
+     "ports": [3080], "markers": [],
      "panel_url": "http://127.0.0.1:3080/"},
     {"id": "herdr", "name": "Herdr 终端编排", "category": "Backend",
      "desc": "coding-agent 终端多路复用器 (headless server，命名管道，无 TCP 端口)",
@@ -704,7 +704,8 @@ def start_component_dsh(root, env, wait):
 def stop_component_dsh(root, env):
     log.info("[dsh] stopping (:3080)...")
     kill_port(3080)
-    kill_by_cmdline("dsh")
+    # 只杀 dsh CLI 进程 (node .../dsh/lib/bin.js), 避免误伤 DSH Desktop 桌面应用
+    kill_by_cmdline("dsh" + os.sep + "lib" + os.sep + "bin.js")
 
 
 def start_component_conversation_tree(root, env, wait):

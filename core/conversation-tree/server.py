@@ -66,13 +66,17 @@ from memory_v5 import store as v5s     # noqa: E402
 from taskbus import EventBus, exec_state_event  # noqa: E402
 # ── LLM 配置 ──────────────────────────────────────────────────
 
-for _ep in _ENV_PATHS:
+# 2026-08-18: 单一 env 权威 = 根 .env（bin/ikaros-env.* 生成，不再扫描多个 env 文件）
+_DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+if not _DEEPSEEK_KEY:
     try:
-        if _ep.exists():
-            for _line in _ep.read_text(encoding="utf-8").split("\n"):
+        _envf = _HERE.parent.parent / ".env"
+        if _envf.is_file():
+            for _line in _envf.read_text(encoding="utf-8").splitlines():
                 _line = _line.strip()
-                if _line.startswith("DEEPSEEK_API_KEY="):
+                if _line.startswith("DEEPSEEK_API_KEY=") and not _line.startswith("#"):
                     _DEEPSEEK_KEY = _line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
     except Exception:
         pass
 

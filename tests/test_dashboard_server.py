@@ -46,7 +46,7 @@ class TestTtlCache(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
 
     def test_cache_distinguishes_args(self):
-        """不同参数必须独立缓存 (修复: 单槽缓存 hermes/neko 互相覆盖)。"""
+        """不同参数必须独立缓存 (修复: 单槽缓存 ikaros/dsh 互相覆盖)。"""
         seen = []
 
         @server._ttl_cache(60)
@@ -54,10 +54,10 @@ class TestTtlCache(unittest.TestCase):
             seen.append(name)
             return name.upper()
 
-        self.assertEqual(f("hermes"), "HERMES")
-        self.assertEqual(f("neko"), "NEKO")
-        self.assertEqual(f("hermes"), "HERMES")
-        self.assertEqual(seen, ["hermes", "neko"])  # 每参数只执行一次
+        self.assertEqual(f("ikaros"), "IKAROS")
+        self.assertEqual(f("dsh"), "DSH")
+        self.assertEqual(f("ikaros"), "IKAROS")
+        self.assertEqual(seen, ["ikaros", "dsh"])  # 每参数只执行一次
 
     def test_cache_expires(self):
         calls = {"n": 0}

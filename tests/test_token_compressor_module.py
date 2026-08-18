@@ -1,5 +1,5 @@
 """
-test_token_compressor_module.py — V5 token_compressor 模块沙箱验证 (不依赖 hermes)
+test_token_compressor_module.py — V5 token_compressor 模块沙箱验证 (不依赖 hermes 底座)
 
 目标: 在离线/未装 llmlingua 的真实环境(当前 venv 无 llmlingua)下, 验证
   - 规则压缩可用且不崩
@@ -7,7 +7,7 @@ test_token_compressor_module.py — V5 token_compressor 模块沙箱验证 (不�
   - compress_old_rounds / compress_retrieval_block / enforce_budget 行为正确
 
 运行:
-  core/hermes/venv/Scripts/python.exe tests/test_token_compressor_module.py
+  runtime/portable-python/python.exe tests/test_token_compressor_module.py
 """
 from __future__ import annotations
 

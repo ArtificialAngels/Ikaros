@@ -4,11 +4,13 @@
 setup-native.py — Ikaros 原生配置脚本（幂等）
 
 在 fetch-upstreams.py 拉取上游之后运行，做「我们自己的」落地配置:
-  1. 校验关键 runtime exe 是否就位 (portable-python / node / llama-server)
-  2. 生成/刷新 core/env/ikaros-paths.json (path 以 IKAROS_ROOT 相对化, 不再写死 E:\\Ikaros)
-  3. 生成 hermes-agent/config.yaml (llama-local 指向 http://127.0.0.1:8080/v1)
-  4. 校验 neko 落点 (core/neko) 是否已由 fetch 拉取; 未拉则提示但不阻断
+  1. 校验关键 runtime exe 是否就位 (portable-python / node / llama-server / dsh)
+  2. 生成/刷新 core/env/ikaros-paths.json (path 以 IKAROS_ROOT 相对化, 不写死盘符)
+  3. 生成 dsh profile 环境参考 (llama-local 指向 http://127.0.0.1:8080/v1)
+  4. 校验 dsh (deepseek-harness) 本地安装是否就位; 未装则提示但不阻断
   5. 写 .env 风格的 IKAROS_ROOT 提示 (不覆盖已有)
+
+2026-08-18: hermes / neko 配置段已随底座退役移除，改为 dsh (deepseek-harness) 语义。
 
 不修改任何上游代码。失败给出明确提示，便于定位缺了哪个上游。
 
@@ -40,7 +42,7 @@ def build_paths():
     rt = "runtime"
     return {
         "_comment": "Ikaros 路径配置 - 由 scripts/setup-native.py 生成 (相对 IKAROS_ROOT)。",
-        "_version": "1.1",
+        "_version": "2.0",
         "ikaros_root": ROOT,
         "core": {
             "python": resolve(f"{rt}/portable-python/python.exe"),
@@ -58,11 +60,13 @@ def build_paths():
             "config": resolve("config"),
             "logs": resolve("data/logs"),
         },
-        "hermes": {
-            "agent": resolve("runtime/hermes-agent"),
-            "home": resolve("data/hermes-agent"),
-            "bridge": resolve("bridge"),
-            "core": resolve("runtime/hermes-agent"),
+        "dsh": {
+            "root": resolve("runtime/dsh"),
+            "source": resolve("runtime/deepseek-harness-master"),
+            "bin": resolve("runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"),
+            "profile": resolve("data/dsh/profiles"),
+            "web_port": 3080,
+            "overlay": resolve("core/ikaros-dsh/cordis.patch.yml"),
         },
         "memory": {
             "root": resolve("core/memory_v5"),
@@ -79,18 +83,7 @@ def build_paths():
         },
         "models": {
             "embedding": resolve("core/memory_v5/models/bge-m3-q8_0.gguf"),
-            "llm": resolve("core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf"),
-        },
-        "neko": {
-            "root": resolve("core/neko"),
-            "python": resolve("core/neko/.venv/Scripts/python.exe"),
-            "server": "app.main_server",   # 上游已将入口重构为包 app/main_server（python -m 形式）
-            "desktop": resolve("core/neko/N.E.K.O.exe"),
-            "static": resolve("core/neko/static"),
-            "templates": resolve("core/neko/templates"),
-            "venv": resolve("core/neko/.venv"),
-            "start_script": resolve("bin/neko-start.bat"),
-            "stop_script": resolve("bin/neko-stop.bat"),
+            "llm": resolve("core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf"),
         },
         "mcp": {
             "root": resolve(f"{rt}/MCPServe"),
@@ -99,24 +92,22 @@ def build_paths():
         "ports": {
             "embedding": 8587,
             "llama": 8080,
-            "bridge": 7860,
-            "neko_main": 48911,
-            "neko_memory": 48912,
-            "neko_bridge": 9460,
+            "dsh_web": 3080,
+            "conversation_tree": 48920,
+            "dashboard": 9100,
         },
     }
 
 
-def write_hermes_config():
-    """生成 hermes-agent/config.yaml（llama-local 指向本地 :8080）。"""
-    target = resolve("hermes-agent/config.yaml")
+def write_dsh_profile_env():
+    """生成 data/dsh/profiles/env.json 参考（llama-local 指向本地 :8080）。"""
+    target = resolve("data/dsh/profiles/env.json")
     if os.path.isfile(target):
-        log(f"  hermes config 已存在, 跳过: {target}")
+        log(f"  dsh profile env 已存在, 跳过: {target}")
         return True
     os.makedirs(os.path.dirname(target), exist_ok=True)
     content = {
-        "provider": "local",
-        "local": {"base_url": "http://127.0.0.1:8080/v1", "model": "local-llm"},
+        "local_llm": {"base_url": "http://127.0.0.1:8080/v1", "model": "local-llm"},
         "deepseek": {
             "base_url": "https://api.deepseek.com/v1",
             "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
@@ -125,7 +116,7 @@ def write_hermes_config():
     }
     with open(target, "w", encoding="utf-8") as f:
         json.dump(content, f, ensure_ascii=False, indent=2)
-    log(f"  hermes config 已生成: {target}")
+    log(f"  dsh profile env 已生成: {target}")
     return True
 
 
@@ -147,12 +138,12 @@ def main():
     ]
     missing = [label for p, label in checks if not check_exe(p, label)]
 
-    # 2) neko 落点校验
-    neko_dir = resolve("core/neko")
-    neko_ok = os.path.isdir(neko_dir) and os.path.isfile(os.path.join(neko_dir, "app", "main_server", "__main__.py"))
-    log(f"  {'OK ' if neko_ok else 'MISS'} N.E.K.O 落点: core/neko (先跑 fetch-upstreams.py)")
-    if not neko_ok:
-        log("    提示: 未检测到 N.E.K.O，运行 `python scripts/fetch-upstreams.py neko` 拉取")
+    # 2) dsh 落点校验
+    dsh_bin = resolve("runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js")
+    dsh_ok = os.path.isfile(dsh_bin)
+    log(f"  {'OK ' if dsh_ok else 'MISS'} dsh 本地安装: {dsh_bin}")
+    if not dsh_ok:
+        log("    提示: 未检测到 dsh (deepseek-harness)，运行 `cd runtime/dsh && npm install` 安装")
 
     # 3) 写配置
     if args.check:
@@ -164,15 +155,15 @@ def main():
         with open(pj, "w", encoding="utf-8") as f:
             json.dump(paths, f, ensure_ascii=False, indent=2)
         log(f"  paths -> {pj}")
-        write_hermes_config()
+        write_dsh_profile_env()
 
     # 4) 结论
     if missing:
         log(f"缺少必需 runtime 组件: {missing}")
         log("请先运行 `python scripts/fetch-upstreams.py` 拉取 runtime 工具链。")
         sys.exit(1)
-    if not neko_ok:
-        log("N.E.K.O 未拉取（可选组件，不影响 V5 核心）。")
+    if not dsh_ok:
+        log("dsh 未安装（工作引擎缺失，建议尽快安装）。")
     log("原生配置完成。")
 
 
