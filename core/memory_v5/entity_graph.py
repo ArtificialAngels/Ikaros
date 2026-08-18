@@ -1,7 +1,9 @@
-# Entity Graph Memory System for Ikaros V5
-# Ported from Innerlife-main (MIT License) entity graph architecture.
-# Provides: entity extraction, entity resolution, spreading activation search,
-# episodic memory consolidation, and graph-based memory retrieval.
+"""Entity Graph Memory System for Ikaros V5.
+
+Ported from Innerlife-main (MIT License) entity graph architecture.
+Provides: entity extraction, entity resolution, spreading activation search,
+episodic memory consolidation, and graph-based memory retrieval.
+"""
 
 from __future__ import annotations
 

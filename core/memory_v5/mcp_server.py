@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-# See docs/scripts/core/memory_v5/v5/mcp_server.md
+"""MCP server — 把 V5 记忆引擎以 MCP 协议暴露给外部 agent (dsh / pi 等).
+
+提供 48 个 v5_* 工具 (v5_memory_search/store/self_model/relationship 等),
+由 memory_v5.tools.* 注册; 经 stdio transport 与客户端通信。
+见 docs/scripts/core/memory_v5/v5/mcp_server.md
+"""
 
 from __future__ import annotations
 

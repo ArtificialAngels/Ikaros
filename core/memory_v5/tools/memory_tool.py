@@ -1,6 +1,10 @@
-from __future__ import annotations
+"""V5 记忆读写工具 — v5_memory_store / v5_memory_search 等 MCP 暴露入口。
 
-# 详细说明见 docs/scripts/core/memory_v5/v5/tools/memory_tool.md
+基于 memory_v5.store 与 memory_retrieval, 提供存储/检索/删除记忆的工具注册。
+详细说明见 docs/scripts/core/memory_v5/v5/tools/memory_tool.md
+"""
+
+from __future__ import annotations
 
 import json
 
