@@ -1,10 +1,11 @@
 # ============================================================================
 # config/defaults/ports.yaml  —  STATIC TEMPLATE (no secrets)
 # ----------------------------------------------------------------------------
-# 这是 8 个服务端口的静态模板，提交到 git，作为各服务的默认端口清单。
+# 这是服务端口的静态模板，提交到 git，作为各服务的默认端口清单。
 # 运行时覆盖请放在 data/config/ports.yaml（gitignored），由
 # core/env/config.py 的 load_config("ports") 合并加载。
 # 修改端口请确保同步更新各服务启动脚本与防火墙规则。
+# 2026-08-18: hermes/neko/qwenpaw 端口已随底座退役移除。
 # ============================================================================
 
 ports:
@@ -13,14 +14,8 @@ ports:
   - port: 8080
     service: local_llm            # 本地大模型（lazy / 按需加载）
   - port: 8587
-    service: embedding            # embedding 向量服务
-  - port: 48911
-    service: neko_frontend        # neko 前端
-  - port: 48912
-    service: neko_memory          # neko 记忆
-  - port: 48915
-    service: neko_agent           # neko agent
-  - port: 9119
-    service: hermes_dashboard     # hermes dashboard
-  - port: 8088
-    service: qwenpaw              # qwenpaw
+    service: embedding            # embedding 向量服务 (bge-m3)
+  - port: 3080
+    service: dsh_web              # dsh (DeepSeek Harness) 工作引擎 web
+  - port: 48920
+    service: conversation_tree    # 对话树面板
