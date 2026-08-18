@@ -12,7 +12,6 @@ $env:IKAROS_PYTHON = Join-Path $root "runtime\portable-python\python.exe"
 $env:IKAROS_NODE = Join-Path $root "runtime\node\node.exe"
 $env:IKAROS_NODE_MODULES = Join-Path $root "runtime\node\node_modules"
 $env:IKAROS_LOGS = Join-Path $root "data\logs"
-$env:IKAROS_MODULES = Join-Path $root "modules"
 
 # Memory V5
 $env:IKAROS_MEMORY = Join-Path $root "core\memory_v5"

@@ -16,7 +16,6 @@ set "IKAROS_PYTHON=%IKAROS_ROOT%\runtime\portable-python\python.exe"
 set "IKAROS_NODE=%IKAROS_ROOT%\runtime\node\node.exe"
 set "IKAROS_NODE_MODULES=%IKAROS_ROOT%\runtime\node\node_modules"
 set "IKAROS_LOGS=%IKAROS_ROOT%\data\logs"
-set "IKAROS_MODULES=%IKAROS_ROOT%\modules"
 
 rem ---- Memory V5 ----
 set "IKAROS_MEMORY=%IKAROS_ROOT%\core\memory_v5"

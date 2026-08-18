@@ -11,7 +11,6 @@ export IKAROS_PYTHON="${IKAROS_ROOT}/runtime/portable-python/python.exe"
 export IKAROS_NODE="${IKAROS_ROOT}/runtime/node/node.exe"
 export IKAROS_NODE_MODULES="${IKAROS_ROOT}/runtime/node/node_modules"
 export IKAROS_LOGS="${IKAROS_ROOT}/data/logs"
-export IKAROS_MODULES="${IKAROS_ROOT}/modules"
 
 # Memory V5
 export IKAROS_MEMORY="${IKAROS_ROOT}/core/memory_v5"
