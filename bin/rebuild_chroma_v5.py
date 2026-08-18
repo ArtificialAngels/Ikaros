@@ -2,7 +2,7 @@
 # 全量重建 V5 向量索引 (chroma 集合 ikaros_v5) — 从 v5.db 重新嵌入所有记忆。
 #
 # 前置:
-#   - embedding 服务 :8587 必须已起 (经控制面板 bin/ikaros-control-panel.bat -> start 拉起,
+#   - embedding 服务 :8587 必须已起 (经 watchdog 拉起,
 #     或由人工在真实桌面启动看门狗). 本脚本【不】自己拉起 llama-server,
 #     只连接外部已运行的 :8587 服务 (避免沙箱环境差异导致崩溃).
 #   - 用 runtime/portable-python/python.exe 运行 (chromadb 在该环境)

@@ -7,8 +7,7 @@
 - :class:`EventBus` —— 单进程内线程安全 pub/sub。``subscribe(handler)`` 返回退订函数,
   ``publish(event)`` 广播给所有订阅者; 单个 handler 异常不影响其他订阅者。
 
-零第三方依赖 (标准库)。可被 conversation-tree 的 SSE 端点、9100 面板、Neko 前端、
-CodingAgentSupervisor 共用同一总线。
+零第三方依赖 (标准库)。可被 conversation-tree 的 SSE 端点、CodingAgentSupervisor 共用同一总线。
 
 事件协议版本化 (``EVENT_PROTOCOL_VERSION``) 以便向前兼容 —— 对应 herdr 的 ``PROTOCOL_VERSION``。
 """

@@ -500,7 +500,7 @@ def build_system_prompt(mode: str) -> str:
 def _flatten_openai_content(content) -> str:
     """把 OpenAI 消息 content (str 或 [{"type":..., ...}] 列表) 拍平成纯文本.
 
-    供不支持多模态的文本端点 (DeepSeek/Hermes dashboard/Local) 与树摘要使用:
+    供不支持多模态的文本端点 (DeepSeek/Local) 与树摘要使用:
     text 块取 text; image_url 块降级为占位说明 (无视觉能力的模型读不到图).
     """
     if isinstance(content, str):
@@ -700,7 +700,7 @@ _tree: "ct.ConversationTree | None" = None
 _retriever: "ct.MemoryRetriever | None" = None
 _lock = threading.RLock()
 
-# B2: 共享任务事件总线 —— 所有订阅方 (SSE / 9100 面板 / supervisor) 共用同一实例
+# B2: 共享任务事件总线 —— 所有订阅方 (SSE / supervisor) 共用同一实例
 _bus = EventBus()
 
 # ── 多会话 (session) 支持: 每个 session = 一棵独立对话树 ──────────────
@@ -1120,7 +1120,7 @@ def _export_txt(sess: dict) -> str:
     return "\n".join(lines)
 
 
-# ── B5: supervisor 端点 (9100 面板 herdr 卡片驱动) ───────────────────────
+# ── B5: supervisor 端点 ───────────────────────────────────────────────
 _supervisor = None
 _SUPERVISOR_OVERRIDE = None  # 测试注入用 (FakeSupervisor)
 
@@ -1416,7 +1416,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        # B5: 允许 9100 面板跨域订阅 supervisor 端点 + 事件流
+        # B5: 允许跨域订阅 supervisor 端点 + 事件流
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
@@ -1425,7 +1425,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self):
-        # B5: CORS 预检（9100 面板跨域 POST supervisor 端点）
+        # B5: CORS 预检（跨域 POST supervisor 端点）
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -1725,7 +1725,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")  # 禁用代理缓冲, 保证实时
-        # B5: 允许 9100 面板跨域订阅事件流
+        # B5: 允许跨域订阅事件流
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
@@ -2339,7 +2339,7 @@ class Handler(BaseHTTPRequestHandler):
                 sess["title"] = title[:60]
                 _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
-            # ── B5: supervisor 编排端点 (9100 面板 herdr 卡片驱动) ──
+            # ── B5: supervisor 编排端点 ──
             elif path == "/api/supervisor/run":
                 # 在 herdr pane 里跑一个外部 coding agent; 后台线程执行, 结果经 exec_state 回流
                 try:
