@@ -91,7 +91,7 @@ LLM_PORT = 8080  # 本地 LLM 服务端口
 LLM_LAZY = True
 
 
-def _resolve_llm_model() -> Path:
+def _resolve_llm_model() -> "Path | None":
     """动态解析本地 LLM 模型路径 (每次调用时读取, 不缓存).
 
     修复 (2026-08-11): 原 LLM_MODEL 为模块级固定值且 env 优先——看门狗被面板
@@ -100,15 +100,19 @@ def _resolve_llm_model() -> Path:
       - config (model_config.json 的 initial_model) 是权威源 (面板切换/手动
         修改都走这里), 每次 spawn 前重新读取;
       - env IKAROS_MODEL_LLM 仅当 config 模型文件缺失时兜底 (历史兼容)。
+      - 2026-08-18 本地 LLM 退役: initial_model 为空串 (显式禁用标记)
+        → 返回 None, 调用方 (spawn/start) 判空跳过, 不再回退 Qwen 默认。
     """
-    cfg_model = _LLM_CFG.get("initial_model", "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
-    # _LLM_CFG 是模块级快照; 每次重新读 config 文件, 面板/手动切换即时生效
     try:
         _fresh = _load_model_cfg()
-        if isinstance(_fresh, dict) and _fresh.get("initial_model"):
+        if isinstance(_fresh, dict) and "initial_model" in _fresh:
             cfg_model = _fresh["initial_model"]
+        else:
+            cfg_model = _LLM_CFG.get("initial_model", "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
     except Exception:
-        pass
+        cfg_model = _LLM_CFG.get("initial_model", "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
+    if cfg_model == "":  # 显式"无本地 LLM"(2026-08-18 退役标记)
+        return None
     cfg_path = Path(ROOT / "core" / "memory_v5" / "models" / cfg_model)
     if cfg_path.exists():
         return cfg_path
@@ -123,13 +127,18 @@ def _build_llm_argv() -> list[str]:
 
     配置逻辑统一来自 core/memory_v5/models/model_config.py (经 _load_model_cfg 读取)。
     """
+    model = _resolve_llm_model()
+    if model is None:
+        raise FileNotFoundError(
+            "local LLM disabled (2026-08-18 退役): model_config.json 的 "
+            "initial_model 为空串; 有本地推理需求时放入 gguf 并改回模型名即可恢复")
     ngl = str(_LLM_CFG.get("gpu_layers", "auto"))
     if LLAMA_CPU_FALLBACK:
         # 设备无匹配 CUDA build：强制 CPU 层数，避免 CUDA 初始化崩溃
         ngl = "0"
     return [
         str(LLAMA_BIN),
-        "-m", str(_resolve_llm_model()),
+        "-m", str(model),
         "--host", _LLM_CFG.get("host", "127.0.0.1"),
         "--port", str(LLM_PORT),
         "-c", str(_LLM_CFG.get("ctx_size", 8192)),
@@ -151,11 +160,12 @@ def _spawn_llm_server() -> subprocess.Popen:
         raise FileNotFoundError(
             f"llama-server not found: {LLAMA_BIN} "
             f"(选择原因: {LLAMA_SELECT_REASON or 'env/默认'})")
-    model = _resolve_llm_model()
+    argv = _build_llm_argv()  # 内部 resolve 模型并判空 (None → FileNotFoundError)
+    model = Path(argv[argv.index("-m") + 1])
     if not model.exists():
         raise FileNotFoundError(f"local LLM model not found: {model}")
     return subprocess.Popen(
-        _build_llm_argv(),
+        argv,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=_SUBPROC_SERVICE,
@@ -296,7 +306,11 @@ class MemoryWatchdog:
         if self._port_alive(LLM_PORT):
             _log("[llm] :8080 already listening, skip")
             return True
-        _log("[llm] starting: %s ...", _resolve_llm_model().name)
+        model = _resolve_llm_model()
+        if model is None:
+            _log("[llm] local LLM 已退役 (2026-08-18), 跳过启动 (:8080)")
+            return False
+        _log("[llm] starting: %s ...", model.name)
         try:
             self._procs["llm"] = _spawn_llm_server()
         except Exception as e:

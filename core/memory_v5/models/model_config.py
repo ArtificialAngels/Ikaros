@@ -95,12 +95,17 @@ def resolve_model_config(force_rescan: bool = False) -> dict:
     """读取（或首跑创建）模型加载配置。
 
     - 配置存在且 ``initial_model`` 指向的文件仍在 → 直接用。
+    - ``initial_model`` 为 ``""`` (2026-08-18 本地 LLM 退役标记) → 保持原样返回,
+      不触发扫描/写回——"无本地 LLM"是显式意图, 即使目录里只有一个 embedding 模型
+      也不会被误扫描重建。有需求时手动把 initial_model 改回模型名即可恢复。
     - 否则扫描目录、选定默认模型、写回 ``model_config.json``。
     """
     if not force_rescan and CONFIG_PATH.exists():
         try:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             initial = cfg.get("initial_model")
+            if initial == "":  # 显式"无本地 LLM"(2026-08-18 退役标记)
+                return cfg
             if initial and (MODELS_DIR / initial).is_file():
                 return cfg
         except (json.JSONDecodeError, OSError):

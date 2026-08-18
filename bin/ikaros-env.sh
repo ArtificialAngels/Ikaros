@@ -19,7 +19,6 @@ export IKAROS_MEMORY_DATA="${IKAROS_MEMORY}/data"
 export IKAROS_MEMORY_MODELS="${IKAROS_MEMORY}/models"
 export IKAROS_MEMORY_SCRIPT="${IKAROS_MEMORY}/store.py"
 export IKAROS_MODEL_EMBEDDING="${IKAROS_MEMORY_MODELS}/bge-m3-q8_0.gguf"
-export IKAROS_MODEL_LLM="${IKAROS_MEMORY_MODELS}/Phi-4-mini-instruct-Q4_K_M.gguf"
 
 # DeepSeek Harness (dsh) 工作引擎
 export IKAROS_DSH="${IKAROS_ROOT}/runtime/dsh"

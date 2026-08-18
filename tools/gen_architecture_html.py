@@ -31,8 +31,8 @@ TODAY = datetime.date.today().isoformat()  # e.g. 2026-07-30
 # (The :9100 panel itself is the host, listed separately in the port table.)
 SERVICES = [
     ("9100", "控制面板", "组件编排中枢 · 一键启停 + CUDA 装配 + 模型切换", "Infra"),
-    ("8080", "本地 LLM", "Phi-4-mini · 懒加载（调用时热载入）", "Backend"),
-    ("8587", "Embedding 向量", "nomic 嵌入 · 看门狗管理", "Backend"),
+    ("8080", "本地 LLM", "已退役 (2026-08-18) · 按需热载入（有需求再配置）", "Backend"),
+    ("8587", "Embedding 向量", "bge-m3 嵌入 (1024 维) · 看门狗管理", "Backend"),
     ("48911", "Neko 主前端", "React 聊天 + Avatar（Live2D/VRM/MMD）", "Frontend"),
     ("48912", "Neko 记忆服务", "独立 SQLite+Chroma 记忆系统", "Frontend"),
     ("48915", "Neko Agent 服务", "键鼠/浏览器/OpenClaw 控制", "Frontend"),
@@ -44,8 +44,8 @@ SERVICES = [
 # Full port mapping table (TCP ports + the named-pipe component).
 PORT_TABLE = [
     (":9100", "控制面板 Web UI", "core/dashboard/server.py", "✅"),
-    (":8080", "本地 LLM (Phi-4-mini, 懒加载)", "bin/ikaros-memory-watchdog.py → llama-server", "⚠️ 懒加载"),
-    (":8587", "Embedding (nomic)", "bin/ikaros-memory-watchdog.py", "⚠️"),
+    (":8080", "本地 LLM (已退役 2026-08-18, 按需配置)", "bin/ikaros-memory-watchdog.py → llama-server", "⛔ 已退役"),
+    (":8587", "Embedding (bge-m3)", "bin/ikaros-memory-watchdog.py", "✅"),
     (":48911", "Neko 主前端", "apps/neko/app/main_server.py", "✅"),
     (":48912", "Neko 记忆服务", "apps/neko/app/memory_server.py", "✅"),
     (":48915", "Neko Agent 服务", "apps/neko/app/agent_server.py", "✅"),

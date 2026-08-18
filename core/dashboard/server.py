@@ -132,7 +132,7 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_OMP_AGENT"] = s(root / "data" / "omp" / "agent")
     e["PI_CODING_AGENT_DIR"] = e["IKAROS_OMP_AGENT"]
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf")
-    e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Phi-4-mini-instruct-Q4_K_M.gguf")
+    # 本地 LLM 已退役 (2026-08-18): 如需本地推理, 放入 gguf + model_config.json 设 initial_model 即可恢复
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
     # API_SERVER_KEY: 优先取根 .env；
     # 对话树等子进程经此注入同一 key 保持一致性）。
@@ -426,8 +426,7 @@ def list_models(kind: str) -> list[str]:
 
 
 def load_panel_models() -> dict:
-    default = {"8080": "Phi-4-mini-instruct-Q4_K_M.gguf",
-               "8587": "bge-m3-q8_0.gguf"}
+    default = {"8587": "bge-m3-q8_0.gguf"}
     if PANEL_MODELS_PATH.is_file():
         try:
             d = json.loads(PANEL_MODELS_PATH.read_text(encoding="utf-8"))
@@ -558,7 +557,7 @@ def start_component_local_model(root, env, wait):
     """启动本地模型 (:8080)：加载面板选中的 LLM。默认懒加载，
     面板可显式拉起；若未运行则 agent 调用时热载入。"""
     log.info("[local_model] starting local LLM (:8080)...")
-    model = current_model_for_port(8080) or "Phi-4-mini-instruct-Q4_K_M.gguf"
+    model = current_model_for_port(8080)
     if not (MODELS_DIR / model).is_file():
         avail = list_models("llm")
         model = avail[0] if avail else model

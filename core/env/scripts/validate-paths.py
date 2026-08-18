@@ -164,11 +164,8 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
         str(root / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf"),
         critical=True, must_be_file=True
     ))
-    checks.append(PathCheck(
-        "LLM 模型",
-        str(root / "core/memory_v5" / "models" / "Phi-4-mini-instruct-Q4_K_M.gguf"),
-        critical=True, must_be_file=True
-    ))
+    # 本地 LLM 已退役 (2026-08-18): 模型槽可空, 不再强制存在
+    # (有本地推理需求时放入 gguf 并恢复此检查)
 
     # ---- env 权威源 (bin/) ----
     checks.append(PathCheck(

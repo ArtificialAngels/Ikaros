@@ -1,9 +1,9 @@
 @echo off
-rem ikaros-env.bat ¡ª Ikaros ±ãÐ¯»·¾³ (µ¥Ò»È¨ÍþÔ´, ×ÔÃª¶¨)
-rem ÓÉ¸÷Èë¿Ú bat call ±¾ÎÄ¼þ (start-dsh-ikaros.bat / ¿ØÖÆÃæ°å / memory services)¡£
-rem ÃªµãÔ­Ôò (Ñ§ ComfyUI-aki): Ò»ÇÐÂ·¾¶Ïà¶Ô IKAROS_ROOT ÍÆµ¼, ²»Ð´ËÀÅÌ·û;
-rem IKAROS_ROOT ÓÃ %%~fI ¹æ·¶»¯ (Ïû³ý %~dp0.. ²ÐÁôµÄ \bin\.. ÓëË«·´Ð±¸Ü)¡£
-rem Éú³É: 2026-08-11 ¡¤ ÖØ¹¹: 2026-08-18 (ÒÆ³ý hermes/neko, ÐÂÔö dsh)
+rem ikaros-env.bat ï¿½ï¿½ Ikaros ï¿½ï¿½Ð¯ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½Ò»È¨ï¿½ï¿½Ô´, ï¿½ï¿½Ãªï¿½ï¿½)
+rem ï¿½É¸ï¿½ï¿½ï¿½ï¿½ bat call ï¿½ï¿½ï¿½Ä¼ï¿½ (start-dsh-ikaros.bat / ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ / memory services)ï¿½ï¿½
+rem Ãªï¿½ï¿½Ô­ï¿½ï¿½ (Ñ§ ComfyUI-aki): Ò»ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ IKAROS_ROOT ï¿½Æµï¿½, ï¿½ï¿½Ð´ï¿½ï¿½ï¿½Ì·ï¿½;
+rem IKAROS_ROOT ï¿½ï¿½ %%~fI ï¿½æ·¶ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ %~dp0.. ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ \bin\.. ï¿½ï¿½Ë«ï¿½ï¿½Ð±ï¿½ï¿½)ï¿½ï¿½
+rem ï¿½ï¿½ï¿½ï¿½: 2026-08-11 ï¿½ï¿½ ï¿½Ø¹ï¿½: 2026-08-18 (ï¿½Æ³ï¿½ hermes/neko, ï¿½ï¿½ï¿½ï¿½ dsh)
 setlocal DisableDelayedExpansion
 for %%I in ("%~dp0..") do set "IKAROS_ROOT=%%~fI"
 
@@ -24,20 +24,19 @@ set "IKAROS_MEMORY_DATA=%IKAROS_MEMORY%\data"
 set "IKAROS_MEMORY_MODELS=%IKAROS_MEMORY%\models"
 set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\store.py"
 set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\bge-m3-q8_0.gguf"
-set "IKAROS_MODEL_LLM=%IKAROS_MEMORY_MODELS%\Phi-4-mini-instruct-Q4_K_M.gguf"
 
-rem ---- DeepSeek Harness (dsh) ¹¤×÷ÒýÇæ ----
+rem ---- DeepSeek Harness (dsh) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ----
 set "IKAROS_DSH=%IKAROS_ROOT%\runtime\dsh"
 set "IKAROS_DSH_SOURCE=%IKAROS_ROOT%\runtime\deepseek-harness-master"
 set "IKAROS_DSH_PROFILE=%IKAROS_DATA%\dsh\profiles"
 set "IKAROS_DSH_WEB_PORT=3080"
 set "IKAROS_DSH_OVERLAY=%IKAROS_ROOT%\core\ikaros-dsh\cordis.patch.yml"
 
-rem ---- omp (oh-my-pi) ±àÂë agent ----
+rem ---- omp (oh-my-pi) ï¿½ï¿½ï¿½ï¿½ agent ----
 set "IKAROS_OMP_AGENT=%IKAROS_DATA%\omp\agent"
 set "PI_CODING_AGENT_DIR=%IKAROS_OMP_AGENT%"
 
-rem ---- llama.cpp / ±¾µØÄ£ÐÍ ----
+rem ---- llama.cpp / ï¿½ï¿½ï¿½ï¿½Ä£ï¿½ï¿½ ----
 if not defined IKAROS_LLAMA_VERSION (
     set "IKAROS_LLAMA_VERSION=b10000-cuda"
     nvidia-smi 2>nul | findstr /C:"CUDA Version: 12." >nul 2>&1 && set "IKAROS_LLAMA_VERSION=b10000-cuda-12.4"
@@ -46,7 +45,7 @@ if not defined IKAROS_LLAMA_VERSION (
 set "IKAROS_LLAMA_DIR=%IKAROS_RUNTIME%\llama\%IKAROS_LLAMA_VERSION%"
 set "IKAROS_LLAMA_SERVER=%IKAROS_LLAMA_DIR%\llama-server.exe"
 
-rem ---- ÆäËüÔËÐÐÊ± ----
+rem ---- ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê± ----
 set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
 set "IKAROS_HERDR=%IKAROS_RUNTIME%\herdr\herdr.exe"
 set "IKAROS_MCP=%IKAROS_RUNTIME%\MCPServe"
@@ -54,7 +53,7 @@ set "IKAROS_GRAPHIFY=%IKAROS_MCP%\graphify"
 set "IKAROS_GRAPHIFY_SERVE=%IKAROS_GRAPHIFY%\graphify\serve.py"
 set "THIRDSPACE_VAULT=%IKAROS_DATA%\thirdspace-vault"
 
-rem ---- ¶Ë¿Ú ----
+rem ---- ï¿½Ë¿ï¿½ ----
 set "IKAROS_PORT_EMBEDDING=8587"
 set "IKAROS_PORT_LLM=8080"
 set "IKAROS_PORT_LLAMA=8080"
@@ -67,7 +66,7 @@ set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;%IKAROS_ROOT%\runtime\herdr;%IKAR
 set "NODE_PATH=%IKAROS_NODE_MODULES%"
 set "PYTHONHOME="
 
-rem ---- --print Ä£Ê½: Êä³öÈ«²¿ IKAROS_* ±äÁ¿ (µ÷ÊÔ/²âÊÔÓÃ) ----
+rem ---- --print Ä£Ê½: ï¿½ï¿½ï¿½È«ï¿½ï¿½ IKAROS_* ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½) ----
 if /i "%~1"=="--print" (
     set | findstr /B "IKAROS_"
     exit /b 0

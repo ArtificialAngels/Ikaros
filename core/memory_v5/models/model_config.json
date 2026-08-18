@@ -1,5 +1,5 @@
 {
-  "initial_model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+  "initial_model": "",
   "alias": "local-llm",
   "host": "127.0.0.1",
   "port": 8080,

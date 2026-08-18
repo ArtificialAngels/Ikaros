@@ -20,7 +20,6 @@ $env:IKAROS_MEMORY_DATA = Join-Path $root "core\memory_v5\data"
 $env:IKAROS_MEMORY_MODELS = Join-Path $root "core\memory_v5\models"
 $env:IKAROS_MEMORY_SCRIPT = Join-Path $root "core\memory_v5\store.py"
 $env:IKAROS_MODEL_EMBEDDING = Join-Path $root "core\memory_v5\models\bge-m3-q8_0.gguf"
-$env:IKAROS_MODEL_LLM = Join-Path $root "core\memory_v5\models\Phi-4-mini-instruct-Q4_K_M.gguf"
 
 # DeepSeek Harness (dsh) 工作引擎
 $env:IKAROS_DSH = Join-Path $root "runtime\dsh"

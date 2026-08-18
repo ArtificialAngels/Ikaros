@@ -83,7 +83,7 @@ def build_paths():
         },
         "models": {
             "embedding": resolve("core/memory_v5/models/bge-m3-q8_0.gguf"),
-            "llm": resolve("core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf"),
+            "llm": "",  # 本地 LLM 已退役 (2026-08-18): 有需求时放入 gguf 再配置
         },
         "mcp": {
             "root": resolve(f"{rt}/MCPServe"),

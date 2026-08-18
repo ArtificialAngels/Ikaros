@@ -66,7 +66,6 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     },
     "models": {
         "embedding": "core/memory_v5/models/bge-m3-q8_0.gguf",
-        "llm": "core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf",
     },
     "omp": {
         "root": "data/omp",
