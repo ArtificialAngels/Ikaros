@@ -43,7 +43,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 ## Soul core
 - Renamed: the V5 soul-core dir is now `core/memory_v5/` (the old `v5` subdir under `core` is gone). Python package `v5` → **`memory_v5`** (`import memory_v5`); `sys.path` must include `E:/Ikaros/core`.
 - Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. The 48 MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix).
-- **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；`rules_retriever` 保持独立意图通道。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
+- **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；⚠️ `rules_retriever` 已于 2026-08-14 删除（孤儿, 无代码调用; 规则数据 `docs/agent-rules.yaml` 暂未消费）。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
 
 ## Hermes 插件外置（2026-08-04）
 - **ikaros_v5 上下文引擎 + 记忆提供方已外置为 Hermes 用户插件**，不再存在于 `runtime/hermes-agent` 仓库内（零源码侵入）。
@@ -61,12 +61,12 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 
 ## 2026-08-14 接手审计修复记录（记忆恢复资料）
 
-- **embed 模型已恢复**：`core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf`（1.8GB，`nomic-ai/nomic-embed-text-v2-moe-GGUF` 仓库，`scripts/fetch-upstreams.py` 的 URL 已修正）；`models/Phi-4-mini-instruct-Q4_K_M.gguf` 已从 `data/models/` 归位；`data/config/panel_models.json` 已同步 Phi-4。
+- **embed 模型已恢复 → 2026-08-14 定稿 bge-m3**：原 `nomic-embed-text-v2-moe.f32.gguf`（1.8GB）在 llama.cpp b10000 下**输出全零向量**（`Mask token missing, please reconvert`，f32 全零 / Q8_0 挂起 / `--pooling last` 也挂起）——**语义向量检索因此静默死了很久**（watchdog 心跳只查端口+health，不校验嵌入值；live chroma 1220 条全零）。中间试过 `nomic-embed-text-v1.5`（139MB，能出非零但**中文语义弱**，相关句 cos 反而最低）；**最终换 `bge-m3-q8_0.gguf`**（605MB，1024 维，中英多语言强，实测相关 cos 0.93 vs 不相关 0.33，需 `--pooling cls` + query 检索指令"为这个句子生成表示以用于检索相关文章："、document 无前缀）。配置链 14 处已同步（ikaros-env.sh|bat / core/env/* / dashboard build_env+panel_models.json / watchdog 默认+pooling / scripts / search.py 前缀 / benchmark.py）；**:8587 已切 bge-m3（cls pooling），chroma 删除重建 + 1068 条全量重嵌（全非零）**；**真实嵌入评分 composite 92.1**（hit@1=0.9/MRR=0.925，超 mock 90.5）。**已删除坏模型文件**：v2-moe.f32（1.78GB）/ v2-moe.Q8_0（488MB）/ v1.5（139MB）全部删除释放 ~2.4GB（models 目录只剩 bge-m3 + Phi-4）；旧全零 chroma 备份也已删。`models/Phi-4-mini-instruct-Q4_K_M.gguf` 已归位；`data/config/panel_models.json` 已同步 Phi-4。⚠️ `data/hermes-agent/` 目录在真实 FS 不存在（仅 harness 虚拟视图可见，曾短暂存在 .env 后消失）——Hermes 侧 env 镜像待核。
 - **v5.db 历史合并已执行（2026-08-14，决策 A）**：8/13 21:26 重建丢失的历史记忆已恢复——
   - 合并结果：**1686 行** = 实时 6 行 + 7/31 备份 1186 行 + chroma 独有 494 条（8/1-8/12，含全部树节点对话）；FTS 同步、chroma 重建 1686==1686 校验通过、13 个树指针重映射（旧 id → 100000+）全部解析
   - 合并前备份：`tmp/v5-merged-prep/applied-backup/`（v5.live.before-merge.db + 树 JSON）
   - 合并源资料：7/31 备份 `tmp/backup-v5del-20260731-094553/v5.db`；chroma 元数据导出 `tmp/chroma-docs-backup-20260814.json`
-- **记忆→对话树推送链**（旧 `hermes_provider.push_to_conversation_tree`）当前无实现，恢复/删承诺待定；`:48920 /api/add_turn` 端点仍在，恢复补丁草稿 `tmp/push-chain-restore-draft.txt`。
+- **记忆→对话树推送链（2026-08-14 已恢复）**：旧 `hermes_provider.push_to_conversation_tree()` 已随重构删除，改由插件 `memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（静默失败）；源 `patches/` 与运行时 `data/hermes-agent/plugins/ikaros_v5/` 同版（20145B 同 mtime）。草稿 `tmp/push-chain-restore-draft.txt` 可清理。
 - **2026-08-14 记忆去重清理**：哲学味月度叙事 5 条 + user_trait 579→61（噪声/思维链泄漏 + 主导签名聚类去重）+ identity 5→1 + emotional_event 40→6 + conversation 脏行（ANSI/空）。1686→1127，FTS/chroma 全一致。备份：`tmp/v5.before-narrative-cleanup-*.db`、`tmp/v5.before-dedup-*.db`。
 - **2026-08-14 决策 A：反思管线 LLM 生成类停用**——`make_default_scheduler` 移除 consolidate/distill/reflect/narrative/self_discovery 5 个 op（无去重产生雷同 user_trait/哲学叙事/思维链泄漏，白烧 API）；情绪因果 `emotional_memory._generate_causal` 改纯规则（不调 LLM）。保留算法类：promote/cleanup/vector_sync/memory_promote/temporal_extract/reflection_promote/expire_directives。
 - **⚠️ 修复看门狗反思循环死链**：`_maybe_reflect` 原 import `v5.reflect.registry`（改名前的旧包名）自 v5→memory_v5 后一直 ModuleNotFoundError 被吞——**全部反思 op 数周未运行**。已改为 `memory_v5.reflect.registry`，首次真正跑通：promote 901 / cleanup 564（历史欠账一次补齐）。教训：改名后必须全局搜旧包名 import。
@@ -76,7 +76,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
   - `core/memory_v5/context_anchor.py`：情境锚 `now_context()`（epoch/时间叙事/周几/活动/前台窗口），复用 cogno_5d（时间作息+窗口活动），供后续召回决策与时间锚定检索
   - `store.upsert()`：写策略——同类相似记忆存在则**合并强化**（权重取高/内容取长/tags 并集/access+1），否则新建；相似判定=LIKE 子句探针 + difflib ratio/子串包含；**带 v5_key: 标签的结构化写入跳过合并**
   - `memory_api.store` 已切到 upsert（MCP v5_memory_store / 项目笔记等路径受益）
-  - 根治"永远 INSERT"的雷同膨胀机制性根源（dedup op 仍是空壳，但 upsert 在写入口挡掉了）
+  - 根治"永远 INSERT"的雷同膨胀机制性根源（upsert 在写入口挡掉 + 2026-08-14 后 dedup op 也补成纯算法实现，见 registry.make_dedup_op）
   - 测试：tests/test_upsert.py 7 项（合并/新建/类型隔离/阈值/内容取长/reinforcement 上限/情境锚）
 - **2026-08-14 Phase 2：召回决策（should_recall）**——"什么时候该调用记忆"：
   - `context_anchor.should_recall(user_text)`：线索词（记得/上次/回顾/关于/最近/remember...）**必召回**；寒暄/琐碎开头且 <20 字（你好/谢谢/晚安/ok）**跳过**；实质内容（>=8 字）**召回**
@@ -88,6 +88,32 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
   - live 库已跑 `temporal_graph.apply_migration()`（memory + eg 表补 valid_to，幂等）
   - 实测：supersede 一条事实 → valid_to 落库，unified_retrieve 默认排除 ✓
   - 测试：2 项（排除过期 / 未迁移 fail-open）
+- **2026-08-14 Phase 4：全套记忆加权**（`memory_retrieval._score_items` 纯函数，config 全可调）：
+  - **A 基础权重进评分**：`score × (base_weight_factor + (1-f)×weight)`，写侧重要性真正影响排名（bwf=1.0 关）
+  - **B+E 类型化衰减**：`type_decay` 每类独立 per_day/floor——conversation 快衰减(0.05/0.2)，user_trait/identity/decision/lesson 保值(0.005-0.01/0.6-0.7)
+  - **C 合并即强化**：upsert 每次合并 +0.05 reinforcement（`merge_reinforce_increment`），被合并越多检索越靠前
+  - **D 情境加权**：`situational`——写代码/IDE/终端活动 → v5_project 标签记忆 +0.10；created 小时 ≈ 当前小时(±1h/跨午夜) → +0.05 时段联想；enabled=false 全关
+  - 检索过程每轮取一次 `now_context()`（costo 低）；tags 已透传到融合层
+  - 测试：tests/test_weighting.py 8 项（各因子 + 关闭开关 + 合并强化累积）
+- **2026-08-14 推荐落地：信号透明 + 意图加权 + V5.7 类型化项目知识边**（对比 graph-memory/mnemon 后落地）：
+  - 检索信号透明：`_score_items` 每条结果带 `signals`（fts/vector/time/base_weight/type_decay/type_boost/frequency/situational）+ `intent`，供上层/LLM 自主重排
+  - 意图驱动加权：`detect_intent`（WHY/WHEN/ENTITY/GENERAL）→ `memory_retrieval.intent` 配置调类型 boost；ENTITY 意图 auto scope 总是补实体图扩散
+  - 循环依赖解开：`valid_to_map`→store、`retrieve_temporal`→memory_retrieval；summary 死字段 model 已删
+  - **V5.7 类型化项目知识边**（graph-memory 借鉴）：`project_edges` 表 + `project_edges.py`，`v5_project_note` 写入自动建边（SOLVES/PREVENTS/CAUSED_BY/RELATES_TO，kind 规则+关键词重叠，纯规则无 LLM）；`v5_project_retrieve(with_links=true)` 沿边返回类型化邻居（pi 能问"这个坑怎么解的"）；`eg_edges` 补 `relation_type` 列（幂等迁移 + `upsert_entity_edge` 参数）
+  - **推荐 4 PPR/社区（graph-memory 借鉴）**：`graph_rank.py`（personalized_pagerank + label_propagation 纯函数）；`spreading_activation_search` 用 PPR 多跳扩散取代单跳传播（失败回退 1-hop）
+  - **推荐 5 EI 统一生命周期（mnemon 借鉴）**：`lifecycle.py`（`effective_importance` = weight×强化×访问×衰减 + `retention_pass` demote/promote/archive 单轮批写）；`reflect.registry` 默认调度器用 `retention` op 取代 promote/cleanup/memory_promote 三个打架的 op
+  - **project_edges 并轨 graph scope**：`project_graph_search` 接入 `unified_retrieve(scope="graph")` + auto 补路（通用检索也能沿类型化边扩散）
+  - 测试：test_retrieval_signals.py 12 项 + test_project_edges.py 6 项 + test_v57_recommendations.py 9 项
+  - **检索质量基准**：`memory_v5/benchmark.py`（golden-query eval，`--real` = 真实 bge-m3 嵌入）。实测 10 查询：hit@1=0.9 / MRR=0.925 / **composite 92.1/100**
+- **2026-08-14 融汇（P1-P5 架构收敛，治"功能分散"）**：
+  - **P1 检索收敛**：删 `search.fused_search`（旧双路），`dissonance`/`metacog` 切到 `unified_retrieve`（阈值 0.4→0.3 融合尺度）；`unified_retrieve` = 唯一对外检索入口，`retrieve` = 内部语义引擎
+  - **P2 统一重要性**：新建 `importance.py`（`effective_importance`/`memory_importance` 单一口径）；`lifecycle` 改为 re-export，`_score_items` 在 `signals.ei` 透出 EI——写时强化/检索排序/生命周期共用同一 EI
+  - **P3 图收敛**：新建 `memory_retrieval._graph_retrieve`（实体图 + 项目知识图一致性收集 + graph_min 过滤），graph scope 与 auto 补路共用，取代 OR 拼装
+  - **P4 扩展裁决**：删无调用的 `gated_retrieval.py`（骨架，其分层思想由 `should_recall`+`type_decay` 覆盖）；其余扩展接入状态写入 ARCHITECTURE §5.2.5
+  - **P5 存储理顺**：ARCHITECTURE §5.2.1 明确三层真相源：`v5.db`=唯一真相源 / `chroma`=派生(可重建, 1024 维 bge-m3) / JSON 状态=灵魂状态(非记忆)
+  - 测试：279→285 (新增 test_importance.py 6 项)，评分 92.1 不变（重构行为保持）
+  - **P6 契约/工具收敛（第二轮）**：① `_norm` 增强为兼容 dict/sqlite.Row/Memory 的唯一归一化，`memory_api._row_to_dict` 委托它（结果形状唯一, 结构化路径标记 source="structured"）；② tree_adapter / conversation-tree 跨分支检索切到 `unified_retrieve(scope="semantic")`（`retrieve` 仅剩内部语义引擎身份, 外部零直连）；③ 删孤儿 `rules_retriever.py`（无代码调用, 其调用方 orchestrator 已删; `docs/agent-rules.yaml` 暂未消费）；④ `v5_memory_search` docstring 修正（本就走 unified_retrieve）
+  - **P7 配置双源防漂移（第三轮）**：`preprocess_config.py._DEFAULTS` 曾是 yaml 的**漂移旧镜像**（min_fused_score 0.6 vs yaml 0.3、缺 Phase 4 全套加权键、残留 summary.model）——yaml 缺失/损坏时回退会落到错误值打空检索。已**全量同步 `_DEFAULTS` 到 yaml**（含 type_decay/situational/intent/auto_route 等），并新增 `tests/test_config_alignment.py`（4 项：键覆盖/无陈旧键/关键兜底值/合并结果）强制防漂移。测试 285→289
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。
@@ -104,7 +130,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - 新增 `:48920` 树形对话面板（Explore.poker 风格），由控制面板 `conversation_tree` 组件管理，启动 `core/conversation-tree/server.py --port 48920`。
 - 后端引擎 `core/memory_v5/conversation_tree.py`（`ConversationTree`，93 tests）；REST：`fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context` / `set_trunk`（主线提升，废弃分支拒绝）。
 - 对话内容存 V5（`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`），树 JSON 仅存指针。
-- 与 V5 集成：~~`hermes_provider.push_to_conversation_tree()` 静默推送节点~~ ⚠️ 2026-08-14 审计：`hermes_provider.py` 已随重构删除，该函数代码中不存在；记忆写入→对话树推送链当前**无实现**（插件 sync_turn 只存 V5）。恢复或删承诺待定。`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话导入对话树。
+- 与 V5 集成：`hermes_provider.push_to_conversation_tree()` 函数已随重构删除，改由插件 `memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复，源/运行时同版）。`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话批量导入对话树。
 - **chat 链路（2026-08-01 得兼）**：ikaros / hermes 双模式统一走 Hermes gateway `:8642`（`/v1/chat/completions`，完整 tools/skills 循环 + MCP 工具）。hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（不重复注入 SOUL，gateway core 的 SOUL 即人格）；ikaros 模式注入「完整 persona + 树域记忆」。gateway 不可达/空响应 → 降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ 只读工具回路，SSE `warn` 事件提示降级（黄色提示条）。gateway 工具结果经 `api_server._on_tool_complete` 截断 2000 透出（`hermes.tool.progress` completed 事件带 `result`）；thinking / usage / tool_calls / skills_used（工具名近似）全落库。`build_tree_aware_context`（TreePathCompressor）已修复可用（原漏 import 被静默吞掉）。前端单飞（发送期间禁用输入）+ AbortController（切换节点/重置中止在飞请求）。
 - **S1 主线模型（2026-08-04）**：显式 `trunk_id` 主线终点取代 node_type 时序快照判定（旧逻辑"父节点有无子节点"导致 branch 下继续对话被误标 trunk、主线身份随创建顺序漂移）。`add_turn` 按 `trunk_id` 判定主线延续；`set_trunk(node, cascade)` 显式提升分支为主线；`is_valid_branch`/`__trunk__` 合并查找沿 `trunk_id`（唯一真源）。序列化带 `trunk_id`，旧 JSON 自动按最深 trunk 链推断。前端 trunk 徽标（★）+ 右键"设为主线终点"。
 - **S2 降级工具协议（2026-08-04）**：降级链从"纯文本补全"升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮，模型可自主调工具；第 0 步保留 memory_search 预检索注入上下文。降级链模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
@@ -119,6 +145,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
 - **mini L3 溢出修复（2026-08-12 再续）**：多个 L3 并存时 mini 卡输入框/底缘掉出卡外显示不全——`.mini-thread.l3{zoom:0.8;width:125%;height:125%}` 的 125% 补偿是错的：Chromium 对 zoom 元素的百分比尺寸按**未缩放**包含块解析（净效果 = 百分比不变），125% 实际渲染 ≈124%，mini 恒比卡高 24%（实测卡 642 / mini 796），输入框整块落在卡外。改回 `width:100%;height:100%`（与主卡 `#card` zoom:0.8 + 100% 同机理，渲染恰为卡尺寸）。⚠️ 教训：zoom 元素上不要做 1/zoom 百分比补偿，除非基准来自未 zoom 祖先。
 - **L2 盖 L3 根因修复（2026-08-12 续 4）**：「L2 状态极不稳定、有概率覆盖在 L3 上」= 两个叠加缺陷。① **快速路径重叠残留**：`reflowAroundCard` 无碰撞快速路径只查目标卡自身（`overlapsAnyCard`），不查其他展开卡之间——`clearReflow`（降级/升级触发）把多卡恢复到紧凑树布局位后，卡间重叠残留到下一次真正有碰撞的 reflow。修复：快速路径条件加 `!anyCardPairOverlap(id)`（除 id 外任意两张展开卡两两检测，O(n²) n<8 可忽略），有重叠则走全量推挤。② **焦点卡带 stale mini-thread**：开 mini 卡时鼠标恰在卡上（真实用户常态）→ 300ms hover 快切 `setFocusCard` 升焦点 → 焦点卡同时挂 #card 和 mini-thread（mini 被 #card 覆盖仍残留）→ 后续 `openNodeCard` 因 `_cards.has(id)` 误走 miniUpgradeToL3 分支（双击焦点卡变「降级 L2」而非「关闭回 L1」）。修复：`setCardLevel` 非 L1 分支挂 #card 前、L1 分支还原前，均清理目标节点残留 `.mini-thread` 并 `_cards.delete`（焦点形态 = #card，与 mini 互斥）。验证：强制 A/C 数据层重叠 → reflow(B) 全量推挤分开零重叠；hover 快切后焦点卡无 mini 残留；双击焦点卡正确关闭。
 - **架构重构 A+B+C（2026-08-12 焦点≠currentId 解耦 + 双击关闭修复）**：① **焦点卡 ≠ `tree.currentId` 系统性解耦**（空壳面板根因）——`tree.currentId` 经 installState 重置为后端当前节点（root），与焦点卡解耦，**所有焦点判定统一 `_focusId()`（data-fid + `_transferFocusIds` 按焦点面板转移），currentId 仅 fallback**，共 11 处：openNodeCard 关闭判定 / setCardLevel prevId-newId / closeMiniCard 焦点回退 / miniUpgradeToL3 焦点同步 / setFocusCard 幂等+from / mini 对话区点击快切 / headerDragStart2 顶栏切换 / collidePushCards+reflowAroundCard 锚点（fid） / openMiniCard keepL3 / renderAll+renderThread+renderHeader 焦点优先 / sendMessage 挂载（parentId/depth/branchLabel 用 fcNode）。回归教训：openNodeCard 曾含 `id===tree.currentId` 分支 → 双击 root（currentId 但非焦点）误关焦点卡，已删。② **双击卡语义**（350ms 两次 mousedown <6px → openNodeCard）：焦点卡双击关闭回 L1（实测 panels=0、无 shell）；非焦点卡双击 openMiniCard 开 mini；mini 卡双击 miniUpgradeToL3。点击 mini 对话区（bindMiniScrollDrag wasClick）→ setFocusCard 切主卡（实测焦点转 root、旧卡保留 mini 无重叠）。③ **doJump 焦点面板迁移**：跳转后 `_focusId()!==jid` → setCardLevel(cardLevel, jid)（新 currentId 成焦点面板、旧焦点降 mini），已焦点仅 scheduleReflow（实测跳转 root：焦点迁移、level 保持、cards 保留、零重叠）。④ **L1 容器化（消灭 `#card` 迁移空壳）**：`_panelInnerHTML` + `ensurePanel`（幂等守卫）+ `_panelOf`——卡片 = 容器内面板，无 `#card` 迁移；空壳 = 焦点判定用 currentId 导致焦点面板被清而容器残留。滚动引擎 scrollTop 统一 + bindScrollDrag appRoot 委托 + capture wheel（惯性续动实测 500→1462→2067→2081 衰减曲线）。⑤ **组视图**：组卡类名 `.group-card`（非 `.topic-card`）；组折叠时组内 `.node-card` 不渲染（先 `toggleGroup('grp_...')` 展开再操作节点）；holdsPanel 强制展开（组内焦点/卡节点）。
+- **卡片图重构（2026-08-15/16）+ 锚点修复（2026-08-17）**：把「节点树」升级为「卡片图」（poker 对齐）——`ConvCard`（卡片 = 一段多轮会话，`messages` 数组；底层 `node=回合` 仍是事实源，V5 store 零改动）；卡片按**分叉点切分自动聚合**（卡片头 = ROOT + 每个分叉点 ≥2 子的孩子），手动建卡（child/parallel/branching）+ 分支点/未读经 `cards_meta` 持久化；**显式连接图**（`links` 多对多可断开，`link_cards`/`unlink_cards`，前端出锚点(右/下)→入锚点(左/上)拖线 `onAnchorDown`/`onLinkMove`/`onLinkUp`）；`viewMode` 收敛单一 `card`（旧 node/group 移除）；分支继承链 `get_branch_chain`/`build_branch_chain_block` 注入 system（hermes/ikaros 双模式）；消息 id（`_ensure_message_ids`/`_strip_msg_ids`）供分支点/发散点定位，**导出剥离 id 修复 `test_export` 2 项回归**。**⚠️ 8/17 锚点裁剪修复**：`.node-card.is-card{overflow:hidden}` 把定位在边缘外(-7px)的四锚点裁掉不可见 → 加 `.node-card.is-card .card-anchor` 内侧贴边覆盖；连线端点几何实测对齐 0.00px（L1/L3 双态）。REST 新增 `card/create|read|parent|link|unlink|branch_point` + `card_branch_chain`。测试：引擎 47 + 服务 62 全绿。
 
 ## Doc-drift rule
 Any commit touching architecture / ports / components MUST sync `docs/ARCHITECTURE.md` and this file, or carry a `docs:` prefix. (See `docs/README.md`.)

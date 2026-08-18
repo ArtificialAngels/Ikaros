@@ -64,23 +64,8 @@ from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
 from memory_v5 import store as v5s     # noqa: E402
 # B2: 任务事件总线 (herdr events.subscribe 语义内化); core/ 已在 sys.path
 from taskbus import EventBus, exec_state_event  # noqa: E402
-# ── gateway 自救工具集 (2026-08-05): ikaros_* 工具由对话树侧直接执行,
-# 不经过 gateway 透出 —— gateway 挂掉时诊断/日志/重启仍可用 (鸡生蛋解药)。
-# 同目录模块; 缺失/异常时 _RESCUE=None 降级为旧逻辑 (fail-open)。
-try:
-    import rescue_tools as _RESCUE_MOD  # noqa: E402
-    _RESCUE = _RESCUE_MOD
-    sys.stderr.write(f"[ct] rescue_tools loaded ({len(_RESCUE.SCHEMAS)} ikaros_* tools)\n")
-except Exception as _imp_err:
-    _RESCUE = None
-    sys.stderr.write(f"[ct] rescue_tools import FAILED: {type(_imp_err).__name__}: {_imp_err}\n")
-
 # ── LLM 配置 ──────────────────────────────────────────────────
-_DEEPSEEK_KEY = ""
-_ENV_PATHS = [
-    Path(os.environ.get("HERMES_HOME", str(Path(__file__).resolve().parent.parent.parent / "data" / "hermes-agent"))) / ".env",
-    Path(os.environ.get("IKAROS_ROOT", str(Path(__file__).resolve().parent.parent.parent))) / ".env",
-]
+
 for _ep in _ENV_PATHS:
     try:
         if _ep.exists():
@@ -92,39 +77,7 @@ for _ep in _ENV_PATHS:
         pass
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
-# Hermes agent runtime 端点.
-# 默认走 Ikaros 自有的 studio 式「0 侵入」包装层 core/hermes-bridge (:8650) —— 它透明代理
-# 纯净 Hermes gateway(:8642) 的原生 session-chat 端点, 并把 reasoning/工具/正文翻译成
-# 对话树方言. 这样 runtime/hermes-agent 工作树可保持 100% 纯净 (无 api_server.py 补丁).
-# bridge 不可达时本服务自动降级到本地 DeepSeek (见 health probe + 流式降级逻辑), 不会硬崩.
-# 设 HERMES_AGENT_URL="" 可禁用 agent runtime, 回退到 chat 补全 + Hermes 任务代理提示;
-# 亦可覆盖为直连 :8642 (http://127.0.0.1:8642/v1/chat/completions) 绕过 bridge.
-# gateway 需 Bearer API_SERVER_KEY (默认 ikaros-gateway-key, 由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
-HERMES_AGENT_URL = os.environ.get("HERMES_AGENT_URL", "http://127.0.0.1:8650/v1/chat/completions").strip() or None
-# 任务2: 多模态直连端点 —— bridge :8650 会把 content 列表拍平成文本, 无法透传图片,
-# 故含 image_url 的消息直接打 gateway :8642 原生的 OpenAI-wire 端点 (其
-# _normalize_multimodal_content 接受 image_url base64; 该端点同样流 hermes.tool.progress)。
-HERMES_GATEWAY_CHAT_URL = os.environ.get(
-    "HERMES_GATEWAY_URL", "http://127.0.0.1:8642"
-).rstrip("/") + "/v1/chat/completions"
-# gateway 鉴权 token; 默认 ikaros-gateway-key (由 :8642 gateway 进程设定; 见 core/dashboard/server.py:165).
-# 2026-08-03: 优先从 HERMES_HOME/.env (data/hermes-agent/.env) 读真实 API_SERVER_KEY,
-# 与 dashboard server 同源, 避免 401.
-HERMES_AGENT_KEY = os.environ.get("API_SERVER_KEY", "").strip()
-if not HERMES_AGENT_KEY:
-    try:
-        _envp = _HERE.parent.parent / "data" / "hermes-agent" / ".env"
-        if _envp.exists():
-            for _l in _envp.read_text(encoding="utf-8", errors="replace").splitlines():
-                _l = _l.strip()
-                if _l.startswith("API_SERVER_KEY=") and not _l.startswith("#"):
-                    HERMES_AGENT_KEY = _l.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-    except Exception:
-        pass
-if not HERMES_AGENT_KEY:
-    HERMES_AGENT_KEY = "ikaros-gateway-key"
-HERMES_AGENT_MODEL = os.environ.get("HERMES_AGENT_MODEL", "hermes").strip()
+# 2026-08-18: Hermes gateway/bridge 已退役; chat 主链路 = 本地 DeepSeek 直连 + 只读工具回路
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 # R2: 分离连接与读取超时. 连接用短超时(快速失败), 流式读取用长超时(允许长生成
@@ -134,7 +87,7 @@ LLM_READ_TIMEOUT = int(os.environ.get("CT_LLM_READ_TIMEOUT", "600"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
 
 # ── 运行时模型切换 (2026-08-03): POST /api/model_switch 覆盖默认 ──
-# mode: ""=节点属性优先(默认) | "hermes" | "ikaros";  model: 模型名覆盖
+# mode: ""=节点属性优先(默认) | "ikaros";  model: 模型名覆盖 (hermes 已退役)
 _CT_RUNTIME = {"mode": "", "model": ""}
 
 def _effective_mode(node_agent: str | None) -> str:
@@ -142,180 +95,18 @@ def _effective_mode(node_agent: str | None) -> str:
 
     F6: 修复 model_switch 全局 mode 失效 —— 节点 agent 默认恒为 "ikaros"
     (from_dict 默认 + add_turn 继承), 旧逻辑 `if node_agent: return node_agent`
-    永远命中, 导致 runtime mode=hermes 切换形同虚设。
+    永远命中, 导致 runtime mode 切换形同虚设。
     现在: set_agent 显式设置的值 (> 0 字节点) 优先; 全局 _CT_RUNTIME["mode"]
     作为 fallback; 两者皆空 → "ikaros"。
     """
-    if node_agent and node_agent != "ikaros":
-        # 显式 set_agent("hermes") 的节点不被全局模式覆盖
-        return node_agent
-    return _CT_RUNTIME["mode"] or (node_agent or "ikaros")
-
-def _effective_model(mode: str) -> str:
-    if _CT_RUNTIME["model"]:
-        return _CT_RUNTIME["model"]
-    return HERMES_AGENT_MODEL if mode == "hermes" else CT_DEEPSEEK_MODEL
 
 
-def _load_hermes_config():
-    """加载 hermes 运行配置 (data/hermes-agent/config.yaml)。
-
-    返回 (parsed_yaml, raw_text)。yaml 缺失/解析失败 → parsed=None, 调用方退回正则。
-    L6: 不再依赖 `^model:` 顶格正则, 改为 yaml 解析, 模型块无论嵌套多深都能取到。
-    """
-    try:
-        cfg = _HERE.parent.parent / "data" / "hermes-agent" / "config.yaml"
-        txt = cfg.read_text(encoding="utf-8")
-    except Exception:
-        return None, None
-    data = None
-    try:
-        import yaml  # PyYAML; 缺失时退回正则
-        data = yaml.safe_load(txt)
-    except Exception:
-        data = None
-    return data, txt
-
-
-def _hermes_model_context(model: str) -> int:
-    """从 hermes 模型元数据表获取**实际** context window (2026-08-03)。
-
-    复用 runtime/hermes-agent/agent/model_metadata.DEFAULT_CONTEXT_LENGTHS (hermes 权威
-    模型参数表: deepseek-v4-flash/pro=1M, claude-opus-4.8=1M 等), 最长键优先模糊匹配;
-    "hermes" 是 gateway 抽象名 → 用 hermes 配置的 model.default 查真实模型。
-    失败回退 CT_CONTEXT_WINDOW。
-    """
-    probe = model
-    if model == "hermes":
-        data, txt = _load_hermes_config()
-        dflt = None
-        if isinstance(data, dict):
-            mb = data.get("model") or {}
-            if isinstance(mb, dict):
-                dflt = mb.get("default")
-        if not dflt and txt:
-            m = re.search(r"default:\s*(\S+)", txt)  # 宽松回退 (yaml 未取到时)
-            if m:
-                dflt = m.group(1)
-        if dflt:
-            probe = dflt
-    try:
-        sys.path.insert(0, str(_HERE.parent / "hermes"))
-        from agent import model_metadata as _mm
-        ml = (probe or "").lower()
-        for k, v in sorted(_mm.DEFAULT_CONTEXT_LENGTHS.items(),
-                           key=lambda x: len(x[0]), reverse=True):
-            if k in ml:
-                return int(v)
-        return int(_mm.DEFAULT_FALLBACK_CONTEXT)
-    except Exception:
-        return CT_CONTEXT_WINDOW
-
-
-def _hermes_models() -> list[dict]:
-    """从 hermes 运行配置 (data/hermes-agent/config.yaml) 提取模型候选 (2026-08-03)。
-
-    L6: 用 yaml 解析 (而非 `^model:` 顶格正则), 模型块无论嵌套多深都能取到;
-    默认模型以 "hermes" 抽象名透传 gateway, MoA 参考/聚合模型也一并列出。
-    yaml 缺失时退回正则 (旧行为)。
-    """
-    cands: list[dict] = []
-    data, txt = _load_hermes_config()
-
-    def _ctx(mname: str) -> int:
-        return _hermes_model_context(mname)
-
-    def _add(mname: str, label: str, ctx: int) -> None:
-        if mname and mname not in {c.get("model") for c in cands}:
-            cands.append({"mode": "hermes", "model": mname,
-                          "label": label, "context_window": ctx})
-
-    if isinstance(data, dict):
-        mb = data.get("model") or {}
-        if isinstance(mb, dict):
-            dflt = mb.get("default"); prov = mb.get("provider")
-            if dflt:
-                _add("hermes", f"Hermes Gateway（默认 {dflt} · {prov or '?'}）",
-                     _ctx(dflt))
-        # 通用递归扫描: 任何含 model+provider 的映射/列表项 (MoA references 等)
-        def _scan(node):
-            if isinstance(node, dict):
-                mm = node.get("model"); pp = node.get("provider")
-                if mm and pp:
-                    _add(mm, f"{mm}（hermes · {pp}）", _ctx(mm))
-                for v in node.values():
-                    _scan(v)
-            elif isinstance(node, list):
-                for v in node:
-                    _scan(v)
-        _scan(data)
-        agg = data.get("aggregator") or {}
-        if isinstance(agg, dict):
-            am = agg.get("model"); ap = agg.get("provider")
-            if am:
-                _add(am, f"{am}（MoA 聚合 · {ap or '?'}）", _ctx(am))
-    elif txt:
-        # 正则回退 (yaml 缺失/解析失败)
-        m = re.search(r"^model:\s*\n\s+default:\s*(\S+)\s*\n\s+provider:\s*(\S+)", txt, re.M)
-        if m:
-            _add("hermes", f"Hermes Gateway（默认 {m.group(1)} · {m.group(2)}）",
-                 _ctx(m.group(1)))
-    if not cands:
-        cands.append({"mode": "hermes", "model": "hermes", "label": "Hermes Gateway",
-                      "context_window": CT_CONTEXT_WINDOW})
-    return cands
-
-
-def _hermes_providers_status() -> list[dict]:
-    """provider 配置状态 (只读, 脱敏: 只报告 key 是否已配置, 绝不返回 key 本身)。
-
-    信息源: data/hermes-agent/config.yaml 的 model.default/provider 与
-    custom_providers 列表; 内置 provider 的 key 走环境变量 (``{NAME}_API_KEY``)。
-    """
-    data, _ = _load_hermes_config()
-    out: list[dict] = []
-
-    def _has_env_key(name: str) -> bool:
-        env = (name or "").replace("-", "_").upper() + "_API_KEY"
-        return bool(os.environ.get(env))
-
-    if isinstance(data, dict):
-        mb = data.get("model") or {}
-        if isinstance(mb, dict):
-            prov = mb.get("provider")
-            if prov:
-                out.append({
-                    "name": str(prov), "role": "default",
-                    "has_key": _has_env_key(str(prov)),
-                    "model": mb.get("default"),
-                    "source": "env {0}_API_KEY".format(str(prov).replace("-", "_").upper()),
-                })
-        cps = data.get("custom_providers") or []
-        if isinstance(cps, list):
-            for cp in cps:
-                if isinstance(cp, dict) and cp.get("name"):
-                    out.append({
-                        "name": str(cp.get("name")), "role": "custom",
-                        "has_key": bool(cp.get("api_key")),
-                        "base_url": cp.get("base_url"),
-                        "models": cp.get("models") or [],
-                    })
-    return out
-
-# Hermes 任务代理 base system prompt (与 Ikaros 伴侣人格区分): 偏执行/工具/任务导向.
-HERMES_AGENT_PROMPT = (
-    "You are Hermes, an autonomous task agent operating inside Ikaros. "
-    "You execute tasks decisively: break problems down, use available tools/skills when helpful, "
-    "and prefer concrete results over lengthy exposition. Be precise and concise. "
-    "When the user is exploring ideas rather than requesting action, you may still answer directly, "
-    "but keep a task-oriented, capable tone. Markdown for code/structure when appropriate."
-)
 
 # ── Ikaros 人格来源 (V5 同步的身份/心绪) ──────────────────────
 # server.py 位于 core/conversation-tree/ ; 根目录 = parent.parent
 _IKAROS_ROOT = _HERE.parent.parent
 _AXIOM_PATH = _IKAROS_ROOT / "config" / "identity" / "axiom.md"
-_SOUL_PATH = _IKAROS_ROOT / "data" / "hermes-agent" / "SOUL.md"
+
 _SELF_MODEL_PATH = _HERE.parent / "memory_v5" / "data" / "v5" / "self_model.json"
 
 # ── LLM 调用 (本地降级三层 chat 补全, 主链路走 gateway) ──
@@ -443,21 +234,7 @@ _READONLY_TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "gateway_ensure",
-            "description": "检查 Hermes gateway (:8642) 健康状态; 不可达时自动拉起并等待就绪 (降级自救)。"
-                           "当 gateway/Hermes 服务疑似挂掉、工具不可用、需要恢复完整工具链时调用。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
 ]
-
-# ikaros_* 自救工具集 (gateway 独立通道, 2026-08-05): 进程/端口诊断、日志读取、
-# 配置读取、gateway 重启、herdr 管道兜底。与 _execute_chat_tool 分派对应。
-if _RESCUE is not None:
-    _READONLY_TOOLS = _READONLY_TOOLS + list(_RESCUE.SCHEMAS)
 
 # 工具循环上限: 防止模型无限调用工具.
 # 2026-08-05: 4→6, 给诊断→日志→重启→复查 的完整自救链留足轮次 (ikaros_* 工具集).
@@ -562,7 +339,7 @@ except Exception:  # 零硬依赖: tree_adapter 缺失/离线时降级为 None, 
 def build_branch_context_block(tree, node_id: "str | None") -> str:
     """当前分支脉络块: 根→当前节点路径 (每节点 #depth branch_label: summary) + agent 归属.
 
-    供 hermes 模式注入 gateway 的树域上下文 (复用 branch_overview 工具的路径摘要逻辑).
+    当前分支脉络块 (复用 branch_overview 工具的路径摘要逻辑).
     fail-open: 树缺失/异常返回空串, 不阻塞主线.
     """
     try:
@@ -675,14 +452,44 @@ def build_v5_memory_block(node_id: str | None, query: str, collector: "dict | No
     return "\n".join(lines)
 
 
-def build_system_prompt(mode: str) -> str:
-    """ekko buildSystemPrompt 的等价: 按代理模式选 base 人格。
+def build_branch_chain_block(tree, node_id, collector=None) -> str:
+    """把当前节点所属分支卡的继承链转成人类可读文本块 (poker t6 的上下文形态).
 
-    - "hermes" → Hermes 任务代理提示 (执行/工具/任务导向)
-    - 其他     → Ikaros 伴侣人格 (axiom + SOUL + 动态心绪)
+    仅在节点属于 branching 卡时返回非空; 否则 '' (走普通 tree-aware 路径)。
+    链 = 沿 branching_source_id 回溯; 每条 link 说明"继承自哪张卡、分支点在哪"。
+    fail-open: 任何异常返回 '' 并记 warn, 不阻塞主对话。
     """
-    if mode == "hermes":
-        return HERMES_AGENT_PROMPT
+    try:
+        if tree is None:
+            return ""
+        nid = node_id or getattr(tree, "current_id", None)
+        card = tree.card_of_node(nid)
+        if card is None or not card.branching_source_id:
+            return ""
+        chain = tree.get_branch_chain(card.id)
+        if not chain:
+            return ""
+        lines = ["Branch lineage (poker-style, authoritative for this branch):"]
+        for i, link in enumerate(chain, 1):
+            src_title = ""
+            src = next((c for c in tree.build_cards(load_messages=False) if c.id == link["source_card_id"]), None)
+            if src is not None:
+                src_title = src.title or link["source_card_id"]
+            at = link["at_message_id"]
+            anchor = "START (from the very beginning)" if at == "START" else (f"message {at}" if at else "entire card")
+            inherited = link["inherited_messages"]
+            lines.append(f"  {i}. inherits from card \"{src_title}\" at {anchor} ({len(inherited)} messages)")
+        return "\n".join(lines)
+    except Exception as e:
+        _warn(collector, f"分支链上下文构建失败（{e}）")
+        return ""
+
+
+def build_system_prompt(mode: str) -> str:
+    """ekko buildSystemPrompt 的等价: Ikaros 伴侣人格 (axiom + SOUL + 动态心绪)。
+
+    2026-08-18: hermes 任务代理模式已退役, 统一伴侣人格。
+    """
     return build_ikaros_persona()
 
 
@@ -819,10 +626,7 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
     """chat 接入 Ikaros V5 的主入口 (ekko 模式: 分支=session, Ikaros=人格层, Hermes=runtime):
 
     - ikaros 模式: 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
-    - hermes 模式: 树域上下文(分支脉络) + 树域记忆, **不注入完整 SOUL** —— gateway
-      的 core system 已含 SOUL.md 身份 + AGENTS.md + ikaros_v5 记忆, 外部 system 消息
-      会**叠加**在 core 之后 (chat_completion_helpers 追加, 不替换), 故树端只补它
-      没有的: 当前分支在树里的位置 + 树域语义记忆, 人格不重复注入。
+    - ikaros 模式 (2026-08-18 起唯一模式): 人格(build_ikaros_persona: axiom+SOUL+心绪) + 树域记忆 + 树感知压缩
     任何环节异常都 fail-open 回退到旧的线性上下文, 并向 collector 记 warn (降级可见化)。
     tree: H3 捕获的活动树引用, 默认全局 _tree。
     attachments: 任务2 附件列表 [{name,url,isImage}] → 转 OpenAI ContentBlock
@@ -835,44 +639,30 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
         if n is not None:
             mode = _effective_mode(getattr(n, "agent", None) or None)
 
-    # ── hermes 模式: 树域上下文 + 树域记忆, 人格/工具/技能全由 gateway 提供 ──
-    if mode == "hermes":
-        # 树域上下文: 分支说明 (路径摘要 + 当前分支标签 + 分支归属)
-        branch_ctx = build_branch_context_block(t, node_id)
-        # 树域记忆: 复用现有 tree_scoped_retrieve (fail-open, 已含会话隔离 H1)
-        mem_block = build_v5_memory_block(node_id, user_message, collector=collector, tree=t)
-        system_text = "\n\n".join(filter(None, [
-            "You are speaking inside Ikaros' conversation tree. "
-            "The branch context below is authoritative for this exchange.",
-            branch_ctx,
-            ("Relevant tree-scoped memories (V5):\n" + mem_block) if mem_block else "",
-        ]))
-        try:
-            if build_tree_aware_context is None:
-                raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
-            ctx = build_tree_aware_context(
-                t, node_id, system_prompt=system_text, extra_memory=None,
-            )
-            return ctx + [{"role": "user", "content": _build_user_content(user_message, attachments)}]
-        except Exception as e:
-            _warn(collector, f"树感知压缩失败，已回退线性上下文（{e}）")
-            msgs: list[dict] = [{"role": "system", "content": system_text}]
-            try:
-                ctx = t.get_context(node_id)
-                if len(ctx) > MAX_CONTEXT_MSGS:
-                    ctx = ctx[-MAX_CONTEXT_MSGS:]
-                msgs.extend(ctx)
-            except Exception:
-                pass
-            msgs.append({"role": "user", "content": user_message})
-            return msgs
-
     # ── ikaros 模式: 人格(伴侣) + 树域记忆 + 树感知压缩 ──
     persona = build_system_prompt(mode)
+    # 记忆永远是 Ikaros 的第一优先级 (王牌): 树域语义检索 + 会话隔离
     mem_block = build_v5_memory_block(node_id, user_message, collector=collector, tree=t)
+    # 2026-08-16 (poker 对齐): branching 卡注入"分支继承链"文本块
+    lineage = build_branch_chain_block(t, node_id, collector=collector)
     try:
         if build_tree_aware_context is None:
             raise RuntimeError("tree_adapter unavailable (build_tree_aware_context)")
+        nid = node_id or (t.current.id if t.current else None)
+        card = t.card_of_node(nid) if nid else None
+        # branching 卡: 分支链上下文 (继承链 + 当前卡) 替代祖先路径压缩;
+        # system 顺序: 人格 → 记忆 → 分支链 (记忆保持高位)
+        if lineage and card is not None:
+            system_parts = [persona]
+            if mem_block:
+                system_parts.append("Relevant memories (V5):\n" + mem_block)
+            system_parts.append(lineage)
+            system_text = "\n\n".join(system_parts)
+            inherited = t.get_branch_context(card.id)
+            if len(inherited) > MAX_CONTEXT_MSGS:
+                inherited = inherited[-MAX_CONTEXT_MSGS:]
+            return ([{"role": "system", "content": system_text}] + inherited
+                    + [{"role": "user", "content": _build_user_content(user_message, attachments)}])
         ctx = build_tree_aware_context(
             t, node_id,
             system_prompt=persona,
@@ -885,6 +675,8 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
         msgs: list[dict] = [{"role": "system", "content": persona}]
         if mem_block:
             msgs.append({"role": "system", "content": "Relevant memories (V5):\n" + mem_block})
+        if lineage:
+            msgs.append({"role": "system", "content": lineage})
         try:
             ctx = t.get_context(node_id)
             if len(ctx) > MAX_CONTEXT_MSGS:
@@ -1182,6 +974,10 @@ def state_dict(tree: "ct.ConversationTree | None" = None, inline: bool = True) -
     t = tree or _tree
     assert t is not None
     data = json.loads(t.serialize())
+    # 2026-08-15 (poker 对齐): 卡片视图 —— 每张卡 = 一段多轮会话 (messages 内联)。
+    # 卡片由节点链按分叉点自动聚合 (后端 build_cards), 前端卡片直接映射。
+    # inline=False 时卡片只带骨架 (messages 空), 前端按需 /api/node_content 惰性拉取。
+    data["cards"] = [c.to_dict() for c in t.build_cards(load_messages=inline)]
     if not inline:
         return data
     # 从 store 批量回读消息, 注入 nodes (前端兼容)
@@ -1235,7 +1031,12 @@ def _export_tree_data(sess: dict) -> dict:
         if raw:
             try:
                 msgs = json.loads(raw)
-                n["messages"] = msgs if isinstance(msgs, list) else [{"role": "system", "content": raw}]
+                if isinstance(msgs, list):
+                    # 2026-08-16 (poker 对齐): 导出为稳定自包含格式, 剥离内部消息
+                    # 定位 id (分支点/发散点定位用), 与旧导出格式向后兼容。
+                    n["messages"] = ct._strip_msg_ids(msgs)
+                else:
+                    n["messages"] = [{"role": "system", "content": raw}]
             except json.JSONDecodeError:
                 n["messages"] = [{"role": "system", "content": raw}]
         else:
@@ -1345,7 +1146,7 @@ CT_DEEPSEEK_MODEL = os.environ.get("CT_DEEPSEEK_MODEL", "deepseek-v4-flash")
 # 上下文窗口 (用于"上下文用量"进度条). DeepSeek API 默认 64K; 可用 env 覆盖 (如 128000).
 CT_CONTEXT_WINDOW = int(os.environ.get("CT_CONTEXT_WINDOW", "64000"))
 
-# chat 专用只读/安全工具集 (hermes 模式启用). 全部不写磁盘/不执行命令.
+# chat 专用只读/安全工具集. 全部不写磁盘/不执行命令.
 CHAT_TOOLS = [
     {
         "type": "function",
@@ -1377,78 +1178,9 @@ CHAT_TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "gateway_ensure",
-            "description": "检查 Hermes gateway (:8642) 健康状态; 不可达时自动拉起它并等待就绪. "
-                           "当 gateway/Hermes 服务疑似挂掉、工具不可用、或需要恢复完整工具链时调用.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
 ]
 
-# ikaros_* 自救工具集同样并入 hermes 模式工具表 (正常态也可见/可用)
-if _RESCUE is not None:
-    CHAT_TOOLS = CHAT_TOOLS + list(_RESCUE.SCHEMAS)
 
-MAX_TOOL_ITER = 5
-
-
-# ── gateway 降级自救 (2026-08-04): gateway 不可达时由对话树侧拉起 ──
-
-def _gateway_health_check(timeout: float = 2.0) -> bool:
-    """探测 :8642 gateway 是否可达 (GET /health, 200/404 均视为进程活着).
-
-    2026-08-05 修复: 原实现探测 HERMES_AGENT_URL (默认 :8650 bridge) 的 /health,
-    bridge 活着但背后 gateway 死了时误报"健康", 导致 gateway_ensure 假阳性、
-    自救链不触发。现直连 :8642 本体。
-    """
-    try:
-        req = urllib.request.Request("http://127.0.0.1:8642/health", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            return resp.status < 500
-    except Exception:
-        return False
-
-
-def _spawn_gateway() -> dict:
-    """拉起/重启 gateway: 优先委托 rescue_tools (venv python + kill + 完整 env);
-    模块缺失时回退旧逻辑 (portable-python, 30s 轮询)。"""
-    if _RESCUE is not None:
-        r = _RESCUE.call("ikaros_restart_gateway", {})
-        return {"ok": bool(r.get("ok")), "result": r.get("result", "")}
-    root = Path(os.environ.get("IKAROS_ROOT",
-                               str(Path(__file__).resolve().parent.parent.parent)))
-    py = root / "runtime" / "portable-python" / "python.exe"
-    cwd = root / "runtime" / "hermes"
-    log = root / "tmp" / "gateway8642.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env.setdefault("HERMES_HOME", str(root / "data" / "hermes-agent"))
-    try:
-        fh = open(log, "a", encoding="utf-8", errors="replace")
-    except OSError:
-        fh = open(os.devnull, "w")
-    try:
-        proc = subprocess.Popen(
-            [str(py), "-m", "hermes_cli.main", "gateway", "run", "--replace"],
-            cwd=str(cwd), env=env, stdout=fh, stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as e:
-        return {"ok": False, "result": f"gateway 拉起失败: {e}"}
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if _gateway_health_check():
-            return {"ok": True, "pid": proc.pid,
-                    "result": f"gateway 已拉起 (PID {proc.pid}), :8642 健康检查通过"}
-        if proc.poll() is not None:
-            return {"ok": False,
-                    "result": f"gateway 进程提前退出 (code={proc.returncode}), 见 tmp/gateway8642.log"}
-        time.sleep(1)
-    return {"ok": False,
-            "result": f"gateway 进程存活 (PID {proc.pid}) 但 :8642 30s 内未就绪, 见 tmp/gateway8642.log"}
 
 
 def _tool_duration_ms(collector: dict, tcid: str) -> int | None:
@@ -1466,12 +1198,6 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
         args = json.loads(arguments) if arguments else {}
     except Exception:
         args = {}
-    # ikaros_* 自救工具集: 本地执行, 不依赖 gateway (鸡生蛋解药)
-    if _RESCUE is not None and name.startswith("ikaros_"):
-        try:
-            return _RESCUE.call(name, args)
-        except Exception as e:
-            return {"ok": False, "result": f"{name} 执行失败: {type(e).__name__}: {e}"}
     if name == "memory_search":
         q = (args.get("query") or "").strip()
         if not q:
@@ -1508,197 +1234,11 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
             return {"ok": True, "result": "\n".join(lines)}
         except Exception as e:
             return {"ok": False, "result": f"概览失败: {e}"}
-    if name == "gateway_ensure":
-        # 降级自救 (2026-08-04): gateway 不可达时拉起, 可达时报告状态
-        if _gateway_health_check():
-            return {"ok": True, "result": "gateway 正常运行 (:8642 健康检查通过)"}
-        return _spawn_gateway()
     return {"ok": False, "result": f"未知工具: {name}"}
-def _stream_hermes_gateway(messages: list[dict], collector: dict, model: str | None = None):
-    """委托 Hermes gateway (:8642) 跑完整 tools/skills 循环, 代理其 SSE 到前端 chat 面板.
-
-    gateway 用 OpenAI 兼容 SSE 流式:
-    - 正文走普通 ``data:`` 行 (delta.content / delta.reasoning_content / usage)
-    - 工具生命周期走命名事件 ``event: hermes.tool.progress``
-      (payload: tool / emoji / label / toolCallId / status="running"|"completed")
-    - 模型推理思考走命名事件 ``event: hermes.reasoning`` (payload: text)
-      —— 由 gateway 从模型 reasoning 字段透出, 让 hermes 模式也能显示思考块
-
-    这里解析这些帧: 把 ``hermes.tool.progress`` 翻译为 chat 面板的
-    ``tool_call``(running) / ``tool_result``(completed) 事件, 把 ``hermes.reasoning``
-    翻译为 ``thinking`` 事件. 网关不在线透出工具结果文本 (被 agent 内部消费并并入
-    最终正文), 故卡片"结果"用占位说明. 若 gateway 不可达/报错会在 urlopen 阶段立即
-    抛出, 由 _chat_stream_events 回退到本地循环 (此时尚未 yield 任何内容, 不会污染前端).
-    """
-    if not HERMES_AGENT_URL:
-        raise RuntimeError("HERMES_AGENT_URL not configured")
-    # 任务2: 含图片内容块 → 直连 gateway :8642 (bridge 会拍平 content, 图片无法透传)
-    target_url = HERMES_GATEWAY_CHAT_URL if _messages_have_images(messages) else HERMES_AGENT_URL
-    body = json.dumps({
-        "model": model or HERMES_AGENT_MODEL,
-        "messages": messages,
-        "max_tokens": 2048,
-        "temperature": 0.7,
-        "stream": True,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        target_url, data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {HERMES_AGENT_KEY}",
-            # studio 式包装层 (core/hermes-bridge) 用此头稳定绑定 Hermes session;
-            # 直连 8642 网关时该头被忽略, 故向前兼容、零风险.
-            "X-Ikaros-Conv-Id": (_active_session_id or ""),
-        },
-    )
-    # 连接用短超时(urlopen 的 timeout 在连接阶段生效); 建立后把底层 socket 读取超时
-    # 调长(R2), 允许模型长生成期间的静默间隙, 不被 socket 超时掐断.
-    # urlopen 不可达时立即抛 URLError/HTTPError → 调用方回退本地循环 (尚未 yield 内容)
-    with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
-        buf = b""
-        evt = None
-        data_lines: list[str] = []
-
-        def _flush():
-            nonlocal evt, data_lines
-            raw = "\n".join(data_lines)
-            data_lines = []
-            this_evt = evt
-            evt = None
-            if not raw:
-                return
-            # 命名事件: 工具生命周期 (hermes.tool.progress)
-            if this_evt == "hermes.tool.progress":
-                try:
-                    p = json.loads(raw)
-                except Exception:
-                    return
-                status = (p.get("status") or "").lower()
-                tcid = p.get("toolCallId") or p.get("tool_call_id") or ""
-                tool = p.get("tool") or "tool"
-                label = p.get("label") or ""
-                emoji = p.get("emoji") or "🔧"
-                # 过滤 Hermes 内部元步骤 (调用前的 "describe tool" 等), 避免噪音卡片
-                if tool.startswith("tool_describe") or tool == "tool_describe":
-                    return
-                if status == "running" or (not status and label):
-                    # 工具开始: 注册卡片 (前端 ok:null → 待执行态). 记录 tcid 以便
-                    # 结果回填按 id 精确匹配 (L5: 避免同名工具多次调用互相串台).
-                    collector["tool_calls"].append({
-                        "id": tcid,
-                        "name": tool,
-                        "params": {"input": label, "emoji": emoji},
-                        "result_summary": "",
-                        "success": True,
-                        "timestamp": time.time(),
-                    })
-                    yield {
-                        "type": "tool_call", "id": tcid, "name": tool,
-                        "args": {"input": label, "emoji": emoji},
-                    }
-                else:
-                    # completed / failed / 其它: 终结卡片. gateway 现随事件透出结果文本
-                    # (阶段 2: api_server._on_tool_complete 携带 result, 截断 2000),
-                    # 实时卡片显示真实结果; 同时回填 collector 供持久化 (阶段 3).
-                    ok = (status != "failed")
-                    result_txt = p.get("result", "") if ok else "（执行失败）"
-                    if ok:
-                        # L5: 优先按 toolCallId 精确回填; 无 id 时回退按 name 逆序匹配
-                        matched = False
-                        if tcid:
-                            for _tc in reversed(collector["tool_calls"]):
-                                if _tc.get("id") == tcid:
-                                    _tc["result_summary"] = str(result_txt)[:500]
-                                    _tc["success"] = True
-                                    _tc["duration"] = _tool_duration_ms(collector, tcid)
-                                    matched = True
-                                    break
-                        if not matched:
-                            for _tc in reversed(collector["tool_calls"]):
-                                if _tc.get("name") == tool:
-                                    _tc["result_summary"] = str(result_txt)[:500]
-                                    _tc["success"] = True
-                                    _tc["duration"] = _tool_duration_ms(collector, tcid)
-                                    break
-                    yield {
-                        "type": "tool_result", "id": tcid, "ok": ok,
-                        "result": result_txt,
-                        "duration": _tool_duration_ms(collector, tcid),
-                    }
-                return
-            # 命名事件: 模型推理思考流 (hermes.reasoning) — gateway 从模型 reasoning 字段透出
-            if this_evt == "hermes.reasoning":
-                try:
-                    p = json.loads(raw)
-                except Exception:
-                    return
-                text = p.get("text") or ""
-                if text:
-                    collector["thinking"] += text
-                    yield {"type": "thinking", "delta": text}
-                return
-            # 上游错误透传 (bridge 透出的 gateway upstream 失败: 401/404/连接失败)
-            # —— studio 式包装层把上游失败显式转成 event:error, 这里消费它,
-            # 让降级提示从笼统的「空响应」变成准确的「gateway 上游错误 (HTTP 401 ...)」.
-            if this_evt == "error":
-                try:
-                    p = json.loads(raw)
-                except Exception:
-                    return
-                collector["upstream_error"] = p.get("error") or "unknown upstream error"
-                yield {"type": "warn",
-                       "message": f"Hermes 上游返回错误：{collector['upstream_error']}"}
-                return
-            # 其它命名事件 (hermes.token 等) 不处理
-            if this_evt is not None:
-                return
-            # 普通 OpenAI data: 行 (正文 / usage / [DONE])
-            if not raw.startswith("{"):
-                return
-            try:
-                obj = json.loads(raw)
-            except Exception:
-                return
-            # 末块 usage (gateway 把 usage 放在 finish_reason 同块)
-            if obj.get("usage"):
-                collector["usage"] = obj["usage"]
-                yield {"type": "usage", "usage": obj["usage"],
-                       "model": model or HERMES_AGENT_MODEL,
-                       "context_window": _hermes_model_context(model or HERMES_AGENT_MODEL)}
-            try:
-                delta = obj["choices"][0]["delta"]
-            except Exception:
-                return
-            if delta.get("reasoning_content"):
-                collector["thinking"] += delta["reasoning_content"]
-                yield {"type": "thinking", "delta": delta["reasoning_content"]}
-            if delta.get("content"):
-                collector["content"] += delta["content"]
-                yield {"type": "content", "delta": delta["content"]}
-
-        for chunk in resp:
-            buf += chunk
-            while True:
-                idx = buf.find(b"\n")
-                if idx < 0:
-                    break
-                line = buf[:idx].decode("utf-8", "replace").rstrip("\r")
-                buf = buf[idx + 1:]
-                if line == "":
-                    yield from _flush()
-                    continue
-                if line.startswith("event:"):
-                    evt = line[6:].strip()
-                elif line.startswith("data:"):
-                    data_lines.append(line[5:].strip())
-                # retry: / id: 等其它 SSE 字段忽略
-        yield from _flush()  # 收尾: 处理缓冲区中最后一个未以空行结束的帧
-
-
 def _stream_fallback(messages: list[dict], agent: str, collector: dict,
                      node_id: str | None = None):
-    """本地降级通道 (H2 恢复): gateway 不可达/空响应时, 走 DeepSeek→Hermes→Local 三层
-    chat 补全, 把正文以 SSE content 增量流式透出 (≈24 字/片, 前端 rAF 限频重渲 markdown),
+    """本地主链路 (2026-08-18 起): DeepSeek 直连 + 只读工具回路,
+    把正文以 SSE content 增量流式透出 (≈24 字/片, 前端 rAF 限频重渲 markdown),
     并回传 usage 事件. 全部失败时抛错, 由上层转 error 事件.
 
     S2: 完整工具协议 —— 降级链跑多轮工具循环 (上限 MAX_TOOL_ROUNDS):
@@ -1801,63 +1341,14 @@ def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, c
                         tree: "ct.ConversationTree | None" = None):
     """生成 chat SSE 事件字典. collector 累积 {content, thinking, tool_calls, usage} 供持久化.
 
-    主链路 = Hermes gateway (:8642) 跑完整 tools/skills 循环; gateway 不可达 / 空响应 /
-    报错 → 降级到本地三层 chat 补全 (DeepSeek→Hermes→Local), 并以 SSE ``warn`` 黄色提示条
-    告知用户 (符合 AGENTS.md 既定设计, 修复"只走 gateway 禁止降级"与文档/health 的矛盾, H2).
+    2026-08-18: Hermes gateway 已退役 —— 主链路 = DeepSeek 直连 + 只读工具回路
+    (_stream_fallback, 原降级链转正)。
     """
-    if not HERMES_AGENT_URL:
-        # 未配置 gateway → 直接走本地降级 (不报错)
-        yield {"type": "warn", "message": "Hermes gateway 未配置，已使用本地模型"}
-        try:
-            yield from _stream_fallback(messages, agent, collector, node_id=node_id)
-        except Exception as e:
-            yield {"type": "error", "message": f"本地模型不可用（{e}）"}
-        return
-
-    cur_model = _effective_model(agent)
-    gw_yielded = False
-    try:
-        for _ev in _stream_hermes_gateway(messages, collector, model=cur_model):
-            gw_yielded = True
-            yield _ev
-        # gateway 正常结束但无正文 → 降级本地
-        if not collector["content"].strip():
-            if collector.get("upstream_error"):
-                yield {"type": "warn",
-                       "message": f"Hermes 上游错误（{collector['upstream_error']}），已降级本地模型"}
-            else:
-                yield {"type": "warn", "message": "Hermes gateway 返回空响应，已降级本地模型"}
-        else:
-            return
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
-        yield {"type": "warn", "message": f"Hermes gateway 不可达（{e}），已降级本地模型"}
-        sys.stderr.write(f"[ct] Hermes gateway unreachable ({e}); fallback to local\n")
-    except Exception as e:
-        if gw_yielded:
-            # 中段错误: gateway 已流式产出部分内容后中断.
-            # - 若尚未产出正文(仅工具事件): 安全降级本地补全, 不会产生重复正文;
-            # - 若已有部分正文: 保留残缺 + 明确 warn(黄色提示条), 不再重复生成,
-            #   避免把 gateway 半截答案 + 本地全新答案拼接成乱文落库.
-            if not collector["content"].strip():
-                sys.stderr.write(f"[ct] Hermes gateway mid-stream error before content ({e}); fallback to local\n")
-                yield {"type": "warn", "message": f"Hermes gateway 中断（{e}），已降级本地模型补全"}
-                try:
-                    yield from _stream_fallback(messages, agent, collector, node_id=node_id)
-                except Exception as e2:
-                    yield {"type": "error", "message": f"本地模型也不可用（{e2}）"}
-                return
-            sys.stderr.write(f"[ct] Hermes gateway mid-stream error ({e}); keep partial\n")
-            yield {"type": "warn", "message": f"Hermes gateway 流中途中断（{e}），上方为已生成的部分内容"}
-            return
-        yield {"type": "warn", "message": f"Hermes gateway 错误（{e}），已降级本地模型"}
-        sys.stderr.write(f"[ct] Hermes gateway error ({e}); fallback to local\n")
-
-    # 降级本地三层链路
     try:
         yield from _stream_fallback(messages, agent, collector, node_id=node_id)
     except Exception as e:
-        yield {"type": "error", "message": f"本地模型也不可用（{e}）"}
-        sys.stderr.write(f"[ct] fallback failed ({e})\n")
+        yield {"type": "error", "message": f"本地模型不可用（{e}）"}
+        sys.stderr.write(f"[ct] chat stream failed ({e})\n")
 
 
 # ── 任务2: multipart/form-data 上传解析 (纯标准库, 无 cgi 依赖) ─────────
@@ -1979,8 +1470,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            # M3 + F9: 客户端断开(ESC/切节点)时主动关闭生成器链, 让 _stream_hermes_gateway
-            # 的 urlopen with 块立即退出并关掉 gateway HTTP 连接, 不再挂到 LLM_TIMEOUT.
+            # M3 + F9: 客户端断开(ESC/切节点)时主动关闭生成器链, 让流式 urlopen with 块
+            # 立即退出并关掉 LLM HTTP 连接, 不再挂到 LLM_TIMEOUT.
             # F9: 补 ConnectionAbortedError —— Windows 上客户端 abort 抛的是它
             # (WinError 10053), 旧代码只捕前两个, 导致完整 traceback 刷屏日志.
             try:
@@ -2133,6 +1624,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"context": ctx, "count": len(ctx)})
             elif path == "/api/mermaid":
                 self._send_json({"mermaid": _tree.to_mermaid()})
+            elif path == "/api/card_branch_chain":
+                # 2026-08-16 (poker 对齐): 分支继承链回溯 (t6) + 分支上下文
+                cid = self._q("card_id")
+                if not cid:
+                    self._send_json({"error": "card_id required"}, 400)
+                    return
+                chain = _tree.get_branch_chain(cid)
+                ctx = _tree.get_branch_context(cid)
+                self._send_json({"chain": chain, "context": ctx, "count": len(ctx)})
             elif path == "/api/sessions":
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             elif path == "/api/sessions/tree":
@@ -2184,20 +1684,9 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"error": "format must be json or txt"}, 400)
             elif path == "/api/health":
-                # 连接状态探测: gateway 主通道 / 本地 LLM 降级链 / DeepSeek key
-                health = {"gateway": False, "local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
-                          "model": HERMES_AGENT_MODEL, "ts": time.time()}
-                try:
-                    req = urllib.request.Request(
-                        HERMES_AGENT_URL, method="GET",
-                        headers={"Authorization": f"Bearer {HERMES_AGENT_KEY}"},
-                    )
-                    urllib.request.urlopen(req, timeout=2)
-                    health["gateway"] = True
-                except urllib.error.HTTPError as e:
-                    health["gateway"] = e.code in (200, 405)  # POST-only 端点 GET 405 = 可达
-                except Exception:
-                    health["gateway"] = False
+                # 连接状态探测: 本地 LLM / DeepSeek key
+                health = {"local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
+                          "model": CT_DEEPSEEK_MODEL, "ts": time.time()}
                 try:
                     urllib.request.urlopen(LOCAL_CHAT_URL + "/health", timeout=2)
                     health["local_llm"] = True
@@ -2208,11 +1697,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": True,
                     "current": dict(_CT_RUNTIME),
-                    "defaults": {"hermes": HERMES_AGENT_MODEL, "ikaros": CT_DEEPSEEK_MODEL},
-                    "available": _hermes_models(),
+                    "defaults": {"ikaros": CT_DEEPSEEK_MODEL},
+                    "available": [{"mode": "ikaros", "model": CT_DEEPSEEK_MODEL,
+                                   "label": f"Ikaros 本地直连（{CT_DEEPSEEK_MODEL}）",
+                                   "context_window": CT_CONTEXT_WINDOW}],
                 })
-            elif path == "/api/providers":
-                self._send_json({"ok": True, "providers": _hermes_providers_status()})
             elif path == "/api/events":
                 self._stream_events()
             else:
@@ -2347,6 +1836,11 @@ class Handler(BaseHTTPRequestHandler):
                         state=data.get("state"),
                         config=data.get("config"),
                         title=data.get("title"),
+                        # 2026-08-16: 透传思考/工具/用量, 测试对话与真实 chat 落库一致
+                        thinking=data.get("thinking", ""),
+                        tool_calls=[ct.ToolCall(**tc) for tc in data.get("tool_calls", [])],
+                        usage=data.get("usage", {}),
+                        skills_used=data.get("skills_used"),
                     )
                     _touch_active_session()
                     self._send_json(state_dict())
@@ -2456,6 +1950,85 @@ class Handler(BaseHTTPRequestHandler):
                     title=data.get("title", ""),
                 )
                 self._send_json({"ok": True, "node_id": node.id, "state": state_dict()})
+            elif path == "/api/card/create":
+                # 2026-08-15 (poker 对齐): 从源卡某条消息创建新卡 (子/发散/分支卡)
+                # kind: child | parallel | branching; 分支点 = source_message_id
+                try:
+                    card = _tree.create_card_from_message(
+                        source_card_id=data["source_card_id"],
+                        kind=data.get("kind", "child"),
+                        messages=data.get("messages", []),
+                        source_message_id=data.get("source_message_id"),
+                        source_message_index=data.get("source_message_index"),
+                        source_focus=data.get("source_focus", ""),
+                        title=data.get("title"),
+                        branch_label=data.get("branch_label"),
+                    )
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "card_id": card.id, "state": state_dict()})
+            elif path == "/api/card/read":
+                # 卡片未读状态 (cards_meta 持久化)
+                cid = data.get("card_id")
+                if not cid:
+                    self._send_json({"error": "card_id required"}, 400)
+                    return
+                with _lock:
+                    _tree.set_card_read(cid, bool(data.get("is_unread", False)))
+                self._send_json({"ok": True, "state": state_dict()})
+            elif path == "/api/card/parent":
+                # 2026-08-15 (科技树编排): 手动指定卡片父关系 (拖拽挂接); parent_card_id 空 = 解除
+                cid = data.get("card_id")
+                if not cid:
+                    self._send_json({"error": "card_id required"}, 400)
+                    return
+                try:
+                    card = _tree.set_card_parent(cid, data.get("parent_card_id") or None)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "card_id": card.id, "state": state_dict()})
+            elif path == "/api/card/link":
+                # 2026-08-16 (显式连接图重构): 建立卡片连接 (from 出锚点 → to 入锚点)
+                # 允许多对多, 可断开; 断开后卡片恢复独立
+                try:
+                    link = _tree.link_cards(
+                        from_card=data.get("from_card", ""),
+                        to_card=data.get("to_card", ""),
+                        from_port=data.get("from_port", "bottom"),
+                        to_port=data.get("to_port", "top"),
+                        kind=data.get("kind", "manual"),
+                    )
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "link_id": link["id"], "state": state_dict()})
+            elif path == "/api/card/unlink":
+                # 断开卡片连接 (按 link_id 或 from_card→to_card); 断开后卡片独立
+                try:
+                    changed = _tree.unlink_cards(
+                        link_id=data.get("link_id"),
+                        from_card=data.get("from_card"),
+                        to_card=data.get("to_card"),
+                    )
+                except Exception as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "changed": changed, "state": state_dict()})
+            elif path == "/api/card/branch_point":
+                # 2026-08-16 (poker 对齐): 事后调整分支卡的分支点 (effectiveBranchPointId)
+                # at_message_id: "START" | 源卡内消息 id | null (整卡来源)
+                cid = data.get("card_id")
+                if not cid:
+                    self._send_json({"error": "card_id required"}, 400)
+                    return
+                try:
+                    card = _tree.set_card_branch_point(cid, data.get("at_message_id"))
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                self._send_json({"ok": True, "card_id": card.id, "state": state_dict()})
             elif path == "/api/set_trunk":
                 # S1 + F14: 显式主线提升 (把分支节点设为主线终点); 废弃分支禁止提升
                 try:
@@ -2472,7 +2045,7 @@ class Handler(BaseHTTPRequestHandler):
                 _tree.delete_node(data["node_id"])
                 self._send_json({"ok": True, "state": state_dict()})
             elif path == "/api/set_agent":
-                # 设置分支归属代理 (ekko 模式): ikaros 伴侣 / hermes 任务代理
+                # 设置分支归属代理 (ekko 模式): 仅 ikaros (hermes 已退役)
                 node = _tree.set_agent(
                     node_id=data["node_id"],
                     agent=data.get("agent", "ikaros"),
@@ -2511,11 +2084,11 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send_json(res)
             elif path == "/api/model_switch":
-                # POST: {"mode":"hermes"|"ikaros"|"","model":"<名>"}
+                # POST: {"mode":"ikaros"|"","model":"<名>"} (hermes 模式已退役)
                 mode = (data.get("mode") or "").strip()
                 model = (data.get("model") or "").strip()
-                if mode not in ("", "hermes", "ikaros"):
-                    self._send_json({"error": "mode must be hermes|ikaros|''"}, 400)
+                if mode not in ("", "ikaros"):
+                    self._send_json({"error": "mode must be ikaros|''"}, 400)
                     return
                 _CT_RUNTIME["mode"] = mode
                 _CT_RUNTIME["model"] = model
@@ -2829,22 +2402,7 @@ def main():
         sys.stderr.write("[ct] health: tree_adapter OK (树域记忆可用)\n")
     except Exception as e:
         sys.stderr.write(f"[ct] health: tree_adapter UNAVAILABLE ({e}); 树域记忆将降级为空\n")
-    if HERMES_AGENT_URL:
-        try:
-            probe = urllib.request.Request(HERMES_AGENT_URL, method="GET")
-            with urllib.request.urlopen(probe, timeout=3) as _pr:
-                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} reachable (主通道 OK)\n")
-        except urllib.error.HTTPError as _he:
-            # 405 Method Not Allowed = 端点存在且只接受 POST → gateway 在线
-            if _he.code == 405:
-                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} reachable (主通道 OK, HTTP 405=POST-only)\n")
-            else:
-                sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} HTTP {_he.code}; chat 可能降级\n")
-        except Exception as e:
-            sys.stderr.write(f"[ct] health: gateway {HERMES_AGENT_URL} unreachable ({e}); chat 将降级本地模型\n")
-    else:
-        sys.stderr.write("[ct] health: HERMES_AGENT_URL 未配置; chat 走本地 DeepSeek 直连\n")
-    if _DEEPSEEK_KEY:
+
         sys.stderr.write("[ct] health: DeepSeek key present (降级链可用)\n")
     else:
         sys.stderr.write("[ct] health: DeepSeek key MISSING; 本地直连将不可用\n")

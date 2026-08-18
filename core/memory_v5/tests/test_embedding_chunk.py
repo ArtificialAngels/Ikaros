@@ -5,8 +5,8 @@
 修复: >350 字符分块嵌入 + mean pooling.
 
 验证:
-  E1. 短文本单次请求, 返回 768 维 (或 mock 维度)
-  E2. 长文本 (2000+ 字符) 拆成多块, 各自带 task 前缀, 结果平均池化
+  E1. 短文本单次请求, 返回 mock 维度
+  E2. 长文本 (2000+ 字符) 拆成多块, document 无前缀 (bge-m3), 结果平均池化
   E3. 任一块 HTTP 500 → 整体返回 None (fail-open)
   E4. 空文本 → None
 """
@@ -114,7 +114,7 @@ def test_e1_short_text_single_call(_patch_http):
     assert vec is not None and len(vec) == 64
     assert len(_patch_http.instances) == 1
     body = json.loads(_patch_http.instances[0].calls[0])
-    assert body["content"].startswith("search_query: 短文本")
+    assert body["content"].startswith("为这个句子生成表示以用于检索相关文章：短文本")
 
 
 # ── E2: 长文本分块 + 平均池化 ──
@@ -125,10 +125,10 @@ def test_e2_long_text_chunked_and_pooled(_patch_http):
     assert vec is not None and len(vec) == 64
     n_calls = len(_patch_http.instances)
     assert n_calls >= 3  # 1300 字符 / 350 → 至少 4 块 (保险断言 3+)
-    # 每块都带 document 前缀
+    # bge-m3: document 不加前缀 (query 才加检索指令)
     for inst in _patch_http.instances:
         body = json.loads(inst.calls[0])
-        assert body["content"].startswith("search_document: ")
+        assert not body["content"].startswith("为这个句子生成表示")
     # 均值池化: 结果是各块向量的逐元素平均 (随机单位向量平均后范数 < 1, 属预期)
     assert len(vec) == 64
     assert 0.0 < float(np.linalg.norm(np.asarray(vec))) < 1.0

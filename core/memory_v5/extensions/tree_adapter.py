@@ -67,7 +67,7 @@ def tree_scoped_retrieve(
     要求：记忆条目已在存储时通过 `tag_for_node` 打过 `node:`/`branch:` 标签。
     """
     try:
-        from memory_v5.memory_retrieval import retrieve as _v5_retrieve
+        from memory_v5.memory_retrieval import unified_retrieve as _v5_retrieve
     except Exception as exc:  # pragma: no cover - 防御性
         logger.debug("tree_scoped_retrieve: 无法导入 memory_retrieval (%s)", exc)
         return []
@@ -81,7 +81,9 @@ def tree_scoped_retrieve(
     sess_tag = f"session:{getattr(tree, 'persist_key', '')}"
 
     try:
-        results = _v5_retrieve(query, top_k=max(top_k * 3, 12), character=character)
+        # P6 收敛: 统一走 unified_retrieve(scope="semantic") (含时效过滤 + 统一形状)
+        results = _v5_retrieve(query, scope="semantic", top_k=max(top_k * 3, 12),
+                               character=character)
     except Exception as exc:
         logger.debug("tree_scoped_retrieve: _v5_retrieve 失败 (%s)", exc)
         return []

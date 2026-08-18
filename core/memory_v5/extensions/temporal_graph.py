@@ -25,7 +25,8 @@ V5 已有实体图 (eg_entities / eg_edges / eg_episodic / eg_activations) 与�
 ---------------------------------
   - 启动时跑 apply_migration() 加列(幂等);
   - 在 dissonance._record_dissonance 之后调用 resolve_dissonance_supersede();
-  - 用 retrieve_temporal / spreading_activation_search_temporal 包裹原检索。
+  - 用 retrieve_temporal (现位于 memory_v5.memory_retrieval, 2026-08-14 迁移)
+    / spreading_activation_search_temporal 包裹原检索。
 """
 
 from __future__ import annotations
@@ -141,48 +142,9 @@ def resolve_dissonance_supersede(
 
 # ─── 3) 时效感知检索 (过滤 / 降权过期事实) ─────────────────────
 
-def _valid_to_map(ids: list[str], conn_fn) -> dict:
-    """批量取 valid_to。conn_fn 返回 (conn, 表名)。
-
-    返回 {str(id): valid_to} —— 键统一为 str, 与检索结果 dict 的 id 字段对齐
-    (SQLite 行返回 int id, 不转换会导致 get() 失配、过期过滤静默失效).
-    """
-    if not ids:
-        return {}
-    table, col = conn_fn
-    ph = ",".join("?" * len(ids))
-    from memory_v5 import store
-    from memory_v5.entity_graph import eg_conn
-    if table == "memory":
-        with store.conn() as c:
-            rows = c.execute(
-                f"SELECT id, valid_to FROM {table} WHERE id IN ({ph})", ids
-            ).fetchall()
-    else:
-        with eg_conn() as c:
-            rows = c.execute(
-                f"SELECT id, valid_to FROM {table} WHERE id IN ({ph})", ids
-            ).fetchall()
-    return {str(r["id"]): r["valid_to"] for r in rows}
-
-
-def retrieve_temporal(query: str, *, now: Optional[float] = None,
-                      top_k: int = 5, **kw) -> list[dict]:
-    """包裹 memory_retrieval.retrieve: 过滤已失效(valid_to<now)的事实。
-
-    过期事实被直接剔除(而非降权) —— 因为失效意味着"该值已被新事实取代",
-    召回它就是错误。若需保留为弱信号, 可改为降权而非删除。
-    """
-    now = now or time.time()
-    from memory_v5.memory_retrieval import retrieve
-    results = retrieve(query, top_k=top_k, **kw)
-    if not results:
-        return results
-    ids = [r.get("id") for r in results if r.get("id")]
-    vt = _valid_to_map(ids, ("memory", "id"))
-    kept = [r for r in results
-            if vt.get(r.get("id")) is None or vt[r["id"]] > now]
-    return kept
+# _valid_to_map 已迁至 memory_v5.store.valid_to_map; retrieve_temporal 已迁至
+# memory_v5.memory_retrieval.retrieve_temporal (2026-08-14 解开
+# temporal_graph ↔ memory_retrieval 循环依赖)。
 
 
 def filter_expired_episodic(memories: list, now: Optional[float] = None) -> list:
@@ -195,8 +157,9 @@ def filter_expired_episodic(memories: list, now: Optional[float] = None) -> list
     now = now or time.time()
     if not memories:
         return memories
+    from memory_v5.store import valid_to_map
     ids = [m.id for m in memories]
-    vt = _valid_to_map(ids, ("eg_episodic", "id"))
+    vt = valid_to_map(ids, "eg_episodic", "id")
     return [m for m in memories
             if vt.get(m.id) is None or vt[m.id] > now]
 

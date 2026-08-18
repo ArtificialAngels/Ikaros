@@ -1,6 +1,5 @@
 # See docs/scripts/core/env/scripts/detect-root.md
-
-$ErrorActionPreference = "Stop"
+# 2026-08-18: 移除 HERMES_ROOT 兼容与 hermes-agent marker
 
 function Find-IkarosRoot {
     # Priority 1: IKAROS_ROOT env var
@@ -11,47 +10,37 @@ function Find-IkarosRoot {
         }
     }
 
-    # Priority 2: HERMES_ROOT env var (legacy compat)
-    if ($env:HERMES_ROOT -and (Test-Path $env:HERMES_ROOT)) {
-        $root = (Resolve-Path $env:HERMES_ROOT).Path
-        if (Test-Path "$root\runtime\portable-python\python.exe") {
-            return $root
-        }
-    }
-
-    # Priority 3: Derive from script location
-    # Script is at Ikaros-environment\scripts\, root is parent of parent
+    # Priority 2: Script is at Ikaros-environment\scripts\, root is parent of parent
     $scriptDir = $PSScriptRoot
-    $envDir = Split-Path $scriptDir -Parent
-    $candidate = Split-Path $envDir -Parent
+    $candidate = (Resolve-Path "$scriptDir\..\..").Path
     if (Test-Path "$candidate\runtime\portable-python\python.exe") {
-        return (Resolve-Path $candidate).Path
+        return $candidate
     }
 
-    # Priority 4: Walk up from current working directory
-    $dir = Get-Location
-    while ($dir -ne $null) {
-        $hasPython = Test-Path "$dir\runtime\portable-python\python.exe"
-        $hasHermes = Test-Path "$dir\runtime/hermes-agent"
+    # Priority 3: Walk up from CWD looking for marker files
+    $marker = "runtime\portable-python\python.exe"
+    $dir = (Get-Location).Path
+    while ($dir) {
+        $hasPython = Test-Path "$dir\$marker"
         $hasEnv = Test-Path "$dir\core\env"
-        if ($hasPython -and $hasHermes -and $hasEnv) {
-            return (Resolve-Path $dir).Path
+        if ($hasPython -and $hasEnv) {
+            return $dir
         }
-        $dir = Split-Path $dir -Parent
+        $parent = Split-Path $dir -Parent
+        if ($parent -eq $dir) { break }
+        $dir = $parent
     }
 
-    # Priority 5: Scan drive letters
-    $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null }
-    foreach ($drive in $drives) {
-        $candidate = Join-Path $drive.Root "Ikaros"
+    # Priority 4: Drive scan (slow, last resort)
+    foreach ($letter in (Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Root)) {
+        $candidate = Join-Path $letter "Ikaros"
         if (Test-Path "$candidate\runtime\portable-python\python.exe") {
-            return (Resolve-Path $candidate).Path
+            return $candidate
         }
     }
 
     throw "IKAROS_ROOT not found. Set IKAROS_ROOT env var."
 }
 
-# Execute and output result
 $root = Find-IkarosRoot
 Write-Output $root

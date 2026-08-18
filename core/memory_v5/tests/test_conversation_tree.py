@@ -685,3 +685,242 @@ class TestSerializationV2:
         t = ct.ConversationTree.deserialize(v1)
         assert t.nodes["r1"].node_type == "trunk"
         assert t.nodes["n1"].node_type == "branch"
+
+# ────────────────────────── 卡片视图 (poker 对齐, 2026-08-15) ──────────────────────────
+
+class TestCards:
+    """build_cards: 卡片 = 一段多轮会话 (分叉点切分聚合)."""
+
+    def _chain_tree(self):
+        """ROOT -> A -> B -> C (无分叉): 应聚合为单张卡."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}, {"role": "assistant", "content": "a2"}])
+        c = t.add_turn([{"role": "user", "content": "q3"}, {"role": "assistant", "content": "a3"}])
+        return t, {"a": a.id, "b": b.id, "c": c.id}
+
+    def test_single_chain_one_card(self):
+        t, ids = self._chain_tree()
+        cards = t.build_cards()
+        assert len(cards) == 1
+        card = cards[0]
+        assert card.id == "card_" + t.root_id
+        assert card.node_ids == [t.root_id, ids["a"], ids["b"], ids["c"]]
+        # 消息串联 = 一段连续会话 (root system + 3 回合)
+        roles = [m["role"] for m in card.messages]
+        assert roles == ["system", "user", "assistant", "user", "assistant", "user", "assistant"]
+        assert card.parent_id is None
+        assert card.children == []
+
+    def test_fork_splits_cards(self):
+        """ROOT -> A -> B -> C, B -> D -> E: 主线连续聚合 (A/B/C 一张卡) + 分支卡 (D/E)."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards2", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        c = t.add_turn([{"role": "user", "content": "q3"}])
+        d = t.branch_from(b.id, [{"role": "user", "content": "f1"}], branch_label="fork")
+        e = t.add_turn([{"role": "user", "content": "f2"}])
+        cards = t.build_cards()
+        by_id = {c.id: c for c in cards}
+        # 主线 A/B/C 连续聚合为一张卡 (不再被分叉点切成薄卡); 分支 D/E 独立成卡
+        assert len(cards) == 2, [c.id for c in cards]
+        root_card = by_id["card_" + t.root_id]
+        assert root_card.node_ids == [t.root_id, a.id, b.id, c.id]
+        d_card = by_id["card_" + d.id]
+        assert d_card.node_ids == [d.id, e.id]
+        # 卡片父链: 分支卡挂回主线卡
+        assert d_card.parent_id == root_card.id
+        assert root_card.children == [d_card.id]
+        # 分支卡带 branch_label
+        assert d_card.branch_label == "fork"
+
+    def test_cards_meta_merge_and_roundtrip(self):
+        """cards_meta (标题/未读/分支点标记) 持久化往返并合并进自动卡."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards3", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        d = t.branch_from(a.id, [{"role": "user", "content": "f1"}], branch_label="fork")
+        card_id = "card_" + d.id
+        t.cards_meta[card_id] = {
+            "kind": "branching",
+            "branching_source_id": "card_" + a.id,
+            "branching_source_message_id": "msg_x",
+            "title": "分支探索",
+            "is_unread": True,
+        }
+        # 往返
+        raw = t.serialize()
+        t2 = ct.ConversationTree.deserialize(raw, persist_key="test_cards3",
+                                             _store=ms.store, _load=ms.load, _search=ms.search)
+        assert t2.cards_meta[card_id]["title"] == "分支探索"
+        cards = {c.id: c for c in t2.build_cards()}
+        card = cards[card_id]
+        assert card.title == "分支探索"
+        assert card.is_unread is True
+        assert card.kind == "branching"
+        assert card.branching_source_id == "card_" + a.id
+        assert card.branching_source_message_id == "msg_x"
+        # 旧 JSON 无 cards_meta → 兼容
+        v1 = json.loads(raw); v1.pop("cards_meta")
+        t3 = ct.ConversationTree.deserialize(json.dumps(v1))
+        assert t3.cards_meta == {}
+        # 主线 b 连续聚合 (root,a,b 一张卡) + 分支 d 独立 → 2 张卡
+        assert len(t3.build_cards()) == 2
+
+    def test_card_of_node(self):
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards4", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        d = t.branch_from(a.id, [{"role": "user", "content": "f1"}])   # a 两孩子 → d 成卡头; b 主线并入 root 卡
+        card = t.card_of_node(d.id)
+        assert card is not None and card.id == "card_" + d.id
+        # b 在主线上 → 属于 root 卡 (主线连续聚合)
+        assert t.card_of_node(b.id).id == "card_" + t.root_id
+        assert t.card_of_node("nope") is None
+
+    def test_create_card_from_message(self):
+        """从源卡某条消息建分支卡: 新节点成卡片头 + cards_meta 分支点标记 + 消息 id 补全."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards5", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([
+            {"role": "user", "content": "q1", "id": "msg_q1"},
+            {"role": "assistant", "content": "a1"},
+        ])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        src = "card_" + t.root_id          # a 在 root 卡内 (a 非卡片头)
+        card = t.create_card_from_message(
+            source_card_id=src, kind="branching",
+            messages=[{"role": "user", "content": "继续深入 q1"}],
+            source_message_id="msg_q1", source_focus="q1 选中文本",
+            title="深入探索", branch_label="deep",
+        )
+        assert card.kind == "branching"
+        meta = t.cards_meta[card.id]
+        assert meta["kind"] == "branching"
+        assert meta["branching_source_id"] == src
+        assert meta["branching_source_message_id"] == "msg_q1"
+        assert meta["source_focus"] == "q1 选中文本"
+        # 新卡挂源消息所在节点 (a) 下 → a 成为分叉点, 新节点是卡片头
+        assert card.node_ids[0] in t.get_node(a.id).children
+        # 消息 id 自动补全 (add_turn 存库前); LLM 上下文剥离 id (见 test_context_strips_message_ids)
+        card_msgs = t.build_cards()[0].messages or []
+        assert any(m.get("id", "").startswith("msg_") for m in card_msgs)
+
+    def test_set_card_read_roundtrip(self):
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards6", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        cid = "card_" + t.root_id
+        t.set_card_read(cid, True)
+        assert t.cards_meta[cid]["is_unread"] is True
+        t2 = ct.ConversationTree.deserialize(t.serialize(),
+                                             _store=ms.store, _load=ms.load, _search=ms.search)
+        assert t2.cards_meta[cid]["is_unread"] is True
+        assert t2.build_cards()[0].is_unread is True
+
+    def test_context_strips_message_ids(self):
+        """LLM 上下文剥离消息 id (OpenAI 兼容 API 严格字段); state 内联保留 id (前端定位)."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards7", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        t.add_turn([{"role": "user", "content": "q1", "id": "msg_keep"}])
+        ctx = t.get_context(t.current_id)
+        assert ctx and all("id" not in m for m in ctx)
+        c = t.build_cards()
+        assert any("id" in m for m in c[0].messages)
+        assert t.get_context_with_meta(t.current_id)[-1]["messages"][0].get("id") is None
+
+    def test_set_card_parent(self):
+        """手动挂接 (科技树编排): parent_override 覆盖自动父链; 解除恢复; 成环/自挂拒绝."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards8", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        d = t.branch_from(a.id, [{"role": "user", "content": "f1"}])   # b 主线并入 root 卡; d 分支卡
+        cards = {c.id: c for c in t.build_cards()}
+        root_card = cards["card_" + t.root_id]
+        d_card = cards["card_" + d.id]
+        assert b.id in root_card.node_ids and d_card.parent_id == root_card.id
+        # 手动挂接: 卡 d 显式挂到 root 卡下 (override)
+        t.set_card_parent(d_card.id, root_card.id)
+        assert t.cards_meta[d_card.id]["parent_override"] == root_card.id
+        cards2 = {c.id: c for c in t.build_cards()}
+        assert cards2[d_card.id].parent_id == root_card.id
+        assert d_card.id in cards2[root_card.id].children
+        assert cards2[d_card.id].parent_override == root_card.id
+        # 成环拒绝 (把 root 挂到 d 下)
+        with pytest.raises(ValueError):
+            t.set_card_parent(root_card.id, d_card.id)
+        # 自挂拒绝
+        with pytest.raises(ValueError):
+            t.set_card_parent(d_card.id, d_card.id)
+        # 解除 → 恢复自动
+        t.set_card_parent(d_card.id, None)
+        assert "parent_override" not in t.cards_meta[d_card.id]
+        cards3 = {c.id: c for c in t.build_cards()}
+        assert cards3[d_card.id].parent_id == root_card.id
+
+    def test_links_migration(self):
+        """旧 JSON (无 links) → build_cards 首次迁移默认链接 (父→子); inputs/outputs 派生."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_links_mig", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        d = t.branch_from(a.id, [{"role": "user", "content": "f1"}])
+        raw = t.serialize()
+        data = json.loads(raw); data.pop("links", None)   # 模拟旧 JSON
+        t2 = ct.ConversationTree.deserialize(json.dumps(data), _store=ms.store, _load=ms.load, _search=ms.search)
+        assert t2._links_pending_migration is True
+        cards = t2.build_cards()
+        assert t2._links_pending_migration is False
+        # 迁移: 主线 root{a,b} + 分支 d; link(root卡 → d卡, 自动)
+        assert len(t2.links) == 1, t2.links
+        lk = t2.links[0]
+        assert lk["to_card"] == "card_" + d.id
+        assert lk["from_card"] == "card_" + t.root_id
+        assert lk["kind"] == "auto" or lk["kind"] == "manual"
+        # inputs/outputs 派生
+        cm = {c.id: c for c in t2.build_cards()}
+        d_card = cm["card_" + d.id]
+        root_card = cm["card_" + t.root_id]
+        assert d_card.inputs and d_card.inputs[0]["from_card"] == root_card.id
+        assert root_card.outputs and root_card.outputs[0]["to_card"] == d_card.id
+
+    def test_link_unlink(self):
+        """显式连接 (多对多, 可断开): 建立/幂等/自连拒绝/断开后独立."""
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_links2", _store=ms.store, _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])          # b parent a (主线)
+        d = t.branch_from(a.id, [{"role": "user", "content": "f1"}]) # a 两孩子 → d 卡头
+        cards = {c.id: c for c in t.build_cards()}
+        root = "card_" + t.root_id
+        d_card = "card_" + d.id
+        # 建立
+        lk = t.link_cards(root, d_card)
+        assert any(x["from_card"] == root and x["to_card"] == d_card for x in t.links)
+        # 幂等: 再次连接不新增
+        lk2 = t.link_cards(root, d_card)
+        assert lk2["id"] == lk["id"] and len(t.links) == 1
+        # 自连拒绝
+        import pytest
+        with pytest.raises(ValueError):
+            t.link_cards(root, root)
+        # 断开 (按 from/to)
+        assert t.unlink_cards(from_card=root, to_card=d_card) is True
+        assert len(t.links) == 0
+        # 断开后卡片恢复独立 (无 inputs/outputs)
+        cards2 = {c.id: c for c in t.build_cards()}
+        assert cards2[d_card].inputs == [] and cards2[root].outputs == []

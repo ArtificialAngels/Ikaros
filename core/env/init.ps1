@@ -1,7 +1,6 @@
 # See docs/scripts/core/env/init-ps1.md
+# 2026-08-18: env 权威源收敛到 bin/ikaros-env.ps1 (删除 core/env/ 重复副本)
 
-# `return` 在 script-scope 是 no-op (只会 break 当前语句)。
-# wrap whole logic in function so `return` 真的能从外层调用 short-circuit。
 function Invoke-IkarosInit {
     trap {
         Write-Host "[init.ps1 FAIL] $_" -ForegroundColor Red
@@ -24,9 +23,9 @@ function Invoke-IkarosInit {
         return
     }
 
-    # ---- Step 2: dot-source ikaros-env.ps1 (核心 11 步) ----
+    # ---- Step 2: dot-source bin/ikaros-env.ps1 (权威源) ----
     try {
-        . "$env:IKAROS_ROOT\core\env\ikaros-env.ps1"
+        . "$env:IKAROS_ROOT\bin\ikaros-env.ps1"
     } catch {
         Write-Host "[init.ps1 FAIL] ikaros-env.ps1 failed: $_" -ForegroundColor Red
         return

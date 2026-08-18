@@ -76,10 +76,9 @@ def v5_memory_search(
 
     Paths (first match wins):
       1. emotion_tag given  -> emotional_memory.search_by_emotion()
-      2. time/exclude given  -> memory_retrieval.retrieve() (3-way fusion)
-      3. default            -> V5MemoryAPI.search(fuse=True) = unified_retrieve(scope="auto")
+      2. 默认               -> V5MemoryAPI.search(fuse=True) = unified_retrieve(scope="auto")
                               (语义三路融合 + 图补路 + Vault; 失败降级 FTS5)
-      4. any failure        -> FTS5 only (store.search)
+      3. any failure        -> FTS5 only (store.search)
     Always returns a JSON array string; never raises.
     """
     # 1. emotion-tag retrieval (kept on its own path — emotional_memory specific)
@@ -104,6 +103,14 @@ def v5_memory_search(
                 r for r in results
                 if not any(e in r.get("content", "") for e in exclude_list)
             ]
+
+    # P8 可观测性: 每条附 why (召回依据: 向量/关键词分量 + 意图 + EI + 图 relation)
+    try:
+        from memory_v5.memory_retrieval import explain_result
+        for r in results:
+            r["why"] = explain_result(r)
+    except Exception:
+        pass
 
     return answer(f"找到 {len(results)} 条记忆", results)
 

@@ -46,8 +46,10 @@ LLAMA_CPU_FALLBACK = _LLAMA_RES.get("cpu_fallback", False)
 LLAMA_SELECT_REASON = _LLAMA_RES.get("reason", "")
 
 # Embedding model (dedicated; never auto-scanned as a chat LLM)
+# 2026-08-14: nomic-embed-text-v2-moe 在 llama.cpp b10000 下输出全零 (mask token 缺失);
+# nomic-v1.5 中文语义弱; 换 bge-m3 Q8_0 (1024 维, 中英多语言强, 需 --pooling cls)。
 EMBED_MODEL = Path(os.environ.get("IKAROS_MODEL_EMBEDDING",
-    str(ROOT / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")))
+    str(ROOT / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf")))
 
 
 def _load_model_cfg() -> dict:
@@ -273,8 +275,8 @@ class MemoryWatchdog:
                 "-c", "4096",
                 "-ngl", "99",
                 "--embeddings",
-                "--pooling", "mean",
-                "--alias", "nomic-embed-text-v2-moe",
+                "--pooling", "cls",
+                "--alias", "bge-m3",
                 "--cont-batching",
             ],
             stdout=subprocess.DEVNULL,

@@ -66,10 +66,10 @@ MANIFEST = [
     },
     {
         "name": "model-nomic-embed",
-        "desc": "nomic-embed-text-v2-moe f32 GGUF (embedding)",
+        "desc": "bge-m3 Q8_0 GGUF (embedding; v2-moe 在 llama.cpp 下输出全零)",
         "method": "release",
-        "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe-GGUF/resolve/main/nomic-embed-text-v2-moe.f32.gguf",
-        "local": "core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf",
+        "url": "https://huggingface.co/nomic-ai/bge-m3-GGUF/resolve/main/bge-m3-q8_0.gguf",
+        "local": "core/memory_v5/models/bge-m3-q8_0.gguf",
         "mirror": "hf",
         "optional": True,
     },

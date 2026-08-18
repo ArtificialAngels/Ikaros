@@ -27,5 +27,5 @@ if not exist "%MODEL%" (
 )
 
 echo [Ikaros Memory] Starting embedding service on %HOST%:%PORT%
-echo [Ikaros Memory] Model: nomic-embed-text-v2-moe.f32.gguf
+echo [Ikaros Memory] Model: bge-m3-q8_0.gguf
 "%LLAMA%" -m "%MODEL%" --host %HOST% --port %PORT% -ngl auto --embedding --pooling mean

@@ -5,7 +5,7 @@ from io import BytesIO
 from PIL import Image
 
 SIZES = [16, 20, 24, 28, 32, 40, 48, 56, 60, 72, 80, 84, 86, 120, 128, 144, 256, 512, 768, 1024]
-SRC = 'E:/Ikaros/Artificialangel.png'
+SRC = 'E:/Ikaros/assets/Artificialangel.png'
 OUT = 'E:/Ikaros/Artificialangel.ico'
 
 img = Image.open(SRC).convert('RGBA')

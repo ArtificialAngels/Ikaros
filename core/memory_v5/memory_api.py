@@ -13,29 +13,15 @@ if str(V5_ROOT.parent) not in sys.path:
 from memory_v5 import store as _store
 
 
-def _val(row, key, default=None):
-    """Read a column from either a sqlite3.Row or a Memory dataclass."""
-    try:
-        return row[key]
-    except Exception:  # noqa: BLE001
-        try:
-            return getattr(row, key)
-        except Exception:  # noqa: BLE001
-            return default
-
-
 def _row_to_dict(row) -> dict:
-    return {
-        "id": _val(row, "id"),
-        "content": _val(row, "content", ""),
-        "type": _val(row, "type", "fact"),
-        "tags": _val(row, "tags") or "",
-        "weight": float(_val(row, "weight", 0.6)),
-        "created": _val(row, "created", 0.0),
-        "pad_p": float(_val(row, "pad_p", 0.0)),
-        "pad_a": float(_val(row, "pad_a", 0.0)),
-        "pad_d": float(_val(row, "pad_d", 0.0)),
-    }
+    """行 → 统一结果字典 (P6 收敛: 委托 memory_retrieval._norm, 结果形状唯一).
+
+    结构化精确匹配 (tag/domain/key) 的输出标记 source="structured" (非语义融合)。
+    """
+    from memory_v5.memory_retrieval import _norm
+    d = _norm(row)
+    d["source"] = "structured"
+    return d
 
 
 class V5MemoryAPI:

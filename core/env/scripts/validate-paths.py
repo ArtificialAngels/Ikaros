@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # 详细说明见 docs/scripts/core/env/scripts/validate-paths.md
+# 2026-08-18: 移除 hermes/neko 检查, 新增 dsh; env 权威源改指 bin/ikaros-env.*
 from __future__ import annotations
 
 import json
 import os
 import sys
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -60,25 +61,20 @@ class CheckResult:
 
 
 def resolve_root() -> Optional[Path]:
-    """解析 IKAROS_ROOT。"""
+    """解析 IKAROS_ROOT (只认 IKAROS_ROOT, HERMES_ROOT 兼容已废弃)。"""
     # 1. 环境变量
     env_root = os.environ.get("IKAROS_ROOT", "").strip()
     if env_root and Path(env_root).exists():
         return Path(env_root).resolve()
 
-    # 2. HERMES_ROOT 兼容
-    hermes_root = os.environ.get("HERMES_ROOT", "").strip()
-    if hermes_root and Path(hermes_root).exists():
-        return Path(hermes_root).resolve()
-
-    # 3. 从脚本位置推导
+    # 2. 从脚本位置推导
     script_dir = Path(__file__).resolve().parent
     env_dir = script_dir.parent  # Ikaros-environment
     candidate = env_dir.parent   # Ikaros
     if (candidate / "runtime" / "portable-python" / "python.exe").exists():
         return candidate
 
-    # 4. 从当前工作目录向上查找
+    # 3. 从当前工作目录向上查找
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents):
         if (parent / "runtime" / "portable-python" / "python.exe").exists() and \
@@ -128,10 +124,9 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     for name, subdir in [
         ("数据目录", "data"),
         ("脚本目录", "bin"),
-        ("模块目录", "modules"),
         ("配置目录", "config"),
-        ("依赖目录", "deps"),
         ("运行时目录", "runtime"),
+        ("工作引擎目录", "core/ikaros-dsh"),
     ]:
         checks.append(PathCheck(
             name,
@@ -139,21 +134,23 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
             critical=True, must_be_dir=True
         ))
 
-    # ---- Hermes 组件 ----
+    # ---- dsh (DeepSeek Harness) ----
     checks.append(PathCheck(
-        "Hermes Agent 源码",
-        str(root / "runtime/hermes-agent"),
-        critical=True, must_be_dir=True
+        "dsh 运行时",
+        str(root / "runtime" / "dsh"),
+        critical=True, must_be_dir=True,
+        description="DeepSeek Harness 工作引擎"
     ))
     checks.append(PathCheck(
-        "Hermes 桥接层",
-        str(root / "hermes"),
-        critical=False, must_be_dir=True
+        "dsh overlay",
+        str(root / "core" / "ikaros-dsh" / "cordis.patch.yml"),
+        critical=True, must_be_file=True,
+        description="Ikaros 组合 overlay"
     ))
 
-    # ---- Ikaros-memory ----
+    # ---- core/memory_v5 ----
     checks.append(PathCheck(
-        "Ikaros-memory 模块",
+        "core/memory_v5 模块",
         str(root / "core/memory_v5"),
         critical=True, must_be_dir=True
     ))
@@ -164,24 +161,29 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     ))
     checks.append(PathCheck(
         "Embedding 模型",
-        str(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf"),
+        str(root / "core/memory_v5" / "models" / "nomic-embed-text-v1.5.Q8_0.gguf"),
         critical=True, must_be_file=True
     ))
     checks.append(PathCheck(
         "LLM 模型",
-        str(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf"),
+        str(root / "core/memory_v5" / "models" / "Phi-4-mini-instruct-Q4_K_M.gguf"),
         critical=True, must_be_file=True
     ))
 
-    # ---- Ikaros-environment ----
+    # ---- env 权威源 (bin/) ----
     checks.append(PathCheck(
         "环境配置 (bat)",
-        str(root / "core/env" / "ikaros-env.bat"),
+        str(root / "bin" / "ikaros-env.bat"),
         critical=True, must_be_file=True
     ))
     checks.append(PathCheck(
         "环境配置 (ps1)",
-        str(root / "core/env" / "ikaros-env.ps1"),
+        str(root / "bin" / "ikaros-env.ps1"),
+        critical=True, must_be_file=True
+    ))
+    checks.append(PathCheck(
+        "环境配置 (sh)",
+        str(root / "bin" / "ikaros-env.sh"),
         critical=True, must_be_file=True
     ))
     checks.append(PathCheck(
@@ -223,9 +225,9 @@ def print_report(results: list[CheckResult]) -> tuple[int, int]:
     categories = [
         ("核心组件", ["Python", "Node.js", "llama-server"]),
         ("目录结构", ["目录"]),
-        ("Hermes 组件", ["Hermes"]),
+        ("dsh 工作引擎", ["dsh"]),
         ("core/memory_v5", ["memory", "Embedding", "LLM 模型", "记忆"]),
-        ("core/env", ["环境配置", "路径配置"]),
+        ("env 权威源", ["环境配置", "路径配置"]),
     ]
 
     for cat_name, keywords in categories:

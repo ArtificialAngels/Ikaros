@@ -460,7 +460,7 @@ var _mq = window.matchMedia('(max-width: 720px)');
 (_mq.addEventListener ? _mq.addEventListener('change', relayoutAll) : _mq.addListener(relayoutAll));
 
 /* 关键组件 -> bento 大卡 (非对称, 固定不随状态抖动) */
-var FEATURED = { control_panel:1, local_model:1, memory:1, neko_group:1, neko:1, hermes_bridge:1, conversation_tree:1, herdr:1 };
+var FEATURED = { control_panel:1, local_model:1, memory:1, neko_group:1, neko:1, dsh:1, conversation_tree:1, herdr:1 };
 
 /* 组件卡片现统一挂在 #canvas 内(见 PanelManager) */
 var connDot=document.getElementById('connDot');
@@ -545,15 +545,9 @@ function buildCard(c) {
     if(c.panel_url){ inner+='<a class="btn" href="'+esc(c.panel_url)+'" target="_blank" style="text-decoration:none">面板</a>'; }
     inner+='</div>';
   }
-  if((c.id==='hermes_bridge') || c.id==='neko_group'){
+  if(c.id==='neko_group'){
     inner+='<div class="hermes-patch" id="repo-'+c.id+'"></div>';
-    if(c.id==='neko_group'){
-      inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
-    } else {
-      // hermes 已 0 侵入（studio bridge + 不可约 overlay 由 --apply 自动维护）：
-      // 面板只保留「克隆 / 更新」入口，移除补丁状态窥探与手动补丁。
-      inner+='<div class="comp-actions hermes-extra"><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button><button class="btn warn" id="hermes-update-'+c.id+'">更新 Hermes</button></div>';
-    }
+    inner+='<div class="comp-actions hermes-extra"><button class="btn" id="repo-check-'+c.id+'">检查上游版本</button><button class="btn warn" id="repo-sync-'+c.id+'">克隆/同步</button></div>';
   }
   if(c.id==='runtime'){
     inner+='<div class="runtime-box" id="runtime-'+c.id+'"></div>';
@@ -577,10 +571,7 @@ function buildCard(c) {
     });
   }
   el.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.addEventListener('click',function(e){ e.stopPropagation(); doAction(c.id, b.dataset.act); }); });
-  if(c.id==='hermes_bridge'){
-    var _hu=el.querySelector('#hermes-update-'+c.id); if(_hu)_hu.addEventListener('click', hermesUpdate);
-  }
-  if((c.id==='hermes_bridge') || c.id==='neko_group'){
+  if(c.id==='neko_group'){
     var _rc=el.querySelector('#repo-check-'+c.id); if(_rc)_rc.addEventListener('click', function(){ repoCheck(c.id); });
     var _rs=el.querySelector('#repo-sync-'+c.id); if(_rs)_rs.addEventListener('click', function(){ repoSync(c.id); });
   }
@@ -635,7 +626,7 @@ function updateCard(c) {
   var card=document.getElementById('card-'+c.id); if(!card)return;
   var isBusy=busy.has(c.id); card.classList.toggle('pending',isBusy);
   card.querySelectorAll('button[data-act]').forEach(function(b){ if(b.dataset.sub)return; b.disabled=isBusy; });
-  if(((c.id==='hermes_bridge') || c.id==='neko_group') && c.repo) updateRepoBox(c);
+  if(c.id==='neko_group' && c.repo) updateRepoBox(c);
   if(c.id==='runtime' && c.runtime) updateRuntimeBox(c);
 }
 
@@ -645,20 +636,7 @@ async function doAction(id,act) {
   setTimeout(function(){ busy.delete(id); refreshStatuses(); },12000);
 }
 
-async function hermesUpdate() {
-  // 0 侵入后 hermes 卡片只剩 repo 版本盒子，更新反馈复用它（refreshStatuses 会覆盖为最新版本）
-  var box=document.getElementById('repo-hermes_bridge');
-  if(box)box.innerHTML='<div class="hp-detail">更新 Hermes 中（可能需数十秒）…</div>';
-  try{
-    var r=await fetch('/api/hermes/update',{method:'POST'});
-    var j=await r.json();
-    var msg=(j.msg||'').toString().slice(-600);
-    if(box)box.innerHTML='<div class="hp-detail">'+(j.ok?'✓ 完成':'✗ 失败')+'<pre>'+esc(msg)+'</pre></div>';
-    setTimeout(refreshStatuses,2500);
-  }catch(e){ if(box)box.innerHTML='<div class="hp-detail">请求失败</div>'; }
-}
-
-function repoNameOf(cid){ return cid==='hermes_bridge' ? 'hermes' : 'neko'; }
+function repoNameOf(cid){ return 'neko'; }
 function updateRepoBox(c) {
   var repo=c.repo; if(!repo)return;
   var box=document.getElementById('repo-'+c.id); if(!box)return;
@@ -991,7 +969,7 @@ var HERDR_BODY_HTML =
   + '<select class="herdr-in" id="herdr-kind">'
   + '<option value="aider">aider</option><option value="claude">claude</option>'
   + '<option value="codex">codex</option><option value="cursor">cursor</option>'
-  + '<option value="hermes">hermes</option><option value="opencode">opencode</option>'
+  + '<option value="opencode">opencode</option>'
   + '<option value="gemini">gemini</option></select>'
   + '<input class="herdr-in" id="herdr-cwd" placeholder="仓库目录 cwd（可选）" />'
   + '<textarea class="herdr-in" id="herdr-task" placeholder="下发给 coding agent 的自然语言任务"></textarea>'

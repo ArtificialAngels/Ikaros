@@ -4,7 +4,7 @@ import struct
 from io import BytesIO
 from PIL import Image
 
-SRC = 'E:/Ikaros/Artificialangel.png'
+SRC = 'E:/Ikaros/assets/Artificialangel.png'
 img = Image.open(SRC).convert('RGBA')
 
 

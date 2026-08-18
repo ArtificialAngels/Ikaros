@@ -1,41 +1,51 @@
-# ikaros-env.sh — Ikaros 便携环境 (自锚定, 移动文件夹后仍正确)
-# 由 bash 会话 source (BASH_ENV) 或手动 source; 覆盖 Hermes snap 旧值
-# 生成: 2026-08-11
+# ikaros-env.sh — Ikaros 便携环境 (单一权威源, 自锚定)
+# 由 bash 会话 source (BASH_ENV) 或手动 source
+# 锚点原则: 一切路径相对 IKAROS_ROOT 推导, 不写死盘符
+# 重构: 2026-08-18 (移除 hermes/neko, 新增 dsh)
 export IKAROS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export IKAROS_BIN="${IKAROS_ROOT}/bin"
 export IKAROS_CONFIG="${IKAROS_ROOT}/config"
 export IKAROS_DATA="${IKAROS_ROOT}/data"
-export IKAROS_HERMES_AGENT="${IKAROS_ROOT}/runtime/hermes-agent"
-export IKAROS_HERMES_HOME="${IKAROS_ROOT}/data/hermes-agent"
-export IKAROS_LABEL_EMOTION_PROVIDER="local"
-export IKAROS_LLAMA_DIR="${IKAROS_ROOT}/runtime/llama/b10000-cuda"
-export IKAROS_LLAMA_SERVER="${IKAROS_ROOT}/runtime/llama/b10000-cuda/llama-server.exe"
-export IKAROS_LLAMA_VERSION="b10000-cuda"
-export IKAROS_LOGS="${IKAROS_ROOT}/data/logs"
-export IKAROS_MEMORY_DATA="${IKAROS_ROOT}/core/memory_v5/data"
-export IKAROS_MEMORY_MODELS="${IKAROS_ROOT}/core/memory_v5/models"
-export IKAROS_MEMORY_SCRIPT="${IKAROS_ROOT}/core/memory_v5/store.py"
-export IKAROS_MEMORY="${IKAROS_ROOT}/core/memory_v5"
-export IKAROS_MODEL_EMBEDDING="${IKAROS_ROOT}/core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf"
-export IKAROS_MODEL_LLM="${IKAROS_ROOT}/core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf"
-export IKAROS_MODULES="${IKAROS_ROOT}/modules"
-export IKAROS_NEKO_PYTHON="${IKAROS_ROOT}/apps/neko/.venv/Scripts/python.exe"
-export IKAROS_NEKO_SERVER="app.main_server"
-export IKAROS_NEKO="${IKAROS_ROOT}/apps/neko"
-export IKAROS_NODE_MODULES="${IKAROS_ROOT}/runtime/node/node_modules"
-export IKAROS_NODE="${IKAROS_ROOT}/runtime/node/node.exe"
-export IKAROS_PORT_BRIDGE="7860"
-export IKAROS_PORT_EMBEDDING="8587"
-export IKAROS_PORT_LIVE2D_WEBVIEW_INTERNAL="8649"
-export IKAROS_PORT_LIVE2D_WEBVIEW="8648"
-export IKAROS_PORT_LLAMA="8080"
-export IKAROS_PORT_LLM="8080"
-export IKAROS_PYTHON="${IKAROS_ROOT}/runtime/portable-python/python.exe"
 export IKAROS_RUNTIME="${IKAROS_ROOT}/runtime"
-export IKAROS_RUST="${IKAROS_ROOT}/runtime/rust"
-# omp / bun 便携二进制 (2026-08-12: omp 从 C:\Users\PZS0X\.bun 迁到 runtime/bun)
-export PATH="${IKAROS_ROOT}/runtime/bun/bin:${IKAROS_ROOT}/runtime/node/node_modules/bun/bin:${PATH}"
-# omp 便携配置 (2026-08-13): 配置目录迁出 C 盘, 锚定 ${IKAROS_ROOT}/data/omp
-# PI_CODING_AGENT_DIR = agent 目录绝对路径覆盖(走 path.resolve); PI_CONFIG_DIR 走 path.join 遇绝对路径不重置, 勿用
-export IKAROS_OMP_AGENT="${IKAROS_ROOT}/data/omp/agent"
+export IKAROS_PYTHON="${IKAROS_ROOT}/runtime/portable-python/python.exe"
+export IKAROS_NODE="${IKAROS_ROOT}/runtime/node/node.exe"
+export IKAROS_NODE_MODULES="${IKAROS_ROOT}/runtime/node/node_modules"
+export IKAROS_LOGS="${IKAROS_ROOT}/data/logs"
+export IKAROS_MODULES="${IKAROS_ROOT}/modules"
+
+# Memory V5
+export IKAROS_MEMORY="${IKAROS_ROOT}/core/memory_v5"
+export IKAROS_MEMORY_DATA="${IKAROS_MEMORY}/data"
+export IKAROS_MEMORY_MODELS="${IKAROS_MEMORY}/models"
+export IKAROS_MEMORY_SCRIPT="${IKAROS_MEMORY}/store.py"
+export IKAROS_MODEL_EMBEDDING="${IKAROS_MEMORY_MODELS}/nomic-embed-text-v1.5.Q8_0.gguf"
+export IKAROS_MODEL_LLM="${IKAROS_MEMORY_MODELS}/Phi-4-mini-instruct-Q4_K_M.gguf"
+
+# DeepSeek Harness (dsh) 工作引擎
+export IKAROS_DSH="${IKAROS_ROOT}/runtime/dsh"
+export IKAROS_DSH_SOURCE="${IKAROS_ROOT}/runtime/deepseek-harness-master"
+export IKAROS_DSH_PROFILE="${IKAROS_DATA}/dsh/profiles"
+export IKAROS_DSH_WEB_PORT="3080"
+export IKAROS_DSH_OVERLAY="${IKAROS_ROOT}/core/ikaros-dsh/cordis.patch.yml"
+
+# omp (oh-my-pi) 编码 agent
+export IKAROS_OMP_AGENT="${IKAROS_DATA}/omp/agent"
 export PI_CODING_AGENT_DIR="${IKAROS_OMP_AGENT}"
+
+# llama.cpp / 本地模型
+export IKAROS_LLAMA_VERSION="b10000-cuda"
+export IKAROS_LLAMA_DIR="${IKAROS_RUNTIME}/llama/${IKAROS_LLAMA_VERSION}"
+export IKAROS_LLAMA_SERVER="${IKAROS_LLAMA_DIR}/llama-server.exe"
+
+# 其它运行时
+export IKAROS_RUST="${IKAROS_RUNTIME}/rust"
+export IKAROS_HERDR="${IKAROS_RUNTIME}/herdr/herdr.exe"
+export THIRDSPACE_VAULT="${IKAROS_DATA}/thirdspace-vault"
+
+# 端口
+export IKAROS_PORT_EMBEDDING="8587"
+export IKAROS_PORT_LLM="8080"
+export IKAROS_PORT_LLAMA="8080"
+
+# omp / bun 便携二进制
+export PATH="${IKAROS_ROOT}/runtime/bun/bin:${IKAROS_ROOT}/runtime/node/node_modules/bun/bin:${PATH}"

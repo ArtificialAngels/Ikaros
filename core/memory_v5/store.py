@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS eg_edges (
     target_entity_id TEXT NOT NULL,
     weight REAL NOT NULL DEFAULT 0.0,
     co_occurrence_count INTEGER NOT NULL DEFAULT 0,
+    relation_type TEXT NOT NULL DEFAULT 'co_occurrence',
     last_seen_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY(source_entity_id, target_entity_id)
 );
@@ -222,6 +223,23 @@ CREATE TABLE IF NOT EXISTS eg_activations (
     score REAL NOT NULL DEFAULT 0.0,
     PRIMARY KEY(episodic_memory_id)
 );
+"""
+
+# V5.7 (2026-08-14): 类型化项目知识边 (graph-memory 借鉴)
+# 连接项目笔记 (v5_project_note) 之间的类型化关系: SOLVES / PREVENTS / CAUSED_BY /
+# RELATES_TO, 让 pi 检索时可沿"这个坑怎么解的"扩散。
+PROJECT_EDGES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS project_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    relation TEXT NOT NULL DEFAULT 'RELATES_TO',
+    weight REAL NOT NULL DEFAULT 0.5,
+    created_at REAL NOT NULL DEFAULT (strftime('%s','now')),
+    UNIQUE(source_id, target_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_project_edges_source ON project_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_project_edges_target ON project_edges(target_id);
 """
 
 
@@ -275,6 +293,12 @@ def conn() -> Iterator[sqlite3.Connection]:
     c.executescript(USER_DIRECTIVES_SCHEMA)
     c.executescript(EVENTS_SCHEMA)
     c.executescript(ENTITY_GRAPH_SCHEMA)
+    c.executescript(PROJECT_EDGES_SCHEMA)
+    # V5.7: eg_edges 补 relation_type 列 (幂等; 旧库迁移)
+    try:
+        c.execute("ALTER TABLE eg_edges ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'co_occurrence'")
+    except Exception:
+        pass
     # V5: add PAD columns to existing table (idempotent, skip if exists)
     for col in ("pad_p", "pad_a", "pad_d"):
         try:
@@ -565,12 +589,20 @@ def _merge_into(memory_id: int, content: str, type: str, weight: float,
         merged_content = old_content if len(old_content or "") >= len(content) else content
         merged_weight = max(float(old_weight or 0.0), float(weight))
         merged_tags = " ".join(dict.fromkeys(f"{old_tags or ''} {tags}".split()))
+        # Phase 4 (2026-08-14): 合并即强化 —— 每次合并加固定 reinforcement 增量
+        # (被合并越多 → reinforcement 越高 → 检索加分越大; 增量 config 可调)
+        try:
+            from memory_v5 import preprocess_config as _pc
+            _merge_inc = float(_pc.cfg()["memory_retrieval"].get(
+                "merge_reinforce_increment", 0.05))
+        except Exception:
+            _merge_inc = 0.05
         c.execute(
             "UPDATE memory SET content = ?, weight = ?, tags = ?, "
             "  access_count = access_count + 1, last_accessed = ?, "
             "  reinforcement = MIN(1.0, reinforcement + ?) WHERE id = ?",
             (merged_content, merged_weight, merged_tags, _time.time(),
-             max(0.0, reinforcement), memory_id),
+             max(0.0, reinforcement) + _merge_inc, memory_id),
         )
         c.commit()
     _sync_vector_best_effort(memory_id, merged_content, type, merged_tags, merged_weight)
@@ -811,6 +843,79 @@ def search_like(substr: str, top_k: int = 5, min_weight: float = 0.0,
                 (pattern, min_weight, top_k),
             ).fetchall()
     return [Memory.from_row(r) for r in rows]
+
+
+def valid_to_map(ids: list[str], table: str, col: str = "id") -> dict:
+    """批量取 valid_to (时效图谱过期过滤用)。
+
+    返回 {str(id): valid_to}。键统一 str, 与检索结果 dict 的 id 字段对齐
+    (SQLite 行返回 int id, 不转换会导致 get() 失配、过期过滤静默失效)。
+
+    原位于 extensions.temporal_graph._valid_to_map (2026-08-14 迁移至此,
+    供 memory_retrieval 与 temporal_graph 共用, 解开循环依赖)。table 为
+    'memory' 或 eg_* 表名 (非 memory 走 entity_graph.eg_conn)。
+    """
+    if not ids:
+        return {}
+    # 表名/列名仅内部常量, 但做最小白名单防御 (防未来误传用户输入注入)
+    if not table.replace("_", "").isalnum() or not col.replace("_", "").isalnum():
+        return {}
+    ph = ",".join("?" * len(ids))
+    if table == "memory":
+        with conn() as c:
+            rows = c.execute(
+                f"SELECT {col} AS id, valid_to FROM {table} WHERE {col} IN ({ph})",
+                ids,
+            ).fetchall()
+    else:
+        from memory_v5.entity_graph import eg_conn
+        with eg_conn() as c:
+            rows = c.execute(
+                f"SELECT {col} AS id, valid_to FROM {table} WHERE {col} IN ({ph})",
+                ids,
+            ).fetchall()
+    return {str(r["id"]): r["valid_to"] for r in rows}
+
+
+def link_project_edge(source_id, target_id, relation: str = "RELATES_TO",
+                      weight: float = 0.5) -> bool:
+    """建一条类型化项目边 (幂等: 同 source/target/relation 覆盖 weight)。
+
+    V5.7 (2026-08-14): 连接 v5_project_note 之间的类型化关系
+    (SOLVES / PREVENTS / CAUSED_BY / RELATES_TO)。
+    """
+    if not source_id or not target_id or int(source_id) == int(target_id):
+        return False
+    relation = (relation or "RELATES_TO").upper()
+    try:
+        with conn() as c:
+            c.execute(
+                "INSERT INTO project_edges (source_id, target_id, relation, weight) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(source_id, target_id, relation) "
+                "DO UPDATE SET weight = excluded.weight",
+                (int(source_id), int(target_id), relation, float(weight)),
+            )
+            c.commit()
+        return True
+    except Exception as exc:
+        logger.warning("link_project_edge failed: %s", exc)
+        return False
+
+
+def get_project_edges(memory_id) -> list[dict]:
+    """返回该记忆参与的所有项目边 (作为 source 或 target)。"""
+    try:
+        with conn() as c:
+            rows = c.execute(
+                "SELECT source_id, target_id, relation, weight FROM project_edges "
+                "WHERE source_id = ? OR target_id = ?",
+                (int(memory_id), int(memory_id)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.debug("get_project_edges failed: %s", exc)
+        return []
 
 
 def list_all(limit: int = 50, type_filter: str | None = None,

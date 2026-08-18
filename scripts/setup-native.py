@@ -78,7 +78,7 @@ def build_paths():
             "cli": resolve(f"{rt}/llama/b10000-cuda/llama-cli.exe"),
         },
         "models": {
-            "embedding": resolve("core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf"),
+            "embedding": resolve("core/memory_v5/models/bge-m3-q8_0.gguf"),
             "llm": resolve("core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf"),
         },
         "neko": {

@@ -129,7 +129,7 @@ def test_t4_temporal_scope_filters_expired(monkeypatch):
 # ── T5: registry 注册 ──
 def test_t5_registry_has_new_ops():
     sched = registry.make_default_scheduler()
-    assert sched.get_op("memory_promote") is not None
+    assert sched.get_op("retention") is not None      # 统一生命周期 (V5.7)
     assert sched.get_op("temporal_extract") is not None
 
 

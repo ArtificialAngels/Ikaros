@@ -23,7 +23,6 @@ Endpoints:
   POST /api/components/<id>/<action>   action in {start,stop,restart}
   POST /api/system/<action>            action in {start,stop}  (all components)
   POST /api/shutdown                     stop this control panel service
-  POST /api/hermes/update              -> 克隆更新 Hermes（fetch+reset+3-way 重放+LLM兜底，0 侵入后唯一入口）
 """
 
 from __future__ import annotations
@@ -40,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+import functools as _functools
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 
@@ -56,26 +56,21 @@ DEVNULL = subprocess.DEVNULL
 PORT = 9100
 # 项目根：环境变量优先，兜底用脚本位置推导（可整体迁移盘符，不依赖 E:/F: 硬编码）
 HERE = pathlib.Path(__file__).resolve().parent
-HERMES_ROOT = pathlib.Path(
+ROOT = pathlib.Path(
     os.environ.get("IKAROS_ROOT")
-    or os.environ.get("HERMES_ROOT")
     or HERE.parent.parent
 ).resolve()
-MONITOR_FILE = HERMES_ROOT / "data" / "logs" / "ikaros-monitor.jsonl"
-AFFECT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "affect.json"
-LATEST_THOUGHT_FILE = HERMES_ROOT / "core/memory_v5" / "data" / "v5" / "latest_thought.json"
+MONITOR_FILE = ROOT / "data" / "logs" / "ikaros-monitor.jsonl"
+AFFECT_FILE = ROOT / "core/memory_v5" / "data" / "v5" / "affect.json"
+LATEST_THOUGHT_FILE = ROOT / "core/memory_v5" / "data" / "v5" / "latest_thought.json"
 INDEX_HTML = HERE / "index.html"
 ASSETS_DIR = HERE / "assets"
 
-# ── Hermes 版本 / Ikaros 补丁 控制（需求 §9：9100 面板更新控制 + 9119 启动预检）──
-HERMES_AGENT_DIR = HERMES_ROOT / "runtime" / "hermes-agent"
-HERMES_PATCH_SPEC = HERMES_ROOT / "docs" / "hermes-ikaros-patches.md"
-HERMES_PATCH_SCRIPT = HERMES_ROOT / "bin" / "hermes-update-and-patch.py"
 POLL_INTERVAL = 0.8  # seconds between file polls for SSE
 
 # 双击启动时不自动拉任何组件，全部手动启停。
 BOOT_PROFILE: list[str] = ["local_model", "memory", "neko_group",
-                            "neko_desktop", "qwenpaw"]
+                            "neko_desktop"]
 
 # Component registry — 控制面板的「有哪些组件」事实来源。
 # `ports` 用 TCP 探测；`markers` 用进程命令行子串匹配。任一命中即视为 running。
@@ -93,24 +88,15 @@ COMPONENTS = [
     {"id": "neko_desktop", "name": "N.E.K.O Desktop", "category": "Frontend",
      "desc": "N.E.K.O Electron 桌面壳（独立）", "ports": [],
      "markers": ["N.E.K.O.exe"]},
-    {"id": "qwenpaw", "name": "Hermes (猫爪)", "category": "Backend",
-     "desc": "猫爪服务器 :8088 — Hermes Agent 驱动", "ports": [8088], "markers": [],
-     "panel_url": "http://127.0.0.1:48911/api/agent/openclaw/guide"},
     {"id": "conversation_tree", "name": "对话树面板 (Conversation Tree)", "category": "Frontend",
      "desc": "Explore.poker 风格树形对话面板 :48920（后端 = conversation_tree 引擎）",
      "ports": [48920], "markers": ["conversation-tree"],
      "panel_url": "http://127.0.0.1:48920/"},
-    {"id": "hermes_bridge", "name": "Hermes 包装层 (Studio Bridge)", "category": "Backend",
-     "desc": "studio 式「0 侵入」包装层 :8650 —— 透明代理纯净 Hermes gateway(:8642) 原生 "
-             "session-chat, 把 reasoning/工具/正文翻译为对话树方言, 使 runtime/hermes-agent 工作树 100% 纯净. "
-             "对话树(:48920) 默认经此通道; 不可达时对话树自动降级本地 DeepSeek.",
-     "ports": [8650], "markers": ["hermes-bridge"],
-     "panel_url": "http://127.0.0.1:8650/health"},
-    {"id": "hermes_gateway", "name": "Hermes Gateway", "category": "Backend",
-     "desc": "纯净 Hermes gateway :8642 —— 完整 tools/skills 循环 + V5 记忆注入的对话主链"
-             "（2026-08-14 新增组件：修复重启后无人拉起导致对话树静默降级）",
-     "ports": [8642], "markers": ["hermes_cli.main gateway"],
-     "panel_url": "http://127.0.0.1:8642/health"},
+    {"id": "dsh", "name": "工作引擎 (DSH)", "category": "Backend",
+     "desc": "DeepSeek Harness 底座 :3080 —— Web GUI（--patch 加载 Ikaros overlay: "
+             "memory_v5 MCP + 终端 + LSP + persona）；headless 模式跑 one-shot 任务",
+     "ports": [3080], "markers": ["dsh"],
+     "panel_url": "http://127.0.0.1:3080/"},
     {"id": "herdr", "name": "Herdr 终端编排", "category": "Backend",
      "desc": "coding-agent 终端多路复用器 (headless server，命名管道，无 TCP 端口)",
      "ports": [], "markers": ["herdr.exe"],
@@ -133,7 +119,6 @@ VALID_ACTIONS = {"start", "stop", "restart"}
 KNOWN_IDS = {c["id"] for c in COMPONENTS} | {"all"}
 
 # 全局环境（组件启动时使用）
-ROOT = HERMES_ROOT
 ENV: dict | None = None  # 惰性初始化: 见 _ensure_env()
 
 log = logging.getLogger("core/dashboard")
@@ -154,16 +139,6 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_CONFIG"] = s(root / "config")
     e["IKAROS_MODULES"] = s(root / "modules")
     e["IKAROS_LOGS"] = s(root / "data" / "logs")
-    e["IKAROS_HERMES_AGENT"] = s(root / "runtime/hermes-agent")
-    e["IKAROS_HERMES_HOME"] = s(root / "data" / "hermes-agent")
-    e["HERMES_ROOT"] = s(root)
-    e["HERMES_BIN"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "hermes.exe")
-    e["HERMES_AGENT_CLI_PYTHON"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "python.exe")
-    e["HERMES_AGENT_BRIDGE_PYTHON"] = s(root / "runtime/hermes-agent" / "venv" / "Scripts" / "python.exe")
-    e["HERMES_AGENT_NODE"] = s(root / "runtime" / "node" / "node.exe")
-    # hermes 的 _make_tui_argv 只认 HERMES_NODE（不认 HERMES_AGENT_NODE/IKAROS_NODE）；
-    # 缺失时 /chat 的 PTY 报 "Chat unavailable: 1"（node 找不到 → sys.exit(1)）。
-    e["HERMES_NODE"] = s(root / "runtime" / "node" / "node.exe")
     e["IKAROS_MEMORY"] = s(root / "core/memory_v5")
     e["IKAROS_MEMORY_DATA"] = s(root / "core/memory_v5" / "data")
     e["IKAROS_MEMORY_MODELS"] = s(root / "core/memory_v5" / "models")
@@ -180,14 +155,12 @@ def build_env(root: pathlib.Path) -> dict:
     e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
     e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
-    # API_SERVER_KEY: 优先取 HERMES_HOME/.env（hermes 标准密钥位, 2026-08-03 起存放
-    # 64-hex 强 key）。hermes 0.19.1 gateway startup guard 拒绝 <16 字符/占位符 key,
-    # 旧默认 "ikaros-gateway-key" 在 gateway 环境未设置时会被拒。所有子进程
-    # (对话树 48920 等) 经此注入同一 key, 与 8642 gateway 保持一致。
+    # API_SERVER_KEY: 优先取根 .env（旧 hermes gateway 密钥位已随 hermes 退役；
+    # 对话树等子进程经此注入同一 key 保持一致性）。
     _api_key = os.environ.get("API_SERVER_KEY", "")
     if not _api_key:
         try:
-            _envf = root / "data" / "hermes-agent" / ".env"
+            _envf = root / ".env"
             if _envf.is_file():
                 for _line in _envf.read_text(encoding="utf-8").splitlines():
                     _line = _line.strip()
@@ -232,20 +205,12 @@ def build_env(root: pathlib.Path) -> dict:
 
     e["PYTHONIOENCODING"] = "utf-8"
     e["PYTHONUTF8"] = "1"
-    e["PYTHONPATH"] = s(root) + ";" + s(root / "runtime/hermes-agent")
+    e["PYTHONPATH"] = s(root)
     e["NODE_PATH"] = s(root / "runtime" / "node" / "node_modules")
 
-    # HERMES_* 兼容
-    e["HERMES_ROOT"] = s(root)
-    e["HERMES_HOME"] = s(root / "data" / "hermes-agent")
-    e["HERMES_PYTHON"] = e["IKAROS_PYTHON"]
-    e["HERMES_RUNTIME"] = e["IKAROS_RUNTIME"]
-    e["HERMES_AGENT_ROOT"] = e["IKAROS_HERMES_AGENT"]
-    # 让 hermes dashboard 的 /chat 走预构建 bundle (ui-tui/dist/entry.js),
-    # 完全跳过首次启动的 `npm install --workspace ui-tui`。否则在沙箱/离线环境
-    # npm install 会被安全删除闸门拦截 → _make_tui_argv 走 sys.exit(1) →
-    # web chat 报 "Chat unavailable: 1"。dist 与根 node_modules 均已就绪。
-    e["HERMES_TUI_DIR"] = s(root / "runtime/hermes-agent" / "ui-tui")
+    # dsh 工作引擎 overlay（core/ikaros-dsh/cordis.patch.yml）
+    e["IKAROS_DSH_PATCH"] = s(root / "core" / "ikaros-dsh" / "cordis.patch.yml")
+    e["IKAROS_DSH_PROFILE_DIR"] = s(root / "data" / "dsh" / "profiles")
 
     # PATH: 把项目目录前置到继承的 PATH 之上
     path_parts = [
@@ -728,127 +693,12 @@ def stop_component_neko_group(root, env):
     stop_component_neko_memory(root, env)
 
 
-def _sync_hermes_web_stamp(root):
-    """让 hermes dashboard 跳过 npm 构建：dist 完整时把 stamp 对齐当前源码。
-
-    背景（2026-08-01 根治 "npm 老是 bug"）：
-    hermes dashboard 启动时会调用 _web_ui_build_needed() 对比 web 源码 contentHash
-    与 stamp(web-ui-build-stamp.json)；hermes update 拉新代码后源码 hash 变 → 判定
-    "需要重建" → 执行 npm install + vite build。在 U 盘/离线/受限环境 npm 构建经常
-    失败（网络、SAFE_DELETE 闸门等），于是 9119 起不来，误以为 npm 坏了。
-
-    本函数在启动前做一次"stamp 对齐"：若 web_dist 已存在且非空（说明有可用构建产物，
-    哪怕是旧版本），就用 hermes 自己的 _write_web_ui_build_stamp() 把 stamp 重写为
-    匹配当前源码 hash → _web_ui_build_needed() 返回 False → hermes 完全跳过 npm 构建，
-    直接服务现有 dist。效果：hermes update 后 stamp 失效也能自动恢复，9119 秒起。
-
-    仅当 dist 缺失时才不干预（此时 hermes 必须真构建，让 npm 正常流程走）。
-    返回 True 表示已对齐（跳过构建），False 表示不干预。
-    """
-    try:
-        hermes_dir = root / "runtime" / "hermes-agent"
-        web_dir = hermes_dir / "web"
-        dist_dir = hermes_dir / "hermes_cli" / "web_dist"
-        stamp_file = root / "data" / "hermes-agent" / "web-ui-build-stamp.json"
-        # dist 必须存在且非空（index.html 是 Vite 输出 sentinel）
-        if not (web_dir / "package.json").exists():
-            return False
-        if not (dist_dir / "index.html").exists():
-            return False
-        if not stamp_file.parent.exists():
-            return False
-        # 用 hermes 自己的函数重写 stamp（对齐源码 hash）
-        import importlib.util
-        sys.path.insert(0, str(hermes_dir))
-        spec = importlib.util.find_spec("hermes_cli.main")
-        if spec is None:
-            return False
-        import hermes_cli.main as _hm
-        _hm._write_web_ui_build_stamp(hermes_dir, web_dir)
-        # 验证对齐成功
-        needed = _hm._web_ui_build_needed(web_dir)
-        log.info("[hermes] web stamp 已对齐（dist 存在），build_needed=%s —— 跳过 npm 构建", needed)
-        return not needed
-    except Exception:
-        log_exception("hermes web stamp sync")
-        return False
 
 
-
-# ── Hermes 版本 / Ikaros 补丁 控制（需求 §9）──────────────────────────
-def _git_hermes(args):
-    """在 runtime/hermes-agent 仓库内跑 git（隐藏窗口）。"""
-    return subprocess.run(
-        ["git", *args], cwd=str(HERMES_AGENT_DIR),
-        capture_output=True, text=True, creationflags=CREATE_NO_WINDOW,
-    )
-
-
-def _parse_spec_pointers() -> "tuple[str, str] | None":
-    """从 spec §0 解析 (upstream_tip, ikaros_commit)。"""
-    if not HERMES_PATCH_SPEC.exists():
-        return None
-    import re
-    t = HERMES_PATCH_SPEC.read_text(encoding="utf-8")
-    up = re.search(r"\*\*Upstream tip\*\*[^\n]*?`([0-9a-f]{6,40})`", t)
-    ik = re.search(r"\*\*Ikaros 补丁提交\*\*[^\n]*?`([0-9a-f]{6,40})`", t)
-    if not up or not ik:
-        return None
-    return up.group(1), ik.group(1)
-
-
-def _hermes_git_healthy() -> bool:
-    """runtime/hermes-agent 的 .git 是否健康（有 refs/heads/main 且 rev-parse 不 fallback 到父仓库）。
-
-    当 refs/ 目录被删时，git 会向上爬到父仓库 E:\\Ikaros，导致所有 hermes git
-    命令实际操作的是主仓库——必须提前检测并短路，否则补丁检测会误报。
-    """
-    # 1. refs/heads/main 必须存在（文件或 packed-refs）
-    refs_dir = HERMES_AGENT_DIR / ".git" / "refs" / "heads"
-    packed = HERMES_AGENT_DIR / ".git" / "packed-refs"
-    if not refs_dir.exists() and not packed.exists():
-        return False
-    # 2. rev-parse 返回的 HEAD 不能是主仓库的 commit（用 toplevel 检测）
-    toplevel = _git_hermes(["rev-parse", "--show-toplevel"]).stdout.strip()
-    if toplevel and pathlib.Path(toplevel).resolve() != HERMES_AGENT_DIR.resolve():
-        return False  # git 爬到了父仓库
-    return True
-
-
-# Ikaros 集成补丁的 marker 签名 (patches/hermes/ 与运行树逐字节一致时的特征串)。
-# overlay 以「未提交工作树改动」落地 (bin/hermes-update-and-patch.py 复制不 commit)，
-# 所以 git log --grep 永远查不到 —— 2026-08-14 改为按文件内容签名检测。
-_PATCH_MARKERS: list[tuple[str, str]] = [
-    ("hermes_cli/web_server.py", "_context_engine_options"),
-    ("cron/scheduler.py", "_cron_session_id"),
-    ("agent/conversation_loop.py", "Surface the model's TRUE reasoning"),
-]
-
-
-def _hermes_patch_present() -> bool:
-    """Ikaros 集成补丁是否已就位：工作树文件含全部 marker 签名即判定已打。
-
-    旧判据 (git log --grep "apply Ikaros integration patches") 只匹配"补丁已
-    commit"的旧工作流；当前 overlay 落地方式不改 git 历史，恒误报"未打补丁"。
-    """
-    hermes = HERMES_AGENT_DIR
-    if hermes is None or not hermes.exists():
-        return False
-    for rel, marker in _PATCH_MARKERS:
-        try:
-            txt = (hermes / rel).read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            return False
-        if marker not in txt:
-            return False
-    return True
-
-
-# ── 轻量 TTL 缓存：避免高频轮询重复跑 git / PowerShell ─────────────
-# 9100 面板每 2s 轮询 /api/components；hermes_patch_status 内部多次 git
-# 调用(~0.6s)、_running_command_lines 起 PowerShell(~0.7s)，若不缓存会把
-# 单次轮询拖到 4-5s，组件卡迟迟不渲染。补丁状态 30s 内视为稳定，足够。
-import functools as _functools
+# ── 上游仓库：存在性检查 + 浅克隆(最快通道) + 版本落后检测（neko）──
+# 基础通道统一为浅克隆 git clone --depth 1 --filter blob:none（不拉历史，避免全量包）。
+# 镜像前缀走环境变量 IKAROS_GIT_MIRROR；留空=直连 GitHub。设置示例：
+#   set IKAROS_GIT_MIRROR=https://ghproxy.net/
 
 def _ttl_cache(seconds: float):
     def deco(fn):
@@ -880,87 +730,13 @@ def _clear_status_caches() -> None:
             pass
 
 
-@_ttl_cache(30)
-def hermes_patch_status() -> dict:
-    """返回 hermes 版本 / Ikaros 补丁状态，供 9100 面板显示与启动预检共用。"""
-    res = {"head": None, "upstream_tip": None, "patch_applied": None,
-           "dirty": False, "detail": "", "repo_healthy": True}
-
-    # ── 前置检测：git 仓库完整性 ──
-    if not _hermes_git_healthy():
-        res["repo_healthy"] = False
-        res["patch_applied"] = None
-        res["dirty"] = False
-        res["detail"] = ("hermes git 仓库损坏（refs/ 目录丢失），"
-                         "需等网络恢复后重新 fetch upstream + 重打补丁。"
-                         "工作树文件完好，不影响运行。")
-        log.warning("[hermes] git repo damaged (refs/ missing) — "
-                    "patch detection disabled, working tree intact")
-        return res
-
-    head = _git_hermes(["rev-parse", "--short", "HEAD"]).stdout.strip()
-    if not head:
-        res["repo_healthy"] = False
-        res["detail"] = "无法读取 hermes HEAD（仓库异常？）"
-        return res
-    res["head"] = head
-    ptr = _parse_spec_pointers()
-    if ptr:
-        res["upstream_tip"] = ptr[0]
-    present = _hermes_patch_present()
-    res["patch_applied"] = present
-    res["detail"] = "Ikaros 补丁已就位" if present else "未打 Ikaros 补丁（建议补上）"
-    # 工作树散落文件（允许本地 config.yaml）
-    out = _git_hermes(["status", "--porcelain"]).stdout
-    bad = [l for l in out.splitlines() if l.strip()
-           and not (l[:2] == "??" and l[3:].strip() == "config.yaml")]
-    res["dirty"] = bool(bad)
-    return res
-
-
-def run_hermes_update_and_patch() -> dict:
-    """9100「更新并打补丁」按钮：跑完整脚本（fetch+reset+3-way重放+LLM兜底+
-    验证+提交+更新§0）。"""
-    if not HERMES_PATCH_SCRIPT.exists():
-        return {"ok": False, "msg": "找不到 bin/hermes-update-and-patch.py"}
-    py = HERMES_AGENT_DIR / "venv" / "Scripts" / "python.exe"
-    if not py.exists():
-        py = pathlib.Path(sys.executable)
-    try:
-        proc = subprocess.run(
-            [str(py), str(HERMES_PATCH_SCRIPT), "--apply"],
-            cwd=str(HERMES_ROOT), capture_output=True, text=True,
-            # 必须显式传 env：否则脚本子进程 HERMES_HOME 缺失会回退默认
-            # C:\Users\...\hermes，把更新数据写到 C 盘（2026-08-03 根因修复，commit 065c9f0）。
-            env=child_env(build_env(ROOT)),
-            creationflags=CREATE_NO_WINDOW, timeout=900,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "msg": "更新超时（>15min），请检查网络 / 手动运行脚本"}
-    out = (proc.stdout + "\n" + proc.stderr)[-2000:]
-    st = hermes_patch_status()
-    return {"ok": proc.returncode == 0,
-            "msg": out,
-            "patch_applied": st.get("patch_applied")}
-
-
-# ── 上游仓库：存在性检查 + 浅克隆(最快通道) + 版本落后检测（hermes / neko）──
-# 基础通道统一为浅克隆 git clone --depth 1 --filter blob:none（不拉历史，避免全量包）。
-# 镜像前缀走环境变量 IKAROS_GIT_MIRROR；留空=直连 GitHub。设置示例：
-#   set IKAROS_GIT_MIRROR=https://ghproxy.net/
 GIT_MIRROR = (os.environ.get("IKAROS_GIT_MIRROR") or "").rstrip("/")
 UPSTREAM_REPOS = {
-    "hermes": {
-        "name": "Hermes Agent",
-        "url": "https://github.com/NousResearch/hermes-agent",
-        "branch": "main",
-        "local": HERMES_ROOT / "runtime" / "hermes-agent",
-    },
     "neko": {
         "name": "N.E.K.O",
         "url": "https://github.com/Project-N-E-K-O/N.E.K.O",
         "branch": "main",
-        "local": HERMES_ROOT / "core" / "neko",
+        "local": ROOT / "core" / "neko",
     },
 }
 _UPSTREAM_CACHE: dict = {}          # name -> {upstream_version, checked_at, error}
@@ -980,7 +756,6 @@ def _git_in(dir_path, args, **kw):
 # 内容检查：.git 存在但关键入口文件缺失 → 视为「内容不完整」（空克隆/部分拉取）
 _CONTENT_MARKERS = {
     "neko": "app/main_server/__main__.py",
-    "hermes": "hermes_cli/web_server.py",
 }
 
 
@@ -1131,15 +906,11 @@ def clone_repo(name: str) -> dict:
 
 
 def pull_repo(name: str) -> dict:
-    """已存在则拉取最新；不存在则克隆。Hermes 含 Ikaros 补丁，不强行 ff 拉取。"""
+    """已存在则拉取最新；不存在则克隆。"""
     spec = UPSTREAM_REPOS[name]
     d = spec["local"]
     if not (d / ".git").is_dir():
         return clone_repo(name)
-    if name == "hermes":
-        # Hermes 打了 Ikaros 集成补丁，ff-only pull 必冲突；提示走专用更新流程
-        return {"ok": True, "already": True,
-                "msg": "Hermes 已安装且含 Ikaros 补丁；更新请点「更新并打补丁」"}
     try:
         rr = subprocess.run(["git", "pull", "--ff-only"], cwd=str(d),
                             capture_output=True, text=True, timeout=300,
@@ -1183,11 +954,11 @@ RUNTIME_DEPS = [
 
 def runtime_status() -> dict:
     """检查 runtime/ 目录与必要二进制是否存在；缺失项给手动提示。"""
-    rt = HERMES_ROOT / "runtime"
+    rt = ROOT / "runtime"
     comps = []
     missing = 0
     for d in RUNTIME_DEPS:
-        p = HERMES_ROOT / d["rel"]
+        p = ROOT / d["rel"]
         ok = p.exists()
         if not ok:
             missing += 1
@@ -1213,7 +984,7 @@ def runtime_fetch(key: str) -> dict:
     if dep.get("type") != "fetch" or not dep.get("fetch"):
         return {"ok": False, "msg": "该依赖无自动下载，请手动获取：" + (dep.get("hint") or "")}
     try:
-        cmd = [sys.executable, str(HERMES_ROOT / "scripts" / "fetch-upstreams.py"), dep["fetch"]]
+        cmd = [sys.executable, str(ROOT / "scripts" / "fetch-upstreams.py"), dep["fetch"]]
         rr = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
                             creationflags=CREATE_NO_WINDOW)
         if rr.returncode != 0:
@@ -1265,81 +1036,34 @@ def stop_component_neko_desktop(root, env):
         log.info("[neko_desktop] stopped %d process(es)", killed)
 
 
-def start_component_qwenpaw(root, env, wait):
-    """启动猫爪服务器 (:8088)。
-    默认拉起项目内 Hermes-Paw 桥 (bin/hermes_paw_bridge.py): 伪装成 QwenPaw,
-    内部用 Hermes Agent 执行 Neko 的猫爪指令 (无需安装原生 QwenPaw)。
-    若设了 QWENPAW_CMD 则优先用它 (兼容原生 QwenPaw 服务)。"""
-    log.info("[qwenpaw] starting Cat-Paw server (:8088)...")
-    cmd = (os.environ.get("QWENPAW_CMD") or (env or {}).get("QWENPAW_CMD") or "").strip()
-    if not cmd:
-        bridge = os.path.join(root, "bin", "hermes_paw_bridge.py")
-        hermes_py = (
-            os.environ.get("HERMES_AGENT_PYTHON")
-            or r"E:\Ikaros\runtime\hermes-agent\venv\Scripts\python.exe"
-        )
-        if os.path.exists(bridge):
-            cmd = hermes_py + " " + bridge
-            log.info("[qwenpaw] QWENPAW_CMD 未设, 默认拉起 Hermes-Paw 桥 (复用 Hermes Agent)")
-        else:
-            log.warning(
-                "[qwenpaw] 桥不存在且 QWENPAW_CMD 未设, 请在宿主机手动启动猫爪服务 (:8088)"
-            )
-            return
-    # 构造子进程环境: Hermes Agent 模型名 + hermes 根 + 端口
-    # 模型名优先级: 环境变量 HERMES_PAW_MODEL > panel_models.json 的 "8088"
-    #             > 默认 deepseek-v4-flash（不再写死，可在面板配置里覆盖）。
-    child_env = dict(env or {})
-    _panel_models = load_panel_models()
-    resolved_model = (
-        os.environ.get("HERMES_PAW_MODEL")
-        or (isinstance(_panel_models, dict) and _panel_models.get("8088"))
-        or "deepseek-v4-flash"
-    )
-    child_env["HERMES_PAW_MODEL"] = resolved_model
-    # base_url 透传: 默认不设置 -> Hermes Agent 用自身默认 provider；
-    # 若配置了则走指定 OpenAI 兼容网关。
-    resolved_base_url = (
-        os.environ.get("HERMES_PAW_BASE_URL")
-        or (isinstance(_panel_models, dict) and _panel_models.get("8088_base_url"))
-        or ""
-    )
-    if resolved_base_url:
-        child_env["HERMES_PAW_BASE_URL"] = resolved_base_url
-    child_env.setdefault("HERMES_AGENT_ROOT", r"E:\Ikaros\runtime\hermes-agent")
-    child_env.setdefault("HERMES_PAW_PORT", "8088")
-    parts = cmd.split()
-    try:
-        p = subprocess.Popen(
-            parts, env=child_env, stdin=DEVNULL,
-            creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0,
-        )
-        log.info("[qwenpaw] launched: %s (pid=%s)", cmd, p.pid)
-    except Exception as e:
-        log.error("[qwenpaw] failed to launch %s: %s", cmd, e)
+def start_component_dsh(root, env, wait):
+    """启动工作引擎 DeepSeek Harness (dsh) Web GUI (:3080)。
+
+    经 bin/start-dsh-ikaros.bat web 拉起（--patch 加载 Ikaros overlay:
+    memory_v5 MCP + 终端 + LSP + persona）。headless 模式用命令行跑 one-shot 任务。
+    """
+    log.info("[dsh] starting work-engine web GUI (:3080)...")
+    launcher = root / "bin" / "start-dsh-ikaros.bat"
+    if not launcher.exists():
+        log.error("[dsh] %s not found", launcher)
         return
+    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    spawn_hidden("cmd.exe", ["/c", str(launcher), "web"], env, cwd=str(root),
+                 logfile=str(root / "data" / "logs" / "dsh.log"),
+                 detached=True)
     if wait:
-        wait_for_port(8088, 60)
+        wait_for_port(3080, 60)
 
 
-def stop_component_qwenpaw(root, env):
-    log.info("[qwenpaw] stopping (:8088)...")
-    kill_port(8088)
+def stop_component_dsh(root, env):
+    log.info("[dsh] stopping (:3080)...")
+    kill_port(3080)
+    kill_by_cmdline("dsh")
 
 
 def start_component_conversation_tree(root, env, wait):
     """启动对话树面板后端 (:48920)，便携 Python 跑 core/conversation-tree/server.py。"""
     log.info("[conversation_tree] starting panel server (:48920)...")
-    # studio 式包装层 :8650 是对话树默认的 agent runtime 通道; 启动前确保已起
-    # (否则对话树会走本地 DeepSeek 降级, 失去云端模型 + reasoning 工具卡).
-    if not tcp_probe(8650):
-        log.info("[conversation_tree] bridge :8650 not up, starting hermes_bridge first...")
-        start_component_hermes_bridge(root, env, wait=True)
-    # 纯净 gateway :8642 是 bridge 的上游 (完整 tools/skills); 重启后无人拉起会
-    # 静默降级 — 2026-08-14 在此确保 (已在跑则跳过, 不影响启动耗时).
-    if not tcp_probe(8642):
-        log.info("[conversation_tree] gateway :8642 not up, starting hermes_gateway first...")
-        start_component_hermes_gateway(root, env, wait=True)
     py = str(root / "runtime" / "portable-python" / "python.exe")
     server = root / "core" / "conversation-tree" / "server.py"
     if not server.exists():
@@ -1357,59 +1081,6 @@ def stop_component_conversation_tree(root, env):
     log.info("[conversation_tree] stopping (:48920)...")
     kill_port(48920)
     kill_by_cmdline("conversation-tree")
-
-
-def start_component_hermes_bridge(root, env, wait):
-    """启动 studio 式「0 侵入」包装层 (:8650).
-
-    透明代理纯净 Hermes gateway(:8642) 原生 session-chat 端点, 把 reasoning/工具/
-    正文翻译为对话树方言. 由 bin/hermes-bridge.py 拉起 (便携 Python 跑 core/hermes-bridge/server.py).
-    """
-    log.info("[hermes_bridge] starting studio wrapper (:8650)...")
-    py = str(root / "runtime" / "portable-python" / "python.exe")
-    launcher = root / "bin" / "hermes-bridge.py"
-    if not launcher.exists():
-        log.error("[hermes_bridge] %s not found", launcher)
-        return
-    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    spawn_hidden(py, [str(launcher)], env, cwd=str(root),
-                 logfile=str(root / "data" / "logs" / "hermes-bridge.log"),
-                 detached=True)
-    if wait:
-        wait_for_port(8650, 30)
-
-
-def stop_component_hermes_bridge(root, env):
-    log.info("[hermes_bridge] stopping (:8650)...")
-    kill_port(8650)
-    kill_by_cmdline("hermes-bridge")
-
-
-def start_component_hermes_gateway(root, env, wait):
-    """启动纯净 Hermes gateway (:8642) — 2026-08-14 新增组件.
-
-    对话树 hermes 模式链路 = bridge :8650 → gateway :8642; 此前重启后无任何
-    组件负责拉起 gateway, 对话树会静默降级本地 DeepSeek. 由 bin/hermes-gateway.py
-    start 拉起 (detached; API_SERVER_KEY 从 $HERMES_HOME/.env 读取).
-    """
-    log.info("[hermes_gateway] starting pure gateway (:8642)...")
-    py = str(root / "runtime" / "portable-python" / "python.exe")
-    launcher = root / "bin" / "hermes-gateway.py"
-    if not launcher.exists():
-        log.error("[hermes_gateway] %s not found", launcher)
-        return
-    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    spawn_hidden(py, [str(launcher), "start"], env, cwd=str(root),
-                 logfile=str(root / "data" / "logs" / "hermes-gateway.log"),
-                 detached=True)
-    if wait:
-        wait_for_port(8642, 45)
-
-
-def stop_component_hermes_gateway(root, env):
-    log.info("[hermes_gateway] stopping (:8642)...")
-    kill_port(8642)
-    kill_by_cmdline("hermes_cli.main gateway")
 
 
 def start_component_herdr(root, env, wait):
@@ -1464,14 +1135,10 @@ def comp_already_up(name: str) -> bool:
         return tcp_probe(48915)
     if name == "neko_desktop":
         return neko_desktop_running()
-    if name == "qwenpaw":
-        return tcp_probe(8088)
     if name == "conversation_tree":
         return tcp_probe(48920)
-    if name == "hermes_bridge":
-        return tcp_probe(8650)
-    if name == "hermes_gateway":
-        return tcp_probe(8642)
+    if name == "dsh":
+        return tcp_probe(3080)
     if name == "herdr":
         return _marker_up("herdr.exe")
     if name == "neko_group":
@@ -1496,14 +1163,10 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_neko_agent(root, env, wait)
     elif name == "neko_desktop":
         start_component_neko_desktop(root, env, wait)
-    elif name == "qwenpaw":
-        start_component_qwenpaw(root, env, wait)
     elif name == "conversation_tree":
         start_component_conversation_tree(root, env, wait)
-    elif name == "hermes_bridge":
-        start_component_hermes_bridge(root, env, wait)
-    elif name == "hermes_gateway":
-        start_component_hermes_gateway(root, env, wait)
+    elif name == "dsh":
+        start_component_dsh(root, env, wait)
     elif name == "herdr":
         start_component_herdr(root, env, wait)
     elif name == "all":
@@ -1511,7 +1174,7 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_memory(root, ENV, wait)
         start_component_neko_group(root, ENV, wait)
         start_component_neko_desktop(root, ENV, wait)
-        start_component_qwenpaw(root, ENV, wait)
+        start_component_dsh(root, ENV, wait)
     else:
         log.warning("[component] unknown component: %s", name)
 
@@ -1533,14 +1196,10 @@ def component_stop(name: str, env: dict) -> None:
         stop_component_neko_agent(root, env)
     elif name == "neko_desktop":
         stop_component_neko_desktop(root, env)
-    elif name == "qwenpaw":
-        stop_component_qwenpaw(root, env)
     elif name == "conversation_tree":
         stop_component_conversation_tree(root, env)
-    elif name == "hermes_bridge":
-        stop_component_hermes_bridge(root, env)
-    elif name == "hermes_gateway":
-        stop_component_hermes_gateway(root, env)
+    elif name == "dsh":
+        stop_component_dsh(root, env)
     elif name == "herdr":
         stop_component_herdr(root, env)
     elif name == "all":
@@ -1548,7 +1207,7 @@ def component_stop(name: str, env: dict) -> None:
         stop_component_neko_desktop(root, env)
         stop_component_memory(root, env)
         stop_component_local_model(root, env)
-        stop_component_qwenpaw(root, env)
+        stop_component_dsh(root, env)
     else:
         log.warning("[component] unknown component: %s", name)
 
@@ -1708,86 +1367,8 @@ def _usage_report(days: int = 30) -> dict:
     }
 
 
-# ── Cron / Kanban 管理 (任务4): 读直连数据, 写操作走 hermes CLI 保持语义一致 ──
-_HERMES_CLI = [str(ROOT / "runtime" / "hermes-agent" / "venv" / "Scripts" / "python.exe"),
-               "-m", "hermes_cli.main"]
-
-
-def _hermes_cli(args: list, timeout: int = 90) -> tuple[int, str]:
-    """调用 hermes CLI, 返回 (rc, stdout)."""
-    try:
-        proc = subprocess.run(
-            _HERMES_CLI + args, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-        )
-        return proc.returncode, proc.stdout.strip()
-    except subprocess.TimeoutExpired:
-        return 124, "hermes CLI 超时"
-    except Exception as exc:  # noqa: BLE001
-        return 1, f"调用失败: {type(exc).__name__}: {exc}"
-
-
-def _cron_list() -> dict:
-    """读 cron/jobs.json 返回精简任务列表."""
-    jobs_file = ROOT / "data" / "hermes-agent" / "cron" / "jobs.json"
-    try:
-        data = json.loads(jobs_file.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    rows = []
-    for j in data.get("jobs", []):
-        sched = j.get("schedule_display") or (j.get("schedule") or {}).get("display") or ""
-        rows.append({
-            "id": j.get("id"), "name": j.get("name"), "schedule": sched,
-            "enabled": j.get("enabled"), "state": j.get("state"),
-            "last_status": j.get("last_status"), "last_error": j.get("last_error"),
-            "next_run_at": j.get("next_run_at"), "last_run_at": j.get("last_run_at"),
-            "script": j.get("script"),
-        })
-    return {"ok": True, "jobs": rows}
-
-
-def _cron_action(action: str, job_id: str) -> dict:
-    if action not in ("pause", "resume", "run", "remove"):
-        return {"ok": False, "error": f"未知动作: {action}"}
-    rc, out = _hermes_cli(["cron", action, job_id])
-    if rc != 0:
-        return {"ok": False, "error": out or f"rc={rc}"}
-    return {"ok": True, "msg": f"cron {action} {job_id} 成功"}
-
-
-def _kanban_list() -> dict:
-    rc, out = _hermes_cli(["kanban", "list", "--json"])
-    if rc != 0:
-        return {"ok": False, "error": out or f"rc={rc}"}
-    try:
-        tasks = json.loads(out)
-    except Exception:  # noqa: BLE001
-        return {"ok": False, "error": "kanban list --json 解析失败"}
-    rows = [{
-        "id": t.get("id"), "title": t.get("title"), "status": t.get("status"),
-        "priority": t.get("priority"), "assignee": t.get("assignee"),
-        "created_by": t.get("created_by"), "created_at": t.get("created_at"),
-    } for t in tasks]
-    return {"ok": True, "tasks": rows}
-
-
-def _kanban_action(action: str, payload: dict) -> dict:
-    if action == "create":
-        title = (payload.get("title") or "").strip()
-        if not title:
-            return {"ok": False, "error": "缺少 title"}
-        rc, out = _hermes_cli(["kanban", "create", title, "--json"])
-    elif action in ("complete", "archive"):
-        tid = (payload.get("id") or "").strip()
-        if not tid:
-            return {"ok": False, "error": "缺少 id"}
-        rc, out = _hermes_cli(["kanban", action, tid])
-    else:
-        return {"ok": False, "error": f"未知动作: {action}"}
-    if rc != 0:
-        return {"ok": False, "error": out or f"rc={rc}"}
-    return {"ok": True, "msg": f"kanban {action} 成功", "out": out[:400]}
+# ── V5 状态读取 ──
+# (Cron/Kanban 管理已随 Hermes 底座退役移除；任务调度改由 dsh/系统级 cron 承担)
 
 
 # 缓存 V5 模块导入，避免每次 /api/state 都重新 import 刷屏日志
@@ -1931,17 +1512,10 @@ def get_component_statuses() -> list[dict]:
             entry["sub_status"] = subs
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
-        # Hermes 版本 / 补丁状态（需求 §9）
-        if c["id"] == "hermes_bridge":
+        # 上游仓库存在性 + 版本落后检测（neko 克隆与版本检查）
+        if c["id"] == "neko_group":
             try:
-                entry["hermes_patch"] = hermes_patch_status()
-            except Exception:
-                log_exception("hermes_patch_status")
-        # 上游仓库存在性 + 版本落后检测（hermes / neko 克隆与版本检查）
-        if c["id"] in ("hermes_bridge", "neko_group"):
-            try:
-                entry["repo"] = repo_status(
-                    "hermes" if c["id"] == "hermes_bridge" else "neko")
+                entry["repo"] = repo_status("neko")
             except Exception:
                 log_exception("repo_status")
         # 运行时依赖检查（runtime/ 目录下的必要二进制）
@@ -2117,9 +1691,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 days = 30
             self._send_json(_usage_report(days))
         elif path == "/api/cron":
-            self._send_json(_cron_list())
+            self._send_json({"ok": False, "error": "Cron 管理已随 Hermes 底座退役"})
         elif path == "/api/kanban":
-            self._send_json(_kanban_list())
+            self._send_json({"ok": False, "error": "Kanban 管理已随 Hermes 底座退役"})
         elif path == "/api/state":
             state = _read_v5_state()
             self._send_json(state)
@@ -2182,29 +1756,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未知系统动作"}, status=400)
             return
 
-        # /api/cron → {action: pause|resume|run|remove, id}
+        # /api/cron → 已随 Hermes 底座退役
         if len(parts) >= 2 and parts[0] == "api" and parts[1] == "cron":
-            try:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                raw = self.rfile.read(length) if length else b"{}"
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-            except Exception:
-                body = {}
-            res = _cron_action((body.get("action") or "").strip(),
-                               (body.get("id") or "").strip())
-            self._send_json(res, status=200 if res.get("ok") else 400)
+            self._send_json({"ok": False, "error": "Cron 管理已随 Hermes 底座退役"},
+                            status=400)
             return
 
-        # /api/kanban → {action: create|complete|archive, title?/id?}
+        # /api/kanban → 已随 Hermes 底座退役
         if len(parts) >= 2 and parts[0] == "api" and parts[1] == "kanban":
-            try:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                raw = self.rfile.read(length) if length else b"{}"
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-            except Exception:
-                body = {}
-            res = _kanban_action((body.get("action") or "").strip(), body)
-            self._send_json(res, status=200 if res.get("ok") else 400)
+            self._send_json({"ok": False, "error": "Kanban 管理已随 Hermes 底座退役"},
+                            status=400)
             return
 
         # /api/shutdown  → stop this control panel
@@ -2224,7 +1785,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 subprocess.Popen(
                     [py, script],
                     env=_ensure_env(),
-                    cwd=str(HERMES_ROOT),
+                    cwd=str(ROOT),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2235,16 +1796,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
             return
 
-        # /api/hermes/<action>  —— 0 侵入后仅保留「克隆更新」入口（update）
-        if len(parts) >= 3 and parts[0] == "api" and parts[1] == "hermes":
-            sub = parts[2]
-            if sub == "update":
-                self._send_json(run_hermes_update_and_patch()); return
-            self._send_json({"ok": False, "msg": "unknown hermes action"}, status=400)
-            return
-
         # /api/repo/<name>/<action>  (status | clone | pull)
-        # name ∈ {hermes, neko}；status=强制刷新上游版本, clone=缺失则克隆, pull=拉取/克隆
+        # name ∈ {neko}；status=强制刷新上游版本, clone=缺失则克隆, pull=拉取/克隆
         if len(parts) >= 4 and parts[0] == "api" and parts[1] == "repo":
             name = parts[2]
             action = parts[3]

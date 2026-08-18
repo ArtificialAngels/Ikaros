@@ -1,6 +1,6 @@
 {
-  "_comment": "Ikaros 路径配置 - 全部为相对 IKAROS_ROOT 的相对路径（可整体迁移盘符/目录）。ikaros_root 置空表示由加载方动态探测。",
-  "_version": "2.0",
+  "_comment": "Ikaros 路径配置 - 全部为相对 IKAROS_ROOT 的相对路径（可整体迁移盘符/目录）。ikaros_root 置空表示由加载方动态探测。2026-08-18: 移除 hermes/neko 段，新增 dsh。",
+  "_version": "2.1",
   "ikaros_root": "",
   "core": {
     "python": "runtime/portable-python/python.exe",
@@ -9,20 +9,18 @@
     "node": "runtime/node/node.exe",
     "npm": "runtime/node/npm.cmd",
     "node_modules": "runtime/node/node_modules",
-    "aria2": "runtime/aria2",
-    "gopeed": "runtime/gopeed",
-    "rpc_server": "runtime/rpc-server",
     "data": "data",
     "data_models": "data/models",
     "bin": "bin",
     "config": "config",
     "logs": "data/logs"
   },
-  "hermes": {
-    "agent": "runtime/hermes-agent",
-    "home": "data/hermes-agent",
-    "bridge": "bridge",
-    "core": "runtime/hermes-agent"
+  "dsh": {
+    "root": "runtime/dsh",
+    "source": "runtime/deepseek-harness-master",
+    "profile": "data/dsh/profiles",
+    "web_port": 3080,
+    "overlay": "core/ikaros-dsh/cordis.patch.yml"
   },
   "memory": {
     "root": "core/memory_v5",
@@ -38,19 +36,12 @@
     "cli": "runtime/llama/b10000-cuda/llama-cli.exe"
   },
   "models": {
-    "embedding": "core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf",
-    "llm": "core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+    "embedding": "core/memory_v5/models/nomic-embed-text-v1.5.Q8_0.gguf",
+    "llm": "core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf"
   },
-  "neko": {
-    "root": "apps/neko",
-    "python": "apps/neko/.venv/Scripts/python.exe",
-    "server": "app.main_server",
-    "desktop": "apps/neko/N.E.K.O.exe",
-    "static": "apps/neko/static",
-    "templates": "apps/neko/templates",
-    "venv": "apps/neko/.venv",
-    "start_script": "bin/neko-start.bat",
-    "stop_script": "bin/neko-stop.bat"
+  "omp": {
+    "root": "data/omp",
+    "agent": "data/omp/agent"
   },
   "mcp": {
     "root": "runtime/MCPServe",
@@ -61,9 +52,6 @@
   "ports": {
     "embedding": 8587,
     "llama": 8080,
-    "bridge": 7860,
-    "neko_main": 48911,
-    "neko_memory": 48912,
-    "neko_bridge": 9460
+    "dsh_web": 3080
   }
 }

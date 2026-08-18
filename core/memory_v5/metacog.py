@@ -138,10 +138,11 @@ def _search_theme(keywords: str, top_k: int = 3) -> list[str]:
     """
     _ALLOWED_TYPES = {"fact", "lesson", "preference", "identity", "emotional_event"}
     try:
-        from memory_v5.search import fused_search
+        # P1 收敛: 统一走 unified_retrieve (弃用旧 fused_search)
+        from memory_v5.memory_retrieval import unified_retrieve
         # Use the most representative keyword for search
         kw = keywords.split()[0]
-        rows = fused_search(kw, top_k=top_k)
+        rows = unified_retrieve(kw, top_k=top_k, scope="auto")
         return [r.get("content", "")[:80].replace("\n", " ")
                 for r in rows if r.get("type") in _ALLOWED_TYPES]
     except Exception:

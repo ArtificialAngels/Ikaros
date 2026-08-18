@@ -2,9 +2,10 @@
 """Ikaros 便携式路径解析模块 — 基于 core/env/ 的相对值配置。
 
 所有路径最终相对于 IKAROS_ROOT 解析，确保项目可整体迁移到任意目录。
+2026-08-18: 移除 hermes/neko 段, 新增 dsh; 锚点只认 IKAROS_ROOT (HERMES_ROOT 兼容已废弃)。
 
 优先级（高→低）:
-  1. 显式环境变量 (IKAROS_*, HERMES_*)
+  1. 显式环境变量 (IKAROS_*)
   2. ikaros-paths.json 中定义的相对路径
   3. 内建默认值
 
@@ -31,7 +32,7 @@ from typing import Any
 log = logging.getLogger("ikaros.paths")
 
 # ── 内建默认路径模板（相对于 IKAROS_ROOT） ──
-# 当 ikaros-paths.json ��可用时使用的兜底
+# 当 ikaros-paths.json 不可用时使用的兜底
 BUILTIN_DEFAULTS: dict[str, Any] = {
     "core": {
         "python": "runtime/portable-python/python.exe",
@@ -44,10 +45,12 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "config": "config",
         "logs": "data/logs",
     },
-    "hermes": {
-        "agent": "runtime/hermes-agent",
-        "home": "data/hermes-agent",
-        "core": "hermes",
+    "dsh": {
+        "root": "runtime/dsh",
+        "source": "runtime/deepseek-harness-master",
+        "profile": "data/dsh/profiles",
+        "web_port": 3080,
+        "overlay": "core/ikaros-dsh/cordis.patch.yml",
     },
     "memory": {
         "root": "core/memory_v5",
@@ -62,25 +65,17 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "cli": "runtime/llama/b10000-cuda/llama-cli.exe",
     },
     "models": {
-        "embedding": "core/memory_v5/models/nomic-embed-text-v2-moe.f32.gguf",
-        "llm": "core/memory_v5/models/Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+        "embedding": "core/memory_v5/models/nomic-embed-text-v1.5.Q8_0.gguf",
+        "llm": "core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf",
     },
-    "neko": {
-        "root": "apps/neko",
-        "server": "app.main_server",   # 上游已将入口重构为包 app/main_server（python -m 形式）
-        "desktop": "apps/neko/N.E.K.O.exe",
-        "static": "apps/neko/static",
-        "templates": "apps/neko/templates",
-        "venv": "apps/neko/.venv",
+    "omp": {
+        "root": "data/omp",
+        "agent": "data/omp/agent",
     },
     "ports": {
         "embedding": 8587,
         "llama": 8080,
-        "neko_main": 48911,
-        "neko_memory": 48912,
-        "neko_agent": 48915,
-        "hermes_dashboard": 9119,
-        "qwenpaw": 8088,
+        "dsh_web": 3080,
     },
 }
 
@@ -94,26 +89,26 @@ ENV_OVERRIDE_MAP: dict[str, str] = {
     "IKAROS_BIN": "core.bin",
     "IKAROS_CONFIG": "core.config",
     "IKAROS_LOGS": "core.logs",
-    "HERMES_ROOT": "ikaros_root",  # 兼容变量
-    "HERMES_HOME": "hermes.home",
-    "HERMES_AGENT_ROOT": "hermes.agent",
-    "NEKO_STORAGE_ANCHOR_ROOT": "neko.storage_anchor",
+    "IKAROS_DSH": "dsh.root",
+    "IKAROS_DSH_SOURCE": "dsh.source",
+    "IKAROS_DSH_PROFILE": "dsh.profile",
+    "IKAROS_DSH_WEB_PORT": "dsh.web_port",
 }
 
 
 def _detect_root() -> Path:
-    """5 级优先级探测 IKAROS_ROOT（同 detect-root.ps1 逻辑）。"""
-    # 1) 环境变量
-    env_root = os.environ.get("IKAROS_ROOT") or os.environ.get("HERMES_ROOT")
+    """3 级优先级探测 IKAROS_ROOT（同 detect-root.ps1 逻辑）。"""
+    # 1) 环境变量（只认 IKAROS_ROOT）
+    env_root = os.environ.get("IKAROS_ROOT")
     if env_root:
         candidate = Path(env_root).resolve()
         if (candidate / "runtime" / "portable-python" / "python.exe").exists():
             return candidate
 
-    # 2) 从脚本位置推导（core/detect-root/ → 项目根）
+    # 2) 从脚本位置推导（core/env/ → 项目根）
     script_dir = Path(__file__).resolve().parent  # core/env/
     ikaros_root = script_dir.parent.parent  # 项目根
-    markers = ["runtime/portable-python/python.exe", "runtime/hermes-agent", "core/env"]
+    markers = ["runtime/portable-python/python.exe", "core/env", "bin/ikaros-env.bat"]
     if all((ikaros_root / m).exists() for m in markers):
         return ikaros_root
 
@@ -122,12 +117,6 @@ def _detect_root() -> Path:
     for parent in [cwd] + list(cwd.parents):
         if all((parent / m).exists() for m in markers):
             return parent
-
-    # 4) 盘符扫描（兜底, 较慢）
-    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        candidate = Path(f"{letter}:/Ikaros")
-        if candidate.exists() and all((candidate / m).exists() for m in markers):
-            return candidate
 
     raise RuntimeError(
         "无法自动检测 IKAROS_ROOT。请设置环境变量 IKAROS_ROOT 或 "
@@ -154,7 +143,7 @@ def _flatten(d: dict, parent_key: str = "") -> dict:
 class IkarosPaths:
     """便携路径容器——所有路径相对于 IKAROS_ROOT 解析。
 
-    属性可直接点取: p.python, p.llama_server, p.neko_main 等。
+    属性可直接点取: p.python, p.llama_server, p.dsh_root 等。
     """
 
     def __init__(self, root: str | Path | None = None, paths_file: str | Path | None = None):
@@ -191,7 +180,7 @@ class IkarosPaths:
                 raise ValueError("ikaros-paths.json 顶层不是 dict")
             self._raw_config = raw
         except FileNotFoundError:
-            log.warning("ikaros-paths.json 未找到 (%s)，使用���建默认值", paths_file)
+            log.warning("ikaros-paths.json 未找到 (%s)，使用内建默认值", paths_file)
             self._raw_config = {}
         except json.JSONDecodeError as e:
             raise RuntimeError(
@@ -240,10 +229,11 @@ class IkarosPaths:
                 self._paths[key] = val
                 continue
             if isinstance(val, str):
-                # 版本号列表
+                # 版本号/非路径字段
                 if key.endswith("version") or key in (
                     "llama.type", "rust.type", "mcp.gitnexus.pkg",
                     "mcp.context7.pkg", "mcp.playwright.pkg", "mcp.codebase-memory.pkg",
+                    "dsh.web_port",
                 ):
                     self._paths[key] = val
                 else:
@@ -308,7 +298,7 @@ class IkarosPaths:
         return current
 
     def __getattr__(self, name: str) -> Any:
-        """p.llama_server, p.neko_main 等快捷访问。"""
+        """p.llama_server, p.dsh_root 等快捷访问。"""
         # 方式1: 精确匹配
         if name in self._paths:
             return self._paths[name]
@@ -332,7 +322,7 @@ class IkarosPaths:
                     current = current.setdefault(p, {})
                 current[parts[-1]] = v
             return result
-        # 方式4: key 的最后一段匹配 (llama_server → llama.server 最后一段 server)
+        # 方式4: key 的最后一段匹配
         for key in self._paths:
             if key.endswith(f".{name}") or key.endswith(f".{dotted}"):
                 return self._paths[key]
@@ -363,7 +353,7 @@ class IkarosPaths:
     def build_env(self) -> dict[str, str]:
         """构建进程环境变量 dict，供 spawn 子进程使用。
 
-        等效于 ikaros-env.bat/ps1 的功能。
+        等效于 bin/ikaros-env.bat/ps1 的功能。
         """
         env = dict(os.environ)
         root = str(self.root)
@@ -378,11 +368,16 @@ class IkarosPaths:
         env["IKAROS_CONFIG"] = self.get("core.config", str(self.root / "config"))
         env["IKAROS_LOGS"] = self.get("core.logs", str(self.root / "data/logs"))
 
-        # Hermes 兼容变量
-        env["HERMES_ROOT"] = root
-        env["HERMES_HOME"] = self.get("hermes.home", str(self.root / "data/hermes-agent"))
-        env["HERMES_AGENT_ROOT"] = self.get("hermes.agent", str(self.root / "runtime/hermes-agent"))
-        env["HERMES_PYTHON"] = env["IKAROS_PYTHON"]
+        # dsh
+        env["IKAROS_DSH"] = self.get("dsh.root", str(self.root / "runtime/dsh"))
+        env["IKAROS_DSH_SOURCE"] = self.get("dsh.source", str(self.root / "runtime/deepseek-harness-master"))
+        env["IKAROS_DSH_PROFILE"] = self.get("dsh.profile", str(self.root / "data/dsh/profiles"))
+        env["IKAROS_DSH_WEB_PORT"] = str(self.get("dsh.web_port", 3080))
+        env["IKAROS_DSH_OVERLAY"] = self.get("dsh.overlay", str(self.root / "core/ikaros-dsh/cordis.patch.yml"))
+
+        # omp
+        env["IKAROS_OMP_AGENT"] = self.get("omp.agent", str(self.root / "data/omp/agent"))
+        env["PI_CODING_AGENT_DIR"] = env["IKAROS_OMP_AGENT"]
 
         # LLM / Embedding
         env["LLAMA_SERVER"] = self.get("llama.server", str(self.root / "runtime/llama/b10000-cuda/llama-server.exe"))
@@ -391,11 +386,6 @@ class IkarosPaths:
         env["IKAROS_MODEL_LLM"] = self.get("models.llm", "")
         env["IKAROS_LLAMA_PORT"] = str(self.get("ports.llama", 8080))
         env["IKAROS_EMBEDDING_PORT"] = str(self.get("ports.embedding", 8587))
-
-        # Neko
-        env["IKAROS_NEKO"] = self.get("neko.root", str(self.root / "apps/neko"))
-        env["IKAROS_NEKO_PYTHON"] = str(Path(env["IKAROS_NEKO"]) / ".venv" / "Scripts" / "python.exe")
-        env["IKAROS_NEKO_SERVER"] = "app.main_server"  # 上游已将入口重构为包 app/main_server（python -m 形式）
 
         # PATH 组装
         path_parts = [
@@ -441,10 +431,9 @@ if __name__ == "__main__":
     print(f"根目录: {p.root}")
     print(f"Python:  {p.python}")
     print(f"llama:   {p.llama_server}")
-    print(f"neko:    {p.neko_root}")
+    print(f"dsh:     {p.dsh_root}")
     print(f"embed:   {p.models_embedding}")
     print(f"llm:     {p.models_llm}")
-    print(f"hermes:  {p.hermes_home}")
     print(f"端口:    {p.ports}")
     print("\n全部路径:")
     for k, v in sorted(p.to_dict(flat=True).items()):
