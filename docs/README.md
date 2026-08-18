@@ -23,7 +23,7 @@
 > **架构图三件套**（交互式 HTML，放 `docs/`）：`module-dependency-map.html`（模块依赖关系）/ `architecture-overview.html`（架构全景）/ `folder-tree.html`（文件夹层级）。全部基于 2026-07-27 真实扫描生成（已过时，仅作历史参考）。
 
 >
-> **清理记录**（2026-08-12）：删除 4 份过时文档（`p2-payload-schema-migration.md`（mem0/Qdrant 旧时代）、`upstream-candidates.md`、`附录-镜像与代理.md`、`16-资源链接.md`），镜像/代理配置以 `config/hermes.yaml` 与 `bin/ikaros-env.sh/.bat` 为准。
+> **清理记录**（2026-08-12）：删除 4 份过时文档（`p2-payload-schema-migration.md`（mem0/Qdrant 旧时代）、`upstream-candidates.md`、`附录-镜像与代理.md`、`16-资源链接.md`），镜像/代理配置以 `bin/ikaros-env.sh/.bat` 为准。
 
 ### Hermes 集成与更新（Ikaros 套在 Hermes 之上的解耦 / 维护）
 - [hermes-v5-memory-efficiency-analysis.md](hermes-v5-memory-efficiency-analysis.md) — V5 记忆接入 Hermes 的效率分析（52 → 48 工具口径，2026-08-10 FTS5 兜底修复）
@@ -72,4 +72,4 @@
 - 新增脚本说明：按 `scripts/README.md` 的映射规则放到 `scripts/<相对路径>.md`。
 - 文档均简体中文；脚本内仅保留必要安全提示 + 一行指针（`.bat`/`.ps1` 用纯 ASCII 英文指针）。
 - 不放 secrets；路径优先走 `bin/ikaros-env.sh/.bat` 注册的环境变量。
-- **架构防漂移规则**：任何触及架构 / 端口 / 组件的 commit，**必须同步** `docs/ARCHITECTURE.md` 与根 `AGENTS.md`，否则其提交信息须带 `docs:` 前缀（如 `docs: 调整 neko_group 端口`），以防文档与实现漂移。可用 `python docs/lint.py` 检查残留的旧路径 / 已删文件与端口。
+- **架构防漂移规则**：任何触及架构 / 端口 / 组件的 commit，**必须同步** `docs/ARCHITECTURE.md` 与根 `AGENTS.md`，否则其提交信息须带 `docs:` 前缀（如 `docs: 调整 dsh overlay`），以防文档与实现漂移。可用 `python docs/lint.py` 检查残留的旧路径 / 已删文件与端口。

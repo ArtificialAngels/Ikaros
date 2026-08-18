@@ -1,5 +1,7 @@
 # Hermes Studio AI Chat 功能对比报告
 
+> ⚠️ **历史文档**：hermes / N.E.K.O 已随底座退役（2026-08-18），本文档仅作历史参考。
+
 > 任务 C1：参考项目分析  
 > 来源：`E:\Ikaros-something\reference project\hermes-studio-main`  
 > 目标：对比 Ikaros 现有 chat 实现，提取可借鉴点与落地建议  

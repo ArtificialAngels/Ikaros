@@ -102,7 +102,9 @@ def _effective_mode(node_agent: str | None) -> str:
     现在: set_agent 显式设置的值 (> 0 字节点) 优先; 全局 _CT_RUNTIME["mode"]
     作为 fallback; 两者皆空 → "ikaros"。
     """
-
+    if node_agent and node_agent.strip():
+        return node_agent
+    return _CT_RUNTIME.get("mode") or "ikaros"
 
 
 # ── Ikaros 人格来源 (V5 同步的身份/心绪) ──────────────────────
@@ -1337,7 +1339,8 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
         yield {"type": "content", "delta": chunk}
     if usage:
         yield {"type": "usage", "usage": usage,
-               "model": _effective_model(agent), "context_window": CT_CONTEXT_WINDOW}
+               "model": _CT_RUNTIME.get("model") or CT_DEEPSEEK_MODEL,
+               "context_window": CT_CONTEXT_WINDOW}
 
 
 def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, collector: dict,

@@ -4,29 +4,30 @@
 > Full architecture: `docs/ARCHITECTURE.md`. Naming rules: `docs/naming.md`.
 > Drift guard: `python docs/lint.py` (run after doc edits).
 
-## Ports (9 active services + 1 named-pipe)
+## Ports (4 active services + 1 named-pipe)
 
 | Port | Service | Component |
 |------|---------|----------|
-| :9100 | Control panel Web UI | `core/dashboard/server.py` (start: `bin/ikaros-control-panel.bat`) |
 | :8080 | 本地 LLM（**已退役 2026-08-18**，按需恢复） | watchdog `bin/ikaros-memory-watchdog.py`——配置 `core/memory_v5/models/model_config.json` 的 `initial_model` 为空串 = 禁用 |
 | :8587 | Embedding (bge-m3 q8_0, 1024 dim) | watchdog |
 | :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` (npm 本地安装; 启动 `bin/start-dsh-ikaros.bat web`; overlay `core/ikaros-dsh/cordis.patch.yml`) |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
-| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，面板 `herdr` 组件按需启动） |
+| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，按需启动） |
 
 Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
 Added (2026-08-11): **pi 纳入 V5 核心** — `data/omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工（2026-08-18 更新）：dsh = 工作引擎（对话/记忆/工具链），pi = 编码 agent（任务执行）**。
 Added (2026-08-12): **pi 干活必须带记忆** — 开工先 `v5_project_retrieve`/`v5_memory_search` 检索相关项目决策与教训（跨会话连续性不能只押在手工 summary 上）；收尾把关键决策/坑用 `v5_project_note` 落库（kind=decision|pitfall|convention）。实测：conversation-tree 多卡重构 B+C 决策/降级归位 pitfall/zoom 弃用均已入库（#3179-3184）。
-Added (2026-08-13): **omp 便携化（配置迁出 C 盘）** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置目录经 `PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent` 锚定项目（agent.db / mcp.json / models.yml / config.yml / .env 全部迁入，密钥 `OPENCODE_GO_API_KEY` 放 `data/omp/agent/.env`）。⚠️ 用 `PI_CODING_AGENT_DIR`（走 path.resolve，绝对路径覆盖有效）；`PI_CONFIG_DIR` 走 path.join 遇绝对路径不重置、junction 方案已被 bun bug 堵死——勿再尝试。三处注入：`bin/ikaros-env.sh|bat`（shell 权威源）、`bin/start-omp.bat`（TUI 直启）、`core/dashboard/server.py build_env()`（面板→herdr→omp pane 链路）。旧 `C:\Users\PZS0X\.omp\` 现为兜底，确认新链路稳定后可删。
+Added (2026-08-13): **omp 便携化（配置迁出 C 盘）** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置目录经 `PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent` 锚定项目（agent.db / mcp.json / models.yml / config.yml / .env 全部迁入，密钥 `OPENCODE_GO_API_KEY` 放 `data/omp/agent/.env`）。⚠️ 用 `PI_CODING_AGENT_DIR`（走 path.resolve，绝对路径覆盖有效）；`PI_CONFIG_DIR` 走 path.join 遇绝对路径不重置、junction 方案已被 bun bug 堵死——勿再尝试。三处注入：`bin/ikaros-env.sh|bat`（shell 权威源）、`bin/start-omp.bat`（TUI 直启）、`bin/ikaros-env.*` 环境注入（pi 链路）。旧 `C:\Users\PZS0X\.omp\` 现为兜底，确认新链路稳定后可删。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
 Removed (do not re-add): voice bridge (ports 7870 / 7871).
 2026-08-18: Hermes gateway (:8642) / Bridge (:8650) / Dashboard (:9119) 已随底座整体退役; 工作引擎 = dsh (:3080, DeepSeek Harness).
 
 ## Startup
-- Control panel: `bin/ikaros-control-panel.bat` → opens http://127.0.0.1:9100 (panel-only; components started from the panel UI. dsh :3080: 面板 dsh 卡片或 `bin/start-dsh-ikaros.bat web`)
-- **Distinction**: `core/control-panel/` = Electron desktop shell (pulls up `:9100` + components); `apps/neko/` = FastAPI + React **frontend service** (its `N.E.K.O.exe` is the neko shell). Don't conflate the two.
+- dsh 工作引擎（Web GUI）: `bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080（`--patch` 加载 Ikaros overlay: memory_v5 MCP + 终端 + LSP + persona）
+- dsh headless（one-shot 任务）: `bin/start-dsh-ikaros.bat headless "<task>"`
+- 对话树面板: `python core/conversation-tree/server.py --port 48920` → http://127.0.0.1:48920
+- Embedding: watchdog `bin/ikaros-memory-watchdog.py`（:8587）
 
 ## 便携环境 (2026-08-11, 学秋叶整合包)
 - IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）
@@ -37,19 +38,18 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. The 48 MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix).
 - **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；⚠️ `rules_retriever` 已于 2026-08-14 删除（孤儿, 无代码调用; 规则数据 `docs/agent-rules.yaml` 暂未消费）。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
 
-## Hermes 插件外置（2026-08-04）
-- **ikaros_v5 上下文引擎 + 记忆提供方已外置为 Hermes 用户插件**，不再存在于 `runtime/hermes-agent` 仓库内（零源码侵入）。
-- 运行时位置 `data/hermes-agent/plugins/ikaros_v5/`（= `$HERMES_HOME/plugins/`，gitignore 数据区，hermes 更新不影响）；规范源 `patches/hermes/plugins/ikaros_v5/`，由 `bin/hermes-update-and-patch.py` 的 `ensure_external_plugins()` 幂等部署。
-- 两条原生发现链路：context engine 走通用插件系统（`plugin.yaml` 显式 `kind: standalone` + `register()` 调 `register_context_engine`，须在 config `plugins.enabled` 列表）；memory provider 走 memory 系统 user 目录扫描（`load_memory_provider("ikaros_v5")`）。
-- 激活配置（`data/hermes-agent/config.yaml`）：`context.engine: ikaros_v5`、`memory.provider: ikaros_v5`、`plugins.enabled: [ikaros_v5]`。Dashboard 枚举走 upstream `plugins_cmd._discover_context_engines`（自动含插件注册引擎）。
-- 补丁 spec 详见 `docs/hermes-ikaros-patches.md` §6b。
+## dsh 底座 overlay（2026-08-18，替代 hermes 插件外置）
+- **工作引擎底座 = dsh (DeepSeek Harness)**；Ikaros 定制经 overlay `core/ikaros-dsh/cordis.patch.yml` 注入（memory_v5 MCP stdio 48 个 `v5_*` 工具 + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
+- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。
+- 启动: `bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
+- 架构参考: `docs/ikaros-dsh-plugin-architecture.md`；退役历史: `docs/hermes-retirement-inventory.md`。
 
 ## DO NOT
 - ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always go through the watchdog.
 - ❌ Never auto-commit / auto-push without an explicit user instruction.
-- ❌ After editing `core/dashboard/server.py` / `bin/ikaros-memory-watchdog.py` / `core/conversation-tree/server.py`, restart the corresponding service — the panel caches component states, changes won't take effect otherwise.
-- ❌ Don't edit `runtime/hermes-agent` directly — it's the hermes-agent upstream worktree (git clone, kept 100% 纯净). Ikaros 定制改走 `patches/hermes/`（`bin/hermes-update-and-patch.py` 幂等重打）或 `core/hermes-bridge/`（0 侵入包装层）。
-- ✅ hermes 迁移已完成（2026-08-12 验证）：源码 `runtime/hermes-agent/`（venv 同步，editable install），HERMES_HOME 数据 `data/hermes-agent/`，env 与全部启动器已指向新位置；健康测试全绿（gateway :8642 / dashboard :9119 / CLI v0.20.0 / paw :8088）。旧树残留已清理。
+- ❌ After editing `bin/ikaros-memory-watchdog.py` / `core/conversation-tree/server.py`, restart the corresponding service.
+- ❌ Don't edit `runtime/` 下的上游/工具链（dsh npm 包、portable-python 等）——它们是拉取的二进制/依赖，定制走 `core/ikaros-dsh/` overlay 或 `bin/` 包装层。
+- ✅ hermes / N.E.K.O / 9100 控制面板均已退役（2026-08-18），勿再启动或恢复相关服务；历史见 `docs/hermes-retirement-inventory.md`。
 
 ## 2026-08-14 接手审计修复记录（记忆恢复资料）
 
@@ -117,18 +117,18 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - **降级**：everything MCP 服务不可用/报错时，回退默认 `search_files`（ripgrep）。
 - 已实测在线（E:\Ikaros 内搜索秒回）。V5 directive #2 同步此规则。
 
-## 9100 panel refactor (2026-07-26)
+## 9100 panel refactor (2026-07-26) — 历史，9100 已退役 2026-08-18
 - Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable).
 - Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control.
 - Person Sync removed (sync script deleted). Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.main gateway run` (used by dashboard + chat-tree). The legacy `bin/hermes-api-server.py` script is unused.
 - `hermes` cloud_chat provider now aliases to `dashboard`.
 
 ## Conversation Tree 面板 (2026-07-28, 2026-08-01 得兼改造; 2026-08-04 S1/S2 结构性修复)
-- 新增 `:48920` 树形对话面板（Explore.poker 风格），由控制面板 `conversation_tree` 组件管理，启动 `core/conversation-tree/server.py --port 48920`。
+- 新增 `:48920` 树形对话面板（Explore.poker 风格），启动 `core/conversation-tree/server.py --port 48920`。
 - 后端引擎 `core/memory_v5/conversation_tree.py`（`ConversationTree`，93 tests）；REST：`fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context` / `set_trunk`（主线提升，废弃分支拒绝）。
 - 对话内容存 V5（`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`），树 JSON 仅存指针。
-- 与 V5 集成：`hermes_provider.push_to_conversation_tree()` 函数已随重构删除，改由插件 `memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复，源/运行时同版）。`bin/import-hermes-to-convtree.py` 可将 Hermes 单会话批量导入对话树。
-- **chat 链路（2026-08-01 得兼）**：ikaros / hermes 双模式统一走 Hermes gateway `:8642`（`/v1/chat/completions`，完整 tools/skills 循环 + MCP 工具）。hermes 模式注入「树域上下文（分支脉络）+ 树域记忆」（不重复注入 SOUL，gateway core 的 SOUL 即人格）；ikaros 模式注入「完整 persona + 树域记忆」。gateway 不可达/空响应 → 降级本地 DeepSeek 直连（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`）+ 只读工具回路，SSE `warn` 事件提示降级（黄色提示条）。gateway 工具结果经 `api_server._on_tool_complete` 截断 2000 透出（`hermes.tool.progress` completed 事件带 `result`）；thinking / usage / tool_calls / skills_used（工具名近似）全落库。`build_tree_aware_context`（TreePathCompressor）已修复可用（原漏 import 被静默吞掉）。前端单飞（发送期间禁用输入）+ AbortController（切换节点/重置中止在飞请求）。
+- 与 V5 集成：`memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复）。
+- **chat 链路（2026-08-01 得兼；2026-08-18 ikaros 唯一模式）**：对话树统一 ikaros 模式——**dsh 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`，OpenAI function-calling + `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，`MAX_TOOL_ROUNDS=4` 多轮，模型可自主调工具；第 0 步 memory_search 预检索注入上下文）。注入「完整 persona + 树域记忆」。dsh 不可达/空响应 → 降级链仍走本地 DeepSeek 直连 + 只读工具回路，SSE `warn` 事件提示降级（黄色提示条）。thinking / usage / tool_calls / skills_used 全落库。`build_tree_aware_context`（TreePathCompressor）已修复可用。前端单飞（发送期间禁用输入）+ AbortController（切换节点/重置中止在飞请求）。
 - **S1 主线模型（2026-08-04）**：显式 `trunk_id` 主线终点取代 node_type 时序快照判定（旧逻辑"父节点有无子节点"导致 branch 下继续对话被误标 trunk、主线身份随创建顺序漂移）。`add_turn` 按 `trunk_id` 判定主线延续；`set_trunk(node, cascade)` 显式提升分支为主线；`is_valid_branch`/`__trunk__` 合并查找沿 `trunk_id`（唯一真源）。序列化带 `trunk_id`，旧 JSON 自动按最深 trunk 链推断。前端 trunk 徽标（★）+ 右键"设为主线终点"。
 - **S2 降级工具协议（2026-08-04）**：降级链从"纯文本补全"升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮，模型可自主调工具；第 0 步保留 memory_search 预检索注入上下文。降级链模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
 - **S4 SSE chunked（2026-08-04）**：`_send_sse` 手动 `Transfer-Encoding: chunked`（HTTP/1.1 标准客户端不再等 EOF 挂起）。

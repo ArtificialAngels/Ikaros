@@ -15,28 +15,28 @@
 
 ## 🎯 一句话
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros-control-panel.bat` 拉起 **控制面板 :9100**,一键启动 **工作引擎(dsh) + 记忆 + 对话树**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前 Phi-4-mini + bge-m3)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\start-dsh-ikaros.bat web` 拉起 **工作引擎(dsh) :3080**,一键联动 **记忆 + 对话树**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前仅 bge-m3 embedding;本地 LLM 已退役按需恢复)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
 
 > **仓库是「瘦身版」**:本云端仓库只保留 **Ikaros 原生代码 + 配置 + 上游清单/拉取/配置脚本**。所有「有上游」的组件(runtime 工具链、dsh、各类 MCP)**不入库**,统一由 `scripts/fetch-upstreams.py` 拉取、`scripts/setup-native.py` 落地配置。详见 `UPSTREAM.md`。
 
 ---
 
-## 🖼️ 架构 (控制面板统一调度, 2026-08-18)
+## 🖼️ 架构 (dsh 工作引擎为核心, 2026-08-18)
 
 ```
-                    ┌──── 控制面板 :9100 ────┐
-                    │  bin/ikaros-control-panel.bat │
-                    │  一键启停全部组件         │
+                    ┌──── dsh 工作引擎 :3080 ────┐
+                    │  bin/start-dsh-ikaros.bat  │
+                    │  overlay: MCP+终端+LSP+人格 │
                     └──────────┬─────────────┘
-                               │ start
+                               │ 联动
        ┌───────────────────────┼───────────────────┐
        ▼                       ▼                   ▼
 ┌─────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ Memory      │      │ dsh 工作引擎      │      │ 对话树 :48920     │
-│ :8587 embed │◄────►│ :3080 web        │      │ DeepSeek 直连     │
-│ :8080 LLM*  │      │ MCP(48 工具)+    │      │ + 只读工具回路    │
-└──────┬──────┘      │ terminal + lsp   │      └──────────────────┘
-       │             └──────────────────┘
+│ Memory      │      │ 对话树 :48920     │      │ pi / herdr       │
+│ :8587 embed │◄────►│ DeepSeek 直连     │      │ 编码 agent       │
+│ (bge-m3)    │      │ + 只读工具回路    │      │ (omp, 命名管道)  │
+└──────┬──────┘      └──────────────────┘      └──────────────────┘
+       │
        ▼
 ┌─────────────┐
 │ V5 数据层   │
@@ -44,7 +44,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 │ ChromaDB    │
 └─────────────┘
 
-* :8080 本地 LLM 为懒加载: 看门狗只监测端口, 模型在 agent 首次调用时热载入。
+* 本地 LLM(:8080) 已退役(2026-08-18): 云端 DeepSeek 为主, 按需恢复(见 AGENTS.md)。
 * 对话树 :48920 单模式 DeepSeek 直连(人格 = Ikaros 伴侣), 不可达时降级本地三层链路 + 只读工具回路。
 * dsh :3080 为 DeepSeek Harness 工作引擎 (overlay 挂载 memory_v5 MCP: 48 个 v5_* 工具 + terminal + typescript LSP + persona)。
 ```
@@ -53,11 +53,10 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 | Port | 组件 | 用途 | 状态 |
 |------|------|------|------|
-| **9100** | 控制面板 | `bin/ikaros-control-panel.bat` Web UI 启动器 | ✅ 常驻 |
 | **8587** | Memory (bge-m3 embed) | embedding 1024 dim, V5 记忆写入/召回 | ✅ 常驻 |
-| **8080** | 本地模型 (Local LLM) | Phi-4-mini,**懒加载**(agent 调用时热载入);面板可切换模型 | ⏸ 按需 |
-| **3080** | dsh (DeepSeek Harness) | 工作引擎 web 界面 + memory_v5 MCP + 工具链 | ⏸ 按需(面板可启停) |
+| **3080** | dsh (DeepSeek Harness) | 工作引擎 web 界面 + memory_v5 MCP + 工具链 | ⏸ 按需(`bin/start-dsh-ikaros.bat web`) |
 | **48920** | 对话树 | 树形对话面板(`core/conversation-tree/server.py`),DeepSeek 直连 | ✅ 常驻 |
+| **8080** | 本地模型 (Local LLM) | **已退役 2026-08-18**(按需恢复: 放 gguf 进 `core/memory_v5/models/` + `model_config.json` 设 `initial_model`) | ⏸ 禁用 |
 
 > **已退役 (2026-08-18)**: Hermes 底座(`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / hermes venv)、N.E.K.O 桌宠(`:48911/:48912/:48915`)、QwenPaw(`:8088`)。工作引擎由 **dsh (deepseek-harness)** 承接。
 >
@@ -70,10 +69,9 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 - **零系统依赖** — 自带便携 Python **3.12.10**(`runtime\portable-python\`)、Node.js(`runtime\node\`)、llama.cpp Windows 二进制 + DLL(`runtime/llama/`)、**dsh**(`runtime/dsh\`,npm 本地安装)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
 - **U 盘即插即用** — 项目根路径由 `bin/ikaros-env.sh/.bat/.ps1`(单一权威源,自锚定 `%%~fI` 归一化)自动解析,不写死盘符;换盘符后无需手工改路径。
 - **dsh 工作引擎** — DeepSeek Harness 承接过往 agent 底座职责:web 界面(:3080)+ memory_v5 MCP(48 工具)+ terminal + typescript LSP + persona(overlay `core/ikaros-dsh/cordis.patch.yml`,路径经 `!!js process.env.IKAROS_ROOT` 推导,0 硬编码,可整体移动)。
-- **控制面板统一调度** — `:9100` Web UI 一键启停全部组件(含 dsh 启停闭环,精确匹配 dsh CLI 进程、不误伤 DSH Desktop)。
 - **本地记忆系统 (V5)** — SQLite(FTS5 关键词)+ Chroma(向量语义)+ 时间范围 **三路融合召回**(`min_fused_score` 默认 0.3),统一入口 `unified_retrieve(scope=auto|semantic|lexical|graph|tree|temporal)`;`store()` 实时写入、`consolidate/distill/reflect` 经云端 LLM 归约。无 Qdrant 依赖。
 - **5D 认知注入** — `cogno_5d.py` 在每轮对话注入时间/设备/地理/情绪/上下文锚点。
-- **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 Phi-4-mini 仅作兜底,懒加载不占常驻资源。
+- **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 LLM 已退役,不占资源(按需恢复)。
 - **对话树** — `:48920` 树形对话面板,多轮/分支对话以可折叠树呈现;单模式 DeepSeek 直连(人格 = Ikaros 伴侣公理 + SOUL 身份)。
 - **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
 - **隐私优先** — `data/`、`runtime/`、`.env`、IDE 状态全在 `.gitignore`。
@@ -89,7 +87,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 2. cd Ikaros
 3. python scripts/fetch-upstreams.py     ← 拉取上游 (runtime / mcp / 模型权重)
 4. python scripts/setup-native.py        ← 落地 ikaros-paths.json + dsh profile env 参考
-5. bin\ikaros-control-panel.bat          ← 拉起控制面板 :9100, 点 start 启动整栈
+5. bin\start-dsh-ikaros.bat web            ← 拉起工作引擎 :3080 (dsh)
 ```
 
 > `scripts/fetch-upstreams.py` 支持 `--list` / `--dry-run` / 按名拉取;`setup-native.py` 支持 `--check` 校验。详见 `UPSTREAM.md`。
@@ -97,9 +95,9 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 ### 在你现在的电脑上(已经解压过)
 
 ```
-1. 双击 bin\ikaros-control-panel.bat
-2. 浏览器开 http://127.0.0.1:9100, 点 start
-3. 对话树 / dsh 就绪, 开始对话
+1. 双击 bin\start-dsh-ikaros.bat web       ← 工作引擎 :3080
+2. 启动对话树: python core/conversation-tree/server.py --port 48920
+3. 浏览器开 http://127.0.0.1:3080 / http://127.0.0.1:48920, 开始对话
 ```
 
 ---
@@ -155,9 +153,9 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 | 用途 | 命令 |
 |------|------|
-| 拉起控制面板 | `bin\ikaros-control-panel.bat` |
-| 一键启动整栈 | 控制面板 :9100 → 点 `start` |
-| 停止全部 | 控制面板 :9100 → 点 `stop` / 各组件 `stop` |
+| 拉起工作引擎 (dsh web) | `bin\start-dsh-ikaros.bat web` (http://127.0.0.1:3080) |
+| 启动对话树 | `python core/conversation-tree/server.py --port 48920` |
+| 停止 dsh | 任务管理器结束 dsh 进程 / 重启脚本 `bin/restart-dsh-ikaros.ps1` |
 | 拉取上游 | `python scripts/fetch-upstreams.py` |
 | 落地原生配置 | `python scripts/setup-native.py` |
 | **dsh 启动 (web)** | `bin\start-dsh-ikaros.bat web` → :3080 (或面板 dsh 卡片 start) |
@@ -176,7 +174,7 @@ Ikaros\
 ├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + ikaros-env(环境权威) + llama-help + start-dsh-ikaros
 ├── core\                 ← 核心系统
 │  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思) + 48 个 v5_* MCP 工具
-│  ├── dashboard\         ← 控制面板 Web UI (:9100)
+│  ├── conversation-tree\  ← 对话树面板 (:48920)
 │  ├── env\               ← Python 侧环境引导副本 (ikaros-paths.json / llama_resolver.py)
 │  ├── conversation-tree\ ← 对话树面板后端 (:48920)
 │  └── ikaros-dsh\        ← dsh overlay (cordis.patch.yml: MCP/terminal/lsp/persona)
@@ -197,7 +195,7 @@ Ikaros\
 
 | 现象 | 第一看 |
 |------|--------|
-| 控制面板没起来 | `netstat -ano \| findstr :9100` 看进程是否在 |
+| dsh web 打不开 | `bin/restart-dsh-ikaros.ps1` 重启 (日志 data/logs/ikaros-dsh-restart.log) |
 | 记忆召回弱 | `bin\llama-help.py --status` 看 `:8587` 心跳 |
 | 本地 LLM 没反应 | `bin\llama-help.py --hotload` 手动热载入 `:8080` |
 | dsh 没起 / :3080 无响应 | 面板 dsh 卡片 start;日志 `data\logs\dsh.log`(UTF-8) |
@@ -279,5 +277,5 @@ Ikaros\
 
 ---
 
-*当前架构: 控制面板 :9100 → 本地模型(:8080 可切模型) + Memory(:8587 可切模型) + dsh 工作引擎(:3080) + 对话树 :48920*
-*启动: `bin\ikaros-control-panel.bat` · 故障看: `bin\llama-help.py --status` · dsh 日志: `data\logs\dsh.log`*
+*当前架构: dsh 工作引擎(:3080) + Memory(:8587, bge-m3) + 对话树(:48920, DeepSeek 直连)*
+*启动: `bin\start-dsh-ikaros.bat web` · 故障看: `bin\llama-help.py --status` · dsh 日志: `data\logs\dsh.log`*

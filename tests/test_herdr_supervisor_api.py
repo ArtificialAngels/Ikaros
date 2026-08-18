@@ -6,7 +6,7 @@
 - 通过 ``server._SUPERVISOR_OVERRIDE`` 注入 FakeSupervisor，驱动**真实**的
   ``ConversationTree.set_exec_state`` → 真实 ``EventBus`` → 真实 SSE 事件流。
 - 核对设计文档 §11/§12：run→blocked(SSE)→approve→done(SSE) 闭环、
-  CORS(9100 跨域订阅)、OPTIONS 预检。
+  CORS(跨域订阅)、OPTIONS 预检。
 
 运行
 ----
@@ -189,7 +189,7 @@ def ctx():
 
 # ── 验收用例 ──────────────────────────────────────────────────────────────
 def test_cors_on_state(ctx: Ctx):
-    """GET /api/state 必须带 CORS 头（9100 跨域订阅）。"""
+    """GET /api/state 必须带 CORS 头（跨域订阅）。"""
     st, hdrs, _ = _http(ctx, "GET", "/api/state")
     assert st == 200, f"state 返回 {st}"
     assert hdrs.get("Access-Control-Allow-Origin") == "*"

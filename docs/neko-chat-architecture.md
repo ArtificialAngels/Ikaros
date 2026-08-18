@@ -1,5 +1,7 @@
 # N.E.K.O 前端聊天系统架构分析
 
+> ⚠️ **历史文档**：hermes / N.E.K.O 已随底座退役（2026-08-18），本文档仅作历史参考。
+
 > **日期**: 2026-07-25
 > **范围**: `E:\Ikaros\apps\neko\` — 完整前端聊天链路
 > **参考项目**: `E:\Ikaros-something\reference project\N.E.K.O-main`

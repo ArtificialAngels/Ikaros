@@ -2,7 +2,7 @@
 
 > **目标读者**: 所有接入本项目的 AI Agent
 > **核心原则**: 便携性（零系统依赖）+ 路径统一管理（一处注册，全局可查）
-> **最后更新**: 2026-08-12
+> **最后更新**: 2026-08-18（hermes / N.E.K.O / 9100 面板退役，dsh 底座）
 
 ---
 
@@ -17,9 +17,8 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │      L3: 表现层 (Presentation) — 逻辑分组                       │
-│  core/control-panel/ — Electron 桌面壳 (Desktop Shell)        │
-│  apps/neko/ — 前端服务 (Frontend Service): FastAPI+React      │
-│  :48911 main_server  :48912 memory_server  :48915 agent      │
+│  dsh web :3080 — 工作引擎 Web GUI (DeepSeek Harness)          │
+│  对话树 :48920 — 树形对话面板 (conversation-tree)               │
 ├─────────────────────────────────────────────────────────────┤
 │      L2: 智能体层 (Soul) — 逻辑分组                             │
 │  core/memory_v5/ — V5 自我认知引擎 (包名 memory_v5)            │
@@ -29,7 +28,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 │      L1: 基础设施 (Runtime Infrastructure) — 逻辑分组           │
 │  runtime/dsh/ — 工作引擎 (DeepSeek Harness, npm 本地安装)                    │
 │  ikaros-dsh overlay — memory_v5 MCP(48 工具) + terminal + lsp + persona     │
-│  bin/ikaros-memory-watchdog — 本地 LLM :8080 + Embed :8587   │
+│  bin/ikaros-memory-watchdog — Embed :8587 (本地 LLM 已退役)   │
 ├─────────────────────────────────────────────────────────────┤
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
 │  runtime/portable-python/ — Python 3.12.10                  │
@@ -41,31 +40,23 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **环境变量权威源（2026-08-11 便携化后）**：`IKAROS_*` 变量的**唯一权威**是 `bin/ikaros-env.sh`（bash）与 `bin/ikaros-env.bat`（cmd），两者自锚定 `BASH_SOURCE[0]` / `%~dp0`，项目整体移动后仍正确；`core/env/` 下保留的是 Python 侧副本（`ikaros-env.bat/.ps1` + `ikaros-paths.json` + `llama_resolver.py`），**注册表 `IKAROS_*` 已清零**，新增变量以 `bin/ikaros-env.*` 为准（单一权威源，路径自锚定 IKAROS_ROOT 推导）。
+> **环境变量权威源（2026-08-11 便携化后）**：`IKAROS_*` 变量的**唯一权威**是 `bin/ikaros-env.sh`（bash）与 `bin/ikaros-env.bat`（cmd），两者自锚定 `BASH_SOURCE[0]` / `%~dp0`，项目整体移动后仍正确；`core/env/` 下保留的是 Python 侧副本（`ikaros-paths.json` + `llama_resolver.py`），**注册表 `IKAROS_*` 已清零**，新增变量以 `bin/ikaros-env.*` 为准（单一权威源，路径自锚定 IKAROS_ROOT 推导）。
 
-> **桌面壳 vs 前端服务**：`core/control-panel/` 是 Electron **桌面壳**（拉起面板 `:9100` 与各组件）；`apps/neko/` 是 **前端服务**（FastAPI + React，其 `N.E.K.O.exe` 即 neko 壳）。二者职责不同，勿混为一谈。
+> **2026-08-18 底座收敛**：`core/control-panel/`（Electron 壳）、`core/dashboard/`（9100 面板）、`apps/neko/`（N.E.K.O 前端）均已退役删除；表现层由 dsh web + 对话树承接。
 
 ### 1.2 核心端口一览
 
 | 端口 | 服务 | 路径 | 启动方式 |
 |------|------|------|---------|
-| :9100 | 控制面板 Web UI | `core/dashboard/server.py` | `bin/ikaros-control-panel.bat` |
-| :8587 | Embedding (本地) | `bin/ikaros-memory-watchdog.py` | 面板 memory 组件 |
-| :8080 | 本地 LLM（当前 Phi-4-mini，**懒加载**） | `bin/ikaros-memory-watchdog.py` | 看门狗**仅被动监测端口**，不主动拉起模型；模型由 agent 首次调用本地 LLM 时经 `ensure_local_llm()` 热载入（`bin/llama-help.py --hotload` 可手动触发） |
-| :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | 面板 dsh 组件 / `bin/start-dsh-ikaros.bat web` |
+| :8587 | Embedding (bge-m3, 本地) | `bin/ikaros-memory-watchdog.py` | watchdog 自动 |
+| :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | `bin/start-dsh-ikaros.bat web` |
+| :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | `python core/conversation-tree/server.py --port 48920` |
+| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 按需启动 |
+| :8080 | 本地 LLM | **已退役 2026-08-18**（`model_config.json` `initial_model` 空串=禁用；恢复=放 gguf + 设模型名） | 禁用 |
 
+> **端口状态**：上述 TCP 端口为当前生效服务。**2026-08-18**：控制面板 :9100、Hermes 底座（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw）、N.E.K.O `:48911-48915` 全部退役删除；工作引擎 = dsh (DeepSeek Harness) :3080。更早移除：语音桥 7870/7871（07-24）。
 
-
-
-
-
-
-| :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | 面板 conversation_tree 组件 |
-| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 面板 herdr 组件（按需，不随全栈自启） |
-
-> **端口状态**：上述 TCP 端口为当前生效服务。已移除：语音桥（原端口 7870 / 7871，2026-07-24）。**2026-08-18**: Hermes 底座整体退役（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw / N.E.K.O `:48911-48915`），工作引擎 = dsh (DeepSeek Harness) :3080。
-
-### 1.3 控制面板 9100 重构 (2026-07-26)
+### 1.3 控制面板 9100 重构 (2026-07-26) — ⚠️ 历史，9100 已退役 2026-08-18
 
 控制面板（`:9100`）在此次重构后调整如下：
 
@@ -74,7 +65,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 - **Hermes API 网关（:8642）已重新启用**：由 `python -m hermes_cli.main gateway run` 提供，dashboard 与 chat-tree 复用；Person Sync（人设同步脚本）已删除。旧的 `bin/hermes-api-server.py` 脚本未启用。
 - **hermes → dashboard 别名（2026-08-05 作废）**：原 `cloud_chat` 的 `hermes` 云端 provider 别名指向 Dashboard `:9119` 的路由已随 9119 网关用途移除而作废；对话树主链路改经 Hermes Bridge `:8650` → 纯净 gateway `:8642`（见 §1.5）。
 
-### 1.3.1 面板布局与自我思考卡片 (2026-08-01)
+### 1.3.1 面板布局与自我思考卡片 (2026-08-01) — ⚠️ 历史，随面板退役
 
 - **整页统一自由画布**：左侧组件卡（local_model / memory / neko_group / hermes_dashboard / conversation_tree / herdr 等）与右侧仪表带（情感 PAD / 生命活力 / 自我思考 / V5 记忆 + 实时事件流）合并进同一个 `#canvas` 绝对定位画布。所有面板可**自由拖拽移动、八向缩放、拖拽时吸附对齐（容器四边+中线、其他面板四边+中线）、localStorage 记忆布局**；刷新/重载自动恢复上次布局。「重置布局」按钮清记忆恢复默认停靠。
 - **自我思考卡片（替代原"内心独白"）**：原读 `pending_thought.json`（不存在、无写入者）的「内心独白」卡片已废弃；现改为读 metacog 真实产出的 `latest_thought.json`（经 `/api/state` 的 `state.thought` 暴露），显示伊卡洛斯最近一次元认知反思（text + kind + 好奇度 + 时间）。
@@ -91,31 +82,21 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 - **S2 降级工具协议（2026-08-04）**：降级链从「纯文本补全」升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮；模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
 - **S4 SSE chunked（2026-08-04）**：`_send_sse` 手动 `Transfer-Encoding: chunked`（HTTP/1.1 标准客户端不再等 EOF 挂起）。
 - **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针（节点 + `cards_meta` 手动卡片元数据 + `links` 显式连接），真实记忆在 `v5.db`。
-- **与 V5 集成**：`hermes_provider.push_to_conversation_tree()` 函数已随重构删除，改由插件 `memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复，源 `patches/` 与运行时 `data/` 同版）。
-- **LLM 路由（2026-08-05 更新）**：`/api/chat` 的 **ikaros / hermes 两种模式默认走 Hermes Bridge :8650**（OpenAI-wire `/v1/chat/completions`；（2026-08-18: hermes 模式退役, 单模式 ikaros 注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」）。**主链路 = DeepSeek 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`），先预检索记忆（memory_search）再把结果作为 system 前缀喂给 LLM，工具回路为**只读工具集**（memory_search 等），模型可自主选择调用工具（`MAX_TOOL_ROUNDS` 上限）；DeepSeek 不可达时降级本地三层 chat 补全链路，并通过 SSE `warn` 事件（黄色提示条）向前端提示降级。SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
+- **与 V5 集成**：`memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复）。
+- **LLM 路由（2026-08-05 更新；2026-08-18 单模式）**：`/api/chat` **ikaros 单模式**，注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。**主链路 = DeepSeek 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`），先预检索记忆（memory_search）再把结果作为 system 前缀喂给 LLM，工具回路为**只读工具集**（memory_search 等），模型可自主选择调用工具（`MAX_TOOL_ROUNDS` 上限）；DeepSeek 不可达时降级本地三层 chat 补全链路，并通过 SSE `warn` 事件（黄色提示条）向前端提示降级。SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
 - **触控/平板模式（2026-08-10）**：全局 touch-action 策略（手势区 none：画布/节点/卡组头/白板/3D 查看器；滚动区 pan-y + overscroll-behavior:contain）；画布单指平移/双指捏合 + 可交互元素分流（不拦截、保留原生 mouse 合成）；长按手势（~500ms：树节点/组卡 → 右键菜单、L1 小卡 → 直接 L3；位移 10px 取消；吃原生 contextmenu/click 防双菜单）；卡组头部 pointer 事件拖拽（鼠标/触控/笔统一）；触控最小目标 ≥40px（`@media (pointer:coarse)`）；软键盘避让（visualViewport → `--kb-h` 输入区上移）；safe-area-inset 边距（刘海屏）；平板竖屏树面板收窄（--tree-w:220px）。
-- **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `cloud_chat.build_system_prompt`（桌宠）/ Hermes（SOUL.md）/ chat tree 三处使用。
+- **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `build_system_prompt` / chat tree 使用（dsh overlay persona 独立）。
 - **万用工具卡组（Artifact Deck，2026-08-10）**：agent 在 markdown 正文输出 `:::card TYPE` 块（`key: value` 属性行 + 可选正文，`:::` 闭合），前端**抽取进独立卡组** `#cardDeck`（不在 chat 正文内嵌，正文只留 chip 占位链接）。卡组悬浮画布右侧、可拖拽，与 chat 卡同构三态：**L1 = 90×60 小卡**（未调用态，堆叠成卡组，>3 张时只露 3 张 +N 徽章）、**L2 = 中等面板**（只读展示）、**L3 = 全功能面板**（可交互，如 browser 地址栏）。自动布局：1~3 张全 L2 展开；>3 张时被调用的卡展开、其余收缩 L1。被调用卡（active）环绕**淡蓝→粉流光阴影**动画。卡组展开时**让位**：chat 卡（L2/L3）宽度收缩 `--deck-w` 被往左挤。类型：`browser`（Mini 浏览器 iframe）/ `file`（image/text/pdf/audio/video/markdown 预览）/ `whiteboard`（SVG 白板，DSL：`node id 标签` / `link a -> b 说明`）/ `emoji`（大表情）/ `animation`（typing/float/pulse/spin/bounce/rainbow/wave/heartbeat）/ `model`（3D glb 预览卡）/ `audio` / `video` / `code`（大代码框）/ `note|info|warn|ok`（提示条）。安全：属性全 escapeHtml，iframe/媒体 src 走 http(s) 白名单，白板 DSL 走 textContent，零脚本执行；与正文同走 `mdRender` 抽取链路（流式实时 + 持久化重渲染双路径自动生效，降级链路同样可用）。工具生命周期卡（`tool_call`/`tool_result` 三态 running/ok/fail，emoji 取工具事件）仍在 chat 卡 `renderExtras`/`extrasHtml`。语法参考见 `docs/conversation-tree-cards.md`。
-- **卡片图重构（2026-08-15/16，poker 对齐）**：把「节点树」升级为「卡片图」——`ConvCard`（卡片 = 一段多轮会话，`messages` 数组；底层 `node=回合` 仍是事实源，V5 store 零改动）。卡片由节点链按**分叉点切分自动聚合**（卡片头 = ROOT + 每个分叉点 ≥2 子的孩子）；手动建卡（child/parallel/branching）与分支点/未读经 `cards_meta` 持久化合并。**显式连接图**：卡片独立存在，关系 = 显式 `links`（多对多，可断开，`link_cards`/`unlink_cards`），前端出锚点(右/下)→入锚点(左/上)拖线连接（`onAnchorDown`/`onLinkMove`/`onLinkUp`）；`viewMode` 收敛为单一 `card` 视图（旧 node/group 模式移除）。**分支继承链**：branching 卡经 `get_branch_chain` 回溯继承链（`branching_source_message_id` 定位分支点），`build_branch_chain_block` 注入 system prompt（hermes/ikaros 双模式）。消息 id（`_ensure_message_ids`/`_strip_msg_ids`）供分支点/发散点定位；LLM 上下文与导出剥离 id（OpenAI 兼容 + 稳定格式，导出-导入往返闭环）。前端 `TreeView`（`cards`+`links`）+ `installState` snake→camel 规范化 + `renderCardEdges` 连线渲染（端点几何对齐实测 0.00px，62 服务测试 + 47 引擎测试全绿）。
+- **卡片图重构（2026-08-15/16，poker 对齐）**：把「节点树」升级为「卡片图」——`ConvCard`（卡片 = 一段多轮会话，`messages` 数组；底层 `node=回合` 仍是事实源，V5 store 零改动）。卡片由节点链按**分叉点切分自动聚合**（卡片头 = ROOT + 每个分叉点 ≥2 子的孩子）；手动建卡（child/parallel/branching）与分支点/未读经 `cards_meta` 持久化合并。**显式连接图**：卡片独立存在，关系 = 显式 `links`（多对多，可断开，`link_cards`/`unlink_cards`），前端出锚点(右/下)→入锚点(左/上)拖线连接（`onAnchorDown`/`onLinkMove`/`onLinkUp`）；`viewMode` 收敛为单一 `card` 视图（旧 node/group 模式移除）。**分支继承链**：branching 卡经 `get_branch_chain` 回溯继承链（`branching_source_message_id` 定位分支点），`build_branch_chain_block` 注入 system prompt（ikaros 单模式）。消息 id（`_ensure_message_ids`/`_strip_msg_ids`）供分支点/发散点定位；LLM 上下文与导出剥离 id（OpenAI 兼容 + 稳定格式，导出-导入往返闭环）。前端 `TreeView`（`cards`+`links`）+ `installState` snake→camel 规范化 + `renderCardEdges` 连线渲染（端点几何对齐实测 0.00px，62 服务测试 + 47 引擎测试全绿）。
 
-### 1.5 工作引擎接入：dsh (DeepSeek Harness)（2026-08-18 起；Hermes Bridge 方案见 archive）
+### 1.5 工作引擎接入：dsh (DeepSeek Harness)（2026-08-18 起）
 
-对话树与 Hermes 的接入改为**独立进程包装**，`runtime/hermes-agent` 工作树保持纯净：
+agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**（0 源码侵入）：
 
-- **组件**：`core/hermes-bridge/`（纯 stdlib SSE 翻译桥：`translate.py` / `server.py` / `inject_ikaros_paths.py`）+ 启动器 `bin/hermes-bridge.py`，监听 **:8650**。设计文档见 `docs/hermes-bridge-design.md`。
-- **链路**：`:48920` 继续调 OpenAI-wire `/v1/chat/completions`（**零前端改动**）→ bridge → 纯净 Hermes gateway `:8642` 原生 session-chat 端点 → bridge 把 `reasoning / tool.progress / 正文` 翻译成 48920 方言（`hermes.reasoning` / `hermes.tool.progress` / OpenAI chunks / `[DONE]`）。
-- **overlay 精简**：`runtime/hermes-agent` 工作树补丁从 10 个降到 **3 个且全部不可约**：
-  1. `hermes_cli/web_server.py` — Hermes 原生 Dashboard 接线（9119 网关用途报废）
-  2. `cron/scheduler.py` — 对运行版 hermes 深度适配（还原崩 cron）
-  3. `agent/conversation_loop.py` — reasoning 源头正确性修复（bridge 依赖它产出干净推理，不能在翻译层修）
-  其余 7 个薄胶水文件已清理/迁出；**overlay 不提交约定**见 `docs/hermes-ikaros-patches.md`。
-- **配置**：`HERMES_AGENT_URL` 默认 `http://127.0.0.1:8650/v1/chat/completions`（走 bridge）；设 `HERMES_AGENT_URL=""` 禁用 agent runtime（回退 chat 补全 + 任务代理提示）；直连 `:8642` 可绕过 bridge。gateway 需 Bearer `API_SERVER_KEY`（默认 `ikaros-gateway-key`，由 :8642 gateway 进程设定）。
-- **9100 面板 hermes 卡片精简**：删除补丁预检 / 手动补丁 / 补丁状态徽章；只保留「克隆/同步」+「更新 Hermes」（`/api/hermes/update` → `bin/hermes-update-and-patch.py --apply`，克隆更新权威入口）。新增 **hermes_bridge 托管组件**（启停/健康，`:8650/health`）；启动 48920 前自动确保 bridge 已起。
-- **ikaros_v5 插件外置（2026-08-04）**：V5 上下文引擎 + 记忆提供方已外置为 **Hermes 用户插件**（零源码侵入）：运行时在 `data/hermes-agent/plugins/ikaros_v5/`（=`$HERMES_HOME/plugins/`，gitignore 数据区），规范源 `patches/hermes/plugins/ikaros_v5/`（`plugin.yaml` + `context_engine.py` + `memory_provider.py`），由 `bin/hermes-update-and-patch.py` 的 `ensure_external_plugins()` 幂等部署。激活配置：`context.engine: ikaros_v5`、`memory.provider: ikaros_v5`、`plugins.enabled: [ikaros_v5]`。
-
----
-
-## 第二章：便携性（Portability）
+- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，48 个 `v5_*` 工具）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp）+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
+- **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。
+- **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
+- **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
 
 ### 2.1 核心设计：零系统依赖
 
@@ -208,7 +189,7 @@ set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;...;%IKAROS_ROOT%\runtime\portabl
 
 便携 Python 始终在 PATH 首位，且 `PYTHONHOME` 被显式清空。
 
-### 2.5 Neko 的独立 Venv
+### 2.5 Neko 的独立 Venv — ⚠️ 历史，N.E.K.O 已退役 2026-08-18（apps/neko 已删）
 
 `apps/neko/` 使用**独立的 venv**（非 portable-python）：
 
@@ -254,7 +235,7 @@ _ROOT = Path(__file__).resolve().parent.parent   # → E:\Ikaros
 _v5_path = _ROOT / "core" / "memory_v5"          # → E:\Ikaros\core\memory_v5
 ```
 
-#### 规则 C：Neko 集成代码路径
+#### 规则 C：Neko 集成代码路径 — ⚠️ 已失效（N.E.K.O 退役 2026-08-18，apps/neko 已删）
 
 使用 `IKAROS_ROOT` 环境变量：
 
