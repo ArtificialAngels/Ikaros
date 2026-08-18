@@ -11,8 +11,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
 for p in (str(_ROOT / "bin"),
-         str(_ROOT / "core/memory_v5"),
-         str(_ROOT / "runtime/hermes-agent")):
+         str(_ROOT / "core/memory_v5")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -47,7 +46,7 @@ def _load_cloud_chat():
 
 
 def _load_goal_contract():
-    """加载 Ikaros-memory/goal_contract 真物 (借自 Hermes Agent /goal draft).
+    """加载 Ikaros-memory/goal_contract 真物 (借自 Hermes Agent /goal draft (2026-08-18 退役, 代码内联保留)).
 
     返回 (draft_fn, GoalContract) 或 (None, None) — 失败静默, 不破坏主链.
     """

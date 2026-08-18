@@ -113,8 +113,9 @@ def _get_api_key_and_base() -> tuple[str, str, str]:
     DeepSeek 擅长结构化 JSON, 比本地小模型更适合做 contract draft 这种
     一次性辅助调用。本地 LLM 走 :8080, fallback 时用与 server --alias 一致的标签。
     """
-    hermes_root = Path(os.environ.get("HERMES_ROOT") or os.environ.get("IKAROS_ROOT", r"E:\Ikaros"))
-    env_map = _load_env_file(hermes_root / "data" / "hermes-agent" / ".env")
+    ikaros_root = Path(os.environ.get("IKAROS_ROOT") or r"E:\Ikaros")
+    # 2026-08-18: hermes 底座已退役, 环境权威 = 根 .env (path 由 IKAROS_ROOT 推导)
+    env_map = _load_env_file(ikaros_root / ".env")
     env_map.update({k: v for k, v in os.environ.items() if k.startswith(("DEEPSEEK_", "MINIMAX_", "OPENAI_"))})
 
     deepseek_key = env_map.get("DEEPSEEK_API_KEY", "")

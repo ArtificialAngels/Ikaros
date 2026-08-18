@@ -1,4 +1,4 @@
-"""hermes-fix-user-path.py — repair Windows user PATH polluted with MSYS-style entries.
+"""fix-user-path.py — repair Windows user PATH polluted with MSYS-style entries.
 
 Converts /x/... entries to X:\\... form, dedupes, and guarantees bun/omp bin dirs are present.
 Idempotent: safe to re-run.

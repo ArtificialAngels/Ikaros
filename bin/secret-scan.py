@@ -29,9 +29,7 @@ EXCLUDE_PATH_FRAGMENTS = (
     os.sep + ".git" + os.sep,
     "__pycache__",
     os.sep + "runtime" + os.sep,
-    "runtime/hermes-agent" + os.sep + "venv",
-    "core" + os.sep + "hermes" + os.sep + "venv",
-)
+        )
 
 # File names to skip entirely. The sanctioned secret store `.env` is gitignored
 # and is the correct place for secrets, so it must not be flagged as a leak.

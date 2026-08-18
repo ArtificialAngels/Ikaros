@@ -10,18 +10,18 @@
 | 项目 | **Ikaros** | `ikaros`（路径/脚本前缀） | 品牌首字母大写；文件系统用小写 `ikaros-*` |
 | 桌面宠 / 前端 | **N.E.K.O**（品牌，带点） | `neko`（目录 `apps/neko/`、包、变量） | 品牌 **N.E.K.O**；代码一律小写 `neko` |
 | 灵魂核心 | V5（版本代号） | `memory_v5`（包）/ `v5`（db + MCP 工具前缀） | 见 §3 |
-| 基础设施/Agent 框架 | Hermes | `hermes`（目录 `runtime/hermes-agent/`、变量、provider） | 品牌 **Hermes**；代码小写 `hermes` |
+| 工作引擎 (2026-08-18 起) | DeepSeek Harness | `dsh`（目录 `runtime/dsh/`、变量 `IKAROS_DSH_*`） | 品牌 **dsh**；代码小写 `dsh` |
 
 ## 2. 大小写铁律
 
-1. **代码标识符一律小写 + 下划线**：`neko`、`memory_v5`、`hermes`、`ikaros`。
-   - 目录：`apps/neko/`、`core/memory_v5/`、`runtime/hermes-agent/`、`core/control-panel/`。
-   - Python 包：`import memory_v5`、`import hermes`。（旧 `import v5` 已废弃。）
+1. **代码标识符一律小写 + 下划线**：`neko`(历史)、`memory_v5`、`dsh`、`ikaros`。
+   - 目录：`core/memory_v5/`、`core/dashboard/`、`core/ikaros-dsh/`。
+   - Python 包：`import memory_v5`。（旧 `import v5` 已废弃；hermes 已退役。）
 2. **品牌用规定大小写**：
    - 项目名写 **Ikaros**（文档/UI 文案）。
    - 前端品牌写 **N.E.K.O**（带点，文档/UI 文案）。
    - 基础设施品牌写 **Hermes**（文档/UI 文案）。
-3. **环境变量用 UPPER_SNAKE**：`IKAROS_ROOT`、`IKAROS_MEMORY`、`IKAROS_PYTHON`、`HERMES_ROOT`（兼容旧变量）。
+3. **环境变量用 UPPER_SNAKE**：`IKAROS_ROOT`、`IKAROS_MEMORY`、`IKAROS_PYTHON`、`IKAROS_DSH_*`。
 
 ## 3. V5 / memory_v5 / v5 的精确区分（极易混淆）
 
@@ -46,7 +46,7 @@
 |------|------|
 | `import v5` | `import memory_v5` |
 | `core/v5/` | `core/memory_v5/` |
-| `:8642` Hermes API 网关 | 在用（由 `hermes_cli.main gateway run` 提供，dashboard + chat-tree 复用）；旧的 `bin/hermes-api-server.py` 为未启用遗留脚本 |
+| `:8642` Hermes API 网关 | **已退役 (2026-08-18)**，勿引用；工作引擎 = dsh `:3080` |
 | `:7870` `:7871` 语音桥 | 已删除，勿引用 |
 | 文档写 "Neko" 当品牌 | 品牌写 **N.E.K.O**，代码写 `neko` |
 | 环境变量 `ikaros_root` | `IKAROS_ROOT` |

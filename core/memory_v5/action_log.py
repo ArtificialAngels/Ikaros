@@ -15,8 +15,8 @@ logger = logging.getLogger("ikaros.action_log")
 
 # ─── 路径 ───
 
-_HERMES_ROOT = Path(os.environ.get("HERMES_ROOT") or os.environ.get("IKAROS_ROOT", r"E:\Ikaros"))
-_LOG_DIR = _HERMES_ROOT / "data" / "ikaros-coordination" / "action_log"
+_IKAROS_ROOT = Path(os.environ.get("IKAROS_ROOT") or r"E:\Ikaros")
+_LOG_DIR = _IKAROS_ROOT / "data" / "ikaros-coordination" / "action_log"
 
 # ─── 统计 (进程生命周期内) ───
 

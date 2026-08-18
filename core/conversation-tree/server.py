@@ -31,8 +31,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 # 2026-08-05: 面板以 safe_path (-P) 拉起本脚本, 脚本目录不进 sys.path →
-# 同目录 rescue_tools 导入失败 (ModuleNotFoundError, _RESCUE 静默降级)。
-# 显式加入脚本目录, 保证 import rescue_tools 在面板 env 下也命中。
+# 显式加入脚本目录, 保证同目录模块可导入。
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 

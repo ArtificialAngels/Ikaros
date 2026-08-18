@@ -10,37 +10,29 @@
 |------|---------|----------|
 | :9100 | Control panel Web UI | `core/dashboard/server.py` (start: `bin/ikaros-control-panel.bat`) |
 | :8080 | Local LLM (Phi-4-mini, **lazy-loaded**) | watchdog `bin/ikaros-memory-watchdog.py` |
-| :8587 | Embedding (nomic) | watchdog |
-| :48911 | Neko main frontend | `apps/neko/app/main_server/` (包, `python -m app.main_server`) |
-| :48912 | Neko memory server | `apps/neko/app/memory_server/` (包, `python -m app.memory_server`) |
-| :48915 | Neko agent server | `apps/neko/app/agent_server/` (包, `python -m app.agent_server`) |
-| :9119 | Hermes Dashboard (管理面板，**非 LLM 网关**) | `runtime/hermes-agent/.../web_server.py` |
-| :8088 | Hermes-Paw (猫爪) | `bin/hermes_paw_bridge.py` |
+| :8587 | Embedding (bge-m3 q8_0, 1024 dim) | watchdog |
+| :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` (npm 本地安装; 启动 `bin/start-dsh-ikaros.bat web`; overlay `core/ikaros-dsh/cordis.patch.yml`) |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，面板 `herdr` 组件按需启动） |
 
 Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
-Added (2026-08-11): **pi 纳入 V5 核心** — `data/omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工：Hermes = 助理（对话/记忆/人格），pi = 工作引擎（编码/任务执行）**。
+Added (2026-08-11): **pi 纳入 V5 核心** — `data/omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工（2026-08-18 更新）：dsh = 工作引擎（对话/记忆/工具链），pi = 编码 agent（任务执行）**。
 Added (2026-08-12): **pi 干活必须带记忆** — 开工先 `v5_project_retrieve`/`v5_memory_search` 检索相关项目决策与教训（跨会话连续性不能只押在手工 summary 上）；收尾把关键决策/坑用 `v5_project_note` 落库（kind=decision|pitfall|convention）。实测：conversation-tree 多卡重构 B+C 决策/降级归位 pitfall/zoom 弃用均已入库（#3179-3184）。
 Added (2026-08-13): **omp 便携化（配置迁出 C 盘）** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置目录经 `PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent` 锚定项目（agent.db / mcp.json / models.yml / config.yml / .env 全部迁入，密钥 `OPENCODE_GO_API_KEY` 放 `data/omp/agent/.env`）。⚠️ 用 `PI_CODING_AGENT_DIR`（走 path.resolve，绝对路径覆盖有效）；`PI_CONFIG_DIR` 走 path.join 遇绝对路径不重置、junction 方案已被 bun bug 堵死——勿再尝试。三处注入：`bin/ikaros-env.sh|bat`（shell 权威源）、`bin/start-omp.bat`（TUI 直启）、`core/dashboard/server.py build_env()`（面板→herdr→omp pane 链路）。旧 `C:\Users\PZS0X\.omp\` 现为兜底，确认新链路稳定后可删。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
 Removed (do not re-add): voice bridge (ports 7870 / 7871).
-Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.main gateway run` (used by dashboard + chat-tree). The legacy `bin/hermes-api-server.py` script is unused; do not confuse the two.
+2026-08-18: Hermes gateway (:8642) / Bridge (:8650) / Dashboard (:9119) 已随底座整体退役; 工作引擎 = dsh (:3080, DeepSeek Harness).
 
 ## Startup
-- Control panel: `bin/ikaros-control-panel.bat` → opens http://127.0.0.1:9100 (panel-only; components started from the panel UI. Hermes gateway :8642: `python bin/hermes-gateway.py start`)
-- Neko frontend (Electron shell `N.E.K.O.exe`): `bin/neko-start.bat`
+- Control panel: `bin/ikaros-control-panel.bat` → opens http://127.0.0.1:9100 (panel-only; components started from the panel UI. dsh :3080: 面板 dsh 卡片或 `bin/start-dsh-ikaros.bat web`)
 - **Distinction**: `core/control-panel/` = Electron desktop shell (pulls up `:9100` + components); `apps/neko/` = FastAPI + React **frontend service** (its `N.E.K.O.exe` is the neko shell). Don't conflate the two.
 
 ## 便携环境 (2026-08-11, 学秋叶整合包)
 - IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）
-- **Hermes 侧上游**：`data/hermes-agent/.env` 内含同源 32 个 IKAROS_* 变量（Hermes 进程加载 → bash 子进程继承 → snap 捕获新值，覆盖旧 snap；BASH_ENV 方案被 snap 后置覆盖，弃用）
+- **dsh (2026-08-18 新增)**：`runtime/dsh/` npm 本地安装；overlay `core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）
 - 注册表 IKAROS_* 已清零（勿再 setx IKAROS_*，改 .env / ikaros-env.*）
-- 权威源链：`bin/ikaros-env.sh|bat` ↔ `data/hermes-agent/.env`（手工同步，生成脚本见 commit 说明）；`model_config.json` 决定本地 LLM 模型
-- ⚠️ **HERMES_NODE / HERMES_TUI_DIR 必须在 `.env` 显式声明**（值指向 `runtime/node/node.exe` / `runtime/hermes-agent/ui-tui`）。snap 的旧快照曾把 HERMES_TUI_DIR 指向不存在的 `core/hermes/ui-tui`，导致 dashboard `/chat` 的 `_make_tui_argv` 走 npm install/build 失败 → `sys.exit(1)` → 前端红字 "Chat unavailable: 1"。`.env` override 会覆盖父进程传入的旧值，任何启动方式（hub/控制面板/手动）都安全。
-
-## Soul core
+- 权威源链：`bin/ikaros-env.sh|bat|ps1`（单一权威源, 自锚定 IKAROS_ROOT）; 根 `.env` 只放密钥；`model_config.json` 决定本地 LLM 模型
 - Renamed: the V5 soul-core dir is now `core/memory_v5/` (the old `v5` subdir under `core` is gone). Python package `v5` → **`memory_v5`** (`import memory_v5`); `sys.path` must include `E:/Ikaros/core`.
 - Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. The 48 MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix).
 - **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；⚠️ `rules_retriever` 已于 2026-08-14 删除（孤儿, 无代码调用; 规则数据 `docs/agent-rules.yaml` 暂未消费）。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
