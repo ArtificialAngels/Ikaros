@@ -114,6 +114,7 @@ Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.m
   - 测试：279→285 (新增 test_importance.py 6 项)，评分 92.1 不变（重构行为保持）
   - **P6 契约/工具收敛（第二轮）**：① `_norm` 增强为兼容 dict/sqlite.Row/Memory 的唯一归一化，`memory_api._row_to_dict` 委托它（结果形状唯一, 结构化路径标记 source="structured"）；② tree_adapter / conversation-tree 跨分支检索切到 `unified_retrieve(scope="semantic")`（`retrieve` 仅剩内部语义引擎身份, 外部零直连）；③ 删孤儿 `rules_retriever.py`（无代码调用, 其调用方 orchestrator 已删; `docs/agent-rules.yaml` 暂未消费）；④ `v5_memory_search` docstring 修正（本就走 unified_retrieve）
   - **P7 配置双源防漂移（第三轮）**：`preprocess_config.py._DEFAULTS` 曾是 yaml 的**漂移旧镜像**（min_fused_score 0.6 vs yaml 0.3、缺 Phase 4 全套加权键、残留 summary.model）——yaml 缺失/损坏时回退会落到错误值打空检索。已**全量同步 `_DEFAULTS` 到 yaml**（含 type_decay/situational/intent/auto_route 等），并新增 `tests/test_config_alignment.py`（4 项：键覆盖/无陈旧键/关键兜底值/合并结果）强制防漂移。测试 285→289
+  - **P8 可观测性（第四轮）**：新增 `memory_retrieval.explain_result(item)`——从 signals/intent/relation/kind 生成"为什么召回这条"的 `why` 可读说明，已接入 `v5_memory_search` / `v5_project_retrieve`（pi/Hermes 能看到召回依据：向量分量/关键词/图 relation/意图加权/EI）。收敛后架构参考：**`docs/v5-architecture-convergence.md`**。测试 289→292
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。

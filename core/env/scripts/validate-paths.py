@@ -161,7 +161,7 @@ def build_checks(root: Path, paths_cfg: dict) -> list[PathCheck]:
     ))
     checks.append(PathCheck(
         "Embedding 模型",
-        str(root / "core/memory_v5" / "models" / "nomic-embed-text-v1.5.Q8_0.gguf"),
+        str(root / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf"),
         critical=True, must_be_file=True
     ))
     checks.append(PathCheck(

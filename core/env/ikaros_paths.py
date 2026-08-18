@@ -65,7 +65,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "cli": "runtime/llama/b10000-cuda/llama-cli.exe",
     },
     "models": {
-        "embedding": "core/memory_v5/models/nomic-embed-text-v1.5.Q8_0.gguf",
+        "embedding": "core/memory_v5/models/bge-m3-q8_0.gguf",
         "llm": "core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf",
     },
     "omp": {

@@ -55,7 +55,7 @@
 - `IKAROS_LLAMA_SERVER` = `%IKAROS_LLAMA_DIR%\llama-server.exe`
 
 ### 模型路径
-- `IKAROS_MODEL_EMBEDDING` = `%IKAROS_MEMORY_MODELS%\nomic-embed-text-v2-moe.f32.gguf`
+- `IKAROS_MODEL_EMBEDDING` = `%IKAROS_MEMORY_MODELS%\bge-m3-q8_0.gguf` (2026-08-14 定稿 bge-m3, 1024 维, `--pooling cls`)
 - `IKAROS_MODEL_LLM`：**故意不在此设置**——交由 watchdog 经 resolver 选择默认本地 LLM。
 
 ### 服务端口

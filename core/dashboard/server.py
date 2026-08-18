@@ -69,8 +69,7 @@ ASSETS_DIR = HERE / "assets"
 POLL_INTERVAL = 0.8  # seconds between file polls for SSE
 
 # 双击启动时不自动拉任何组件，全部手动启停。
-BOOT_PROFILE: list[str] = ["local_model", "memory", "neko_group",
-                            "neko_desktop"]
+BOOT_PROFILE: list[str] = ["local_model", "memory"]
 
 # Component registry — 控制面板的「有哪些组件」事实来源。
 # `ports` 用 TCP 探测；`markers` 用进程命令行子串匹配。任一命中即视为 running。
@@ -81,13 +80,6 @@ COMPONENTS = [
     {"id": "memory", "name": "Memory Service", "category": "Backend",
      "desc": "Embedding 向量服务 :8587（可切换模型）", "ports": [8587],
      "model_kind": "embed", "markers": ["ikaros-memory-watchdog.py", "llama-server.exe"]},
-    {"id": "neko_group", "name": "N.E.K.O 服务组", "category": "Frontend",
-     "desc": "N.E.K.O 后端（前端/记忆/Agent）一键启停，亦可分开控制",
-     "group": True, "subcomponents": ["neko", "neko_memory", "neko_agent"],
-     "ports": [], "markers": ["main_server", "memory_server", "agent_server"]},
-    {"id": "neko_desktop", "name": "N.E.K.O Desktop", "category": "Frontend",
-     "desc": "N.E.K.O Electron 桌面壳（独立）", "ports": [],
-     "markers": ["N.E.K.O.exe"]},
     {"id": "conversation_tree", "name": "对话树面板 (Conversation Tree)", "category": "Frontend",
      "desc": "Explore.poker 风格树形对话面板 :48920（后端 = conversation_tree 引擎）",
      "ports": [48920], "markers": ["conversation-tree"],
@@ -101,16 +93,6 @@ COMPONENTS = [
      "desc": "coding-agent 终端多路复用器 (headless server，命名管道，无 TCP 端口)",
      "ports": [], "markers": ["herdr.exe"],
      "panel_url": "http://127.0.0.1:48920/"},
-    # ── 隐藏子服务：作为 neko 服务组的独立控制项，不单独出现在面板网格 ──
-    {"id": "neko", "name": "N.E.K.O Frontend", "category": "Backend",
-     "desc": "N.E.K.O :48911 (Chat + Avatar + Ikaros V5)", "ports": [48911],
-     "markers": ["main_server"], "hidden": True, "parent_group": "neko_group"},
-    {"id": "neko_memory", "name": "N.E.K.O Memory", "category": "Backend",
-     "desc": "N.E.K.O memory server :48912", "ports": [48912],
-     "markers": ["memory_server"], "hidden": True, "parent_group": "neko_group"},
-    {"id": "neko_agent", "name": "N.E.K.O Agent", "category": "Backend",
-     "desc": "Agent server :48915 (keyboard/mouse/browser/OpenClaw)", "ports": [48915],
-     "markers": ["agent_server"], "hidden": True, "parent_group": "neko_group"},
     {"id": "runtime", "name": "运行时依赖", "category": "依赖",
      "desc": "runtime/ 下的必要二进制（Python / Node / llama / 下载器 / MCP / Herdr）；缺失项提示手动获取",
      "ports": [], "markers": [], "check_only": True},
@@ -149,13 +131,10 @@ def build_env(root: pathlib.Path) -> dict:
     # PI_CODING_AGENT_DIR 走 path.resolve (绝对路径覆盖); PI_CONFIG_DIR 走 path.join 遇绝对路径不重置, 勿用
     e["IKAROS_OMP_AGENT"] = s(root / "data" / "omp" / "agent")
     e["PI_CODING_AGENT_DIR"] = e["IKAROS_OMP_AGENT"]
-    e["IKAROS_NEKO"] = s(root / "apps/neko")
-    e["IKAROS_NEKO_PYTHON"] = s(root / "apps/neko" / ".venv" / "Scripts" / "python.exe")
-    e["IKAROS_NEKO_SERVER"] = "app.main_server"  # 模块形式（上游已将入口重构为包 app/main_server）
-    e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
-    e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
+    e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf")
+    e["IKAROS_MODEL_LLM"] = s(root / "core/memory_v5" / "models" / "Phi-4-mini-instruct-Q4_K_M.gguf")
     e["IKAROS_LABEL_EMOTION_PROVIDER"] = os.environ.get("IKAROS_LABEL_EMOTION_PROVIDER", "local")
-    # API_SERVER_KEY: 优先取根 .env（旧 hermes gateway 密钥位已随 hermes 退役；
+    # API_SERVER_KEY: 优先取根 .env；
     # 对话树等子进程经此注入同一 key 保持一致性）。
     _api_key = os.environ.get("API_SERVER_KEY", "")
     if not _api_key:
@@ -194,7 +173,7 @@ def build_env(root: pathlib.Path) -> dict:
         e["IKAROS_LLAMA_SERVER"] = s(llama_dir / "llama-server.exe")
     # CPU 兜底场景（llama_ver 为空）：不写 IKAROS_LLAMA_SERVER，
     # 让子进程（watchdog）自行 resolver 选择可用 build / -ngl 0。
-    e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "nomic-embed-text-v2-moe.f32.gguf")
+    e["IKAROS_MODEL_EMBEDDING"] = s(root / "core/memory_v5" / "models" / "bge-m3-q8_0.gguf")
 
     e["IKAROS_PORT_EMBEDDING"] = "8587"
     e["IKAROS_PORT_LLM"] = "8080"
@@ -271,7 +250,7 @@ def spawn_hidden(cmd: str, args: list, env: dict, cwd: str | None = None,
     if detached:
         # detached: CREATE_NO_WINDOW 隐藏窗口 + CREATE_NEW_PROCESS_GROUP 独立进程组。
         # 2026-08-01 23:3x 修正：此前用 DETACHED_PROCESS 只对第一层进程生效——
-        # hermes_cli 内部再 spawn 的子进程(console 程序)因父无 console 会新建 console
+        # 子进程(console 程序)因父无 console 会新建 console
         # 弹窗(白窗标题=python.exe 路径)。CREATE_NO_WINDOW 是"隐藏窗口"语义，整棵
         # 进程树都继承无窗口属性，不再弹窗；配合 CREATE_NEW_PROCESS_GROUP 使子进程
         # 独立于父进程组，父进程(面板/pythonw)退出不影响服务存活。
@@ -447,8 +426,8 @@ def list_models(kind: str) -> list[str]:
 
 
 def load_panel_models() -> dict:
-    default = {"8080": "Qwen_Qwen3-1.7B-Q4_K_M.gguf",
-               "8587": "nomic-embed-text-v2-moe.f32.gguf"}
+    default = {"8080": "Phi-4-mini-instruct-Q4_K_M.gguf",
+               "8587": "bge-m3-q8_0.gguf"}
     if PANEL_MODELS_PATH.is_file():
         try:
             d = json.loads(PANEL_MODELS_PATH.read_text(encoding="utf-8"))
@@ -504,7 +483,7 @@ def spawn_llama_model(port: int, model_name: str, kind: str) -> bool:
     cmd = [llama_bin, "-m", mp, "--host", "127.0.0.1", "--port", str(port)]
     if kind == "embed":
         cmd += ["-c", "4096", "-ngl", "99", "--embeddings",
-                "--pooling", "mean", "--alias", "nomic-embed-text-v2-moe"]
+                "--pooling", "cls", "--alias", "bge-m3"]
     else:
         ctx, ngl = 8192, "auto"
         mcfg = MODELS_DIR / "model_config.json"
@@ -554,7 +533,7 @@ def start_component_memory(root, env, wait):
     并后台启动 watchdog 做健康巡查。Embedding 模型可在面板切换。"""
     log.info("[memory] starting embedding (:8587) + watchdog...")
 
-    model = current_model_for_port(8587) or "nomic-embed-text-v2-moe.f32.gguf"
+    model = current_model_for_port(8587) or "bge-m3-q8_0.gguf"
     if not (MODELS_DIR / model).is_file():
         avail = list_models("embed")
         model = avail[0] if avail else model
@@ -579,7 +558,7 @@ def start_component_local_model(root, env, wait):
     """启动本地模型 (:8080)：加载面板选中的 LLM。默认懒加载，
     面板可显式拉起；若未运行则 agent 调用时热载入。"""
     log.info("[local_model] starting local LLM (:8080)...")
-    model = current_model_for_port(8080) or "Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+    model = current_model_for_port(8080) or "Phi-4-mini-instruct-Q4_K_M.gguf"
     if not (MODELS_DIR / model).is_file():
         avail = list_models("llm")
         model = avail[0] if avail else model
@@ -606,99 +585,6 @@ def stop_component_memory(root, env):
 def stop_component_local_model(root, env):
     log.info("[local_model] stopping (:8080)...")
     kill_port(8080)
-
-
-def start_component_neko(root, env, wait):
-    log.info("[neko] starting N.E.K.O frontend (:48911)...")
-    neko_dir = root / "apps/neko"
-    if not neko_dir.exists():
-        log.error("[neko] apps/neko directory not found: %s", neko_dir)
-        return
-    py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = "app.main_server"  # 上游已将 main_server.py 重构为包 app/main_server
-    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    # NEKO_STORAGE_ANCHOR_ROOT: 重定向 Neko 的本地状态目录到项目内可写路径
-    # 默认 $LOCALAPPDATA/N.E.K.O/state 被系统反勒索保护拦截
-    neko_env = dict(env)
-    neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
-                 str(root / "data" / "logs" / "neko.log"), detached=True)
-    if wait:
-        wait_for_port(48911, 60)
-
-
-def stop_component_neko(root, env):
-    log.info("[neko] stopping (:48911)...")
-    kill_port(48911)
-    kill_by_cmdline("main_server")
-
-
-
-def start_component_neko_memory(root, env, wait):
-    log.info("[neko_memory] starting N.E.K.O memory server (:48912)...")
-    neko_dir = root / "apps/neko"
-    if not neko_dir.exists():
-        log.error("[neko_memory] apps/neko not found: %s", neko_dir)
-        return
-    py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = "app.memory_server"  # 上游已将 memory_server.py 重构为包
-    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    neko_env = dict(env)
-    neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir), str(root / "data" / "logs" / "neko-memory.log"), detached=True)
-    if wait:
-        wait_for_port(48912, 60)
-
-
-def start_component_neko_agent(root, env, wait):
-    log.info("[neko_agent] starting N.E.K.O agent server (:48915)...")
-    neko_dir = root / "apps/neko"
-    if not neko_dir.exists():
-        log.error("[neko_agent] apps/neko not found: %s", neko_dir)
-        return
-    py = str(neko_dir / ".venv" / "Scripts" / "python.exe")
-    server = "app.agent_server"  # 上游已将 agent_server.py 重构为包
-    (root / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    neko_env = dict(env)
-    neko_env["NEKO_STORAGE_ANCHOR_ROOT"] = str(root / "tmp" / "neko-state")
-    spawn_hidden(py, ["-m", server], neko_env, str(neko_dir),
-                 str(root / "data" / "logs" / "neko-agent.log"), detached=True)
-
-
-def stop_component_neko_agent(root, env):
-    log.info("[neko_agent] stopping (:48915)...")
-    kill_port(48915)
-    kill_by_cmdline("agent_server")
-
-
-def stop_component_neko_memory(root, env):
-    log.info("[neko_memory] stopping (:48912)...")
-    kill_port(48912)
-    kill_by_cmdline("memory_server")
-
-
-def start_component_neko_group(root, env, wait):
-    """一键启动 neko 服务组（前端 + 记忆 + Agent）。"""
-    log.info("[neko_group] starting all neko sub-services...")
-    start_component_neko(root, env, wait)
-    start_component_neko_memory(root, env, wait)
-    start_component_neko_agent(root, env, wait)
-
-
-def stop_component_neko_group(root, env):
-    """停止 neko 服务组全部子服务。"""
-    log.info("[neko_group] stopping all neko sub-services...")
-    stop_component_neko(root, env)
-    stop_component_neko_agent(root, env)
-    stop_component_neko_memory(root, env)
-
-
-
-
-# ── 上游仓库：存在性检查 + 浅克隆(最快通道) + 版本落后检测（neko）──
-# 基础通道统一为浅克隆 git clone --depth 1 --filter blob:none（不拉历史，避免全量包）。
-# 镜像前缀走环境变量 IKAROS_GIT_MIRROR；留空=直连 GitHub。设置示例：
-#   set IKAROS_GIT_MIRROR=https://ghproxy.net/
 
 def _ttl_cache(seconds: float):
     def deco(fn):
@@ -728,204 +614,6 @@ def _clear_status_caches() -> None:
             w.cache_clear()
         except Exception:
             pass
-
-
-GIT_MIRROR = (os.environ.get("IKAROS_GIT_MIRROR") or "").rstrip("/")
-UPSTREAM_REPOS = {
-    "neko": {
-        "name": "N.E.K.O",
-        "url": "https://github.com/Project-N-E-K-O/N.E.K.O",
-        "branch": "main",
-        "local": ROOT / "core" / "neko",
-    },
-}
-_UPSTREAM_CACHE: dict = {}          # name -> {upstream_version, checked_at, error}
-_UPSTREAM_TTL = 600                # 上游版本缓存 10 分钟（避免每次轮询打 GitHub）
-
-
-def _mirror_url(url: str) -> str:
-    return (GIT_MIRROR + "/" + url) if GIT_MIRROR else url
-
-
-def _git_in(dir_path, args, **kw):
-    return subprocess.run(["git", *args], cwd=str(dir_path),
-                          capture_output=True, text=True,
-                          creationflags=CREATE_NO_WINDOW, **kw)
-
-
-# 内容检查：.git 存在但关键入口文件缺失 → 视为「内容不完整」（空克隆/部分拉取）
-_CONTENT_MARKERS = {
-    "neko": "app/main_server/__main__.py",
-}
-
-
-@_ttl_cache(30)
-def local_repo_version(name: str) -> dict:
-    """本地仓库版本：最新 tag（按版本排序）或短 HEAD；含 dirty 标记与内容完整性。"""
-    d = UPSTREAM_REPOS[name]["local"]
-    if not (d / ".git").is_dir():
-        return {"present": False, "version": None, "tag": None,
-                "commit": None, "dirty": False, "content_ok": False, "error": "未克隆"}
-    # 内容完整性：关键入口文件是否存在
-    marker = _CONTENT_MARKERS.get(name)
-    content_ok = True
-    if marker:
-        content_ok = (d / marker).is_file()
-    out = _git_in(d, ["tag", "--sort=-v:refname"]).stdout.strip()
-    tag = out.splitlines()[0] if out else None
-    commit = _git_in(d, ["rev-parse", "--short", "HEAD"]).stdout.strip() or None
-    # 允许本地 config.yaml 未跟踪（与 hermes_patch_status 一致）
-    st = _git_in(d, ["status", "--porcelain"]).stdout
-    bad = [l for l in st.splitlines() if l.strip()
-           and not (l[:2] == "??" and l[3:].strip() == "config.yaml")]
-    dirty = bool(bad)
-    return {"present": True, "version": tag or commit, "tag": tag,
-            "commit": commit, "dirty": dirty, "content_ok": content_ok, "error": ""}
-
-
-def upstream_latest_tag(name: str) -> dict:
-    """git ls-remote --tags 取上游最新语义版本 tag（仅列引用，网络开销极小）。"""
-    url = _mirror_url(UPSTREAM_REPOS[name]["url"])
-    try:
-        rr = subprocess.run(["git", "ls-remote", "--tags", url],
-                            capture_output=True, text=True, timeout=30,
-                            creationflags=CREATE_NO_WINDOW)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    if rr.returncode != 0:
-        return {"ok": False, "error": (rr.stderr or "").strip()[:200] or "ls-remote 失败"}
-    tags = []
-    for line in rr.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 2:
-            continue
-        ref = parts[1]
-        if ref.endswith("^{}"):
-            continue
-        tags.append(ref.split("/")[-1])
-    if not tags:
-        return {"ok": True, "tag": None, "tags": []}
-
-    def vkey(t):
-        m = re.search(r"(\d+(?:\.\d+)+)", t)
-        return [int(x) for x in m.group(1).split(".")] if m else [0]
-
-    tags_sorted = sorted(tags, key=vkey)
-    return {"ok": True, "tag": tags_sorted[-1], "tags": tags_sorted}
-
-
-def _ver_tuple(v):
-    if not v:
-        return None
-    m = re.search(r"(\d+(?:\.\d+)+)", v)
-    return tuple(int(x) for x in m.group(1).split(".")) if m else None
-
-
-def refresh_upstream_versions(names=None, force=False):
-    """后台刷新上游版本缓存（网络：git ls-remote）。"""
-    names = names or list(UPSTREAM_REPOS)
-    now = time.time()
-    for name in names:
-        cur = _UPSTREAM_CACHE.get(name)
-        if (not force and cur and "checked_at" in cur
-                and (now - cur["checked_at"] < _UPSTREAM_TTL)):
-            continue
-        res = upstream_latest_tag(name)
-        entry = {"checked_at": now}
-        if res.get("ok"):
-            entry["upstream_version"] = res.get("tag")
-            entry["error"] = ""
-        else:
-            entry["upstream_version"] = (cur or {}).get("upstream_version")
-            entry["error"] = res.get("error", "")
-        _UPSTREAM_CACHE[name] = entry
-
-
-@_ttl_cache(30)
-def repo_status(name: str) -> dict:
-    """汇总：存在性 + 本地版本 + 缓存的上游版本 + 是否落后。"""
-    spec = UPSTREAM_REPOS[name]
-    local = local_repo_version(name)
-    cache = _UPSTREAM_CACHE.get(name, {})
-    upstream_version = cache.get("upstream_version")
-    checking = "checked_at" not in cache
-    behind = None
-    if local.get("tag") and upstream_version:
-        lt, ut = _ver_tuple(local["tag"]), _ver_tuple(upstream_version)
-        if lt and ut:
-            behind = lt < ut
-    if not local.get("present"):
-        status = "missing"
-    elif not local.get("content_ok", True):
-        status = "incomplete"
-    elif checking:
-        status = "checking"
-    elif behind is True:
-        status = "behind"
-    elif behind is False:
-        status = "latest"
-    else:
-        status = "unknown"
-    return {
-        "name": spec["name"], "present": local.get("present", False),
-        "content_ok": local.get("content_ok", True),
-        "local_version": local.get("version"), "local_tag": local.get("tag"),
-        "local_commit": local.get("commit"), "dirty": local.get("dirty", False),
-        "upstream_version": upstream_version, "behind": behind,
-        "status": status, "checking": checking,
-        "upstream_error": cache.get("error", ""),
-        "url": spec["url"], "branch": spec["branch"],
-    }
-
-
-def clone_repo(name: str) -> dict:
-    """不存在则浅克隆到本地落点（最快通道：浅克隆 + 可选镜像前缀）。"""
-    spec = UPSTREAM_REPOS[name]
-    d = spec["local"]
-    if (d / ".git").is_dir():
-        return {"ok": True, "already": True, "msg": f"{spec['name']} 已克隆，无需重复"}
-    if d.exists() and any(d.iterdir()):
-        return {"ok": False, "already": False,
-                "msg": f"{d} 已存在非 git 目录，为避免覆盖已跳过（请手动清理后重试）"}
-    try:
-        d.parent.mkdir(parents=True, exist_ok=True)
-        cmd = ["git", "clone", "--depth", "1", "--filter", "blob:none",
-               "--tags", "-b", spec["branch"], _mirror_url(spec["url"]), str(d)]
-        rr = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                            creationflags=CREATE_NO_WINDOW)
-        if rr.returncode != 0:
-            return {"ok": False, "already": False,
-                    "msg": "克隆失败：" + ((rr.stderr or rr.stdout)[-500:])}
-        refresh_upstream_versions([name], force=True)
-        return {"ok": True, "already": False, "msg": f"已克隆 {spec['name']} → {d}"}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "already": False,
-                "msg": "克隆超时（>10min），请检查网络或镜像"}
-    except Exception as e:
-        return {"ok": False, "already": False, "msg": f"克隆异常：{e}"}
-
-
-def pull_repo(name: str) -> dict:
-    """已存在则拉取最新；不存在则克隆。"""
-    spec = UPSTREAM_REPOS[name]
-    d = spec["local"]
-    if not (d / ".git").is_dir():
-        return clone_repo(name)
-    try:
-        rr = subprocess.run(["git", "pull", "--ff-only"], cwd=str(d),
-                            capture_output=True, text=True, timeout=300,
-                            creationflags=CREATE_NO_WINDOW)
-        subprocess.run(["git", "fetch", "--tags"], cwd=str(d),
-                       capture_output=True, text=True, timeout=120,
-                       creationflags=CREATE_NO_WINDOW)
-        refresh_upstream_versions([name], force=True)
-        if rr.returncode != 0:
-            return {"ok": False,
-                    "msg": "拉取失败（非快进，可能本地有改动）："
-                           + ((rr.stderr or rr.stdout)[-400:])}
-        return {"ok": True, "msg": f"{spec['name']} 已拉取最新"}
-    except Exception as e:
-        return {"ok": False, "msg": f"拉取异常：{e}"}
 
 
 # ── 运行时依赖检查（runtime/ 目录下的必要二进制）─────────────────────
@@ -992,48 +680,6 @@ def runtime_fetch(key: str) -> dict:
         return {"ok": True, "msg": f"已拉取 {dep['name']} → {dep['rel']}"}
     except Exception as e:
         return {"ok": False, "msg": f"拉取异常：{e}"}
-
-
-def neko_desktop_running() -> bool:
-    try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq N.E.K.O.exe", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=10,
-            creationflags=CREATE_NO_WINDOW,
-        ).stdout
-        return "N.E.K.O.exe" in out
-    except Exception:
-        return False
-
-
-def start_component_neko_desktop(root, env, wait):
-    """启动 N.E.K.O Electron 桌面壳（GUI 程序，需可见窗口，不隐藏）。"""
-    log.info("[neko_desktop] launching N.E.K.O desktop shell...")
-    exe = root / "apps/neko" / "N.E.K.O.exe"
-    if not exe.exists():
-        log.error("[neko_desktop] %s not found", exe)
-        return
-    # 先清僵尸：等待所有残留进程实际终止，避免重复积累
-    killed = kill_image_wait("N.E.K.O.exe", timeout=5.0)
-    if killed:
-        log.info("[neko_desktop] cleaned %d stale process(es)", killed)
-    try:
-        p = subprocess.Popen([str(exe)], env=dict(env), stdin=DEVNULL)
-        log.info("[neko_desktop] launched pid=%s", p.pid)
-    except Exception as e:
-        log.error("[neko_desktop] failed to launch: %s", e)
-    time.sleep(2)
-    if neko_desktop_running():
-        log.info("[neko_desktop] started")
-    else:
-        log.warning("[neko_desktop] may not have started")
-
-
-def stop_component_neko_desktop(root, env):
-    log.info("[neko_desktop] stopping...")
-    killed = kill_image_wait("N.E.K.O.exe", timeout=5.0)
-    if killed:
-        log.info("[neko_desktop] stopped %d process(es)", killed)
 
 
 def start_component_dsh(root, env, wait):
@@ -1116,8 +762,6 @@ def comp_running(name: str) -> bool:
         return tcp_probe(8080)
     if name == "memory":
         return tcp_probe(8587)
-    if name == "neko_group":
-        return tcp_probe(48911) and tcp_probe(48912) and tcp_probe(48915)
     return False
 
 
@@ -1127,22 +771,12 @@ def comp_already_up(name: str) -> bool:
         return tcp_probe(8080)
     if name == "memory":
         return tcp_probe(8587)
-    if name == "neko":
-        return tcp_probe(48911)
-    if name == "neko_memory":
-        return tcp_probe(48912)
-    if name == "neko_agent":
-        return tcp_probe(48915)
-    if name == "neko_desktop":
-        return neko_desktop_running()
     if name == "conversation_tree":
         return tcp_probe(48920)
     if name == "dsh":
         return tcp_probe(3080)
     if name == "herdr":
         return _marker_up("herdr.exe")
-    if name == "neko_group":
-        return tcp_probe(48911) and tcp_probe(48912) and tcp_probe(48915)
     return False
 
 
@@ -1153,16 +787,6 @@ def component_start(name: str, env: dict, wait: bool) -> None:
         start_component_local_model(root, env, wait)
     elif name == "memory":
         start_component_memory(root, env, wait)
-    elif name == "neko_group":
-        start_component_neko_group(root, env, wait)
-    elif name == "neko":
-        start_component_neko(root, env, wait)
-    elif name == "neko_memory":
-        start_component_neko_memory(root, env, wait)
-    elif name == "neko_agent":
-        start_component_neko_agent(root, env, wait)
-    elif name == "neko_desktop":
-        start_component_neko_desktop(root, env, wait)
     elif name == "conversation_tree":
         start_component_conversation_tree(root, env, wait)
     elif name == "dsh":
@@ -1172,8 +796,6 @@ def component_start(name: str, env: dict, wait: bool) -> None:
     elif name == "all":
         start_component_local_model(root, ENV, wait)
         start_component_memory(root, ENV, wait)
-        start_component_neko_group(root, ENV, wait)
-        start_component_neko_desktop(root, ENV, wait)
         start_component_dsh(root, ENV, wait)
     else:
         log.warning("[component] unknown component: %s", name)
@@ -1186,16 +808,6 @@ def component_stop(name: str, env: dict) -> None:
         stop_component_local_model(root, env)
     elif name == "memory":
         stop_component_memory(root, env)
-    elif name == "neko_group":
-        stop_component_neko_group(root, env)
-    elif name == "neko":
-        stop_component_neko(root, env)
-    elif name == "neko_memory":
-        stop_component_neko_memory(root, env)
-    elif name == "neko_agent":
-        stop_component_neko_agent(root, env)
-    elif name == "neko_desktop":
-        stop_component_neko_desktop(root, env)
     elif name == "conversation_tree":
         stop_component_conversation_tree(root, env)
     elif name == "dsh":
@@ -1203,8 +815,6 @@ def component_stop(name: str, env: dict) -> None:
     elif name == "herdr":
         stop_component_herdr(root, env)
     elif name == "all":
-        stop_component_neko_group(root, env)
-        stop_component_neko_desktop(root, env)
         stop_component_memory(root, env)
         stop_component_local_model(root, env)
         stop_component_dsh(root, env)
@@ -1318,55 +928,6 @@ def _read_tail(count: int = 200) -> list[dict]:
     _reload_cache()
     with _log_cache_lock:
         return _log_cache[-count:]
-
-
-def _usage_report(days: int = 30) -> dict:
-    """Hermes usage 聚合（state.db session_model_usage）：totals / by_model / daily / notes.
-
-    失真说明（2026-08-10 调研结论）：
-    - glm-5.2 走 go 服务器通道时不写 usage 记录 → 历史"记 0"根因是未记录而非记 0；
-    - estimated_cost 依赖官方价格快照，快照缺失时计 0（如 2026-08-09 后）。
-    """
-    db = ROOT / "data" / "hermes-agent" / "state.db"
-    if not db.exists():
-        return {"ok": False, "error": f"state.db not found: {db}"}
-    cut = time.time() - days * 86400
-    try:
-        import sqlite3
-        conn = sqlite3.connect(str(db))
-        conn.row_factory = sqlite3.Row
-        totals = dict(conn.execute(
-            "SELECT COUNT(*) AS rows_cnt,"
-            " COALESCE(SUM(api_call_count),0) AS calls,"
-            " COALESCE(SUM(input_tokens),0) AS input_tokens,"
-            " COALESCE(SUM(output_tokens),0) AS output_tokens,"
-            " COALESCE(SUM(cache_read_tokens),0) AS cache_read,"
-            " ROUND(COALESCE(SUM(estimated_cost_usd),0),4) AS cost_est"
-            " FROM session_model_usage WHERE last_seen >= ?", (cut,)).fetchone())
-        by_model = [dict(r) for r in conn.execute(
-            "SELECT model, COUNT(*) AS rows_cnt, SUM(api_call_count) AS calls,"
-            " SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,"
-            " ROUND(SUM(estimated_cost_usd),4) AS cost_est"
-            " FROM session_model_usage WHERE last_seen >= ?"
-            " GROUP BY model ORDER BY calls DESC", (cut,))]
-        daily = [dict(r) for r in conn.execute(
-            "SELECT date(last_seen,'unixepoch','localtime') AS d,"
-            " SUM(api_call_count) AS calls, ROUND(SUM(estimated_cost_usd),4) AS cost_est"
-            " FROM session_model_usage WHERE last_seen >= ?"
-            " GROUP BY d ORDER BY d", (cut,))]
-        conn.close()
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    return {
-        "ok": True, "days": days,
-        "totals": totals, "by_model": by_model, "daily": daily,
-        "notes": [
-            "glm-5.2 走 go 服务器通道时不写 usage 记录（历史失真根因：未记录而非记 0）",
-            "estimated_cost 依赖官方价格快照，快照缺失时计 0",
-        ],
-    }
-
-
 # ── V5 状态读取 ──
 # (Cron/Kanban 管理已随 Hermes 底座退役移除；任务调度改由 dsh/系统级 cron 承担)
 
@@ -1512,12 +1073,6 @@ def get_component_statuses() -> list[dict]:
             entry["sub_status"] = subs
             entry["running"] = all(subs.values())
             entry["partial"] = (not all(subs.values())) and any(subs.values())
-        # 上游仓库存在性 + 版本落后检测（neko 克隆与版本检查）
-        if c["id"] == "neko_group":
-            try:
-                entry["repo"] = repo_status("neko")
-            except Exception:
-                log_exception("repo_status")
         # 运行时依赖检查（runtime/ 目录下的必要二进制）
         if c["id"] == "runtime":
             try:
@@ -1683,17 +1238,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/log":
             events = _read_tail(200)
             self._send_json(events)
-        elif path == "/api/usage":
-            qs = urllib.parse.parse_qs(parsed.query)
-            try:
-                days = min(int(qs.get("days", ["30"])[0]), 90)
-            except (ValueError, IndexError):
-                days = 30
-            self._send_json(_usage_report(days))
-        elif path == "/api/cron":
-            self._send_json({"ok": False, "error": "Cron 管理已随 Hermes 底座退役"})
-        elif path == "/api/kanban":
-            self._send_json({"ok": False, "error": "Kanban 管理已随 Hermes 底座退役"})
         elif path == "/api/state":
             state = _read_v5_state()
             self._send_json(state)
@@ -1756,18 +1300,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未知系统动作"}, status=400)
             return
 
-        # /api/cron → 已随 Hermes 底座退役
-        if len(parts) >= 2 and parts[0] == "api" and parts[1] == "cron":
-            self._send_json({"ok": False, "error": "Cron 管理已随 Hermes 底座退役"},
-                            status=400)
-            return
-
-        # /api/kanban → 已随 Hermes 底座退役
-        if len(parts) >= 2 and parts[0] == "api" and parts[1] == "kanban":
-            self._send_json({"ok": False, "error": "Kanban 管理已随 Hermes 底座退役"},
-                            status=400)
-            return
-
         # /api/shutdown  → stop this control panel
         if len(parts) >= 2 and parts[0] == "api" and parts[1] == "shutdown":
             self._send_json({"ok": True, "msg": "控制面板正在关闭"})
@@ -1794,27 +1326,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 time.sleep(2)
                 self.server.shutdown_later()
             threading.Thread(target=_restart, daemon=True).start()
-            return
-
-        # /api/repo/<name>/<action>  (status | clone | pull)
-        # name ∈ {neko}；status=强制刷新上游版本, clone=缺失则克隆, pull=拉取/克隆
-        if len(parts) >= 4 and parts[0] == "api" and parts[1] == "repo":
-            name = parts[2]
-            action = parts[3]
-            if name not in UPSTREAM_REPOS:
-                self._send_json({"ok": False, "msg": "unknown repo"}, status=400)
-                return
-            if action == "status":
-                refresh_upstream_versions([name], force=True)
-                self._send_json({"ok": True, **repo_status(name)})
-                return
-            if action == "clone":
-                self._send_json(clone_repo(name))
-                return
-            if action == "pull":
-                self._send_json(pull_repo(name))
-                return
-            self._send_json({"ok": False, "msg": "unknown repo action"}, status=400)
             return
 
         # /api/runtime/status          (POST) -> runtime_status()
@@ -1880,9 +1391,9 @@ def main():
     autostart = "--autostart" in sys.argv
     do_open = "--open" in sys.argv
 
-    # 进程级代理隔离(方案B): 注入 NO_PROXY=* 让整套 Ikaros 栈 + dev Neko 不继承
+    # 进程级代理隔离(方案B): 注入 NO_PROXY=* 让整套 Ikaros 栈不继承系统代理
     # Windows 系统 socks 代理(socks://127.0.0.1:8086 非法, httpx 报 scheme 不支持)。
-    # 只影响本面板拉起的子进程, 不动系统代理, Steam 官方 Neko 零影响。
+    # 只影响本面板拉起的子进程, 不动系统代理。
     # 单例：先清掉旧面板（原 Rust 启动器也这么做）
     try:
         kill_port(PORT)
@@ -1917,9 +1428,6 @@ def main():
             time.sleep(1.5)
             open_browser(f"http://127.0.0.1:{port}")
         threading.Thread(target=_open, daemon=True).start()
-
-    # 启动即检查 hermes / neko 上游版本（需求：启动时检查版本号是否落后）
-    threading.Thread(target=refresh_upstream_versions, daemon=True).start()
 
     try:
         server.serve_forever()

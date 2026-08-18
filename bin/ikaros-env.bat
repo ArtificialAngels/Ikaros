@@ -23,7 +23,7 @@ set "IKAROS_MEMORY=%IKAROS_ROOT%\core\memory_v5"
 set "IKAROS_MEMORY_DATA=%IKAROS_MEMORY%\data"
 set "IKAROS_MEMORY_MODELS=%IKAROS_MEMORY%\models"
 set "IKAROS_MEMORY_SCRIPT=%IKAROS_MEMORY%\store.py"
-set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\nomic-embed-text-v1.5.Q8_0.gguf"
+set "IKAROS_MODEL_EMBEDDING=%IKAROS_MEMORY_MODELS%\bge-m3-q8_0.gguf"
 set "IKAROS_MODEL_LLM=%IKAROS_MEMORY_MODELS%\Phi-4-mini-instruct-Q4_K_M.gguf"
 
 rem ---- DeepSeek Harness (dsh) 工作引擎 ----
