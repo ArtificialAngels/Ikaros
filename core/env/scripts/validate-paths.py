@@ -61,7 +61,7 @@ class CheckResult:
 
 
 def resolve_root() -> Optional[Path]:
-    """解析 IKAROS_ROOT (只认 IKAROS_ROOT, HERMES_ROOT 兼容已废弃)。"""
+    """解析 IKAROS_ROOT（只认 IKAROS_ROOT，无兼容回退）。"""
     # 1. 环境变量
     env_root = os.environ.get("IKAROS_ROOT", "").strip()
     if env_root and Path(env_root).exists():

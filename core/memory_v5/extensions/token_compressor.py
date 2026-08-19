@@ -22,13 +22,14 @@ Hermes ContextCompressor) 或 **硬性 top_k 截断**。配置里的 `token_budg
 默认**离线规则压缩**(零 LLM 成本, 适配本地 1.7B 小模型); 同时**委派微软
 `llmlingua` 现成库**做真实 token 级压缩——导入守护, 环境装了 `llmlingua` 就自动
 启用, 未装/离线自动回退规则(不破坏 U 盘便携性)。`llm_compress(quality=...)`
-还支持显式调本地 :8080 做更高质量压缩。
+还支持显式走 llmlingua 库做高质量压缩 (按需); 本地 :8080 已退役 (2026-08-18),
+不再作为 :8080 fallback。
 
 接入点(详见同目录 EXTENSIONS.md)
 ---------------------------------
-  - hermes 插件 `on_pre_compress` 组装 memory-context 前, 对检索结果跑
+  - dsh 插件 `on_pre_compress` 组装 memory-context 前, 对检索结果跑
     `compress_retrieval_block()`;
-  - :8080 本地小模型走 V5 构建 system/记忆前缀时, 对整段跑 `enforce_budget()`。
+  - V5 构建 system/记忆前缀时, 对整段跑 `enforce_budget()` (规则压缩)。
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ def compress_text(text: str, *, quality: str = "auto",
 
     quality:
       "auto" (默认) llmlingua(装了就用) → 规则回退, 不调 LLM, 离线零成本;
-      "llm"          本地 :8080 高质量压缩 → 规则回退;
+      "llm"          llmlingua 库 → 规则回退 (2026-08-18 起 :8080 已退役);
       "rule"         仅规则压缩(最稳, 离线安全)。
     """
     if quality == "llm":
@@ -179,11 +180,11 @@ def rule_compress(text: str, ratio: float = 0.5) -> str:
 
 def llm_compress(text: str, *, max_tokens: int = 200,
                  provider: str = "local", quality: str = "auto") -> str:
-    """可选高质量压缩: 优先级 llmlingua(现成库) → 本地 :8080 → 规则回退。
+    """可选高质量压缩: 优先级 llmlingua(现成库) → 规则回退 (2026-08-18 起 :8080 已退役, 不再走本地 LLM)。
 
     quality:
-      "auto" (默认) 装了 llmlingua 就用它, 否则本地 LLM, 再否则规则;
-      "llm"          强制本地 :8080;
+      "auto" (默认) 装了 llmlingua 就用它, 否则规则;
+      "llm"          强制 llmlingua 库;
       "rule"         强制规则(零成本, 离线安全)。
     """
     if quality == "rule":
@@ -193,18 +194,23 @@ def llm_compress(text: str, *, max_tokens: int = 200,
         if got is not None:
             return got
     # llm path (auto 且 llmlingua 不可用时, 或强制 llm)
-    try:
-        from memory_v5.reflect import llm_client
-        prompt = (
-            "压缩下面这段文本, 删除冗余/重复/口语 filler, 保留全部事实与关键指代, "
-            f"控制在 {max_tokens} token 内。只输出压缩结果, 不要解释:\n\n" + text
-        )
-        out = llm_client.call_llm(prompt, "", provider=provider,
-                                  max_tokens=max_tokens, temperature=0.0)
-        return out.content.strip() or text
-    except Exception as exc:
-        logger.debug("token_compressor: 本地 LLM 压缩失败, 回退规则 (%s)", exc)
-    return rule_compress(text)
+        # 2026-08-18 起 :8080 已退役: provider 仅保留 deepseek (云端), local 已废弃
+        # 但保留兼容性 — 若用户配了本地服务仍可工作 (按需)
+        try:
+            from memory_v5.reflect import llm_client
+            if provider == "local":
+                logger.debug("token_compressor: provider=local 已退役 (:8080), 改走规则回退")
+                return rule_compress(text)
+            prompt = (
+                "压缩下面这段文本, 删除冗余/重复/口语 filler, 保留全部事实与关键指代, "
+                f"控制在 {max_tokens} token 内。只输出压缩结果, 不要解释:\n\n" + text,
+            )
+            out = llm_client.call_llm(prompt, "", provider=provider,
+                                      max_tokens=max_tokens, temperature=0.0)
+            return out.content.strip() or text
+        except Exception as exc:
+            logger.debug("token_compressor: LLM 压缩失败, 回退规则 (%s)", exc)
+        return rule_compress(text)
 
 
 # ─── 旧轮压缩 ───────────────────────────────────────────────────

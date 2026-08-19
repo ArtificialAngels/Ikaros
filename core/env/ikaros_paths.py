@@ -2,7 +2,7 @@
 """Ikaros 便携式路径解析模块 — 基于 core/env/ 的相对值配置。
 
 所有路径最终相对于 IKAROS_ROOT 解析，确保项目可整体迁移到任意目录。
-2026-08-18: 移除 hermes/neko 段, 新增 dsh; 锚点只认 IKAROS_ROOT (HERMES_ROOT 兼容已废弃)。
+2026-08-18: 移除 hermes/neko 段, 新增 dsh; 锚点只认 IKAROS_ROOT（无兼容回退）。
 
 优先级（高→低）:
   1. 显式环境变量 (IKAROS_*)

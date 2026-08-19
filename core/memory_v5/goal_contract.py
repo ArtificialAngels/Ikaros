@@ -108,10 +108,12 @@ def _load_env_file(env_path: Path) -> Dict[str, str]:
 
 
 def _get_api_key_and_base() -> tuple[str, str, str]:
-    """返回 (api_key, base_url, model) — 优先 DeepSeek, fallback 到本地 LLM。
+    """返回 (api_key, base_url, model) — 优先 DeepSeek, fallback MiniMax。
 
-    DeepSeek 擅长结构化 JSON, 比本地小模型更适合做 contract draft 这种
-    一次性辅助调用。本地 LLM 走 :8080, fallback 时用与 server --alias 一致的标签。
+    DeepSeek 擅长结构化 JSON, 比云端 MiniMax 更适合做 contract draft 这种
+    一次性辅助调用。本地 LLM 已退役 (2026-08-18, :8080 停用, 按需恢复),
+    所以这里不再 fallback 到 :8080 — 无 API key 时直接返回空元组让
+    调用方跳过 draft。
     """
     ikaros_root = Path(os.environ.get("IKAROS_ROOT") or r"E:\Ikaros")
     # 2026-08-18: hermes 底座已退役, 环境权威 = 根 .env (path 由 IKAROS_ROOT 推导)
@@ -130,8 +132,9 @@ def _get_api_key_and_base() -> tuple[str, str, str]:
         model = env_map.get("MINIMAX_CN_MODEL", "MiniMax-M3")
         return minimax_key, base, model
 
-    # fallback: 本地 LLM (已在 :8080)；model 标签与 server --alias 对齐 (默认 local-llm)
-    return "", "http://127.0.0.1:8080/v1", env_map.get("HERMES_LOCAL_LLM_MODEL", "local-llm")
+    # 本地 LLM 已退役 (2026-08-18, :8080 停用): 无 API key 直接返回空元组,
+    # 调用方 (draft_contract) 检测到 (api_key, base_url) 都为空时跳过 draft。
+    return "", "", ""
 
 
 # 内联说明见 docs/scripts/core/memory_v5/goal_contract.md（见“内联注释摘录”）
@@ -209,8 +212,9 @@ def draft_contract(objective: str, *, timeout: float = 30.0, max_tokens: int = 1
     """把自然语言目标扩写成结构化合同。
 
     抄自 `hermes-agent/hermes_cli/goals.py:draft_contract`, 但绕开 Hermes 的
-    auxiliary_client (它依赖 agent 包的内部状态), 改走 DeepSeek / MiniMax 直连
-    或本地 :8080 qwen3。失败返回 None —— 调用方应退化到裸 free-form goal,
+    auxiliary_client (它依赖 agent 包的内部状态), 改走 DeepSeek / MiniMax 直连。
+    本地 LLM 已退役 (2026-08-18, :8080 停用), 不再 fallback 到本地 qwen3。
+    失败返回 None —— 调用方应退化到裸 free-form goal,
     不要把 draft 失败当成阻塞错误。
     """
     objective = (objective or "").strip()
@@ -218,8 +222,8 @@ def draft_contract(objective: str, *, timeout: float = 30.0, max_tokens: int = 1
         return None
 
     api_key, base_url, model = _get_api_key_and_base()
-    if not api_key and "127.0.0.1" not in base_url:
-        logger.info("goal_contract: no API key + no local LLM, skip draft")
+    if not api_key:
+        logger.info("goal_contract: no API key (本地 :8080 已退役 2026-08-18), skip draft")
         return None
 
     messages = [

@@ -77,7 +77,7 @@ def _has_server(d: Path) -> bool:
 def resolve_llama_dir(root: Path | None = None) -> dict:
     """解析 llama 目录，返回 {dir, version, cuda, cpu_fallback, reason}。
 
-    root 缺省时按 ikaros 约定探测（环境变量 IKAROS_ROOT/HERMES_ROOT →
+    root 缺省时按 ikaros 约定探测（环境变量 IKAROS_ROOT →
     脚本位置推导）。
     """
     if root is None:
@@ -182,7 +182,7 @@ def resolve_llama_dir(root: Path | None = None) -> dict:
 
 def _detect_ikaros_root() -> Path:
     """轻量探测 Ikaros 根（与 ikaros_paths._detect_root 同思路，零依赖）。"""
-    env_root = os.environ.get("IKAROS_ROOT") or os.environ.get("HERMES_ROOT")
+    env_root = os.environ.get("IKAROS_ROOT", "")
     if env_root:
         c = Path(env_root)
         if (c / "runtime" / "llama").is_dir():

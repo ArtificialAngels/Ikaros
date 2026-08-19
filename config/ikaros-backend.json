@@ -1,5 +1,6 @@
 {
-  "provider": "local",
+  "_comment": "2026-08-18 起默认 provider 走云端 DeepSeek; local (:8080) 仅供「按需恢复」场景使用 (见 AGENTS.md). 本文件当前无代码引用, 保留为参考配置.",
+  "provider": "deepseek",
   "local": {
     "base_url": "http://127.0.0.1:8080/v1",
     "model": "local-llm"
