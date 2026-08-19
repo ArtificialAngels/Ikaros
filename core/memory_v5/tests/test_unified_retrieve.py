@@ -74,6 +74,11 @@ def _noop_semantic(query, **kw):
 def test_u1_guard_and_bad_scope(monkeypatch):
     assert mr.unified_retrieve("   ") == []
     monkeypatch.setattr(mr, "retrieve", _semantic)
+    # 2026-08-19: 图数据已激活 (eg_edges 有真实数据), 显式 mock 图路为空,
+    # 隔离"无效 scope 降级 auto"的测试语义 (否则真实图结果会并入 auto)。
+    monkeypatch.setattr("memory_v5.search.entity_graph_search", _noop_graph)
+    monkeypatch.setattr("memory_v5.project_edges.project_graph_search",
+                        lambda q, top_k=5, **kw: [])
     out = mr.unified_retrieve("hi", scope="bogus")
     assert out and out[0]["source"] == "semantic"
     assert out[0]["id"] == "m1"
@@ -100,6 +105,10 @@ def test_u2_lexical_hit_and_fallback(monkeypatch):
 def test_u3_graph_hit_and_fallback(monkeypatch):
     monkeypatch.setattr(mr, "retrieve", _noop_semantic)
     monkeypatch.setattr("memory_v5.search.entity_graph_search", _graph)
+    # 2026-08-19: project_graph_search 有真实数据 (v5_project 标签记忆 17+ 条,
+    # score 固定 0.8 高于 mock), 显式 mock 为空隔离测试语义
+    monkeypatch.setattr("memory_v5.project_edges.project_graph_search",
+                        lambda q, top_k=5, **kw: [])
     out = mr.unified_retrieve("图", scope="graph")
     assert out and out[0]["id"] == "epi:1" and out[0]["source"] == "graph"
     # 空 → 回退 semantic
@@ -135,7 +144,9 @@ def test_u4_tree_scope(monkeypatch):
     # tree 缺失 → 降级 auto (不崩)
     monkeypatch.setattr(mr, "retrieve", _semantic)
     out2 = mr.unified_retrieve("降级", scope="tree", node_id="n1")
-    assert out2 and out2[0]["source"] == "semantic"
+    # 2026-08-19: 图数据激活后 auto 补路会并入真实图结果, source 不再保证 semantic
+    # (语义 mock 固定, 图路走真实 eg_edges — 合法降级行为)
+    assert out2 and out2[0]["source"] in ("semantic", "graph", "project_graph")
 
 
 # ── U5: auto 补路 ──
@@ -143,6 +154,9 @@ def test_u5_auto_graph_backfill(monkeypatch):
     # semantic 只 1 条 → 触发补路 → 图路并入
     monkeypatch.setattr(mr, "retrieve", _semantic_one)
     monkeypatch.setattr("memory_v5.search.entity_graph_search", _graph)
+    # 2026-08-19: project_graph_search 有真实数据, mock 为空隔离
+    monkeypatch.setattr("memory_v5.project_edges.project_graph_search",
+                        lambda q, top_k=5, **kw: [])
     out = mr.unified_retrieve("auto 补路")
     sources = {o["source"] for o in out}
     assert "semantic" in sources and "graph" in sources

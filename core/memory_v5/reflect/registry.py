@@ -445,6 +445,32 @@ def make_retention_op() -> ReflectOp:
     )
 
 
+def make_rule_entity_op() -> ReflectOp:
+    """规则实体图抽取: 6h, 纯算法建实体/边 (无 LLM, 决策 A 安全).
+
+    2026-08-19: entity_graph 的 LLM 抽取 (run_episodic_consolidation) 从未被
+    调度, eg_entities/eg_edges 全空, PPR 图检索整个空转。本 op 用纯规则
+    (extensions/rule_entity_extract) 从记忆提取高频词建实体 + 共现边,
+    激活 graph scope / auto 补路的图扩散。全量幂等, 权重累积, 量小直接跑。
+    """
+    from memory_v5.extensions.rule_entity_extract import run_rule_extract
+
+    def _fn() -> int:
+        try:
+            stats = run_rule_extract(limit=300, min_weight=0.45)
+            return stats.get("entities_created", 0)
+        except Exception as exc:
+            logger.warning("rule_entity_extract op failed: %s", exc)
+            return 0
+
+    return ReflectOp(
+        name="rule_entity_extract",
+        fn=_fn,
+        interval_sec=6 * 3600,
+        last_run_key="last_rule_entity_extract",
+    )
+
+
 # ─── 默认 scheduler (V5.2) ─────────────────────────────────
 
 def make_default_scheduler(state: ScheduleState | None = None) -> ReflectScheduler:
@@ -465,6 +491,8 @@ def make_default_scheduler(state: ScheduleState | None = None) -> ReflectSchedul
     # (三者阈值打架, 见 AGENTS.md; 旧工厂函数保留, 默认调度器只用 retention)
     s.register(make_retention_op())
     s.register(make_vector_sync_op())
+    # V5.7 图激活 (2026-08-19): 纯规则实体图抽取 (无 LLM), 激活 graph scope
+    s.register(make_rule_entity_op())
     # V5.2 新增
     s.register(make_reflection_promote_op())
     s.register(make_expire_directives_op())
