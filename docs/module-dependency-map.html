@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 模块依赖关系图 (2026-08-14)</title>
+<title>Ikaros 模块依赖关系图 (2026-08-19)</title>
 <style>
   :root{
     --bg:#ffffff; --panel:#f6f8fb; --line:#d9e1ec; --ink:#1f2a37; --muted:#66748a;
@@ -50,7 +50,7 @@
 <body>
 <header>
   <h1>Ikaros 模块依赖关系图</h1>
-  <p>快照日期 2026-08-14 · 实线=运行时调用依赖，紫色虚线=记忆/状态写入，箭头方向=依赖指向。
+  <p>快照日期 2026-08-19 · dsh 时代 (2026-08-18+) · 实线=运行时调用依赖，紫色虚线=记忆/状态写入，箭头方向=依赖指向。
   数据均经真实代码/端口扫描核对（非凭记忆）。</p>
 </header>
 <div class="wrap">
@@ -67,116 +67,110 @@
 
       <!-- nodes -->
       <g class="node">
-        <rect x="360" y="20" width="200" height="46" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
-        <text x="460" y="42" text-anchor="middle" font-weight="600">控制面板 :9100</text>
-        <text x="460" y="58" text-anchor="middle" class="sub">core/dashboard/server.py · 一键启停</text>
+        <rect x="360" y="20" width="200" height="64" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
+        <text x="460" y="44" text-anchor="middle" font-weight="600">dsh 工作引擎 :3080</text>
+        <text x="460" y="62" text-anchor="middle" class="sub">runtime/dsh/ + core/ikaros-dsh/ overlay</text>
+        <text x="460" y="78" text-anchor="middle" class="sub">DeepSeek Harness web GUI</text>
       </g>
 
       <g class="node">
-        <rect x="40" y="180" width="200" height="150" rx="10" fill="var(--front-bg)" stroke="var(--front)"></rect>
-        <text x="140" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">前端桌宠 · apps/neko</text>
-        <text x="140" y="224" text-anchor="middle" class="sub">:48911 React 聊天 + Avatar</text>
-        <text x="140" y="244" text-anchor="middle" class="sub">:48912 自有 memory_server</text>
-        <text x="140" y="264" text-anchor="middle" class="sub">:48915 Agent (键鼠/浏览器)</text>
-        <text x="140" y="288" text-anchor="middle" class="sub">完整独立，零 V5 代码依赖</text>
-        <text x="140" y="308" text-anchor="middle" class="sub">Electron 壳 core/control-panel</text>
+        <rect x="40" y="180" width="220" height="120" rx="10" fill="var(--front-bg)" stroke="var(--front)"></rect>
+        <text x="150" y="200" text-anchor="middle" font-weight="600" fill="var(--front)">对话树 :48920</text>
+        <text x="150" y="222" text-anchor="middle" class="sub">core/conversation-tree/server.py</text>
+        <text x="150" y="240" text-anchor="middle" class="sub">React 卡片图 UI · poker 风格</text>
+        <text x="150" y="258" text-anchor="middle" class="sub">后端 = conversation_tree 引擎</text>
+        <text x="150" y="276" text-anchor="middle" class="sub">ikaros 单模式 → DeepSeek 直连</text>
+        <text x="150" y="294" text-anchor="middle" class="sub">+ 只读工具回路</text>
       </g>
 
       <g class="node">
-        <rect x="360" y="180" width="200" height="120" rx="10" fill="var(--soul-bg)" stroke="var(--soul)"></rect>
-        <text x="460" y="200" text-anchor="middle" font-weight="600" fill="var(--soul)">灵魂核心 · core/memory_v5</text>
-        <text x="460" y="224" text-anchor="middle" class="sub">记忆/情感/认知引擎</text>
-        <text x="460" y="244" text-anchor="middle" class="sub">包名 memory_v5</text>
-        <text x="460" y="264" text-anchor="middle" class="sub">data/v5: v5.db+chroma+人格JSON</text>
-        <text x="460" y="284" text-anchor="middle" class="sub">Hermes 桥插件在 runtime/hermes-agent</text>
+        <rect x="350" y="180" width="220" height="120" rx="10" fill="var(--soul-bg)" stroke="var(--soul)"></rect>
+        <text x="460" y="200" text-anchor="middle" font-weight="600" fill="var(--soul)">灵魂核心 · memory_v5</text>
+        <text x="460" y="222" text-anchor="middle" class="sub">自我/情感/认知/关系引擎</text>
+        <text x="460" y="240" text-anchor="middle" class="sub">包名 memory_v5</text>
+        <text x="460" y="258" text-anchor="middle" class="sub">data/v5: v5.db + chroma + 人格JSON</text>
+        <text x="460" y="276" text-anchor="middle" class="sub">48 个 v5_* MCP 工具（stdio）</text>
+        <text x="460" y="294" text-anchor="middle" class="sub">conversation_tree 后端</text>
       </g>
 
       <g class="node">
-        <rect x="680" y="180" width="200" height="80" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
-        <text x="780" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/hermes-agent</text>
-        <text x="780" y="224" text-anchor="middle" class="sub">:9119 Dashboard 管理面板（非 LLM 网关）</text>
-        <text x="780" y="244" text-anchor="middle" class="sub">含 venv + ikaros_v5 桥插件</text>
+        <rect x="660" y="180" width="220" height="120" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
+        <text x="770" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/</text>
+        <text x="770" y="222" text-anchor="middle" class="sub">runtime/dsh/ · runtime/herdr/</text>
+        <text x="770" y="240" text-anchor="middle" class="sub">runtime/portable-python / llama / node</text>
+        <text x="770" y="258" text-anchor="middle" class="sub">Herdr 命名管道 (coding-agent)</text>
+        <text x="770" y="276" text-anchor="middle" class="sub">bin/ikaros-env.* · 路径自锚定</text>
+        <text x="770" y="294" text-anchor="middle" class="sub">core/env/ · Python 侧引导副本</text>
       </g>
 
       <g class="node">
-        <rect x="360" y="350" width="200" height="104" rx="10" fill="var(--back-bg)" stroke="var(--back)"></rect>
+        <rect x="350" y="350" width="220" height="84" rx="10" fill="var(--back-bg)" stroke="var(--back)"></rect>
         <text x="460" y="370" text-anchor="middle" font-weight="600" fill="var(--back)">后端服务</text>
-        <text x="460" y="394" text-anchor="middle" class="sub">:8080 本地 LLM (懒加载)</text>
-        <text x="460" y="414" text-anchor="middle" class="sub">:8587 Embedding (看门狗)</text>
-        <text x="460" y="434" text-anchor="middle" class="sub">:8088 猫爪 (Hermes 驱动)</text>
-        <text x="460" y="454" text-anchor="middle" class="sub">Herdr 命名管道 (coding-agent)</text>
+        <text x="460" y="390" text-anchor="middle" class="sub">:8587 Embedding (bge-m3 Q8_0, 1024 dim)</text>
+        <text x="460" y="408" text-anchor="middle" class="sub">看门狗 = 各组件启动脚本自带</text>
+        <text x="460" y="426" text-anchor="middle" class="sub">Herdr 命名管道 (coding-agent 多路复用)</text>
       </g>
 
       <g class="node">
-        <rect x="360" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
-        <text x="460" y="520" text-anchor="middle" font-weight="600">对话主链 · Hermes Bridge :8650 → gateway :8642</text>
-        <text x="460" y="536" text-anchor="middle" class="sub">ikaros/hermes 双模式（完整 tools/skills 循环）</text>
+        <rect x="350" y="480" width="220" height="60" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
+        <text x="460" y="500" text-anchor="middle" font-weight="600">对话主链 · dsh :3080 + 对话树 :48920</text>
+        <text x="460" y="518" text-anchor="middle" class="sub">v5_* MCP (stdio) + DeepSeek 直连 + 只读工具回路</text>
+        <text x="460" y="534" text-anchor="middle" class="sub">memory_api 检索 + 逐轮轻写</text>
       </g>
 
       <g class="node">
-        <rect x="680" y="350" width="200" height="90" rx="10" fill="var(--data-bg)" stroke="var(--data)"></rect>
-        <text x="780" y="370" text-anchor="middle" font-weight="600" fill="var(--data)">数据层 · data/</text>
-        <text x="780" y="394" text-anchor="middle" class="sub">模型权重 (GGUF/嵌入)</text>
-        <text x="780" y="414" text-anchor="middle" class="sub">data/hermes-agent 用户态</text>
-        <text x="780" y="434" text-anchor="middle" class="sub">thirdspace-vault 知识库</text>
-      </g>
-
-      <g class="node">
-        <rect x="40" y="500" width="200" height="44" rx="9" fill="var(--panel)" stroke="var(--ink)"></rect>
-        <text x="140" y="520" text-anchor="middle" font-weight="600">ThirdSpace Vault</text>
-        <text x="140" y="536" text-anchor="middle" class="sub">双轨知识库 (Markdown)</text>
-      </g>
-
-      <g class="node">
-        <rect x="680" y="500" width="200" height="44" rx="9" fill="var(--front-bg)" stroke="var(--front)"></rect>
-        <text x="780" y="520" text-anchor="middle" font-weight="600" fill="var(--front)">对话树 · :48920</text>
-        <text x="780" y="536" text-anchor="middle" class="sub">core/conversation-tree/server.py</text>
+        <rect x="660" y="350" width="220" height="90" rx="10" fill="var(--data-bg)" stroke="var(--data)"></rect>
+        <text x="770" y="370" text-anchor="middle" font-weight="600" fill="var(--data)">数据层</text>
+        <text x="770" y="390" text-anchor="middle" class="sub">core/memory_v5/data/v5/ (v5.db + chroma)</text>
+        <text x="770" y="408" text-anchor="middle" class="sub">runtime/dsh/node_modules (vendored)</text>
+        <text x="770" y="426" text-anchor="middle" class="sub">data/ 根目录 (gguf + 缓存 + 日志)</text>
       </g>
 
       <!-- edges -->
-      <path class="edge" d="M460,66 L460,180" marker-end="url(#ah)"></path>
-      <path class="edge" d="M460,66 L140,200" marker-end="url(#ah)"></path>
-      <path class="edge" d="M460,66 L780,200" marker-end="url(#ah)"></path>
-      <path class="edge" d="M460,66 L460,350" marker-end="url(#ah)"></path>
-      <path class="edge" d="M460,66 L780,350" marker-end="url(#ah)"></path>
-      <text x="300" y="120" class="elabel">启动/停止编排</text>
+      <!-- dsh :3080 → 三个核心 -->
+      <path class="edge" d="M460,84 L460,180" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,84 L150,180" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,84 L770,180" marker-end="url(#ah)"></path>
+      <path class="edge" d="M460,84 L460,350" marker-end="url(#ah)"></path>
+      <text x="320" y="130" class="elabel">注入 MCP + terminal + LSP + persona</text>
 
-      <path class="edge" d="M240,300 C300,420 320,470 358,520" marker-end="url(#ah)"></path>
-      <text x="250" y="430" class="elabel">用户消息 → 主链</text>
+      <!-- 对话树 ↔ memory_v5 -->
+      <path class="edge" d="M260,240 L350,240" marker-end="url(#ah)"></path>
+      <text x="265" y="232" class="elabel">注入 persona + 检索记忆</text>
 
-      <path class="edge hot" d="M460,500 L460,300" marker-end="url(#ahh)"></path>
-      <text x="470" y="410" class="elabel">逐轮轻写 + 后台 reflect</text>
+      <!-- 对话树 ↔ DeepSeek（写在主链块下边） -->
+      <path class="edge" d="M150,300 C150,400 280,470 358,500" marker-end="url(#ah)"></path>
+      <text x="170" y="430" class="elabel">用户消息 → DeepSeek</text>
 
-      <path class="edge" d="M560,520 C660,500 700,470 780,260" marker-end="url(#ah)"></path>
-      <text x="640" y="430" class="elabel">云端 LLM 优先 / :8080 兜底</text>
+      <!-- V5 → dsh :3080 (检索暴露) -->
+      <path class="edge hot" d="M460,300 C540,360 580,440 570,490" marker-end="url(#ahh)"></path>
+      <text x="600" y="400" class="elabel">v5_* MCP 检索 (stdio)</text>
 
-      <path class="edge" d="M460,300 L460,350" marker-end="url(#ah)"></path>
-      <text x="468" y="330" class="elabel">推理/向量依赖</text>
+      <!-- V5 推送对话树 -->
+      <path class="edge hot" d="M460,300 C310,330 220,360 175,300" marker-end="url(#ahh)"></path>
+      <text x="200" y="335" class="elabel">sync_turn 推送节点</text>
 
-      <path class="edge hot" d="M360,240 C300,250 280,260 240,260" marker-end="url(#ahh)"></path>
-      <text x="250" y="245" class="elabel">V5 单向暴露检索</text>
+      <!-- V5 ↔ 数据层 -->
+      <path class="edge" d="M570,260 C640,300 700,320 770,360" marker-end="url(#ah)"></path>
+      <text x="640" y="305" class="elabel">读写 v5.db / chroma</text>
 
-      <path class="edge" d="M360,280 C260,340 180,440 140,500" marker-end="url(#ah)"></text>
-      <text x="200" y="400" class="elabel">latest_thought 同步</text>
+      <!-- Herdr ↔ dsh :3080 -->
+      <path class="edge" d="M770,180 L770,260 L770,350" marker-end="url(#ah)"></path>
+      <text x="775" y="270" class="elabel">命名管道</text>
 
-      <path class="edge hot" d="M460,300 C620,360 720,440 780,500" marker-end="url(#ahh)"></path>
-      <text x="600" y="400" class="elabel">V5 推送节点 (push_to_conversation_tree)</text>
-
-      <path class="edge" d="M560,380 C660,370 700,360 780,260" marker-end="url(#ah)"></path>
-      <text x="640" y="330" class="elabel">同 venv 进程</text>
-
-      <path class="edge" d="M560,350 C660,350 700,360 780,350" marker-end="url(#ah)"></path>
-      <text x="650" y="345" class="elabel">模型/用户态落盘</text>
+      <!-- 对话树 ↔ :8587 -->
+      <path class="edge" d="M260,260 C300,320 350,360 360,378" marker-end="url(#ah)"></path>
+      <text x="270" y="340" class="elabel">向量检索</text>
     </svg>
   </div>
 
   <aside class="legend">
     <h3>模块分区</h3>
     <div class="lg"><span class="dot" style="background:var(--soul)"></span>灵魂核心 memory_v5</div>
-    <div class="lg"><span class="dot" style="background:var(--front)"></span>前端桌宠 neko / 对话树</div>
-    <div class="lg"><span class="dot" style="background:var(--infra)"></span>基础设施 hermes</div>
-    <div class="lg"><span class="dot" style="background:var(--back)"></span>后端服务</div>
-    <div class="lg"><span class="dot" style="background:var(--data)"></span>数据层 data/</div>
+    <div class="lg"><span class="dot" style="background:var(--front)"></span>对话树 :48920</div>
+    <div class="lg"><span class="dot" style="background:var(--infra)"></span>基础设施 runtime/</div>
+    <div class="lg"><span class="dot" style="background:var(--back)"></span>后端服务 (dsh + Embedding)</div>
+    <div class="lg"><span class="dot" style="background:var(--data)"></span>数据层 v5.db / runtime vendored</div>
 
     <div class="leg-edge">
       <h3>依赖类型</h3>
@@ -185,19 +179,25 @@
     </div>
 
     <details>
-      <summary>三条边界约定</summary>
+      <summary>四条边界约定</summary>
       <ul>
-        <li>⚠️ <b>neko 保持独立</b>：不引入 memory_v5 依赖，不搬移其 memory/ 模块，数据不回写 V5。</li>
-        <li>✅ <b>v5.db 契约保留</b>：包改名 memory_v5，但 DB 文件名与 40 个 v5_* 工具名不改。</li>
+        <li>✅ <b>dsh 零源码侵入</b>：所有 Ikaros 定制走 <code>cordis.patch.yml</code> overlay，<code>runtime/dsh/</code> 始终是上游原版。</li>
+        <li>✅ <b>v5.db 契约保留</b>：包改名 memory_v5，但 DB 文件名与 48 个 <code>v5_*</code> 工具名不改。</li>
+        <li>✅ <b>IKAROS_ROOT 自锚定</b>：<code>bin/ikaros-env.sh/.bat</code> 自锚定项目根目录，移动项目仍正确。</li>
         <li>⚠️ <b>E:\v5-memory 独立开源版</b>：无运行数据，与主工程手动同步，按需更新。</li>
       </ul>
     </details>
     <details>
-      <summary>已移除（勿引用）</summary>
+      <summary>已退役（勿引用）</summary>
       <ul>
-        <li>:8642 Hermes 网关（已重新启用，由 hermes_cli gateway run 提供；旧 bin/hermes-api-server.py 未启用）</li>
-        <li>:7870/:7871 语音桥</li>
-        <li>think.py 自循环、Persona Sync、Studio 桌面端</li>
+        <li>:9100 控制面板 (core/dashboard/)</li>
+        <li>Hermes 底座 :8642 / :8650 / :9119 / :8088 (2026-08-18)</li>
+        <li>N.E.K.O 桌宠 :48911 / :48912 / :48915 (2026-08-18)</li>
+        <li>本地 LLM :8080 (2026-08-18)</li>
+        <li>语音桥 :7870 / :7871 (07-24)</li>
+        <li>Electron 壳 core/control-panel/</li>
+        <li>Person Sync · think.py 自循环 · Studio 桌面端</li>
+        <li>apps/neko/ · patches/hermes/ · runtime/hermes-agent/ · data/hermes-agent/</li>
         <li>core/v5 旧名 → 现为 core/memory_v5</li>
       </ul>
     </details>
@@ -205,14 +205,12 @@
 </div>
 
 <p class="note">
-  <b>如何读这张图：</b>控制面板 :9100 是总开关，编排全部组件。
-  用户对话由对话树 :48920 双模式（ikaros/hermes）进入，默认经 <code>Hermes Bridge :8650</code> → 纯净 gateway :8642（完整 tools/skills 循环 + V5 记忆注入）；
-  gateway 不可达 → 降级本地 DeepSeek 直连；本地 :8080 仅按需懒加载；
-  每一轮都会<b>轻写</b> V5（紫色虚线）并在后台跑 reflect 提炼；
-  V5 把检索能力经 <code>memory_api / v5_* MCP</code> 暴露（neko/pi 不回写）；
-  ⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 <code>push_to_conversation_tree()</code>）已随 hermes_provider 删除，当前无实现；
-  V5 的 latest_thought 同步到 ThirdSpace 双轨库。
-    Herdr（coding-agent 终端多路复用器）使用命名管道，无 TCP 端口。
+  <b>如何读这张图：</b>dsh <code>:3080</code> 是工作引擎总入口（web GUI），通过 <code>core/ikaros-dsh/</code> overlay
+  注入 <code>v5_* MCP</code>（48 工具，stdio）+ 持久 PTY 终端（terminal / tool-terminal）+ LSP + Ikaros persona；
+  对话树 <code>:48920</code> 是独立的卡片图面板（ikaros 单模式 → DeepSeek 直连 + 只读工具回路）；
+  memory_v5 是灵魂引擎，<code>sync_turn</code> 推送节点到对话树（<code>ui_conversation_tree.json</code>）；
+  Embedding <code>:8587</code>（bge-m3 Q8_0, 1024 维）为 v5 注入与对话树检索提供向量；
+  Herdr（coding-agent 终端多路复用器）使用命名管道，无 TCP 端口。
   <br><br>
   配套图：<a href="architecture-overview.html">架构全景图</a> ·
   <a href="folder-tree.html">文件夹层级图</a>（由 tools/gen_architecture_html.py 生成）。

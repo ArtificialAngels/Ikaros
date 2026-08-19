@@ -53,7 +53,7 @@ class MockVectorIndex:
 CORPUS: list[dict] = [
     {"content": "哥哥喜欢喝美式咖啡", "type": "preference", "weight": 0.8, "tags": ""},
     {"content": "哥哥偏好简洁直接的沟通方式", "type": "preference", "weight": 0.8, "tags": ""},
-    {"content": "伊卡洛斯的本地 LLM 是 Phi-4-mini 模型", "type": "fact", "weight": 0.7, "tags": ""},
+    {"content": "本地 LLM (:8080) 已于 2026-08-18 退役, 当前所有 LLM 调用走云端 DeepSeek / MiniMax", "type": "fact", "weight": 0.7, "tags": ""},
     {"content": "向量索引用 bge-m3 做 1024 维嵌入", "type": "fact", "weight": 0.7, "tags": ""},
     {"content": "检索结果有 20 秒短缓存", "type": "fact", "weight": 0.6, "tags": ""},
     {"content": "choma 向量索引在多进程并发写时报 hnsw compactor 冲突", "type": "lesson", "weight": 0.7,
@@ -70,7 +70,7 @@ CORPUS: list[dict] = [
 # ── 金标查询: (query, 期望命中的内容子串) ──
 QUERIES: list[tuple[str, str]] = [
     ("哥哥喜欢喝什么咖啡", "哥哥喜欢喝美式咖啡"),
-    ("本地 LLM 用的是什么模型", "Phi-4-mini"),
+    ("本地 LLM 还在用吗", "2026-08-18 退役, 走云端"),
     ("向量索引并发写为什么报错", "compactor 冲突"),
     ("向量索引并发写冲突怎么解决", "文件锁解决"),
     ("用户现在住在哪个城市", "用户住在上海"),

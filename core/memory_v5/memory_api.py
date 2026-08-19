@@ -27,9 +27,10 @@ def _row_to_dict(row) -> dict:
 class V5MemoryAPI:
     """Single entry point for all V5 memory operations.
 
-    Every method has a fallback: if the semantic layer (ChromaDB / :8080)
+    Every method has a fallback: if the semantic layer (ChromaDB / bge-m3 :8587)
     is unavailable, search() degrades to FTS5 keyword matching and the
     structured (tag-based) path always works against SQLite directly.
+    (:8080 本地 LLM 已退役 2026-08-18, 注释里原本提到它作为 fallback 之一已移除。)
     """
 
     def store(

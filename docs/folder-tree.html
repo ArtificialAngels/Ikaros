@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 文件夹层级图 · 2026-08-14</title>
+<title>Ikaros 文件夹层级图 · 2026-08-19</title>
 <style>
   :root{--bg:#f5f7fa;--card:#fff;--ink:#1f2933;--muted:#647084;--line:#d6dde6;
         --blue:#2f6fed;--teal:#0fb5a6;--purple:#8b5cf6;--green:#22a06b;--amber:#f0a020;--red:#e8743b}
@@ -39,7 +39,7 @@
 <body>
 <div class="wrap">
   <h1>Ikaros 文件夹层级图</h1>
-  <div class="sub">快照 2026-08-14 · 已排除 vendored（runtime/ node_modules/ .git/ __pycache__）· 展开折叠可点击 ▸</div>
+  <div class="sub">快照 2026-08-19 · dsh 时代 · 已排除 vendored（runtime/ node_modules/ .git/ __pycache__）· 展开折叠可点击 ▸</div>
 
   <div class="card">
     <div class="legend">
@@ -52,12 +52,12 @@
 
     <div class="tree" id="tree"></div>
 
-    <div class="note">说明：<code>runtime/hermes-agent/</code> 内置完整 Hermes 工程（含 node_modules/venv，未在树中展开）；
-      <code>apps/neko/</code> 为独立完整前端工程；<code>data/</code> 含模型权重（仅在顶层标注）。
+    <div class="note">说明：<code>runtime/</code> 内置 dsh / herdr / portable-python / llama / node / bun（vendored，未展开）；
+      <code>data/</code> 含模型权重 + 运行时日志（仅在顶层标注）。
       虚线折叠项可点击展开。</div>
   </div>
 
-  <footer>Ikaros Folder Tree · 由 tools/gen_architecture_html.py 于 2026-08-14 生成 · 数据来自实际目录扫描</footer>
+  <footer>Ikaros Folder Tree · 由 tools/gen_architecture_html.py 于 2026-08-19 生成 · 数据来自实际目录扫描</footer>
 </div>
 
 <script>
@@ -71,26 +71,27 @@ const T = {
       {n:"ArtificialAngel.ico"}, {n:"Artificialangel.png"}, {n:"Artificialangeljpg.jpg"}, {n:"Artificialangelmini.png"}
     ]},
     {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
-      {n:"ikaros-control-panel.bat", k:true, c:"拉控制面板 :9100"}, 
-      {n:"hermes-gateway.py", c:":8642 gateway 启动器"}, {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
-      {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
-      {n:"ikaros-fastdl.py", c:"Gopeed 下载 (按需)"}, {n:"import-hermes-to-convtree.py", c:"Hermes→对话树 :48920"},
-      {n:"neko-start.bat / neko-stop.bat", c:"Neko 启停"},
-      {n:"rebuild_chroma_v5.py", c:"重建向量库"}, {n:"bootstrap-venvs.py", c:"venv 引导"}, {n:"secret-scan.py", c:"密钥扫描"},
+      {n:"ikaros-env.sh / ikaros-env.ps1 / ikaros-env.bat", k:true, c:"环境权威源 (IKAROS_ROOT 自锚定)"},
+      {n:"start-dsh-ikaros.bat", k:true, c:"拉 dsh 工作引擎 :3080 (web|headless)"},
+      {n:"start-omp.bat", c:"omp 启动器"},
+      {n:"restart-dsh-ikaros.ps1", c:"杀旧 dsh web + --patch 重启"},
+      {n:"proc.py / wb.py", c:"进程/工作簿工具"},
+      {n:"secret-scan.py", c:"密钥扫描"},
       {n:"legacy/", c:"旧脚本回滚桶", b:"核心"}
     ]},
     {n:"config/", c:"配置文件", children:[
       {n:"defaults/", c:"默认端口/模型", children:[{n:"ports.yaml"},{n:"panel_models.json"}]},
       {n:"identity/", c:"身份文件", children:[{n:"axiom / capabilities"}]}
     ]},
-    {n:"core/", c:"核心系统（8 模块）", b:"核心", open:true, children:[
+    {n:"core/", c:"核心系统（5 模块）", b:"核心", open:true, children:[
       {n:"memory_v5/", k:true, c:"V5 灵魂引擎 (包名 memory_v5)", b:"核心", open:true, children:[
         {n:"__init__.py", k:true, c:"包根 · __version__"}, {n:"store.py / search.py", k:true, c:"记忆读写/检索"},
         {n:"affect.py / vitality.py", c:"情感/精力"},
         {n:"self_model.py / metacog.py / relationship.py", c:"自我/元认知/关系"},
-        {n:"mcp_server.py", k:true, c:"48 个 v5_* 工具"},
-        {n:"reflect/", c:"后台整合流水线"}, {n:"cogno_extensions/", c:"认知扩展"},
-        {n:"models/", c:"模型配置"}, {n:"services/", c:"start-*.bat"}, {n:"data/", k:true, c:"运行态记忆", b:"数据", open:true, children:[
+        {n:"conversation_tree.py", k:true, c:"对话树后端引擎 (ConvCard + 卡片图)"},
+        {n:"mcp_server.py", k:true, c:"48 个 v5_* MCP 工具"},
+        {n:"reflect/", c:"后台整合流水线"}, {n:"extensions/", c:"认知扩展"},
+        {n:"models/", c:"模型配置"}, {n:"data/", k:true, c:"运行态记忆", b:"数据", open:true, children:[
           {n:"v5/", k:true, c:"人格+记忆库", children:[
             {n:"v5.db", k:true, c:"SQLite 记忆 (契约名不改)"}, {n:"chroma/", c:"向量库"},
             {n:"self_model.json / affect.json / relationship.json", c:"人格状态"},
@@ -98,38 +99,25 @@ const T = {
           ]}
         ]}
       ]},
-      {n:"neko/", k:true, c:"Neko 主服务 (独立完整, 不合并 V5)", b:"前端", open:true, children:[
-        {n:"app/", k:true, c:"main_server / memory_server / agent_server", children:[{n:"main_server.py (:48911)"},{n:"memory_server.py (:48912)"},{n:"agent_server.py (:48915)"}]},
-        {n:"memory/", c:"Neko 自有记忆系统"}, {n:"frontend/", c:"React 聊天 UI"}, {n:"assets/", c:"Live2D/VRM/MMD Avatar"},
-        {n:"brain/", c:"智能体逻辑"}, {n:"plugin/ / utils/ / config/ / tests/", c:"其他子模块"}
+      {n:"conversation-tree/", k:true, c:"对话树面板 (:48920)", b:"前端", open:true, children:[
+        {n:"server.py", k:true, c:"FastAPI 服务 :48920"},
+        {n:"frontend/", c:"React 卡片图 UI (cards + links + trunk + splitter)"},
+        {n:"assets/", c:"字体/光标/图标"}
       ]},
-      {n:"hermes/", k:true, c:"Hermes Agent (原 hermes-agent, 已搬迁)", b:"基础设施", open:true, children:[
-        {n:"venv/", k:true, c:"Python 虚拟环境 (fastapi 0.133.1)"}, {n:"plugins/memory/", c:"记忆插件", children:[{n:"ikaros_v5/", k:true, c:"V5 桥 (plugin.yaml)"}]},
-        {n:"hermes_cli/ / agent/ / gateway/ / web/ / skills/ / providers/", c:"核心子模块"},
-        {n:"node_modules/ (vendored, 折叠)", c:"前端依赖"}, {n:".git (独立子仓库)", c:"Hermes 上游"}
+      {n:"ikaros-dsh/", k:true, c:"dsh Ikaros overlay", b:"基础设施", open:true, children:[
+        {n:"cordis.patch.yml", k:true, c:"0 源码侵入 overlay (process.env.IKAROS_ROOT)"},
+        {n:"plugins/ikaros-memory/", c:"记忆插件 (recallMemory / writeMemory)"},
+        {n:"persona/", c:"Ikaros 工作引擎 system-prompt"}
       ]},
-      {n:"dashboard/", k:true, c:"控制面板 Web UI (:9100)", b:"核心"},
-      {n:"control-panel/", c:"Electron 桌面壳", b:"前端"},
+      {n:"herdr/", k:true, c:"Herdr coding-agent 多路复用器 (命名管道)", b:"基础设施"},
       {n:"env/", c:"环境配置/CLI", children:[{n:"ikaros-cli/ / scripts/ / detect-root/"}]},
-      {n:"conversation-tree/", k:true, c:"对话树面板 (:48920)"},
-      {n:"data/", c:"核心内部日志 (遗留)", b:"数据"}
-    ]},
-    {n:"data/", k:true, c:"系统级运行数据", b:"数据", open:true, children:[
-      {n:"models/", k:true, c:"模型权重 (GGUF/嵌入)"}, {n:"cache/ / tts-cache/", c:"缓存"},
-      {n:"hermes-agent/", k:true, c:"Hermes 用户态 (契约目录, 不改名)"},
-      {n:"thirdspace-vault/", c:"ThirdSpace 双轨知识库"}, {n:"logs/", c:"运行日志"},
-      {n:"config/", c:"运行期配置"}, {n:"ikaros-coordination/", c:"组件协调"}
-    ]},
-    {n:"docs/", c:"文档", children:[
-      {n:"ARCHITECTURE.md", k:true}, {n:"naming.md / lint.py (漂移守卫)"},
-      {n:"neko-deep-analysis.md (已标作废合并建议)"},
-      {n:"assets/ / examples/ / research/ / scripts/"}
+      {n:"taskbus.py", c:"任务总线"}
     ]},
     {n:"deploy/", c:"部署", children:[{n:"Dockerfile"},{n:"README.md"}]},
-    {n:"runtime/", c:"运行时依赖 (vendored, 未展开)", b:"基础设施"},
+    {n:"runtime/", c:"运行时依赖 (vendored, 未展开) · 含 dsh / herdr / portable-python / llama / node / bun", b:"基础设施"},
     {n:"scripts/", c:"setup-native.py / fetch-upstreams.py"},
-    {n:"tests/", c:"测试", children:[{n:"hermes/ (子测试)"}]},
-    {n:"tools/", c:"工具", children:[{n:"ikaros-monitor/ / dwg/ / experiments/ / gen_architecture_html.py"}]},
+    {n:"tests/", c:"测试", children:[]},
+    {n:"tools/", c:"工具", children:[{n:"dwg/ / experiments/ / gen_architecture_html.py"}]},
     {n:"tmp/", c:"临时文件 (gitignored)", b:"数据"},
     {n:"logs/ / output/", c:"根级日志/输出"}
   ]

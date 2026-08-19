@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 项目架构 · 2026-08-14</title>
+<title>Ikaros 项目架构 · 2026-08-19</title>
 <style>
   :root{
     --bg:#f5f7fa; --card:#ffffff; --ink:#1f2933; --muted:#647084;
@@ -24,7 +24,7 @@
   .t-purple{background:var(--purple)} .t-pink{background:var(--pink)}
   .t-green{background:var(--green)} .t-amber{background:var(--amber)}
 
-  /* 控制面板总入口 */
+  /* 工作引擎总入口 */
   .panel{background:linear-gradient(135deg,#2f6fed,#0fb5a6);color:#fff;border:none}
   .panel .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
   .chip{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);
@@ -76,80 +76,63 @@
 <body>
 <div class="wrap">
   <h1>Ikaros 项目架构全景</h1>
-  <div class="sub">快照日期 2026-08-14 · 控制面板 :9100 · 9 个常驻 TCP 服务 + Herdr 命名管道 · 已取消 neko→V5 合并计划</div>
+  <div class="sub">快照日期 2026-08-19 · dsh (DeepSeek Harness) 时代 · 3 个常驻 TCP 服务 + Herdr 命名管道</div>
 
-  <!-- 总入口 -->
+  <!-- 工作引擎总入口 -->
   <div class="card panel">
-    <h2 style="color:#fff">🎛️ 控制面板（总入口）</h2>
-    <div style="font-size:13px;opacity:.95">一键启停所有组件，装配 CUDA 环境，模型切换持久化</div>
+    <h2 style="color:#fff">🤖 dsh 工作引擎（总入口）</h2>
+    <div style="font-size:13px;opacity:.95">DeepSeek Harness 工作引擎 web GUI · 注入 Ikaros overlay（memory_v5 MCP + terminal + LSP + persona）</div>
     <div class="row">
-      <div class="chip"><b>:9100</b><span>core/dashboard/server.py（纯 stdlib）</span></div>
-      <div class="chip"><b>bin/ikaros-control-panel.bat</b><span>双击拉起面板 :9100（只起面板，不拉全栈）</span></div>
+      <div class="chip"><b>:3080</b><span>dsh web GUI（runtime/dsh/）</span></div>
+      <div class="chip"><b>bin/start-dsh-ikaros.bat web</b><span>双击拉起 dsh + Ikaros overlay</span></div>
     </div>
   </div>
 
   <!-- 服务层 -->
   <div class="card">
-    <h2><span class="tag t-blue">服务层</span> 9 个常驻 TCP 组件 (+ Herdr 命名管道)</h2>
+    <h2><span class="tag t-blue">服务层</span> 3 个常驻 TCP 组件 (+ Herdr 命名管道)</h2>
     <div class="svcs">
-      <div class="svc"><div class="p">:9100</div><h3>控制面板</h3>
-        <p>组件编排中枢 · 一键启停 + CUDA 装配 + 模型切换</p><span class="badge b-infra">Infra</span></div>
-      <div class="svc"><div class="p">:8080</div><h3>本地 LLM</h3>
-        <p>Phi-4-mini · 懒加载（调用时热载入）</p><span class="badge b-back">Backend</span></div>
-      <div class="svc"><div class="p">:8587</div><h3>Embedding 向量</h3>
-        <p>nomic 嵌入 · 看门狗管理</p><span class="badge b-back">Backend</span></div>
-      <div class="svc"><div class="p">:48911</div><h3>Neko 主前端</h3>
-        <p>React 聊天 + Avatar（Live2D/VRM/MMD）</p><span class="badge b-front">Frontend</span></div>
-      <div class="svc"><div class="p">:48912</div><h3>Neko 记忆服务</h3>
-        <p>独立 SQLite+Chroma 记忆系统</p><span class="badge b-front">Frontend</span></div>
-      <div class="svc"><div class="p">:48915</div><h3>Neko Agent 服务</h3>
-        <p>键鼠/浏览器/OpenClaw 控制</p><span class="badge b-front">Frontend</span></div>
-      <div class="svc"><div class="p">:9119</div><h3>Hermes Dashboard</h3>
-        <p>管理面板（非 LLM 网关）· skills/MCP 浏览</p><span class="badge b-infra">Infra</span></div>
-      <div class="svc"><div class="p">:8088</div><h3>Hermes 猫爪</h3>
-        <p>bin/hermes_paw_bridge.py · Agent 驱动</p><span class="badge b-back">Backend</span></div>
+      <div class="svc"><div class="p">:3080</div><h3>dsh 工作引擎</h3>
+        <p>DeepSeek Harness web GUI（npm 本地安装 + Ikaros overlay）</p><span class="badge b-back">Backend</span></div>
       <div class="svc"><div class="p">:48920</div><h3>对话树面板</h3>
-        <p>Explore.poker 风格树形对话 · 后端=conversation_tree 引擎</p><span class="badge b-front">Frontend</span></div>
+        <p>Explore.poker 风格卡片图对话 · 后端=conversation_tree 引擎</p><span class="badge b-front">Frontend</span></div>
+      <div class="svc"><div class="p">:8587</div><h3>Embedding 向量</h3>
+        <p>bge-m3 Q8_0 (1024 维) · 各启动脚本自带 watchdog</p><span class="badge b-back">Backend</span></div>
     </div>
     <details>
       <summary>查看完整端口映射表</summary>
       <table>
         <tr><th>端口</th><th>服务</th><th>组件路径</th><th>状态</th></tr>
-        <tr><td>:9100</td><td>控制面板 Web UI</td><td>core/dashboard/server.py</td><td>✅</td></tr>
-        <tr><td>:8080</td><td>本地 LLM (已退役)</td><td>已退役, 无看门狗</td><td>⛔ 已退役</td></tr>
-        <tr><td>:8587</td><td>Embedding (bge-m3)</td><td>各组件启动脚本自带 watchdog</td><td>✅</td></tr>
-        <tr><td>:48911</td><td>Neko 主前端</td><td>apps/neko/app/main_server.py</td><td>✅</td></tr>
-        <tr><td>:48912</td><td>Neko 记忆服务</td><td>apps/neko/app/memory_server.py</td><td>✅</td></tr>
-        <tr><td>:48915</td><td>Neko Agent 服务</td><td>apps/neko/app/agent_server.py</td><td>✅</td></tr>
-        <tr><td>:9119</td><td>Hermes Dashboard</td><td>runtime/hermes-agent/.../web_server.py</td><td>✅ 管理面板，非 LLM 网关</td></tr>
-        <tr><td>:8088</td><td>Hermes 猫爪</td><td>bin/hermes_paw_bridge.py</td><td>✅</td></tr>
-        <tr><td>:48920</td><td>对话树面板</td><td>core/conversation-tree/server.py (后端 conversation_tree 引擎)</td><td>✅</td></tr>
+        <tr><td>:3080</td><td>dsh 工作引擎 (DeepSeek Harness web)</td><td>runtime/dsh/ + overlay core/ikaros-dsh/cordis.patch.yml</td><td>✅ bin/start-dsh-ikaros.bat web</td></tr>
+        <tr><td>:48920</td><td>对话树面板 (Conversation Tree)</td><td>core/conversation-tree/server.py（后端引擎 core/memory_v5/conversation_tree.py）</td><td>✅ python core/conversation-tree/server.py --port 48920</td></tr>
+        <tr><td>:8587</td><td>Embedding (bge-m3 Q8_0)</td><td>各组件启动脚本自带 watchdog（v5 注入 / 对话树检索）</td><td>✅ 自动拉起</td></tr>
+        <tr><td>命名管道</td><td>Herdr 终端编排 (coding-agent 多路复用器)</td><td>runtime/herdr/herdr.exe（无 TCP 端口）</td><td>✅ 按需启动</td></tr>
       </table>
-      <p style="font-size:11px;color:var(--muted)">Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），由面板 herdr 组件按需启动。<br>Gopeed 下载 :9999 仅在下载任务时按需启动，<b>不计入常驻服务</b>。<br>已移除（勿加回）：语音桥 :7870/:7871、Person Sync。Hermes API 网关 :8642 已重新启用（由 hermes_cli gateway run 提供，dashboard + chat-tree 复用；旧 bin/hermes-api-server.py 未启用），请勿删除。</p>
+      <p style="font-size:11px;color:var(--muted)">Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），由 dsh overlay 的 terminal / tool-terminal 工具按需启动。<br>已退役（勿加回）：本地 LLM :8080、控制面板 :9100、Hermes 底座 :8642 / :8650 / :9119 / :8088、N.E.K.O 桌宠 :48911 / :48912 / :48915、语音桥 :7870 / :7871。</p>
     </details>
   </div>
 
   <!-- 三层目录结构 -->
   <div class="card">
-    <h2><span class="tag t-purple">代码层</span> core/ 目录（8 个一级模块）</h2>
+    <h2><span class="tag t-purple">代码层</span> 当前核心目录（dsh 时代）</h2>
     <div class="layers">
       <div class="layer"><div class="lh">🧠 灵魂核心</div>
         <div class="items">
-          <span class="pill"><code>core/memory_v5/</code> V5 记忆/情感/认知引擎（包名 memory_v5）</span>
-          <span class="pill"><code>core/memory_v5/data/v5/</code> 人格+记忆库（v5.db+chroma）</span>
+          <span class="pill"><code>core/memory_v5/</code> V5 自我认知引擎（包名 memory_v5，48 个 v5_* MCP 工具）</span>
+          <span class="pill"><code>core/memory_v5/data/v5/</code> 人格+记忆库（v5.db + chroma，对外契约不改）</span>
         </div></div>
-      <div class="layer"><div class="lh">🐾 前端与桌宠</div>
+      <div class="layer"><div class="lh">🪟 表现层</div>
         <div class="items">
-          <span class="pill"><code>apps/neko/</code> Neko 主服务（独立完整，不合并 V5）</span>
-          <span class="pill"><code>core/control-panel/</code> Electron 桌面壳（拉 :9100）</span>
+          <span class="pill"><code>core/conversation-tree/</code> 对话树面板后端（:48920） · React 前端在子目录</span>
+          <span class="pill"><code>core/ikaros-dsh/</code> dsh 定制 overlay（cordis.patch.yml + memory 插件 + persona）</span>
         </div></div>
       <div class="layer"><div class="lh">🛠️ 基础设施</div>
         <div class="items">
-          <span class="pill"><code>runtime/hermes-agent/</code> Hermes Agent（原 hermes-agent，已搬迁）</span>
-          <span class="pill"><code>core/dashboard/</code> 控制面板 Web UI</span>
-          <span class="pill"><code>core/env/</code> 环境配置/CLI/初始化</span>
-          <span class="pill"><code>core/conversation-tree/</code> 对话树面板（:48920）</span>
-          <span class="pill"><code>core/data/</code> 核心内部日志（遗留）</span>
+          <span class="pill"><code>runtime/dsh/</code> DeepSeek Harness 工作引擎（npm 本地安装）</span>
+          <span class="pill"><code>runtime/herdr/</code> coding-agent 终端多路复用器（herdr.exe + 命名管道）</span>
+          <span class="pill"><code>core/env/</code> 环境配置 / CLI / 初始化（ikaros-paths.json + llama_resolver）</span>
+          <span class="pill"><code>bin/</code> 启动器（start-dsh-ikaros / ikaros-env / restart / secret-scan）</span>
+          <span class="pill"><code>scripts/</code> setup-native.py / fetch-upstreams.py（bootstrap 工具）</span>
         </div></div>
     </div>
   </div>
@@ -158,33 +141,37 @@
   <div class="card">
     <h2><span class="tag t-teal">数据流</span> 一次对话怎么走</h2>
     <div class="flow">
-      <div class="step"><div class="dot">1</div><div>用户在 <b>Neko 前端 :48911</b>（React+Avatar）发起对话</div></div>
-      <div class="step"><div class="dot">2</div><div>对话树 <code>:48920</code> 双模式（ikaros/hermes）默认走 <b>Hermes Bridge :8650</b> → 纯净 gateway <code>:8642</code>（完整 tools/skills 循环 + V5 记忆注入）</div></div>
-      <div class="step"><div class="dot">3</div><div>gateway 不可达 → 降级本地 DeepSeek 直连 + 只读工具回路；本地 <code>:8080</code> 仅按需懒加载</div></div>
-      <div class="step"><div class="dot">4</div><div>逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型</div></div>
-      <div class="step"><div class="dot">5</div><div>V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索；⚠️ 2026-08-14 审计：记忆写入→对话树推送链（旧 push_to_conversation_tree）已随 hermes_provider 删除，当前无实现</div></div>
-      <div class="step"><div class="dot">6</div><div>ThirdSpace 同步 <code>bin/sync-thirdspace-v5.py</code> 把 thought 写入 <code>data/thirdspace-vault/</code>（双轨知识库）</div></div>
+      <div class="step"><div class="dot">1</div><div>用户在 <b>dsh web :3080</b>（React + Monaco + terminal + LSP）发起对话或代码任务</div></div>
+      <div class="step"><div class="dot">2</div><div>dsh overlay 注入 <code>v5_* MCP</code>（memory_v5 stdio, 48 工具）+ 持久 PTY 终端 + LSP + Ikaros persona</div></div>
+      <div class="step"><div class="dot">3</div><div><b>对话树 :48920</b>（独立面板，Explore.poker 卡片图风格）走 ikaros 单模式：注入完整 persona + 树域记忆 → DeepSeek 直连 + 只读工具回路</div></div>
+      <div class="step"><div class="dot">4</div><div>Embedding :8587（bge-m3 Q8_0，1024 维）为 v5 注入与对话树检索提供向量</div></div>
+      <div class="step"><div class="dot">5</div><div>逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型</div></div>
+      <div class="step"><div class="dot">6</div><div>V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索（dsh web + 对话树共享）</div></div>
+      <div class="step"><div class="dot">7</div><div>Herdr 命名管道为 dsh terminal / tool-terminal 提供持久的 PTY 会话（无 TCP 端口）</div></div>
     </div>
   </div>
 
   <!-- 边界说明 -->
   <div class="card">
     <h2><span class="tag t-amber">边界与约定</span> 关键架构决策</h2>
-    <div class="note" style="margin-bottom:10px">
-      <b>⚠️ neko 保持独立：</b> apps/neko 完整保留，不引入对 memory_v5 的代码依赖，不搬移 neko 内部 memory/ 模块。迁移脚本与方案文档已删除。
+    <div class="ok" style="margin-bottom:10px">
+      <b>✅ dsh 零源码侵入：</b> 所有 Ikaros 定制走 <code>core/ikaros-dsh/cordis.patch.yml</code> overlay，runtime/dsh/ 始终是上游原版，可独立升级。
     </div>
     <div class="ok" style="margin-bottom:10px">
-      <b>✅ v5.db 契约保留：</b> 包已重命名 v5→memory_v5，但 DB 文件名 v5.db、40 个 v5_* MCP 工具名是对外契约，不改。
-    </div>
-    <div class="note" style="margin-bottom:10px">
-      <b>⚠️ v5-memory 独立仓库：</b> E:\v5-memory 是从 core/memory_v5 抽离的开源插件版（无运行数据），两份手动同步，改主工程不影响开源版。
+      <b>✅ v5.db / v5_* 契约保留：</b> 包已重命名 v5→memory_v5，但 DB 文件名 <code>v5.db</code> 与 40 个 <code>v5_*</code> MCP 工具名是对外契约，不改。
     </div>
     <div class="ok" style="margin-bottom:10px">
-      <b>✅ 严禁裸跑 llama-server：</b> 缺 CUDA DLL 会 SIGSEGV，一律走看门狗/控制面板启动。
+      <b>✅ IKAROS_ROOT 自锚定：</b> <code>bin/ikaros-env.sh/.bat</code> 自锚定项目根目录（<code>BASH_SOURCE[0]</code> / <code>%~dp0</code>），项目整体移动仍正确；无任何硬编码盘符。
+    </div>
+    <div class="note" style="margin-bottom:10px">
+      <b>⚠️ E:\v5-memory 独立仓库：</b> 从 core/memory_v5 抽离的开源插件版（无运行数据），两份手动同步，改主工程不影响开源版。
+    </div>
+    <div class="note" style="margin-bottom:10px">
+      <b>⚠️ 本地 LLM :8080 已退役：</b> 2026-08-18 起 <code>model_config.json</code> <code>initial_model=""</code>（禁用）；按需恢复 = 放 gguf + 设模型名（详见 AGENTS.md）。
     </div>
   </div>
 
-  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-08-14 生成 · 数据来自实际控制面板注册表与目录核查</footer>
+  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-08-19 生成 · 数据来自 docs/ARCHITECTURE.md §1.1 §1.2 §1.5 与目录核查</footer>
 </div>
 </body>
 </html>

@@ -9,7 +9,7 @@ memory_retrieval:
   vector_weight: 0.7      # 向量语义分权重
   fts_weight: 0.3         # FTS5 关键词分权重
   time_decay_per_day: 0.05
-  min_fused_score: 0.3    # 融合分阈值, 低于此不注入 (2026-07-26 标定于 nomic-embed-text-v2-moe; 2026-08-14 换 bge-m3 后融合尺度不变, 真实语义匹配 fused≈0.3~0.5, 噪声≈0.15; 原 0.6 会把所有有效召回过滤掉导致语义召回失效)
+  min_fused_score: 0.3    # 融合分阈值, 低于此不注入 (2026-08-14 标定于 bge-m3 q8_0 1024 维; 真实语义匹配 fused≈0.3~0.5, 噪声≈0.15; 原 0.6 会把所有有效召回过滤掉导致语义召回失效；早期标定于 nomic-embed-text-v2-moe 的 0.3 在 bge-m3 下尺度不变)
   top_k: 5
   auto_route: true            # unified_retrieve 自动补路: semantic 不足时补图扩散 (阶段1)
   graph_min_score: 0.2        # 图扩散补路的最低分阈值, 低于此丢弃 (防噪音)

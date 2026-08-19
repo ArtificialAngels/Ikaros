@@ -100,7 +100,11 @@ def build_paths():
 
 
 def write_dsh_profile_env():
-    """生成 data/dsh/profiles/env.json 参考（llama-local 指向本地 :8080）。"""
+    """生成 data/dsh/profiles/env.json 参考（本地 LLM 默认禁用, 按需恢复）。
+
+    2026-08-18 起本地 LLM :8080 已退役, 这里写的 ``local_llm`` 仅供「按需恢复」
+    场景参考使用 (见 AGENTS.md 恢复流程); 默认 DSH overlay 走云端 DeepSeek。
+    """
     target = resolve("data/dsh/profiles/env.json")
     if os.path.isfile(target):
         log(f"  dsh profile env 已存在, 跳过: {target}")

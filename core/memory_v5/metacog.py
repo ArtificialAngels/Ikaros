@@ -288,8 +288,10 @@ def _fallback_thought(sm: "SelfModel") -> None:
     """When LLM is unavailable, generate a simple English placeholder thought.
 
     Keeps 'what I'm thinking' non-empty for monitoring panel / conversation injection
-    when :8080 is down. This is step #1 of unified thinking output: all
+    when DeepSeek is down. This is step #1 of unified thinking output: all
     'currently thinking' goes through latest_thought.json.
+    (2026-08-18 注: :8080 本地 LLM 已退役, 注释里原本提到它作为 fallback 之一已移除;
+    现在所有 LLM 调用都走 DeepSeek / MiniMax 云端。)
     """
     try:
         qs = sm.data.get("questions", []) or []
@@ -307,7 +309,8 @@ def _fallback_thought(sm: "SelfModel") -> None:
 def cycle(now: float | None = None) -> Optional[dict]:
     """One complete beat: curiosity tick → daily reflection.
 
-    All goes through cloud (DeepSeek). Local :8080 small-model removed from V5 (2026-07-26).
+    All goes through cloud (DeepSeek / MiniMax). Local :8080 small-model removed from V5 (2026-07-26);
+2026-08-18 :8080 服务整体退役, 不再做任何本地 LLM 调用。
     Has internal minimum interval gating, safe to call at high frequency.
     When LLM is down, still writes placeholder thought to keep latest_thought.json non-empty.
     """

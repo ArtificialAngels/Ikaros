@@ -15,7 +15,7 @@ fetch-upstreams.py — Ikaros 上游组件拉取脚本（幂等）
 
 用法:
   python scripts/fetch-upstreams.py            # 拉全部
-  python scripts/fetch-upstreams.py model-nomic-embed  # 只拉指定组件
+  python scripts/fetch-upstreams.py model-bge-m3-embed  # 只拉指定组件 (例)
   python scripts/fetch-upstreams.py --dry-run  # 不实际下载，打印将要做什么
   python scripts/fetch-upstreams.py --list     # 列出所有组件
 """

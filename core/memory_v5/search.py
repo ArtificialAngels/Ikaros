@@ -125,11 +125,10 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
       - Fix: split into ≤350-char chunks, embed each with the task prefix,
         mean-pool the vectors (standard long-text embedding practice).
 
-    历史: nomic-embed-text-v2-moe task prefixes (2026-07-14, 2026-08-14 换 bge-m3 后弃用):
-      - task="query"    (semantic search)  -> "search_query: "
-      - task="document" (index/re-embed)   -> "search_document: "
-      Without prefix, falls to default task, causing query/document vector space
-      mismatch and recall distortion.
+    历史: 嵌入模型从 nomic-embed-text-v2-moe 切换到 bge-m3 q8_0 (1024 维) ——
+      nomic-v2-moe 在 llama.cpp 下输出全零; nomic-v1.5 中文语义弱。
+      bge-m3 无需 document 前缀, query 按官方推荐加检索指令。
+      (旧 nomic-embed-text-v2-moe 的 task prefixes 已弃用: search_query:/search_document:)
 
     2026-08-14: 嵌入模型已换 bge-m3 (nomic-v2-moe 在 llama.cpp 下输出全零;
     nomic-v1.5 中文语义弱)。bge-m3 无需 document 前缀, query 按官方推荐加检索指令

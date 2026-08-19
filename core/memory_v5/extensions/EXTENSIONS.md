@@ -35,8 +35,10 @@
   导入守护：`try: from llmlingua import PromptCompressor`，未装/离线/模型下载失败
   都返回 None 触发回退（U 盘便携环境不强制装，避免首次运行拉 HF 模型破坏离线性）。
 - `compress_text(text, quality="auto")` —— 统一入口：`auto`=llmlingua→规则
-  （零 LLM、离线安全），`llm`=本地 :8080，`rule`=仅规则。
-- `llm_compress(text, quality="auto")` —— 高质量压缩链：llmlingua→本地 :8080→规则。
+  （零 LLM、离线安全），`llm`=llmlingua 库（2026-08-18 起 :8080 已退役），
+  `rule`=仅规则。
+- `llm_compress(text, quality="auto")` —— 高质量压缩链：llmlingua→规则
+  （2026-08-18 起 :8080 已退役, 不再 fallback 到本地 LLM）。
 - `compress_old_rounds` / `compress_retrieval_block` —— 已改调 `compress_text`，
   环境装了 llmlingua 自动走现成库，否则规则回退（**不改动 V5 主链路**）。
 - `enforce_budget(texts/blocks, budget_tokens)` —— 按 score/顺序截到预算内。
@@ -45,14 +47,13 @@
 自动下载 HF 模型（需联网一次）；之后离线也能用缓存。不装则全程规则回退，功能不降级。
 
 **接入点（已落地）**：
-- hermes 插件 `on_pre_compress`（`data/hermes-agent/plugins/ikaros_v5/memory_provider.py`）在
-  `self._v5_search(...)` 返回后调用 `compress_retrieval_block(max_chars_per_item=150)`，
+- dsh 插件 `on_pre_compress`（`core/ikaros-dsh/plugins/ikaros-memory/`）在
+  V5 注入 memory-context 时调用 `compress_retrieval_block(max_chars_per_item=150)`，
   **已替换**原 `text[:150]` 硬截断；整段 `try/except` 包裹，压缩器异常时自动回退原始硬截断。
-- :8080 本地小模型构建 system/记忆前缀时跑 `enforce_budget`（尚未接线，待评估）。
+- V5 构建 system/记忆前缀时跑 `enforce_budget`（规则压缩, 离线零成本）。
 
-**未做**：真实中文分词级压缩、与 Hermes `ContextCompressor` 头尾保护协同的全局预算分配、
-`llm_compress` 的旁白守卫（本地 Qwen3-1.7B 不听指令，需复用 V5 已有的
-`is_clean_structured_content` 守卫）。
+**未做**：真实中文分词级压缩、与 dsh overlay 的全局预算分配、
+`llm_compress` 的旁白守卫（云端 LLM 已替代本地小模型, 不需要这个守卫）。
 
 ---
 

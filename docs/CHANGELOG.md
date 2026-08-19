@@ -8,6 +8,78 @@
 
 ---
 
+## [2026-08-19] — 线1 死引用清理：架构图重生 + 退役引用收敛
+
+> **背景**：2026-08-18 底座切换（hermes/neko → dsh）后，架构图生成器（`tools/gen_architecture_html.py`）
+> 仍画着已退役的 `:9100` 控制面板 / N.E.K.O 桌宠 / hermes 底座；codebase 里残留
+> `:8080` 本地 LLM 调用代码（已 2026-08-18 退役）；`docs/README.md` / 架构图也未同步。
+> 本次清理把架构图与 active code 全部对齐到当前真实架构。
+
+### Changed
+
+#### 架构图重生（dsh 时代）
+- **`tools/gen_architecture_html.py` 完全重写**：数据模型只反映 dsh 时代
+  当前生效服务（`:3080` dsh web / `:48920` 对话树 / `:8587` bge-m3 / herdr 命名管道），
+  退役组件（`:9100` 面板 / `:8642` `:8650` `:9119` `:8088` hermes 底座 / `:48911-48915`
+  N.E.K.O / `:7870` `:7871` 语音桥）全部从主图移除，仅在「已退役（勿加回）」
+  列表中保留作历史参考。
+- **3 份 HTML 重生**：
+  - `docs/architecture-overview.html` — 改顶部「控制面板 :9100」为「dsh 工作引擎 :3080」，
+    数据流从「Hermes Bridge :8650 → gateway :8642」改为「dsh overlay 注入 v5_* MCP」
+  - `docs/folder-tree.html` — `core/` 目录只列当前 5 模块
+    （memory_v5 / conversation-tree / ikaros-dsh / herdr / env），neko/hermes 子树全删
+  - `docs/module-dependency-map.html` — 节点关系图重画：
+    dsh :3080 → v5 MCP / 对话树 :48920 / 基础设施 runtime / 后端 :8587
+- diff: 363 +/ 397 -
+
+#### Code 层退役引用收敛
+- **`core/env/llama_resolver.py`** — 移除 `HERMES_ROOT` 兼容回退，
+  只认 `IKAROS_ROOT`（与 `bin/ikaros-env.sh/.bat` 单一权威源一致）
+- **`core/env/scripts/validate-paths.py`** — docstring 更新
+  （"HERMES_ROOT 兼容已废弃" → "无兼容回退"）
+- **`core/env/ikaros_paths.py`** — 模块 docstring trim
+- **`core/memory_v5/goal_contract.py`** — `_get_api_key_and_base()` 移除
+  本地 `:8080` fallback，无 API key 时直接返回空元组；`draft_contract()`
+  检测空 base_url 跳过 draft（注释明确本地 LLM 退役事实）
+- **`core/memory_v5/extensions/token_compressor.py`** — `quality="llm"`
+  路径不再走 `:8080`，改走 llmlingua 库 → 规则回退；
+  `provider="local"` 显式标记为"已退役"并触发规则回退
+- **`core/memory_v5/extensions/EXTENSIONS.md`** — 文档同步
+  (hermes 插件 → dsh 插件；enforce_budget 用途更新)
+- **`core/memory_v5/memory_api.py`** — class docstring 移除 `:8080` 提及
+- **`core/memory_v5/metacog.py`** — `_fallback_thought` / `cycle` docstring 更新
+  (":8080 is down" → "DeepSeek is down")
+- **`core/memory_v5/preprocess_config.yaml`** — `min_fused_score` 注释
+  从"标定于 nomic-embed-text-v2-moe"改为"标定于 bge-m3 q8_0 1024 维"
+- **`core/memory_v5/search.py`** — 旧 nomic task prefixes 折叠为简短历史备注
+- **`core/memory_v5/benchmark.py`** — 测试语料从 "Phi-4-mini" 改为
+  "本地 LLM (:8080) 已于 2026-08-18 退役, 当前所有 LLM 调用走云端 DeepSeek / MiniMax"
+- **`scripts/fetch-upstreams.py`** — 用法示例从 `model-nomic-embed` 改为
+  `model-bge-m3-embed`
+- **`scripts/setup-native.py`** — `write_dsh_profile_env()` docstring 更新
+  ("llama-local 指向本地 :8080" → "本地 LLM 默认禁用, 按需恢复")
+- **`config/ikaros-backend.json`** — `_comment` 注明 2026-08-18 默认 provider
+  走云端 DeepSeek；`provider` 字段从 `local` 改为 `deepseek`
+
+### Notes
+
+- `apps/neko/` 与 `patches/hermes/` 在 worktree 已不存在（git 也不跟踪）；
+  历史 doc 提及保留作教育价值。
+- 218 个 `.bak` 备份 + 大量 `__pycache__` 已被前几轮清理（`a6e5b75` /
+  `1d4813f` / `6102ca6`）删干净，本轮 0 个 `.bak` 待删。
+- `tmp/` 在 worktree 不存在（git ignored）；父工程 1.4GB 历史归档 + 调试
+  文件已写分类清单到 `/tmp/tmp-classification.md`（**等哥哥裁决**）。
+- `docs/lint.py` 仍有 3 条 pre-existing WARN（`docs/architecture-cleanup-20260817.md`
+  + `docs/hermes-retirement-inventory.md` 的历史记录，与本次清理无关，保留作教育价值）。
+
+### Verification
+
+- `python docs/lint.py` → 仅 3 条 pre-existing WARN（**OK**）
+- `python -m py_compile` 全 11 个被改 .py 文件 → **全部通过**
+- 现有测试不在本次重写范围（Task F 单独跑 baseline 验证）
+
+---
+
 ## [2026-08-01] — 9100 面板：自我思考卡片对齐真实数据 + 整页自由画布
 
 - **自我思考卡片（替代"内心独白"）**：9100 面板原「内心独白」读 `pending_thought.json`（磁盘不存在、无写入者）已废弃；现改读 metacog 真实产出的 `latest_thought.json`，经 `core/dashboard/server.py` 的 `/api/state` 暴露 `state.thought`；`index.html` 新增「自我思考」卡片（text + kind + 好奇度 + 时间，3s 轮询）。metacog 模块本体保留（事件驱动，详见 ARCHITECTURE §1.3.1）。
