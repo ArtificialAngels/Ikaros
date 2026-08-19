@@ -63,24 +63,51 @@ def _call_store(args: dict) -> dict:
 _HANDLERS = {"search": _call_search, "store": _call_store}
 
 
-def main() -> int:
-    if len(sys.argv) < 3:
-        print(json.dumps({"ok": False, "error": "usage: v5_call.py <search|store> <json-args>"}))
-        return 0
-    op = sys.argv[1]
+def _handle_one(op: str, args_json: str) -> str:
+    """执行单个 op, 返回 JSON 行 (异常吞掉返回错误, 不退栈)。"""
     try:
-        args = json.loads(sys.argv[2])
+        args = json.loads(args_json) if args_json else {}
     except json.JSONDecodeError:
         args = {}
     handler = _HANDLERS.get(op)
     if not handler:
-        print(json.dumps({"ok": False, "error": f"unknown op: {op}"}))
-        return 0
+        return json.dumps({"ok": False, "error": f"unknown op: {op}"}, ensure_ascii=False)
     try:
         result = handler(args)
     except Exception as exc:  # noqa: BLE001 — 桥接层失败必须吞掉返回 JSON, 不退栈
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    print(json.dumps(result, ensure_ascii=False))
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _daemon_loop() -> int:
+    """常驻模式: stdin 逐行读 `op\tjson` 命令, stdout 逐行回 JSON 结果。
+
+    复用进程 → 消除每次 spawn Python + import memory_v5 全链的 ~1.7s 冷启动。
+    协议: 请求 `<op>\\t<json>`; 响应 `<json-line>`。空行/EOF 退出。
+    """
+    import sys as _sys
+    _sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")  # type: ignore[union-attr]
+    for raw in _sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        if line in ("exit", "quit"):
+            break
+        op, _, args_json = line.partition("\t")
+        _sys.stdout.write(_handle_one(op.strip(), args_json.strip()) + "\n")
+        _sys.stdout.flush()
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) >= 2 and sys.argv[1] == "--daemon":
+        return _daemon_loop()
+    if len(sys.argv) < 3:
+        print(json.dumps({"ok": False, "error": "usage: v5_call.py <search|store> <json-args> | v5_call.py --daemon"}))
+        return 0
+    op = sys.argv[1]
+    args_json = sys.argv[2]
+    print(_handle_one(op, args_json))
     return 0
 
 
