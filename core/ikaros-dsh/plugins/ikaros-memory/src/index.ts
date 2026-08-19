@@ -148,7 +148,12 @@ function extractTurnPair(messages: unknown[]): { user: string; assistant: string
   return { user: '', assistant: '' }
 }
 
-// ── v5 桥接调用（dsh subprocess Service：collect/done API）────────────
+// ── v5 桥接调用（常驻 daemon 进程 + JSON 行协议）────────────────────
+// 性能优化 (2026-08-19): 原实现每次 spawn 一次性 python 进程 (~1.5s 冷启动),
+// 改为 apply 时启动 `v5_call.py --daemon` 常驻进程, stdin/stdout JSON 行通信。
+// subprocess Service 确认: {stdin:'pipe'} → handle.stdin (Writable 写);
+// {stdout:'pipe'} → handle.stdout (Readable, on('data') 实时读)。
+// 热调用 ~30ms (实测), 比一次性快 ~50x。进程崩溃自动重启。
 interface V5Result {
   ok: boolean
   error?: string
@@ -156,7 +161,118 @@ interface V5Result {
   id?: number
 }
 
+interface V5Daemon {
+  handle: {
+    stdin?: { write(data: string): unknown }
+    stdout?: { on(event: 'data', cb: (chunk: unknown) => void): unknown; on(event: 'error', cb: () => void): unknown }
+    done?: Promise<unknown>
+    terminate?(): void
+  }
+  buf: string
+  queue: Array<{ op: string; args: Record<string, unknown>; resolve: (r: V5Result) => void }>
+  draining: boolean
+}
+
+let _v5d: V5Daemon | null = null
+
+function ensureV5Daemon(ctx: Context): V5Daemon | null {
+  if (_v5d && _v5d.handle && _v5d.handle.stdin) return _v5d
+  const sub = ctx.get('subprocess')
+  if (sub === undefined) return null
+  try {
+    const handle = (sub as {
+      spawn(spec: unknown): {
+        stdin?: { write(data: string): unknown }
+        stdout?: { on(event: string, cb: (chunk?: unknown) => void): unknown }
+        done?: Promise<unknown>
+        terminate?(): void
+      }
+    }).spawn({
+      argv: [PYTHON, V5_CALL, '--daemon'],
+      cwd: path.dirname(PYTHON) + '/../..',
+      stdio: {
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+      graceMs: 5000,
+    })
+    if (!handle || !handle.stdin) return null
+    const d: V5Daemon = { handle, buf: '', queue: [], draining: false }
+    // 实时读 stdout → 按行解析响应
+    handle.stdout?.on('data', (chunk) => {
+      d.buf += String(chunk)
+      let nl: number
+      while ((nl = d.buf.indexOf('\n')) >= 0) {
+        const line = d.buf.slice(0, nl).trim()
+        d.buf = d.buf.slice(nl + 1)
+        if (!line) continue
+        const req = d.queue.shift()
+        if (!req) continue
+        try { req.resolve(JSON.parse(line) as V5Result) }
+        catch { req.resolve({ ok: false, error: 'bad daemon response' }) }
+      }
+    })
+    handle.stdout?.on('error', () => { /* 流错误, 下次调用重启 */ })
+    // 进程退出 → 拒绝队列, 清引用 (下次自动重启)
+    if (handle.done) {
+      void handle.done.then(() => {
+        const q = _v5d?.queue || []
+        _v5d = null
+        for (const r of q) r.resolve({ ok: false, error: 'v5 daemon exited' })
+      }).catch(() => { _v5d = null })
+    }
+    _v5d = d
+    return d
+  } catch {
+    return null
+  }
+}
+
 function callV5(ctx: Context, op: 'search' | 'store', args: Record<string, unknown>): Promise<V5Result> {
+  return new Promise((resolve) => {
+    const d = ensureV5Daemon(ctx)
+    if (!d) {
+      // 兜底: 常驻不可用 → 一次性进程 (collect 模式, 向后兼容)
+      return callV5Once(ctx, op, args).then(resolve)
+    }
+    d.queue.push({ op, args, resolve })
+    void drainV5Daemon(d)
+  })
+}
+
+async function drainV5Daemon(d: V5Daemon): Promise<void> {
+  if (d.draining) return
+  d.draining = true
+  try {
+    while (d.queue.length) {
+      const req = d.queue[0]
+      // 写请求 (op + json)
+      try {
+        d.handle.stdin!.write(`${req.op}\t${JSON.stringify(req.args)}\n`)
+      } catch {
+        d.queue.shift()
+        req.resolve({ ok: false, error: 'write failed' })
+        continue
+      }
+      // 等该请求被 on('data') 解析并 resolve (queue 头被 shift)
+      // 轮询等待: 若 15s 无响应则超时
+      const deadline = Date.now() + 15_000
+      while (d.queue[0] === req && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      if (d.queue[0] === req) {
+        d.queue.shift()
+        req.resolve({ ok: false, error: 'v5 daemon timeout' })
+      }
+    }
+  } finally {
+    d.draining = false
+  }
+}
+
+/** 兜底: 一次性进程调用 (collect 模式, 无 daemon 时用) */
+function callV5Once(ctx: Context, op: 'search' | 'store', args: Record<string, unknown>): Promise<V5Result> {
   return new Promise((resolve) => {
     const sub = ctx.get('subprocess')
     if (sub === undefined) return resolve({ ok: false, error: 'subprocess unavailable' })
