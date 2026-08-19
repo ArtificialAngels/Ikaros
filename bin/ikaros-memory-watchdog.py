@@ -331,7 +331,7 @@ class MemoryWatchdog:
         if "_action_log" not in _sys.modules:
             _spec = _ilu.spec_from_file_location(
                 "_action_log",
-                str(ROOT / "bin" / "ikaros-action-log.py"))
+                str(ROOT / "core" / "memory_v5" / "scripts" / "ikaros-action-log.py"))
             _al = _ilu.module_from_spec(_spec)
             _sys.modules["_action_log"] = _al
             _spec.loader.exec_module(_al)
@@ -529,7 +529,7 @@ class MemoryWatchdog:
                     "url": f"http://127.0.0.1:{EMBED_PORT}/v1",
                     "port": EMBED_PORT,
                     "alive": embed_ok,
-                    "model": "nomic-embed-text",
+                    "model": "bge-m3",
                 },
                 "llm": {
                     "url": f"http://127.0.0.1:{LLM_PORT}/v1",

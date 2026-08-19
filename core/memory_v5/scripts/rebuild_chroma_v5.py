@@ -28,11 +28,22 @@ import sys
 import time
 from pathlib import Path
 
-MEMORY_ROOT = Path(os.environ.get("IKAROS_MEMORY", r"E:/Ikaros/core/memory_v5")).resolve()
+def _ikaros_root() -> Path:
+    env = os.environ.get("IKAROS_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for d in (here, *here.parents):
+        if (d / "core" / "memory_v5").is_dir():
+            return d
+    return here.parents[2] if len(here.parents) > 2 else here
+
+ROOT = _ikaros_root()
+MEMORY_ROOT = Path(os.environ.get("IKAROS_MEMORY", str(ROOT / "core" / "memory_v5"))).resolve()
 DB_PATH = MEMORY_ROOT / "data" / "v5" / "v5.db"
 
-# v5 包在 Ikaros-memory/ 下; 把该目录前置进 sys.path 让 `import v5` 生效
-sys.path.insert(0, str(MEMORY_ROOT.parent))
+# v5 包在 core/memory_v5 下; 把 core/ 前置进 sys.path 让 `import memory_v5` 生效
+sys.path.insert(0, str(ROOT / "core"))
 os.chdir(MEMORY_ROOT)
 
 from memory_v5 import search as vs  # noqa: E402

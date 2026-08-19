@@ -8,8 +8,17 @@ import time
 from pathlib import Path
 
 # 让 import 找到 cloud_chat / cogno_5d
-_HERE = Path(__file__).resolve().parent
-_ROOT = _HERE.parent
+def _ikaros_root() -> Path:
+    env = os.environ.get("IKAROS_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for d in (here, *here.parents):
+        if (d / "core" / "memory_v5").is_dir():
+            return d
+    return here.parents[2] if len(here.parents) > 2 else here
+
+_ROOT = _ikaros_root()
 for p in (str(_ROOT / "bin"),
          str(_ROOT / "core/memory_v5")):
     if p not in sys.path:

@@ -30,10 +30,6 @@ export IKAROS_DSH_OVERLAY="${IKAROS_ROOT}/core/ikaros-dsh/cordis.patch.yml"
 export IKAROS_OMP_AGENT="${IKAROS_DATA}/omp/agent"
 export PI_CODING_AGENT_DIR="${IKAROS_OMP_AGENT}"
 
-# llama.cpp / 本地模型
-export IKAROS_LLAMA_VERSION="b10000-cuda"
-export IKAROS_LLAMA_DIR="${IKAROS_RUNTIME}/llama/${IKAROS_LLAMA_VERSION}"
-export IKAROS_LLAMA_SERVER="${IKAROS_LLAMA_DIR}/llama-server.exe"
 
 # 其它运行时
 export IKAROS_RUST="${IKAROS_RUNTIME}/rust"

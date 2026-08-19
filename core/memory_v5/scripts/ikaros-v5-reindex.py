@@ -10,9 +10,20 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
+def _ikaros_root() -> Path:
+    env = os.environ.get("IKAROS_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for d in (here, *here.parents):
+        if (d / "core" / "memory_v5").is_dir():
+            return d
+    return here.parents[2] if len(here.parents) > 2 else here
 
-_V5_DB = Path(__file__).resolve().parent.parent / "core" / "memory_v5" / "data" / "v5" / "v5.db"
+ROOT = _ikaros_root()
+sys.path.insert(0, str(ROOT / "core"))
+
+_V5_DB = ROOT / "core" / "memory_v5" / "data" / "v5" / "v5.db"
 
 
 def main() -> int:

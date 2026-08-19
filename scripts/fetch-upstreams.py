@@ -8,7 +8,7 @@ fetch-upstreams.py — Ikaros 上游组件拉取脚本（幂等）
 
 组件类型:
   - git:      git clone (轻量 --depth 1 --filter=blob:none)；已存在则 git pull
-  - release:  走 bin/ikaros-fastdl.py (gopeed/aria2 + 镜像) 下载后解压
+  - release:  走 ikaros-fastdl skill (gopeed/aria2 + 镜像) 下载后解压
   - npm:      runtime/node 的 npm install（全局安装到 runtime/node_modules）
 
 2026-08-18: neko / hermes-agent / hermes-web-ui 上游条目已随底座退役移除。
@@ -93,6 +93,27 @@ def git_clone_or_pull(item, dry):
     return r.returncode == 0
 
 
+def _find_fastdl():
+    """定位高速下载器脚本。
+
+    2026-08-18: 下载器已从 bin/ikaros-fastdl.py 抽离为 WorkBuddy skill
+    (~/.workbuddy/skills/ikaros-fastdl/ikaros-fastdl.py)，大模型可直接调用;
+    仓库内不再保留副本。按以下顺序回退:
+      1. user-level skill 脚本
+      2. PATH 中的 ikaros-fastdl 命令
+    都找不到则返回 None(调用方 skip)。
+    """
+    skill = os.path.join(os.path.expanduser("~"), ".workbuddy", "skills",
+                         "ikaros-fastdl", "ikaros-fastdl.py")
+    if os.path.isfile(skill):
+        return skill
+    import shutil
+    on_path = shutil.which("ikaros-fastdl")
+    if on_path:
+        return on_path
+    return None
+
+
 def release_download(item, dry):
     local = os.path.join(ROOT, item["local"])
     if os.path.isfile(local) or (item.get("unzip") and os.path.isdir(local) and os.listdir(local)):
@@ -101,9 +122,9 @@ def release_download(item, dry):
     log(f"{item['name']}: 下载 -> {item['local']}")
     if dry:
         return True
-    fastdl = os.path.join(BIN, "ikaros-fastdl.py")
-    if not os.path.isfile(fastdl):
-        log(f"  [skip] 缺少下载器 {fastdl}")
+    fastdl = _find_fastdl()
+    if not fastdl:
+        log("  [skip] 未找到下载器 (ikaros-fastdl skill 未安装 / 不在 PATH)")
         return False
     os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
     cmd = [sys.executable, fastdl, item["url"], "-o", local]

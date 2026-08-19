@@ -366,7 +366,7 @@ const T = {
       {n:"ikaros-memory-watchdog.py", k:true, c:":8080+:8587 看门狗"},
       {n:"hermes-gateway.py", c:":8642 gateway 启动器"}, {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
       {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
-      {n:"ikaros-fastdl.py", c:"Gopeed 下载 (按需)"}, {n:"import-hermes-to-convtree.py", c:"Hermes→对话树 :48920"},
+      {n:"ikaros-fastdl (skill)", c:"高速下载 (WorkBuddy skill, 按需)"}, {n:"import-hermes-to-convtree.py", c:"Hermes→对话树 :48920"},
       {n:"neko-start.bat / neko-stop.bat", c:"Neko 启停"},
       {n:"rebuild_chroma_v5.py", c:"重建向量库"}, {n:"bootstrap-venvs.py", c:"venv 引导"}, {n:"secret-scan.py", c:"密钥扫描"},
       {n:"legacy/", c:"旧脚本回滚桶", b:"核心"}

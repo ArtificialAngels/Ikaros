@@ -10,7 +10,17 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+def _ikaros_root() -> Path:
+    env = os.environ.get("IKAROS_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for d in (here, *here.parents):
+        if (d / "core" / "memory_v5").is_dir():
+            return d
+    return here.parents[2] if len(here.parents) > 2 else here
+
+ROOT = _ikaros_root()
 LOG_FILE = ROOT / "data" / "logs" / "ikaros-actions.jsonl"
 
 # 5 维信息

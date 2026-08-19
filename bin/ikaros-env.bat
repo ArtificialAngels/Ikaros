@@ -35,14 +35,7 @@ rem ---- omp (oh-my-pi) ���� agent ----
 set "IKAROS_OMP_AGENT=%IKAROS_DATA%\omp\agent"
 set "PI_CODING_AGENT_DIR=%IKAROS_OMP_AGENT%"
 
-rem ---- llama.cpp / ����ģ�� ----
-if not defined IKAROS_LLAMA_VERSION (
-    set "IKAROS_LLAMA_VERSION=b10000-cuda"
-    nvidia-smi 2>nul | findstr /C:"CUDA Version: 12." >nul 2>&1 && set "IKAROS_LLAMA_VERSION=b10000-cuda-12.4"
-    nvidia-smi 2>nul | findstr /C:"CUDA UMD Version: 12." >nul 2>&1 && set "IKAROS_LLAMA_VERSION=b10000-cuda-12.4"
 )
-set "IKAROS_LLAMA_DIR=%IKAROS_RUNTIME%\llama\%IKAROS_LLAMA_VERSION%"
-set "IKAROS_LLAMA_SERVER=%IKAROS_LLAMA_DIR%\llama-server.exe"
 
 rem ---- ��������ʱ ----
 set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
@@ -61,7 +54,7 @@ rem ---- Python / PATH ----
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 set "PYTHONPATH=%IKAROS_ROOT%;%IKAROS_ROOT%\core"
-set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;%IKAROS_ROOT%\runtime\herdr;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node;%IKAROS_ROOT%\runtime\portable-python\Scripts;%IKAROS_ROOT%\runtime\portable-python;%PATH%"
+set "PATH=%IKAROS_RUST%\bin;%IKAROS_ROOT%\runtime\herdr;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node;%IKAROS_ROOT%\runtime\portable-python\Scripts;%IKAROS_ROOT%\runtime\portable-python;%PATH%"
 set "NODE_PATH=%IKAROS_NODE_MODULES%"
 set "PYTHONHOME="
 

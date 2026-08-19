@@ -31,10 +31,6 @@ $env:IKAROS_DSH_OVERLAY = Join-Path $root "core\ikaros-dsh\cordis.patch.yml"
 $env:IKAROS_OMP_AGENT = Join-Path $root "data\omp\agent"
 $env:PI_CODING_AGENT_DIR = $env:IKAROS_OMP_AGENT
 
-# llama.cpp
-$env:IKAROS_LLAMA_VERSION = "b10000-cuda"
-$env:IKAROS_LLAMA_DIR = Join-Path $root "runtime\llama\$($env:IKAROS_LLAMA_VERSION)"
-$env:IKAROS_LLAMA_SERVER = Join-Path $env:IKAROS_LLAMA_DIR "llama-server.exe"
 
 # 其它
 $env:IKAROS_RUST = Join-Path $root "runtime\rust"

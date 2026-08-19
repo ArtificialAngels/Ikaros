@@ -2,7 +2,7 @@
 
 ## 用途（原模块 docstring）
 管理记忆服务（统一架构），由 `ikaros-start.bat` 第 2 步以 `--detach` 拉起：
-1. **Embedding (:8587)** — nomic-embed-text，供 v4 记忆库语义搜索（看门狗主动拉起 + 巡检重启）
+1. **Embedding (:8587)** — bge-m3，供 V5 记忆库语义搜索（看门狗主动拉起 + 巡检重启）
 2. **LLM (:8080)** — 本地常规 llama 服务，**懒加载 / 按需**：看门狗只检测端口在不，**不主动拉起模型、不在启动/巡检时加载模型**；模型在 agent 首次调用本地 LLM 时由 `ensure_local_llm()` 热载入，或手动 `llama-help --hotload` 触发。
 
 启动后：拉起 embedding；每 10 秒巡检端口，embed 死则重启、LLM 仅监测（down 不重启）；写 PID 文件，支持 `--stop` 安全停止。

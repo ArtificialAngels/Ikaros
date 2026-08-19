@@ -1,8 +1,11 @@
 # Ikaros DSH 工作引擎底座 —— 重启器
 # 杀旧 dsh web 进程，用 core/ikaros-dsh/cordis.patch.yml overlay 重启。
-# 独立进程运行（不依赖当前会话），杀掉 dsh 后自身不受影响。
+# 自锚定 IKAROS_ROOT (不写死盘符)，与 start-dsh-ikaros.bat 使用同一 node bin.js 入口。
 $ErrorActionPreference = 'SilentlyContinue'
-$log = 'C:\Users\PZS0X\.dsh\ikaros-dsh-restart.log'
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path.TrimEnd('\')
+$logDir = Join-Path $env:USERPROFILE ".dsh"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$log = Join-Path $logDir "ikaros-dsh-restart.log"
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $m" | Out-File -FilePath $log -Append -Encoding utf8 }
 
 Log "=== restart started (PID $PID) ==="
@@ -17,12 +20,17 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 
 Start-Sleep -Seconds 3
 
-# 2. 用 --patch 重启（自锚定规范源）
-$patch = 'E:\Ikaros\core\ikaros-dsh\cordis.patch.yml'
+# 2. 用 --patch 重启（自锚定规范源，与 start-dsh-ikaros.bat 一致）
+$patch = Join-Path $root "core\ikaros-dsh\cordis.patch.yml"
 if (-not (Test-Path $patch)) { Log "ERROR: patch not found: $patch"; exit 1 }
 
-Log "starting dsh web --patch $patch (cwd E:\Ikaros)"
-$p = Start-Process -FilePath 'dsh' -ArgumentList @('web','--patch',$patch) -WorkingDirectory 'E:\Ikaros' -WindowStyle Hidden -PassThru -RedirectStandardOutput 'C:\Users\PZS0X\.dsh\ikaros-dsh-web.out.log' -RedirectStandardError 'C:\Users\PZS0X\.dsh\ikaros-dsh-web.err.log'
+$node = Join-Path $root "runtime\node\node.exe"
+$dshBin = Join-Path $root "runtime\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"
+if (-not (Test-Path $node)) { Log "ERROR: node not found: $node"; exit 1 }
+if (-not (Test-Path $dshBin)) { Log "ERROR: dsh not found: $dshBin"; exit 1 }
+
+Log "starting dsh web --patch $patch (cwd $root)"
+$p = Start-Process -FilePath $node -ArgumentList @($dshBin,'web','--patch',$patch) -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir "ikaros-dsh-web.out.log") -RedirectStandardError (Join-Path $logDir "ikaros-dsh-web.err.log")
 Log "started dsh PID $($p.Id)"
 
 # 3. 验证 3080 监听 + mcp_server spawn

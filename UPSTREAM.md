@@ -74,7 +74,7 @@
 | Phi-4-mini (本地 LLM) | `core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf` | HuggingFace `microsoft/Phi-4-mini-instruct-gguf` |
 | 其它 `*.gguf` / `*.onnx_data` | 各处 | 见 `*.gguf` / `*.onnx_data` 全局忽略 |
 
-> 下载统一走 `bin/ikaros-fastdl.py`（带 hf-mirror.com / ghproxy 镜像）。
+> 下载统一走 WorkBuddy 技能 `ikaros-fastdl`（底层 gopeed/aria2 + hf-mirror.com / ghproxy 镜像），由 `scripts/fetch-upstreams.py` 解析调用。
 
 ---
 
