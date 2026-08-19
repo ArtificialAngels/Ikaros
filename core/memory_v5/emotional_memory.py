@@ -300,13 +300,14 @@ def build_emotion_diff_block() -> str:
         except Exception:
             last = {}
 
-        # 写回当前状态 (轨迹追踪, 每次都更)
+        # 写回当前状态 (轨迹追踪, 每次都更) — 原子写 + .bak 备份
         try:
-            _EMOTION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _EMOTION_STATE_PATH.write_text(
-                _json.dumps({"p": p, "a": a, "d": d, "mood": cur_mood, "ts": _now},
-                            ensure_ascii=False),
-                encoding="utf-8")
+            from memory_v5.file_store import atomic_write_json
+            atomic_write_json(
+                _EMOTION_STATE_PATH,
+                {"p": p, "a": a, "d": d, "mood": cur_mood, "ts": _now},
+                validator=None,
+            )
         except Exception:
             pass
 

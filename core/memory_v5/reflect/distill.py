@@ -132,7 +132,7 @@ def distill(*, min_entries: int = 3) -> dict:
     # 用蒸馏结果替换: 删旧, 存新 (V3 line 519-537 一致)
     old_ids = [r["id"] for r in rows]
     try:
-        with store.conn() as c:
+        with store.committed() as c:
             placeholders = ",".join("?" * len(old_ids))
             c.execute(f"DELETE FROM memory WHERE id IN ({placeholders})", old_ids)
     except Exception as e:

@@ -1920,24 +1920,13 @@ class ConversationTree:
 
     def persist(self) -> None:
         try:
+            from memory_v5.file_store import atomic_write_text
             self.data_dir.mkdir(parents=True, exist_ok=True)
             path = self.data_dir / f"{self.persist_key}.json"
-            # R9: 并发持久化安全 —— persist() 在引擎锁外被调用 (R1 设计),
-            # 多线程同时写同一 .json.tmp 会互相截断, Windows 下 rename 期间
-            # 文件被占 → WinError 32, 写全部丢失。每次用唯一 tmp 名,
-            # os.replace 原子替换目标, 并发写同一目标 = 最后一次赢, 不丢文件。
-            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:12]}.tmp")
-            tmp.write_text(self.serialize(), encoding="utf-8")
-            # 2026-08-14: Windows 下目标文件可能被并发读者/杀软瞬时锁定,
-            # os.replace 抛 WinError 5 (access denied) → 短退避重试 (最多 4 次).
-            for _attempt in range(4):
-                try:
-                    tmp.replace(path)
-                    break
-                except OSError:
-                    if _attempt == 3:
-                        raise
-                    time.sleep(0.05 * (_attempt + 1))
+            # R9 + drift guard: 原子写 (唯一 tmp + os.replace, 并发最后赢不丢文件)
+            # + .bak 滚动备份; 若磁盘现有文件已无法 JSON 解析 (外部/手工改坏),
+            # 先备份再拒绝覆盖, 保留有意义 (虽损坏) 的内容供恢复。
+            atomic_write_text(path, self.serialize(), make_backup=True)
         except Exception as exc:
             logger.warning("persist failed for %s: %s", self.persist_key, exc)
 

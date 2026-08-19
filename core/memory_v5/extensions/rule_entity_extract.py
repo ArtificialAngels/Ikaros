@@ -122,7 +122,7 @@ def run_rule_extract(
 
     stats = {"entities_created": 0, "edges_updated": 0, "memories_linked": 0}
     try:
-        with store.conn() as c:
+        with store.committed() as c:
             rows = _load_memory_batch(c, limit, min_weight)
             if not rows:
                 return stats

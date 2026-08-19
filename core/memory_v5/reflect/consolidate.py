@@ -320,7 +320,7 @@ def _delete_conversations(ids: list[int]) -> None:
     if not ids:
         return
     try:
-        with store.conn() as c:
+        with store.committed() as c:
             for mid in ids:
                 c.execute("DELETE FROM memory WHERE id = ?", (mid,))
         logger.debug("deleted %d processed conversations", len(ids))

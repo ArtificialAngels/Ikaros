@@ -372,6 +372,38 @@ def conn() -> Iterator[sqlite3.Connection]:
             pass
 
 
+@contextmanager
+def committed() -> Iterator[sqlite3.Connection]:
+    """Read-write transaction helper — auto-commit on success, rollback on error.
+
+    Use this for WRITE paths instead of ``with conn() as c: … c.commit()`` so a
+    forgotten ``commit()`` can never silently drop a write (the historical
+    footgun documented in AGENTS.md §9.1 — promote/cleanup/memory_promote once
+    wrote then forgot to commit, so short-term memory never persisted).
+
+    Read-only paths should keep using :func:`conn` (which rolls back on exit,
+    so a stray write in a read block is discarded rather than persisted).
+
+    Implementation: delegates to ``conn()`` (same per-call connection, same
+    schema bootstrap) and commits in the ``else`` branch — i.e. only when the
+    ``with`` body returned normally. Any exception triggers rollback + re-raise.
+    """
+    with conn() as c:
+        try:
+            yield c
+        except Exception:
+            try:
+                c.rollback()
+            except Exception:
+                pass
+            raise
+        else:
+            try:
+                c.commit()
+            except Exception:
+                pass
+
+
 def close() -> None:
     """Close the current thread's connection (for testing / db switching)."""
     c = getattr(_tls, "c", None)
@@ -462,16 +494,25 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
     import time as _time
 
     # Validation: catch issues early before retry loop
-    from memory_v5.validation import validate_memory, check_and_log
+    from memory_v5.validation import (
+        validate_memory, check_and_log, contains_prompt_injection,
+    )
+    from memory_v5.validation import INJECTION_HARD_BLOCK
     check_and_log(content, lambda v: validate_memory(
         v, mem_type=type, weight=weight, pad_p=pad_p, pad_a=pad_a, pad_d=pad_d
     ), context="store")
+    # Grafted from dsh-memory-evolve: hard-block unambiguous prompt-injection
+    # overrides when enabled (default off → fail-open, log-only).
+    if INJECTION_HARD_BLOCK and contains_prompt_injection(content, critical_only=True):
+        raise ValueError(
+            f"store refused: content matches CRITICAL prompt-injection pattern: {content[:120]!r}"
+        )
 
     weight = max(0.0, min(1.0, weight))
     last_err = None
     for attempt in range(4):
         try:
-            with conn() as c:
+            with committed() as c:
                 cur = c.execute(
                     "INSERT INTO memory (content, type, tags, weight, "
                     "pad_p, pad_a, pad_d, character, reinforcement, disputation, "
@@ -481,7 +522,6 @@ def store(content: str, type: str = "fact", weight: float = 0.6,
                      pad_p, pad_a, pad_d, character, reinforcement, disputation,
                      source_memory_id),
                 )
-                c.commit()
                 mid = int(cur.lastrowid)
             _sync_vector_best_effort(mid, content, type, tags, weight)
             # V5.2: 事件溯源
@@ -578,7 +618,7 @@ def _merge_into(memory_id: int, content: str, type: str, weight: float,
                 tags: str, reinforcement: float = 0.0) -> int:
     """合并强化既有记忆: 内容取更长者, 权重取高者, tags 并集, access+1, last_accessed=now."""
     import time as _time
-    with conn() as c:
+    with committed() as c:
         row = c.execute(
             "SELECT content, weight, tags FROM memory WHERE id = ?", (memory_id,)
         ).fetchone()
@@ -708,7 +748,7 @@ def _record_event_best_effort(entity_id: int | str, content: str, entity_type: s
         return
     def _write():
         try:
-            with conn() as c:
+            with committed() as c:
                 c.execute(
                     "INSERT INTO events (character, event_type, entity_type, entity_id, payload) "
                     "VALUES (?, ?, ?, ?, ?)",
@@ -888,7 +928,7 @@ def link_project_edge(source_id, target_id, relation: str = "RELATES_TO",
         return False
     relation = (relation or "RELATES_TO").upper()
     try:
-        with conn() as c:
+        with committed() as c:
             c.execute(
                 "INSERT INTO project_edges (source_id, target_id, relation, weight) "
                 "VALUES (?, ?, ?, ?) "
@@ -990,7 +1030,7 @@ def search_by_time_range(start_ts: float, end_ts: float,
 
 def delete(memory_id: int) -> bool:
     """Delete one memory. Returns True/False."""
-    with conn() as c:
+    with committed() as c:
         cur = c.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
         c.commit()
         return cur.rowcount > 0
@@ -998,7 +1038,7 @@ def delete(memory_id: int) -> bool:
 
 def access(memory_id: int) -> None:
     """Record access + weight +0.05 (same as V3)."""
-    with conn() as c:
+    with committed() as c:
         c.execute(
             "UPDATE memory SET "
             "  access_count = access_count + 1, "
@@ -1081,7 +1121,7 @@ def evidence_score(memory_row: dict, now: float | None = None) -> float:
 def update_evidence(memory_id: int, delta_rein: float = 0.0, delta_disp: float = 0.0) -> bool:
     """更新记忆的证据分数."""
     try:
-        with conn() as c:
+        with committed() as c:
             c.execute(
                 "UPDATE memory SET reinforcement = reinforcement + ?, "
                 "disputation = disputation + ?, "

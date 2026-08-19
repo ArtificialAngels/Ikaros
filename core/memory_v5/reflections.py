@@ -178,10 +178,10 @@ def synthesize(character: str, content: str, source_fact_ids: list[str] | None =
     Returns:
         The reflection ID, or '' on failure
     """
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     rid = _make_id(content)
     try:
-        with conn() as c:
+        with committed() as c:
             c.execute(
                 "INSERT OR IGNORE INTO reflections "
                 "(id, character, content, entity, relation_type, temporal_scope, "
@@ -208,9 +208,9 @@ def apply_evidence(character: str, reflection_id: str,
 
     After applying, recomputes evidence score and may trigger status transition.
     """
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     try:
-        with conn() as c:
+        with committed() as c:
             row = c.execute(
                 "SELECT * FROM reflections WHERE id = ? AND character = ?",
                 (reflection_id, character),
@@ -311,8 +311,8 @@ def promote_to_persona(reflection_id: str, character: str, merge_target: str = "
             model.data[narrative_key] = entry
         model.save()
 
-        from memory_v5.store import conn
-        with conn() as c:
+        from memory_v5.store import conn, committed
+        with committed() as c:
             c.execute(
                 "UPDATE reflections SET status = 'merged', merged_into = ? "
                 "WHERE id = ? AND character = ?",

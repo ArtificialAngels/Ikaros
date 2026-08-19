@@ -70,8 +70,8 @@ def _load_revisions() -> dict[str, int]:
 
 def _save_revisions(revs: dict[str, int]) -> None:
     try:
-        _REVISION_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _REVISION_FILE.write_text(json.dumps(revs, indent=2), encoding="utf-8")
+        from memory_v5.file_store import atomic_write_json
+        atomic_write_json(_REVISION_FILE, revs, make_backup=False)
     except Exception:
         pass
 
@@ -260,10 +260,10 @@ class SelfModel:
                 for uk in unknown_keys:
                     self.data.pop(uk, None)
             with json_lock(p, state_key="self_model.json", expected_revision=expected_revision):
-                tmp = p.parent / (p.name + f".tmp.{os.getpid()}")
-                tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2),
-                               encoding="utf-8")
-                os.replace(tmp, p)  # 原子替换, 防止双进程写坏
+                # 原子写 + 滚动 .bak + 漂移护栏 (hand-edit 后语法损坏的旧文件会被
+                # 备份而非覆盖, 见 memory_v5.file_store) — 取代手工 tmp+os.replace.
+                from memory_v5.file_store import atomic_write_json
+                atomic_write_json(p, self.data, make_backup=True)
         except Exception as exc:
             logger.warning("self_model save failed: %s", exc)
 

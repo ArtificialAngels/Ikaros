@@ -52,7 +52,7 @@ def record_response(character: str, response_text: str) -> int:
     Returns:
         Number of new ngrams recorded
     """
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     tokens = _tokenize(response_text)
     ngrams = _extract_ngrams(tokens)
     if not ngrams:
@@ -61,7 +61,7 @@ def record_response(character: str, response_text: str) -> int:
     count = Counter(ngrams)
     recorded = 0
     try:
-        with conn() as c:
+        with committed() as c:
             # Prune oldest if over limit
             c.execute(
                 "DELETE FROM anti_repeat WHERE character = ? "
@@ -173,9 +173,9 @@ def get_penalty_hint(character: str, candidate_text: str) -> str:
 
 def clear(character: str = '') -> int:
     """Clear anti-repeat corpus for a character (or all if character='')."""
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     try:
-        with conn() as c:
+        with committed() as c:
             if character:
                 cur = c.execute("DELETE FROM anti_repeat WHERE character = ?", (character,))
             else:

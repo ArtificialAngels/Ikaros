@@ -276,13 +276,10 @@ class AffectState:
     # ── 持久化 ─────────────────────────────────────────────────
 
     def save(self, path: str | Path | None = None) -> None:
-        """写 JSON 持久化."""
+        """写 JSON 持久化 (原子写 + .bak 滚动备份, 见 memory_v5.file_store)."""
+        from memory_v5.file_store import atomic_write_json
         p = Path(path) if path else _AFFECT_PATH
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps(asdict(self), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(p, asdict(self))
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "AffectState":

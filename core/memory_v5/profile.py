@@ -187,17 +187,9 @@ def aggregate() -> UserProfile:
 
 
 def save_profile(profile: UserProfile) -> None:
-    """保存画像到 data/v5/profile.json.
-
-    原子写: 写 tmp + rename, 防中途崩溃丢数据.
-    """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = PROFILE_PATH.with_suffix(PROFILE_PATH.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(asdict(profile), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    tmp.replace(PROFILE_PATH)
+    """保存画像到 data/v5/profile.json. 原子写 + 滚动 .bak."""
+    from memory_v5.file_store import atomic_write_json
+    atomic_write_json(PROFILE_PATH, asdict(profile), make_backup=True)
     logger.info("profile: 已保存 %d 条 trait", len(profile.traits))
 
 

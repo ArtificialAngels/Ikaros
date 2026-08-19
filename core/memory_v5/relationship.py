@@ -132,10 +132,9 @@ class Relationship:
     # -- 持久化 --
 
     def save(self, path: str | Path | None = None) -> None:
+        from memory_v5.file_store import atomic_write_json
         p = Path(path) if path else _REL_PATH
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2),
-                     encoding="utf-8")
+        atomic_write_json(p, asdict(self))
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Relationship":

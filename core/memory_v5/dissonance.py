@@ -147,7 +147,7 @@ def _record_dissonance(new_content: str, conflicts: list[dict]) -> None:
 
         # 阶段 4: reinforcement 降权 (下限 -2.0, 防止反复召回已被推翻的内容)
         try:
-            with store.conn() as c:
+            with store.committed() as c:
                 for cf in conflicts:
                     oid = cf.get("old_id")
                     if oid is None:

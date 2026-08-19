@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from memory_v5.file_store import atomic_write_json
+
 logger = logging.getLogger("ikaros.v5.proactive")
 
 V5_ROOT = Path(__file__).resolve().parent
@@ -73,8 +75,7 @@ def mark_chat(now: float | None = None) -> None:
     try:
         st = json.loads(_STATE_PATH.read_text(encoding="utf-8")) if _STATE_PATH.is_file() else {}
         st["last_chat_ts"] = now
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(_STATE_PATH, st, validator=None)
     except Exception:
         pass
 
@@ -154,8 +155,7 @@ def try_proactive() -> Optional[str]:
         # 记录说话时间
         st = json.loads(_STATE_PATH.read_text(encoding="utf-8")) if _STATE_PATH.is_file() else {}
         st["last_speak_ts"] = time.time()
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(_STATE_PATH, st, validator=None)
 
         logger.info("proactive speak [self-determined]: %s", text[:60])
         return text
@@ -185,8 +185,7 @@ class _TodoScheduler:
                 self._items = []
 
     def _save(self):
-        _SCHED_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _SCHED_PATH.write_text(_json.dumps(self._items, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(_SCHED_PATH, self._items, validator=None)
 
     def remember_todo(self, text: str, due_ts: float = 0, kind: str = ""):
         self._load()

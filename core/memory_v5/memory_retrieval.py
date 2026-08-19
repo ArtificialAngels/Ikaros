@@ -554,6 +554,7 @@ def unified_retrieve(
     time_range: tuple[float, float] | None = None,
     exclude: list[str] | None = None,
     min_weight: float = 0.0,
+    include_dsh_only: bool = True,
 ) -> list[dict]:
     """统一检索入口 (对应 cognee recall). scope 自动路由, 空则回退语义.
 
@@ -615,7 +616,8 @@ def unified_retrieve(
         if not merged:
             return unified_retrieve(query, top_k=tk, scope="semantic",
                                     character=character, time_range=time_range,
-                                    exclude=exclude, min_weight=min_weight)
+                                    exclude=exclude, min_weight=min_weight,
+                                    include_dsh_only=include_dsh_only)
 
     elif scope == "graph":
         # P3 图收敛: 统一图检索 (实体图 + 项目知识图)
@@ -627,7 +629,8 @@ def unified_retrieve(
         if not merged:
             return unified_retrieve(query, top_k=tk, scope="semantic",
                                     character=character, time_range=time_range,
-                                    exclude=exclude, min_weight=min_weight)
+                                    exclude=exclude, min_weight=min_weight,
+                                    include_dsh_only=include_dsh_only)
 
     elif scope == "tree":
         if tree is not None and node_id:
@@ -639,11 +642,12 @@ def unified_retrieve(
             except Exception as e:
                 logger.debug("unified tree failed: %s", e)
             if merged:
-                return _finish(merged, tk)
+                return _finish(merged, tk, include_dsh_only=include_dsh_only)
         # tree 不可用 → 降级 auto (保持树端调用行为不崩)
         return unified_retrieve(query, top_k=tk, scope="auto", character=character,
                                 time_range=time_range, exclude=exclude,
-                                min_weight=min_weight)
+                                min_weight=min_weight,
+                                include_dsh_only=include_dsh_only)
 
     elif scope == "temporal":
         # 阶段 5: retrieve_temporal —— 过滤 valid_to 已失效的事实 (时效图谱)
@@ -655,10 +659,11 @@ def unified_retrieve(
         except Exception as e:
             logger.debug("unified temporal failed: %s", e)
         if merged:
-            return _finish(merged, tk)
+            return _finish(merged, tk, include_dsh_only=include_dsh_only)
         return unified_retrieve(query, top_k=tk, scope="semantic", character=character,
                                 time_range=time_range, exclude=exclude,
-                                min_weight=min_weight)
+                                min_weight=min_weight,
+                                include_dsh_only=include_dsh_only)
 
     # ── auto / semantic ──
     sem: list = []
@@ -670,7 +675,7 @@ def unified_retrieve(
     _merge(sem, "semantic")
     used.append("semantic")
     if scope == "semantic" or not auto_route:
-        return _finish(merged, tk)
+        return _finish(merged, tk, include_dsh_only=include_dsh_only)
 
     # ── auto 补路: semantic 不足时补图扩散 (低分 graph 不过 threshold) ──
     # 意图为 ENTITY (问"什么是/关于/是谁") 时总是补实体图扩散 (即使 semantic 已足),
@@ -682,10 +687,10 @@ def unified_retrieve(
             used.append("graph")
         except Exception as e:
             logger.debug("unified auto graph fallback failed: %s", e)
-    return _finish(merged, tk)
+    return _finish(merged, tk, include_dsh_only=include_dsh_only)
 
 
-def _finish(merged: dict[str, dict], tk: int) -> list[dict]:
+def _finish(merged: dict[str, dict], tk: int, *, include_dsh_only: bool = True) -> list[dict]:
     """排序截断 (fail-open: merged 可能为空).
 
     Phase 3 (2026-08-14): 时间锚定检索 ——
@@ -693,6 +698,8 @@ def _finish(merged: dict[str, dict], tk: int) -> list[dict]:
       - 默认排除已失效事实 (memory.valid_to < now), 与 temporal_graph
         "检索永远取当前值" 设计意图一致; 列不存在/迁移未跑/查询失败 → fail-open
         不过滤 (不阻塞检索)。
+    ``include_dsh_only=False`` drops ``[dsh-only]`` entries (used when building
+    context for external executors such as pi / herdr).
     """
     out = [v for v in merged.values() if v["score"] > 0]
     if not out:
@@ -708,6 +715,9 @@ def _finish(merged: dict[str, dict], tk: int) -> list[dict]:
                or float(vt[str(v["id"])]) > now]
     except Exception as exc:
         logger.debug("_finish: temporal filter skipped (%s)", exc)
+    if not include_dsh_only:
+        from memory_v5.scope import is_dsh_only
+        out = [v for v in out if not is_dsh_only(v.get("content"))]
     out.sort(key=lambda x: -x["score"])
     return out[:tk]
 

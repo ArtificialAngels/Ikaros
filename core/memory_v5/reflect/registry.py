@@ -102,7 +102,7 @@ def make_dedup_op() -> ReflectOp:
 
         if dup_ids:
             try:
-                with store.conn() as c:
+                with store.committed() as c:
                     c.executemany(
                         "UPDATE memory SET archived = 1, archived_at = ? WHERE id = ?",
                         [(now, i) for i in dup_ids],
@@ -136,7 +136,7 @@ def make_promote_op() -> ReflectOp:
     PROMOTE_ACCESSES = 2
 
     def _fn() -> int:
-        with store.conn() as c:
+        with store.committed() as c:
             cur = c.execute(
                 "UPDATE memory SET short_term = 0, long_term = 1 "
                 "WHERE short_term = 1 AND archived = 0 "
@@ -210,7 +210,7 @@ def make_cleanup_op() -> ReflectOp:
         seven_days = 7 * 86400
         thirty_days = 30 * 86400
         archived = 0
-        with store.conn() as c:
+        with store.committed() as c:
             # conversation > 7d → 归档 (原 DELETE)
             cur = c.execute(
                 "UPDATE memory SET archived = 1, archived_at = ? "
@@ -307,7 +307,7 @@ def make_memory_promote_op() -> ReflectOp:
         now = time.time()
         promoted = demoted = 0
         try:
-            with store.conn() as c:
+            with store.committed() as c:
                 # 先回收: long_term=1 且 90 天零访问 → 降回 short_term
                 # (必须放在晋升前: 同一事务内刚晋升的行若 last_accessed=0 会立即被回收)
                 # 2026-08-14 修复: 原条件 `access_count=0 AND (last_accessed=0 OR ...)`
@@ -405,7 +405,7 @@ def make_temporal_extract_op() -> ReflectOp:
                 continue
             if ts is not None:
                 try:
-                    with store.conn() as c:
+                    with store.committed() as c:
                         c.execute("UPDATE memory SET valid_from = ? WHERE id = ?",
                                   (ts, r["id"]))
                         c.commit()

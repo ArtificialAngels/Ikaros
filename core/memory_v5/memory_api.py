@@ -86,6 +86,7 @@ class V5MemoryAPI:
         top_k: int = 5,
         time_range: tuple = None,
         min_score: Optional[float] = None,
+        include_dsh_only: bool = True,
     ) -> list[dict]:
         """Search memory.
 
@@ -145,7 +146,8 @@ class V5MemoryAPI:
                 from memory_v5.memory_retrieval import unified_retrieve
                 tr = tuple(time_range) if time_range else None
                 fused = unified_retrieve(query, top_k=top_k, scope="auto",
-                                         time_range=tr, min_weight=0.0)
+                                         time_range=tr, min_weight=0.0,
+                                         include_dsh_only=include_dsh_only)
 # 内联说明见 docs/scripts/core/memory_v5/v5/memory_api.md（见“内联注释摘录”）
                 if fused:
                     if min_score is not None and min_score > 0:
@@ -162,7 +164,11 @@ class V5MemoryAPI:
         # 3) FTS5 fallback (reachable both when fusion raises AND when it returns [])
         if query:
             try:
-                return [_row_to_dict(m) for m in _store.search(query, top_k=top_k)]
+                rows = [_row_to_dict(m) for m in _store.search(query, top_k=top_k)]
+                if not include_dsh_only:
+                    from memory_v5.scope import is_dsh_only
+                    rows = [r for r in rows if not is_dsh_only(r.get("content"))]
+                return rows
             except Exception:  # noqa: BLE001
                 return []
         return []

@@ -32,10 +32,10 @@ def add_directive(character: str, directive_text: str,
     Returns:
         The new directive ID, or 0 on failure
     """
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     try:
         expires_at = (time.time() + ttl_seconds) if ttl_seconds > 0 else 0
-        with conn() as c:
+        with committed() as c:
             # Prune oldest over limit
             c.execute(
                 "DELETE FROM user_directives WHERE character = ? "
@@ -105,10 +105,10 @@ def expire_old(character: str = '') -> int:
     Returns:
         Number of directives expired
     """
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     now = time.time()
     try:
-        with conn() as c:
+        with committed() as c:
             if character:
                 cur = c.execute(
                     "UPDATE user_directives SET is_active = 0 "
@@ -130,9 +130,9 @@ def expire_old(character: str = '') -> int:
 
 def deactivate(directive_id: int) -> bool:
     """Deactivate a specific directive by ID."""
-    from memory_v5.store import conn
+    from memory_v5.store import conn, committed
     try:
-        with conn() as c:
+        with committed() as c:
             c.execute(
                 "UPDATE user_directives SET is_active = 0 WHERE id = ?",
                 (directive_id,),

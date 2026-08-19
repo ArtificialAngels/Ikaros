@@ -106,6 +106,7 @@ def v5_project_retrieve(
     query: str = None,
     top_k: int = 8,
     with_links: bool = False,
+    include_dsh_only: bool = True,
 ) -> str:
     """Retrieve project memory: decisions / pitfalls / conventions / ideas.
 
@@ -140,6 +141,7 @@ def v5_project_retrieve(
         tags=tags,
         top_k=top_k,
         min_score=0.0,
+        include_dsh_only=include_dsh_only,
     )
     if not results:
         return dumps({"ok": True, "count": 0, "items": [],

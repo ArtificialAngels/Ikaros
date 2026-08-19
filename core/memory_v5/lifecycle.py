@@ -92,7 +92,7 @@ def retention_pass(now: float | None = None) -> dict:
     archive_ids = [i for i in archive_ids if i not in keep]
 
     try:
-        with store.conn() as c:
+        with store.committed() as c:
             if demote_ids:
                 c.executemany(
                     "UPDATE memory SET long_term = 0, short_term = 1 WHERE id = ?",

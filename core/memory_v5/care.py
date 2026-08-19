@@ -135,11 +135,11 @@ class CareMonitor:
 
     def save(self, path: Path | None = None) -> None:
         from memory_v5.self_model import json_lock
+        from memory_v5.file_store import atomic_write_json
         p = path or _CARE_PATH
         p.parent.mkdir(parents=True, exist_ok=True)
         with json_lock(p):
-            p.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2),
-                         encoding="utf-8")
+            atomic_write_json(p, asdict(self))
 
     @classmethod
     def load(cls, path: Path | None = None) -> "CareMonitor":

@@ -82,7 +82,7 @@ def supersede_memory(old_id: str, now: Optional[float] = None) -> bool:
     now = now or time.time()
     from memory_v5 import store
     ok = False
-    with store.conn() as c:
+    with store.committed() as c:
         cur = c.execute(
             "SELECT valid_to FROM memory WHERE id=?", (old_id,)
         ).fetchone()

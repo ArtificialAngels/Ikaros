@@ -31,6 +31,8 @@ import os
 import sys
 from pathlib import Path
 
+from memory_v5.file_store import atomic_write_json
+
 MODELS_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = MODELS_DIR / "model_config.json"
 
@@ -114,10 +116,8 @@ def resolve_model_config(force_rescan: bool = False) -> dict:
     candidates = _scan_chat_models()
     chosen = _select_default(candidates)
     cfg = default_config(chosen)
-    CONFIG_PATH.write_text(
-        json.dumps(cfg, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    # 原子写 + .bak 备份 (machine-managed: 关闭 drift guard 以便修复损坏配置)
+    atomic_write_json(CONFIG_PATH, cfg, validator=None)
     return cfg
 
 

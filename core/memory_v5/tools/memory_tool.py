@@ -75,6 +75,7 @@ def v5_memory_search(
     time_end: float = None,
     exclude: str = None,
     emotion_tag: str = None,
+    include_dsh_only: bool = True,
 ) -> str:
     """Search long-term memory.
 
@@ -95,7 +96,8 @@ def v5_memory_search(
 
     api = V5MemoryAPI()
     time_range = (time_start, time_end) if (time_start and time_end) else None
-    results = api.search(query=query, fuse=True, top_k=top_k, time_range=time_range)
+    results = api.search(query=query, fuse=True, top_k=top_k, time_range=time_range,
+                         include_dsh_only=include_dsh_only)
 
     if min_weight > 0:
         results = [r for r in results if float(r.get("weight", 0)) >= min_weight]

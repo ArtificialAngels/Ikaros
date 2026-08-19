@@ -8,8 +8,8 @@
 
 | Port | Service | Component |
 |------|---------|----------|
-| :8080 | 本地 LLM（**已退役 2026-08-18**，按需恢复） | watchdog `bin/ikaros-memory-watchdog.py`——配置 `core/memory_v5/models/model_config.json` 的 `initial_model` 为空串 = 禁用 |
-| :8587 | Embedding (bge-m3 q8_0, 1024 dim) | watchdog |
+| :8080 | 本地 LLM（**已退役 2026-08-18**，按需恢复） | 退役，无看门狗；恢复时由对应组件启动脚本自带 watchdog 拉起 |
+| :8587 | Embedding (bge-m3 q8_0, 1024 dim) | 各组件启动脚本自带 watchdog |
 | :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` (npm 本地安装; 启动 `bin/start-dsh-ikaros.bat web`; overlay `core/ikaros-dsh/cordis.patch.yml`) |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，按需启动） |
@@ -17,6 +17,7 @@
 Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
 Added (2026-08-11): **pi 纳入 V5 核心** — `data/omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工（2026-08-18 更新）：dsh = 工作引擎（对话/记忆/工具链），pi = 编码 agent（任务执行）**。
 Added (2026-08-12): **pi 干活必须带记忆** — 开工先 `v5_project_retrieve`/`v5_memory_search` 检索相关项目决策与教训（跨会话连续性不能只押在手工 summary 上）；收尾把关键决策/坑用 `v5_project_note` 落库（kind=decision|pitfall|convention）。实测：conversation-tree 多卡重构 B+C 决策/降级归位 pitfall/zoom 弃用均已入库（#3179-3184）。
+Added (2026-08-19): **`[dsh-only]` 内容隔离** — 内容含 `[dsh-only]` 标记 = 仅 dsh 工作引擎可见（平台纪律/密钥类）；**pi/herdr 等外部执行器检索时须传 `include_dsh_only=false`**（`v5_memory_search`/`v5_project_retrieve` 均已支持该参，默认 true 不过滤）。dsh 本体不传参（默认全量）。
 Added (2026-08-13): **omp 便携化（配置迁出 C 盘）** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置目录经 `PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent` 锚定项目（agent.db / mcp.json / models.yml / config.yml / .env 全部迁入，密钥 `OPENCODE_GO_API_KEY` 放 `data/omp/agent/.env`）。⚠️ 用 `PI_CODING_AGENT_DIR`（走 path.resolve，绝对路径覆盖有效）；`PI_CONFIG_DIR` 走 path.join 遇绝对路径不重置、junction 方案已被 bun bug 堵死——勿再尝试。三处注入：`bin/ikaros-env.sh|bat`（shell 权威源）、`bin/start-omp.bat`（TUI 直启）、`bin/ikaros-env.*` 环境注入（pi 链路）。旧 `C:\Users\PZS0X\.omp\` 现为兜底，确认新链路稳定后可删。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
@@ -27,7 +28,7 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - dsh 工作引擎（Web GUI）: `bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080（`--patch` 加载 Ikaros overlay: memory_v5 MCP + 终端 + LSP + persona）
 - dsh headless（one-shot 任务）: `bin/start-dsh-ikaros.bat headless "<task>"`
 - 对话树面板: `python core/conversation-tree/server.py --port 48920` → http://127.0.0.1:48920
-- Embedding: watchdog `bin/ikaros-memory-watchdog.py`（:8587）
+- Embedding (:8587): 由各组件启动脚本自带 watchdog 拉起（不再由集中看门狗管理）
 
 ## 便携环境 (2026-08-11, 学秋叶整合包)
 - IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）
@@ -45,9 +46,9 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - 架构参考: `docs/ikaros-dsh-plugin-architecture.md`；退役历史: `docs/hermes-retirement-inventory.md`。
 
 ## DO NOT
-- ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always go through the watchdog.
+- ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always start via the component start script (自带 watchdog).
 - ❌ Never auto-commit / auto-push without an explicit user instruction.
-- ❌ After editing `bin/ikaros-memory-watchdog.py` / `core/conversation-tree/server.py`, restart the corresponding service.
+- ❌ After editing `core/conversation-tree/server.py`, restart the corresponding service.
 - ❌ Don't edit `runtime/` 下的上游/工具链（dsh npm 包、portable-python 等）——它们是拉取的二进制/依赖，定制走 `core/ikaros-dsh/` overlay 或 `bin/` 包装层。
 - ✅ hermes / N.E.K.O / 9100 控制面板均已退役（2026-08-18），勿再启动或恢复相关服务；历史见 `docs/hermes-retirement-inventory.md`。
 

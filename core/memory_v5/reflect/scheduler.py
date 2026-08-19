@@ -151,17 +151,10 @@ def load_state(path: Path | None = None) -> ScheduleState:
 
 
 def save_state(state: ScheduleState, path: Path | None = None) -> None:
-    """保存反思状态. 原子写: 写 tmp + rename, 防中途崩溃丢状态."""
-    import json
-    import os
+    """保存反思状态. 原子写 + 滚动 .bak (机器态文件, 不设漂移拒写)."""
+    from memory_v5.file_store import atomic_write_json
     p = path or _STATE_FILE
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(state.to_dict(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    os.replace(tmp, p)
+    atomic_write_json(p, state.to_dict(), make_backup=True, validator=None)
 
 
 # ─── 调度器 (注册表模式) ────────────────────────────────────────

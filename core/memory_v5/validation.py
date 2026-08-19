@@ -7,6 +7,7 @@ and extensible rule registration.
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field as dc_field
 from enum import Enum
@@ -14,6 +15,12 @@ from functools import wraps
 from typing import Any, Callable, ClassVar
 
 logger = logging.getLogger("ikaros.v5.validation")
+
+# Hard-block toggle for the CRITICAL prompt-injection tier. Default OFF so the
+# guard is fail-open (detects + logs, never drops a legitimate write) — matching
+# the rest of the validation framework. Flip to True once confidence is built to
+# make store() refuse unambiguous instruction-override content outright.
+INJECTION_HARD_BLOCK: bool = False
 
 # ---------------------------------------------------------------------------
 # Error codes (stable, never reuse deprecated codes)
@@ -33,6 +40,7 @@ class ErrorCode(str, Enum):
     IN_EMPTY_QUERY = "V5-0107"
     IN_QUERY_TOO_SHORT = "V5-0108"
     IN_STRUCTURED_MALFORMED = "V5-0109"
+    IN_PROMPT_INJECTION = "V5-0110"
 
     # Logic verification (Vx-02xx)
     LG_DUPLICATE_MEMORY = "V5-0201"
@@ -323,6 +331,16 @@ class EntityTypeRule(ValidationRule):
         return []
 
 
+class PromptInjectionRule(ValidationRule):
+    name = "prompt_injection"
+    description = "Flag prompt-injection / jailbreak directives in memory content"
+
+    def validate(self, value: Any, context: dict[str, Any] | None = None) -> list[ValidationError]:
+        if not isinstance(value, str):
+            return []
+        return PromptInjectionGuard.guard(value)
+
+
 # ---------------------------------------------------------------------------
 # Global registries
 # ---------------------------------------------------------------------------
@@ -349,6 +367,7 @@ def _init_registries():
     _memory_registry.register(AllowedTypeRule())
     _memory_registry.register(WeightRangeRule())
     _memory_registry.register(PADRangeRule())
+    _memory_registry.register(PromptInjectionRule())
 
     # Query validators
     _query_registry.register(NotEmptyRule())
@@ -529,6 +548,104 @@ def is_clean_structured_content(content: str) -> bool:
     """Convenience: True if the content is safe to persist via the
     structured pipeline."""
     return not guard_structured_content(content)
+
+
+# ---------------------------------------------------------------------------
+# Prompt-injection guard (grafted from dsh-memory-evolve's write-path scan)
+# ---------------------------------------------------------------------------
+#
+# Long-term memory is persisted and re-injected every session. A malicious or
+# corrupted conversation turn can smuggle "ignore previous instructions" /
+# role-play jailbreak directives into a memory entry, which then poison every
+# future session. This guard flags such content at the write boundary so it is
+# surfaced in logs (and can be escalated to a hard block by a future consumer).
+#
+# Design mirrors StructuredContentGuard: WARNING by default (fail-open, never
+# blocks legitimate writes). A small CRITICAL tier carries detail["critical"]
+# so a caller that wants hard enforcement can block only unambiguous overrides
+# (e.g. "ignore all previous instructions") while letting softer hints warn.
+
+class PromptInjectionGuard:
+    """Flag prompt-injection / jailbreak directives in free-text memory content."""
+
+    # CRITICAL — unambiguous instruction overrides. detail["critical"] = True.
+    # These are the patterns that, if persisted, would directly hijack the
+    # agent's behavior on every future recall. Kept narrow to avoid false
+    # positives on legitimate project rules ("回复前先说明自己在哪个目录").
+    CRITICAL_PATTERNS = (
+        re.compile(r"ignore\s+(all\s+)?(the\s+)?(previous|prior|above|preceding)\s+instructions", re.I),
+        re.compile(r"disregard\s+(all\s+)?(the\s+)?(previous|prior|above|preceding)\s+instructions", re.I),
+        # 中文: 忽略/无视/忘掉 ...(≤12字)... 指令/命令/训令/记忆
+        re.compile(r"忽略\s*.{0,12}?(指令|命令|训令|记忆|内容)", re.I),
+        re.compile(r"无视\s*.{0,12}?(指令|命令|训令|记忆|内容)", re.I),
+        re.compile(r"忘\s*(记|掉|却|去)\s*.{0,12}?(指令|命令|训令|记忆|内容|之前|前面|以上|先前)", re.I),
+    )
+
+    # SUSPICIOUS — role-play / mode-switch / prompt-leak hints. WARNING only.
+    SUSPICIOUS_PATTERNS = (
+        re.compile(r"你\s*(现在)?\s*(是|扮演|假装)\s*(一个|一名|一个叫|某个)", re.I),
+        re.compile(r"you\s+are\s+now", re.I),
+        re.compile(r"pretend\s+(to\s+be|you\s+are)", re.I),
+        re.compile(r"假装\s*(你|是|成)", re.I),
+        re.compile(r"developer\s*mode|开发者模式|jailbreak|越狱", re.I),
+        re.compile(r"system\s*prompt|系统\s*提示", re.I),
+        re.compile(r"复述\s*(你|你的)\s*(指令|提示|系统)", re.I),
+        re.compile(r"repeat\s+your\s+(instructions|prompt|system)", re.I),
+    )
+
+    @classmethod
+    def guard(cls, content: str) -> list[ValidationError]:
+        errors: list[ValidationError] = []
+        if not isinstance(content, str) or not content.strip():
+            return errors
+        for pat in cls.CRITICAL_PATTERNS:
+            m = pat.search(content)
+            if m:
+                errors.append(ValidationError(
+                    code=ErrorCode.IN_PROMPT_INJECTION,
+                    message=f"内容疑似提示注入/越权指令(高危): 命中 {m.group(0)!r}",
+                    severity=Severity.ERROR,
+                    detail={"critical": True, "match": m.group(0)},
+                ))
+                break
+        if errors:
+            return errors  # 命中高危即不再叠加可疑项, 避免噪音
+        for pat in cls.SUSPICIOUS_PATTERNS:
+            m = pat.search(content)
+            if m:
+                errors.append(ValidationError(
+                    code=ErrorCode.IN_PROMPT_INJECTION,
+                    message=f"内容疑似提示注入(可疑): 命中 {m.group(0)!r}",
+                    severity=Severity.WARNING,
+                    detail={"critical": False, "match": m.group(0)},
+                ))
+                break
+        return errors
+
+
+def scan_prompt_injection(content: str) -> list[ValidationError]:
+    """Scan free-text memory content for prompt-injection / jailbreak directives.
+
+    Returns a list of ValidationError (possibly empty). Safe to call on any
+    string; never raises. Mirrors ``guard_structured_content``'s contract.
+    """
+    return PromptInjectionGuard.guard(content)
+
+
+def contains_prompt_injection(content: str, *, critical_only: bool = False) -> bool:
+    """Convenience predicate.
+
+    ``critical_only=True`` matches only the high-confidence override tier
+    (e.g. "ignore all previous instructions") — use this when a caller wants
+    to hard-block persistence. ``critical_only=False`` (default) also matches
+    the softer suspicious tier.
+    """
+    errors = PromptInjectionGuard.guard(content)
+    if not errors:
+        return False
+    if critical_only:
+        return any(err.detail.get("critical") for err in errors)
+    return True
 
 
 def check_and_log(value: Any, validator: Callable[[Any], list[ValidationError]],
