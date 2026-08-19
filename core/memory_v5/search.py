@@ -104,6 +104,10 @@ EMBED_MODEL = os.environ.get("IKAROS_EMBED_MODEL", "bge-m3")
 EMBED_TIMEOUT = 10
 USER_AGENT = "ikaros-vector-search-v4/1.0 (curl-compatible)"
 
+# 嵌入连接池 (2026-08-19): 模块级单连接复用 (HTTP/1.1 keep-alive),
+# 取代 _fetch_embedding 里每 chunk 新建 HTTPConnection (~1.6s → ~30ms 热调)。
+_embed_conn = None  # http.client.HTTPConnection | None
+
 
 def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
     """Call :8587 embedding service (network implementation, no cache).
@@ -147,24 +151,30 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
         if len(text) > _MAX_CHUNK else [text]
 
     vectors: list[list[float]] = []
+    global _embed_conn
+    u = urlparse(EMBED_URL)
+    # 连接失效判定: sock 为空 = 已关闭 (HTTPConnection 无 _closed 方法)
+    if _embed_conn is None or _embed_conn.sock is None:
+        _embed_conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
     for chunk in chunks:
         payload = (prefix + chunk)[:2000]
         body = json.dumps({"content": payload}).encode("utf-8")
         try:
-            u = urlparse(EMBED_URL)
-            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
-            conn.request("POST", u.path or "/", body=body, headers={
+            _embed_conn.request("POST", u.path or "/", body=body, headers={
                 "Content-Type": "application/json",
                 "Host": u.netloc,
                 "User-Agent": USER_AGENT,
             })
-            resp = conn.getresponse()
+            resp = _embed_conn.getresponse()
             if resp.status != 200:
                 logger.warning("embed HTTP %d for '%s...'", resp.status, chunk[:30])
-                conn.close()
+                try:
+                    _embed_conn.close()
+                except Exception:
+                    pass
+                _embed_conn = None
                 return None
             data = json.loads(resp.read().decode("utf-8"))
-            conn.close()
             # :8587 observed response: list: [{"index":0, "embedding":[[...]]}]
             # Also compatible with dict shapes {"embedding":[[...]]} / {"data":[{"embedding":[...]}]}
             vec = _extract_vector(data)
@@ -172,7 +182,13 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
                 return None
             vectors.append(vec)
         except Exception as e:
+            # 连接可能已断 (服务重启/超时) → 关闭置空, 下次调用重建
             logger.warning("embedding failed: %s", e)
+            try:
+                _embed_conn.close()
+            except Exception:
+                pass
+            _embed_conn = None
             return None
 
     if len(vectors) == 1:

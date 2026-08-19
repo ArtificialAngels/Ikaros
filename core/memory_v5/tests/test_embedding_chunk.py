@@ -92,6 +92,7 @@ def _patch_http(monkeypatch):
             self.port = port
             self.timeout = timeout
             self.calls: list[bytes] = []
+            self.sock = object()  # 2026-08-19 连接池: 模拟有效连接
             Recorder.instances.append(self)
 
         def request(self, method, path, body, headers=None):
@@ -104,7 +105,10 @@ def _patch_http(monkeypatch):
             pass
 
     monkeypatch.setattr("http.client.HTTPConnection", Recorder)
+    # 2026-08-19 连接池: 清空模块级缓存连接, 避免跨测试复用 mock 实例串扰
+    search_mod._embed_conn = None
     yield Recorder
+    search_mod._embed_conn = None
 
 
 # ── E1: 短文本单次请求 ──
@@ -123,8 +127,11 @@ def test_e2_long_text_chunked_and_pooled(_patch_http):
     long_text = "这是一段非常长的中文记忆内容。" * 100  # 1300+ 字符
     vec = search_mod._fetch_embedding(long_text, task="document")
     assert vec is not None and len(vec) == 64
-    n_calls = len(_patch_http.instances)
-    assert n_calls >= 3  # 1300 字符 / 350 → 至少 4 块 (保险断言 3+)
+    # 2026-08-19 连接池: 连接只建 1 个 (复用), 但 request 次数 = 块数 (≥3)
+    n_conn = len(_patch_http.instances)
+    n_req = sum(len(i.calls) for i in _patch_http.instances)
+    assert n_conn == 1  # 连接池: 单连接复用
+    assert n_req >= 3   # 1300 字符 / 350 → 至少 4 块 (保险断言 3+)
     # bge-m3: document 不加前缀 (query 才加检索指令)
     for inst in _patch_http.instances:
         body = json.loads(inst.calls[0])
@@ -141,7 +148,7 @@ def test_e3_chunk_failure_fail_open(monkeypatch):
         count = 0
 
         def __init__(self, host, port=80, timeout=None):
-            pass
+            self.sock = object()  # 2026-08-19 连接池: 模拟有效连接 (sock 非 None = 复用)
 
         def request(self, method, path, body, headers=None):
             pass
@@ -156,6 +163,7 @@ def test_e3_chunk_failure_fail_open(monkeypatch):
             pass
 
     monkeypatch.setattr("http.client.HTTPConnection", FailOnce)
+    search_mod._embed_conn = None  # 2026-08-19 连接池: 清缓存
     long_text = "x" * 900
     assert search_mod._fetch_embedding(long_text, task="document") is None
 
