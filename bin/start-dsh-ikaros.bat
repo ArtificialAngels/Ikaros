@@ -48,11 +48,15 @@ if /i "%~1"=="headless" (
   echo [start-dsh-ikaros] headless mode (patch: %PATCH%)
   "%DSH_NODE%" "%DSH_BIN%" --profile headless --patch "%PATCH%" %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
 ) else if /i "%~1"=="web" (
-  echo [start-dsh-ikaros] web mode (profile auto-load patch)
-  "%DSH_NODE%" "%DSH_BIN%" web %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
+  REM 2026-08-19: ikaros-env.bat 的 setlocal 会让 IKAROS_DSH_WEB_PORT 不外传,
+  REM 这里本地兜底 (默认 3085, 避免与官方 dsh desktop 3080 冲突)。
+  if not defined IKAROS_DSH_WEB_PORT set "IKAROS_DSH_WEB_PORT=3085"
+  echo [start-dsh-ikaros] web mode (profile auto-load patch, port %IKAROS_DSH_WEB_PORT%)
+  "%DSH_NODE%" "%DSH_BIN%" web --port %IKAROS_DSH_WEB_PORT% %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
 ) else (
-  echo [start-dsh-ikaros] web mode (profile auto-load patch)
-  "%DSH_NODE%" "%DSH_BIN%" web %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
+  if not defined IKAROS_DSH_WEB_PORT set "IKAROS_DSH_WEB_PORT=3085"
+  echo [start-dsh-ikaros] web mode (profile auto-load patch, port %IKAROS_DSH_WEB_PORT%)
+  "%DSH_NODE%" "%DSH_BIN%" web --port %IKAROS_DSH_WEB_PORT% %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
 )
 
 endlocal
