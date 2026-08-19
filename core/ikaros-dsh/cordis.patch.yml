@@ -34,6 +34,19 @@
         failOnStartupError: false
         toolCallTimeoutMs: 60000
 
+    # ── 1b) ikaros-memory 自动记忆工程层（2026-08-18 新增） ─────────────
+    # mcp-client 暴露 48 个 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
+    #   - turn-stopping 自动沉淀: 每轮结束把真实对话提炼写回 v5 (source:dsh, upsert)
+    #   - pre-step 召回注入: should_recall 门控 + 检索 + systemPrompt.context() 快照
+    #     (user-role 快照, 前缀缓存友好; 静态纪律走 section 字节稳定锚)
+    # ⚠️ name 不支持 !!js 表达式（Entry.name 不经过 interpolate, 只有 config 走），
+    #    用裸包名从 profile 的 node_modules 解析（pnpm file: 链接, 源在 E 盘不复制）。
+    # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build (tsc -> dist/)
+    # 装配: cd ~/.dsh/profiles/web && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory
+    - id: ikaros-memory
+      name: '@ikaros/dsh-ikaros-memory'
+      config: {}
+
     # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
     # 状态（cd/export/REPL）跨 tool 调用存活，SIGINT/超时/后台运行齐全。
