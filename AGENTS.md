@@ -40,7 +40,7 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 
 ## dsh 底座 overlay（2026-08-18，替代 hermes 插件外置）
 - **工作引擎底座 = dsh (DeepSeek Harness)**；Ikaros 定制经 overlay `core/ikaros-dsh/cordis.patch.yml` 注入（memory_v5 MCP stdio 48 个 `v5_*` 工具 + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
-- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。
+- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（**已实现 2026-08-18**：turn-stopping 自动沉淀写回 + pre-step 召回注入 + systemPrompt 前缀缓存友好注入；npm 包 `@ikaros/dsh-ikaros-memory` 经 pnpm file: 链接装入 `~/.dsh/profiles/web`，patch 里以裸包名装配。重建/迁移步骤：`npm run build`（tsc→dist/，dist 被 gitignore）+ `cd ~/.dsh/profiles/web && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory`）。⚠️ Entry.name **不支持** `!!js` 表达式（只有 config 字段走 interpolate），Windows 绝对路径 name 也不支持（走 bare module 解析报 e: scheme）——必须裸包名。
 - 启动: `bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - 架构参考: `docs/ikaros-dsh-plugin-architecture.md`；退役历史: `docs/hermes-retirement-inventory.md`。
 
