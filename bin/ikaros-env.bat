@@ -28,7 +28,7 @@ rem ---- DeepSeek Harness (dsh) �������� ----
 set "IKAROS_DSH=%IKAROS_ROOT%\runtime\dsh"
 set "IKAROS_DSH_SOURCE=%IKAROS_ROOT%\runtime\deepseek-harness-master"
 set "IKAROS_DSH_PROFILE=%IKAROS_DATA%\dsh\profiles"
-set "IKAROS_DSH_WEB_PORT=3080"
+set "IKAROS_DSH_WEB_PORT=3085"
 set "IKAROS_DSH_OVERLAY=%IKAROS_ROOT%\core\ikaros-dsh\cordis.patch.yml"
 
 rem ---- omp (oh-my-pi) ���� agent ----

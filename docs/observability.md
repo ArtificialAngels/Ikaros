@@ -14,9 +14,9 @@ Every HTTP service should expose two distinct probes:
   dependencies are satisfied — e.g. the model is loaded, the vector store is
   connected, config validated. Returns 503 otherwise.
 
-### Current gap (watchdog)
+### Current gap (historical, central watchdog removed)
 
-The existing watchdog (`bin/ikaros-memory-watchdog.py`) only checks **port
+The previous central watchdog only checked **port
 presence** (can it connect to `:8080`?). That is insufficient: the model server
 on 8080 is **lazy-loaded** — the port accepts connections before the model is
 actually ready to serve inference. A readiness check that only sees the port

@@ -41,9 +41,9 @@ except ImportError:
 # ─── 本地 LLM (:8080) — 懒加载 / 按需服务 (2026-07-26 后重构) ───────
 # V5 认知任务(consolidate/distill/reflect/emotion 标注)统一走云端 DeepSeek,
 # 不消费本地 LLM (见 call_llm_auto)。但 :8080 作为「常规 llama 服务」保留,
-# 由 agent / 本地 chat 等按需调用: provider="local" 时 _call_local 会先触发
-# ensure_local_llm() 热载入模型(看门狗只做端口巡检, 不在启动/巡检时拉起)。
-# 配置逻辑统一来自 core/memory_v5/models/model_config.py (经看门狗 _load_model_cfg 读取)。
+# 由 agent / 本地 chat 等按需调用: provider="local" 时走 _call_local 直接打 :8080
+# (无自动热载入 / 看门狗; 调用前须确保 :8080 已自行启动)。
+# 配置逻辑统一来自 core/memory_v5/models/model_config.py。
 
 # ─── 大模型 (DeepSeek) ────────────────────────────────
 
@@ -59,7 +59,7 @@ DEEPSEEK_TIMEOUT = int(os.environ.get("DEEPSEEK_TIMEOUT", "120"))
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 # ─── 本地 LLM (:8080) ───────────────────────────────
-# 懒加载服务: 首次调用时才由 ensure_local_llm() 热载入模型。
+# 本地 :8080 llama 服务地址 (已退役, 仅按需恢复, 无自动热载入)。
 LOCAL_LLM_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080")
 LOCAL_LLM_TIMEOUT = int(os.environ.get("IKAROS_LOCAL_LLM_TIMEOUT", "180"))
 LOCAL_LLM_ALIAS = os.environ.get("IKAROS_LOCAL_LLM_ALIAS", "local-llm")
@@ -238,40 +238,16 @@ def _call_deepseek(system: str, user: str, max_tokens: int,
 
 
 # ─── 本地 LLM (:8080) ───────────────────────────────
-
-def _ensure_local_llm_loaded() -> None:
-    """确保本地 llama-server (:8080) 已就绪 — 否则热载入。
-
-    复用看门狗模块的 ensure_local_llm() (detached spawn + 等 /health)。
-    看门狗只做端口巡检, 不调用本函数; 热载入由 agent 调用本地 LLM 触发。
-    """
-    # 看门狗文件名含连字符, 用 wd_import 按路径加载 (不直接 import)
-    import sys as _sys
-    from pathlib import Path as _P
-    _root = os.environ.get("IKAROS_ROOT", "")
-    if not _root:
-        _root = str(_P(__file__).resolve().parent.parent.parent)  # core/memory_v5/reflect → 项目根
-    _bin = _P(_root) / "bin"
-    if str(_bin) not in _sys.path:
-        _sys.path.insert(0, str(_bin))
-    from wd_import import ensure_local_llm
-    if not ensure_local_llm(timeout=LOCAL_LLM_TIMEOUT):
-        raise RuntimeError(
-            "本地 LLM (:8080) 热载入失败。检查模型文件 / llama-server 是否可用, "
-            "或手动 `llama-help --hotload` 触发热载入。"
-        )
-
+# :8080 已退役 (2026-08-18), 仅按需恢复。无自动热载入 / 看门狗:
+# _call_local 直接打 :8080, 调用前须确保服务已自行启动。
 
 def _call_local(system: str, user: str, max_tokens: int,
                 temperature: float, timeout: int,
                 extra: dict | None = None) -> LLMResponse:
     """调本地 llama-server (:8080) — OpenAI-compatible /v1/chat/completions。
 
-    懒加载: 若 :8080 未就绪, 先由 _ensure_local_llm_loaded() 拉起模型(热载入),
-    之后复用常驻服务。失败抛 RuntimeError (显式, 不静默)。
+    :8080 须已自行启动 (无自动热载入)。失败抛 RuntimeError (显式, 不静默)。
     """
-    _ensure_local_llm_loaded()
-
     url = f"{LOCAL_LLM_URL.rstrip('/')}/v1/chat/completions"
     body = {
         "model": LOCAL_LLM_ALIAS,
@@ -331,7 +307,7 @@ def stats() -> dict:
             "url": LOCAL_LLM_URL,
             "alias": LOCAL_LLM_ALIAS,
             "timeout": LOCAL_LLM_TIMEOUT,
-            "mode": "lazy-on-demand (hot-loaded on first call via ensure_local_llm)",
+            "mode": "lazy (no auto hot-load; :8080 must already be running)",
         },
         "deepseek": {
             "base_url": DEEPSEEK_BASE_URL,

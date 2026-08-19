@@ -161,7 +161,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 | **dsh 启动 (web)** | `bin\start-dsh-ikaros.bat web` → :3080 (或面板 dsh 卡片 start) |
 | **dsh 启动 (headless)** | `bin\start-dsh-ikaros.bat headless <task>` |
 | dsh 重启 | `bin\restart-dsh-ikaros.ps1` |
-| 记忆服务状态 | `python bin\ikaros-memory-watchdog.py --status` |
+| 记忆服务状态 | 由各组件启动脚本自带 watchdog 管理；查对应服务日志 |
 | 本地 LLM | 已退役 (2026-08-18); 按需恢复见 `core/memory_v5/models/model_config.json` |
 | 模型配置 | `core/memory_v5/models/model_config.json` (本地模型单一事实来源) |
 
@@ -196,7 +196,7 @@ Ikaros\
 | 现象 | 第一看 |
 |------|--------|
 | dsh web 打不开 | `bin/restart-dsh-ikaros.ps1` 重启 (日志 data/logs/ikaros-dsh-restart.log) |
-| 记忆召回弱 | `python bin\ikaros-memory-watchdog.py --status` 看 `:8587` 心跳 |
+| 记忆召回弱 | 检查 :8587 embedding 是否在对应组件启动脚本下正常运行 |
 | 本地 LLM 没反应 | 本地 LLM 已退役 (2026-08-18); 恢复需放 gguf + 设 `model_config.json` 的 `initial_model` |
 | dsh 没起 / :3080 无响应 | 面板 dsh 卡片 start;日志 `data\logs\dsh.log`(UTF-8) |
 | dsh overlay 未加载 | 检查用户层 `~/.dsh/profiles/web/cordis.patch.yml` 与规范源 `core/ikaros-dsh/cordis.patch.yml` 是否同步 |
@@ -278,4 +278,4 @@ Ikaros\
 ---
 
 *当前架构: dsh 工作引擎(:3080) + Memory(:8587, bge-m3) + 对话树(:48920, DeepSeek 直连)*
-*启动: `bin\start-dsh-ikaros.bat web` · 故障看: `python bin\ikaros-memory-watchdog.py --status` · dsh 日志: `data\logs\dsh.log`*
+*启动: `bin\start-dsh-ikaros.bat web` · 故障看各组件自带 watchdog 日志 · dsh 日志: `data\logs\dsh.log`*

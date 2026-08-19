@@ -116,8 +116,8 @@
       <table>
         <tr><th>端口</th><th>服务</th><th>组件路径</th><th>状态</th></tr>
         <tr><td>:9100</td><td>控制面板 Web UI</td><td>core/dashboard/server.py</td><td>✅</td></tr>
-        <tr><td>:8080</td><td>本地 LLM (Phi-4-mini, 懒加载)</td><td>bin/ikaros-memory-watchdog.py → llama-server</td><td>⚠️ 懒加载</td></tr>
-        <tr><td>:8587</td><td>Embedding (nomic)</td><td>bin/ikaros-memory-watchdog.py</td><td>⚠️</td></tr>
+        <tr><td>:8080</td><td>本地 LLM (已退役)</td><td>已退役, 无看门狗</td><td>⛔ 已退役</td></tr>
+        <tr><td>:8587</td><td>Embedding (bge-m3)</td><td>各组件启动脚本自带 watchdog</td><td>✅</td></tr>
         <tr><td>:48911</td><td>Neko 主前端</td><td>apps/neko/app/main_server.py</td><td>✅</td></tr>
         <tr><td>:48912</td><td>Neko 记忆服务</td><td>apps/neko/app/memory_server.py</td><td>✅</td></tr>
         <tr><td>:48915</td><td>Neko Agent 服务</td><td>apps/neko/app/agent_server.py</td><td>✅</td></tr>

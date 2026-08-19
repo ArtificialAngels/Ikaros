@@ -44,8 +44,8 @@ SERVICES = [
 # Full port mapping table (TCP ports + the named-pipe component).
 PORT_TABLE = [
     (":9100", "控制面板 Web UI", "core/dashboard/server.py", "✅"),
-    (":8080", "本地 LLM (已退役 2026-08-18, 按需配置)", "bin/ikaros-memory-watchdog.py → llama-server", "⛔ 已退役"),
-    (":8587", "Embedding (bge-m3)", "bin/ikaros-memory-watchdog.py", "✅"),
+    (":8080", "本地 LLM (已退役 2026-08-18, 按需配置)", "已退役, 无看门狗", "⛔ 已退役"),
+    (":8587", "Embedding (bge-m3)", "各组件启动脚本自带 watchdog", "✅"),
     (":48911", "Neko 主前端", "apps/neko/app/main_server.py", "✅"),
     (":48912", "Neko 记忆服务", "apps/neko/app/memory_server.py", "✅"),
     (":48915", "Neko Agent 服务", "apps/neko/app/agent_server.py", "✅"),
@@ -363,7 +363,6 @@ const T = {
     ]},
     {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
       {n:"ikaros-control-panel.bat", k:true, c:"拉控制面板 :9100"}, 
-      {n:"ikaros-memory-watchdog.py", k:true, c:":8080+:8587 看门狗"},
       {n:"hermes-gateway.py", c:":8642 gateway 启动器"}, {n:"hermes_paw_bridge.py", k:true, c:":8088 猫爪"},
       {n:"sync-thirdspace-v5.py", c:"ThirdSpace 同步"},
       {n:"ikaros-fastdl (skill)", c:"高速下载 (WorkBuddy skill, 按需)"}, {n:"import-hermes-to-convtree.py", c:"Hermes→对话树 :48920"},

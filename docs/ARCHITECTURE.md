@@ -28,7 +28,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 │      L1: 基础设施 (Runtime Infrastructure) — 逻辑分组           │
 │  runtime/dsh/ — 工作引擎 (DeepSeek Harness, npm 本地安装)                    │
 │  ikaros-dsh overlay — memory_v5 MCP(48 工具) + terminal + lsp + persona     │
-│  bin/ikaros-memory-watchdog — Embed :8587 (本地 LLM 已退役)   │
+│  Embed :8587 — 各组件启动脚本自带 watchdog (本地 LLM 已退役)              │
 ├─────────────────────────────────────────────────────────────┤
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
 │  runtime/portable-python/ — Python 3.12.10                  │
@@ -48,7 +48,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 
 | 端口 | 服务 | 路径 | 启动方式 |
 |------|------|------|---------|
-| :8587 | Embedding (bge-m3, 本地) | `bin/ikaros-memory-watchdog.py` | watchdog 自动 |
+| :8587 | Embedding (bge-m3, 本地) | 各组件启动脚本自带 watchdog | 自动拉起 |
 | :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | `bin/start-dsh-ikaros.bat web` |
 | :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | `python core/conversation-tree/server.py --port 48920` |
 | 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 按需启动 |
@@ -364,8 +364,6 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `ikaros-control-panel.bat` | 双击启动控制面板 :9100（只起面板后端+开浏览器，不拉全栈） |
 | `ikaros-env.sh` / `ikaros-env.bat` | **环境权威源**（自锚定，设置全部 IKAROS_*；Hermes 上游镜像 `data/hermes-agent/.env`） |
 | ~~`cloud_chat.py`~~ | ⚠️ 2026-08-14 已删除（companion 主链由对话树双模式 + bridge :8650 → gateway :8642 接替） |
-| `ikaros-memory-watchdog.py` | 管理 :8587 embed + :8080 LLM（崩溃退避 + 心跳/主日志轮转） |
-| `wd_import.py` | 按路径 importlib 加载看门狗模块（文件名含连字符） |
 | `llama-help.py` | llama-server 辅助（`--hotload` 手动热载本地 LLM） |
 | `ikaros-soul-sync.py` | V5 → SOUL.md 同步 |
 | `hermes_paw_bridge.py` | Hermes Agent 驱动的猫爪桥 (:8088) |
@@ -446,7 +444,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 | 云端 DeepSeek | `DEEPSEEK_BASE_URL=https://api.deepseek.com`、`DEEPSEEK_MODEL=deepseek-v4-flash`、`DEEPSEEK_API_KEY` (env) | `call_llm()` / `call_llm_auto()` —— **反思/摘要/对话默认走云端** |
 | 本地 :8080 | `LOCAL_LLM_URL` (默认 `http://127.0.0.1:8080`)、别名 `local-llm`、模型由 `models/model_config.json` 决定（当前 `Qwen3-1.7B Q4_K_M`） | 仅 `call_llm(provider="local")` 触发，**懒加载** |
 
-- **懒加载链路**：看门狗 `bin/ikaros-memory-watchdog.py` 设 `LLM_LAZY=True`，`start_all` 只 `_port_alive(8080)` 监测，不 spawn 模型；agent 调 `llm_client.call_llm(provider="local")` → `_call_local` → `_ensure_local_llm_loaded` → 经 `bin/wd_import.py`（因看门狗文件名含连字符，用 `importlib` 按路径加载）调 `ensure_local_llm(timeout=180)`，detached 进程 + `data/logs/.llama-hotload.lock` 防并发。
+- **懒加载链路（已改）**：本地 LLM (:8080) 已退役，无自动热载入 / 看门狗。`llm_client.call_llm(provider="local")` → `_call_local` 直接打 :8080（调用前须确保服务已自行启动），不再经 `bin/wd_import.py` / `ensure_local_llm` 热载入。
 - **本地小模型已从 V5 认知管线移除（2026-07-26）**：`call_llm_auto` 纯云端；`consolidate/distill/reflect` 全部 `provider="deepseek"`，`:8080` 不参与反思。
 - ⚠️ 内部不一致待修：`summary.py` 配置仍写 `model: local-llm`（与 `preprocess_config.yaml` 默认同），实际却调 `provider="deepseek"` —— 以代码为准。
 
