@@ -47,6 +47,16 @@ export interface Config {
   writebackMinChars: number
   /** 注入记忆快照预算（字符） */
   injectBudgetChars: number
+  /**
+   * 自动沉淀模式: 'rule' = 纯规则蒸馏 (零成本, 默认);
+   * 'subagent' = 调 subagent 提炼 (更智能, 判断值得记什么 + 升格长期价值, 有 API 成本);
+   * 'hybrid' = 规则先写 + subagent 定期提炼升格 (推荐折中)。
+   */
+  writebackMode: 'rule' | 'subagent' | 'hybrid'
+  /** subagent 提炼每日上限 (防白烧 API, 借鉴 dsh-auto-memory 8 次/天) */
+  subagentDailyMax: number
+  /** subagent 提炼冷却（分钟） */
+  subagentCooldownMin: number
 }
 
 export const defaultConfig: Config = {
@@ -57,6 +67,9 @@ export const defaultConfig: Config = {
   writebackCooldownMin: 5,
   writebackMinChars: 60,
   injectBudgetChars: 1200,
+  writebackMode: 'hybrid',
+  subagentDailyMax: 8,
+  subagentCooldownMin: 60,
 }
 
 // ── 常量 ───────────────────────────────────────────────────────────────
@@ -239,6 +252,82 @@ function distillTurn(user: string, assistant: string): string | null {
   return `Q: ${u.slice(0, 500)}\nA: ${cleaned.slice(0, 1200)}`
 }
 
+// ── subagent 提炼（C 阶段: 自动沉淀升级）─────────────────────────────
+// 借鉴 dsh-auto-memory: 每轮对话结束后用 subagent 判断"值得记什么",
+// 产出 [LOG]/[NOTE]/[USER] 三段式提炼。有 API 成本 → 限流 (每日上限 + 冷却),
+// subagent 不可用/失败时回退规则蒸馏 (distillTurn)。
+let _subagentCount = 0
+let _subagentDate = ''
+let _lastSubagentAt = 0
+
+function _resetSubagentDaily(today: string): void {
+  if (_subagentDate !== today) {
+    _subagentDate = today
+    _subagentCount = 0
+  }
+}
+
+interface SubagentExtract {
+  log: string[]      // 今日日志要点
+  note: string[]     // 项目长期笔记 (决策/架构)
+  user: string[]     // 用户级规则/偏好
+}
+
+/**
+ * 调 subagent 提炼本轮对话。返回三段式提炼; subagent 不可用/失败返回 null。
+ * 用 ctx.subagents.start(name, {prompt, parent, signal}) — SubagentStartRequest。
+ */
+async function subagentExtract(
+  ctx: Context,
+  agent: unknown,
+  signal: AbortSignal | undefined,
+  user: string,
+  assistant: string,
+): Promise<SubagentExtract | null> {
+  const subs = ctx.get('subagents')
+  if (subs === undefined || typeof (subs as { start?: unknown }).start !== 'function') return null
+  try {
+    const promptText = [
+      '你是 Ikaros 的记忆沉淀员。根据下面的对话，判断是否有值得长期记住的内容。',
+      '规则:',
+      '- 寒暄/琐碎/临时信息(搜索结果、临时路径、工具报错) → 全部输出 (无)',
+      '- 完成实质工作(改代码/修bug/写文档/重构/技术选型/用户约定) → 提炼要点',
+      '- [LOG] 今日工作日志要点(一句话一条); [NOTE] 项目长期价值(决策/架构/坑, 跨会话有用);',
+      '  [USER] 用户级规则/偏好(跨项目)',
+      '- 没有价值的类别留空(不输出该段)',
+      '- 只输出结构化结果, 不要解释',
+      '',
+      '[对话]',
+      `用户: ${user.slice(0, 800)}`,
+      `助手: ${assistant.slice(0, 1500)}`,
+    ].join('\n')
+    const result = await (subs as {
+      start(name: string, req: { prompt: unknown[]; parent: unknown; signal?: unknown; label?: string }): Promise<{
+        result?: { structured?: unknown; text?: string }
+      }>
+    }).start('default', {
+      prompt: [{ type: 'text', text: promptText }],
+      parent: agent,
+      signal,
+      label: 'ikaros-memory-consolidate',
+    })
+    const text = result?.result?.text || ''
+    if (!text || text.includes('(无)')) return null
+    // 解析 [LOG]/[NOTE]/[USER] 段
+    const out: SubagentExtract = { log: [], note: [], user: [] }
+    let section: 'log' | 'note' | 'user' | null = null
+    for (const raw of text.split('\n')) {
+      const l = raw.trim()
+      if (l === '[LOG]') { section = 'log'; continue }
+      if (l === '[NOTE]') { section = 'note'; continue }
+      if (l === '[USER]') { section = 'user'; continue }
+      if (section && l.startsWith('- ')) out[section].push(l.slice(2).trim().slice(0, 300))
+    }
+    if (!out.log.length && !out.note.length && !out.user.length) return null
+    return out
+  } catch { return null }
+}
+
 export function apply(ctx: Context, config: Config = defaultConfig) {
   // ── 0) 前缀缓存友好的注入 ──────────────────────────────────────────
   try {
@@ -267,6 +356,56 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
         if (!session || typeof session.deriveMessages !== 'function') return
         const msgs = session.deriveMessages()
         const pair = extractTurnPair(msgs)
+        if (!pair.user || !pair.assistant) return
+        if (pair.user.length + pair.assistant.length < config.writebackMinChars) return
+
+        // ── subagent 提炼 (mode=subagent|hybrid, 限流) ──
+        const today = new Date().toISOString().slice(0, 10)
+        _resetSubagentDaily(today)
+        const canSubagent =
+          config.writebackMode !== 'rule' &&
+          _subagentCount < config.subagentDailyMax &&
+          now - _lastSubagentAt >= config.subagentCooldownMin * 60_000
+        if (canSubagent) {
+          _subagentCount++
+          _lastSubagentAt = now
+          const ex = await subagentExtract(ctx, agent, signal, pair.user, pair.assistant)
+          if (ex) {
+            // NOTE → 项目笔记 (type=decision 语义, 走 v5 结构化标签)
+            for (const n of ex.note) {
+              await callV5(ctx, 'store', {
+                content: n,
+                memory_type: 'decision',
+                tags: ['source:dsh', 'v5_kind:decision'],
+                importance: 0.7,
+              })
+            }
+            // USER → 用户级偏好
+            for (const u of ex.user) {
+              await callV5(ctx, 'store', {
+                content: u,
+                memory_type: 'preference',
+                tags: ['source:dsh'],
+                importance: 0.8,
+              })
+            }
+            // LOG → 对话日志
+            if (ex.log.length) {
+              await callV5(ctx, 'store', {
+                content: ex.log.join('\n'),
+                memory_type: 'conversation',
+                tags: ['source:dsh'],
+                importance: 0.6,
+              })
+            }
+            _lastWritebackAt = Date.now()
+            return
+          }
+          // subagent 返回空 → 落回规则蒸馏
+        }
+
+        // ── 规则蒸馏兜底 (mode=rule|hybrid 且 subagent 未用/失败) ──
+        if (config.writebackMode === 'subagent') return // subagent 模式失败不落规则
         const distilled = distillTurn(pair.user, pair.assistant)
         if (!distilled) return
         const res = await callV5(ctx, 'store', {
