@@ -166,6 +166,26 @@ def start_component(
         else:
             argv.extend(args)
 
+    # 防递归: dsh 组件的 start_script 是 thin wrapper (调 ikaros),
+    # 而 ikaros 又会调 start_script 启动 dsh. 这里直接派 node 真启动 dsh, 跳过 wrapper.
+    # 详见 docs/dsh-base-audit-20260820.md #4.
+    if component_id == "dsh" and args and args[0] in {"web", "headless"}:
+        node = root / "runtime" / "node" / "node.exe"
+        dsh_bin = root / "runtime" / "dsh" / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        if not node.is_file():
+            raise LauncherError(f"dsh node not found: {node}")
+        if not dsh_bin.is_file():
+            raise LauncherError(f"dsh bin.js not found: {dsh_bin}")
+        overlay = root / "core" / "ikaros-dsh" / "cordis.patch.yml"
+        web_port = os.environ.get("IKAROS_DSH_WEB_PORT") or str(component.port or 3080)
+        argv = [
+            str(node), str(dsh_bin), args[0],
+            "--port", web_port, "--patch", str(overlay),
+        ]
+        # headless 接受 task 字符串作为后续 arg
+        if len(args) > 1:
+            argv.extend(list(args[1:]))
+
     env = os.environ.copy()
     env["IKAROS_ROOT"] = str(root)
     if component_id in {"dsh", "herdr", "omp"}:

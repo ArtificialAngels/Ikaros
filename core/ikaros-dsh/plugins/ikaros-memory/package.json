@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "description": "Ikaros memory_v5 自动记忆工程层：turn-stopping 自动沉淀写回 + pre-step 召回注入 + 前缀缓存友好",
   "scripts": {
-    "build": "node ../../../../runtime/MCPServe/gitnexus/gitnexus/node_modules/.bin/tsc.cmd src/index.ts --outDir dist --module esnext --moduleResolution bundler --target es2022 --skipLibCheck --allowSyntheticDefaultImports"
+    "build": "tsc src/index.ts --outDir dist --module esnext --moduleResolution bundler --target es2022 --skipLibCheck --allowSyntheticDefaultImports"
   },
   "files": [
     "dist",
