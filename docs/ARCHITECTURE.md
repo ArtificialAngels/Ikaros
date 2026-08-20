@@ -56,21 +56,9 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 
 > **端口状态**：上述 TCP 端口为当前生效服务。**2026-08-18**：控制面板 :9100、Hermes 底座（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw）、N.E.K.O `:48911-48915` 全部退役删除；工作引擎 = dsh (DeepSeek Harness) :3080。更早移除：语音桥 7870/7871（07-24）。
 
-### 1.3 控制面板 9100 重构 (2026-07-26) — ⚠️ 历史，9100 已退役 2026-08-18
+### 1.3 控制面板 :9100 — ⚠️ 已退役 2026-08-18
 
-控制面板（`:9100`）在此次重构后调整如下：
-
-- **local_model / memory 拆分**：原看门狗统一持有的 `:8080`（本地 LLM）与 `:8587`（Embedding）拆分为两个独立卡片 `local_model` 与 `memory`，**两者均可在面板内切换模型**。
-- **neko_group 合并**：Neko 原来的 3 个服务（`:48911` / `:48912` / `:48915`）合并为单一 `neko_group`，支持**一键启动**或分别控制。
-- **Hermes API 网关（:8642）已重新启用**：由 `python -m hermes_cli.main gateway run` 提供，dashboard 与 chat-tree 复用；Person Sync（人设同步脚本）已删除。旧的 `bin/hermes-api-server.py` 脚本未启用。
-- **hermes → dashboard 别名（2026-08-05 作废）**：原 `cloud_chat` 的 `hermes` 云端 provider 别名指向 Dashboard `:9119` 的路由已随 9119 网关用途移除而作废；对话树主链路改经 Hermes Bridge `:8650` → 纯净 gateway `:8642`（见 §1.5）。
-
-### 1.3.1 面板布局与自我思考卡片 (2026-08-01) — ⚠️ 历史，随面板退役
-
-- **整页统一自由画布**：左侧组件卡（local_model / memory / neko_group / hermes_dashboard / conversation_tree / herdr 等）与右侧仪表带（情感 PAD / 生命活力 / 自我思考 / V5 记忆 + 实时事件流）合并进同一个 `#canvas` 绝对定位画布。所有面板可**自由拖拽移动、八向缩放、拖拽时吸附对齐（容器四边+中线、其他面板四边+中线）、localStorage 记忆布局**；刷新/重载自动恢复上次布局。「重置布局」按钮清记忆恢复默认停靠。
-- **自我思考卡片（替代原"内心独白"）**：原读 `pending_thought.json`（不存在、无写入者）的「内心独白」卡片已废弃；现改为读 metacog 真实产出的 `latest_thought.json`（经 `/api/state` 的 `state.thought` 暴露），显示伊卡洛斯最近一次元认知反思（text + kind + 好奇度 + 时间）。
-- **metacog 仍为事件驱动、无定时循环**：`core/memory_v5/metacog.py` 保留并运行，但**不再有后台定时 think 线程**；其实际触发点为：① agent 调 `v5_self_reflect` MCP 工具（唯一会写 `latest_thought.json` 的活路径）；② 用户问"你在想什么"时只读注入；③ 每轮对话后 `mark_interaction()` 降探索欲；④ 手动 CLI。旧文档中"25min / 45min 自动内省循环"已不存在。
-- **桌面 + 移动端**：PanelManager 用 Pointer Events 统一鼠标与触摸；≤720px 画布自动降级为纵向堆叠流（面板 `static`、隐藏缩放手柄、关闭拖拽），保证可读可滚动不误触。
+控制面板（`:9100`）、Hermes 底座（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw）、N.E.K.O 前端（`:48911-48915`）均已退役删除。表现层由 dsh web :3080 + 对话树 :48920 承接。历史面板功能（local_model / memory 拆分、neko_group 合并、自我思考卡片等）随面板一并退役。
 
 ### 1.4 对话树面板 (Conversation Tree, :48920)
 
@@ -109,15 +97,14 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 │   └── Scripts\                ← pip 安装的可执行脚本
 ├── node\                       ← Node.js (node.exe, v26.3.0)
 ├── bun\                        ← Bun (omp/oh-my-pi 可执行在 bin\omp.exe, 2026-08-12 便携化)
-├── llama\b10000-cuda\          ← llama.cpp (CUDA 13.x)
-│   ├── llama-server.exe
+├── dsh\                        ← DeepSeek Harness (npm 本地安装, 工作引擎 :3080)
+├── llama\b10000-cuda\          ← llama.cpp (CUDA 13.x, 用于 :8587 embedding)
+│   └── llama-server.exe
 ├── llama\b10000-cuda-12.4\     ← llama.cpp (CUDA 12.4，低版本驱动设备)
 │   └── llama-server.exe
 ├── rust\bin\                   ← 便携 Rust 工具
 │   └── cargo.exe
 ├── herdr\                      ← Herdr coding-agent 终端多路复用器 (headless, 命名管道)
-├── hermes-agent\               ← Hermes Agent 工作树 (2026-08-05 从仓库根迁入)
-│   └── venv\                   ← Hermes 专属 venv (python -m hermes_cli)
 └── MCPServe\                   ← MCP 服务套件
     ├── gitnexus\               ← GitNexus 代码智能 (图索引, CLI + MCP)
     ├── everything\             ← Everything 搜索 (es.exe)
@@ -126,7 +113,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
     └── codebase-memory\
 ```
 
-> **注意**：`runtime/hermes-agent` 是**工作树**（含 venv 与 clone），Hermes 用户态数据（配置/会话/插件/记忆）在 `data/hermes-agent/`（=`$HERMES_HOME`，gitignore）。升级经 `bin/hermes-update-and-patch.py --apply`（克隆更新 + 补丁重放 + 插件外置）。
+> **退役目录**：`runtime/hermes-agent/`（Hermes Agent 工作树）已于 2026-08-18 随底座退役移除。
 
 ### 2.2 根路径发现规则（IKAROS_ROOT）
 
@@ -137,7 +124,6 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 2. 脚本自身位置推导（__file__ / %~dp0）
    - bat: %~dp0 的父目录
    - Python: Path(__file__).resolve().parent.parent
-3. 兼容变量 HERMES_ROOT（旧版兼容）
 ```
 
 **禁止**: 在任何脚本中写 `root = r"E:\Ikaros"` 这样的硬编码。
@@ -145,7 +131,7 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 
 ### 2.3 环境变量注册表
 
-所有 Agent 可依赖的 `IKAROS_*` 环境变量由 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（权威源，自锚定、可随目录移动）统一设置；Hermes 侧上游同源镜像在 **`data/hermes-agent/.env`**（32 个变量，手工同步）；`core/env/` 保留 Python 侧副本（含 `ikaros-paths.json`）。**注册表 `IKAROS_*` 已清零，勿再 `setx`**。
+所有 Agent 可依赖的 `IKAROS_*` 环境变量由 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（权威源，自锚定、可随目录移动）统一设置；`core/env/` 保留 Python 侧副本（含 `ikaros-paths.json`）。**注册表 `IKAROS_*` 已清零，勿再 `setx`**。
 
 | 变量名 | 值示例 | 说明 |
 |--------|--------|------|
@@ -161,24 +147,16 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_MODULES` | `%IKAROS_ROOT%\modules` | 模块目录（扩展挂载点） |
 | `IKAROS_MEMORY` | `%IKAROS_ROOT%\core\memory_v5` | V5 代码根 |
 | `IKAROS_MEMORY_DATA` | `%IKAROS_ROOT%\core\memory_v5\data` | V5 数据根（`v5.db`、JSON 拓扑） |
-| `IKAROS_MEMORY_MODELS` | `%IKAROS_ROOT%\core\memory_v5\models` | 本地模型目录 |
+| `IKAROS_MEMORY_MODELS` | `%IKAROS_ROOT%\core\memory_v5\models` | 模型目录（bge-m3 embedding） |
 | `IKAROS_MEMORY_SCRIPT` | `%IKAROS_ROOT%\core\memory_v5\store.py` | V5 存储脚本入口 |
-| `IKAROS_MODEL_EMBEDDING` | `...\models\nomic-embed-text-v2-moe.f32.gguf` | Embedding 模型 |
-| `IKAROS_MODEL_LLM` | `...\models\Phi-4-mini-instruct-Q4_K_M.gguf` | 本地 LLM 默认模型（实际由 `model_config.json` 决定） |
-| `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\b10000-cuda` | llama.cpp 目录（`.bat` 默认 CUDA13；跨设备自动选择见 `core/env/llama_resolver.py`） |
-| `IKAROS_LLAMA_SERVER` | `...\b10000-cuda\llama-server.exe` | llama-server 可执行 |
+| `IKAROS_MODEL_EMBEDDING` | `...\models\bge-m3-q8_0.gguf` | Embedding 模型 |
+| `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\b10000-cuda` | llama.cpp 目录（embedding :8587 用，`.bat` 默认 CUDA13；跨设备自动选择见 `core/env/llama_resolver.py`） |
+| `IKAROS_LLAMA_SERVER` | `...\b10000-cuda\llama-server.exe` | llama-server 可执行（embedding 服务） |
 | `IKAROS_LLAMA_VERSION` | `b10000-cuda` | 当前 CUDA 版本标签 |
-| `IKAROS_NEKO` | `%IKAROS_ROOT%\apps\neko` | Neko 前端服务根 |
-| `IKAROS_NEKO_PYTHON` | `%IKAROS_ROOT%\apps\neko\.venv\Scripts\python.exe` | Neko 独立 venv |
-| `IKAROS_NEKO_SERVER` | `app.main_server` | Neko 主服务模块 |
 | `IKAROS_NODE_MODULES` | `%IKAROS_ROOT%\runtime\node\node_modules` | 便携 Node 模块 |
-| `IKAROS_HERMES_AGENT` | `%IKAROS_ROOT%\runtime\hermes-agent` | Hermes Agent 代码根（relocated from `hermes-agent`） |
-| `IKAROS_HERMES_HOME` | `%IKAROS_ROOT%\data\hermes-agent` | Hermes 用户态数据 / 会话 / 插件目录 |
-| `IKAROS_LABEL_EMOTION_PROVIDER` | `local` / `deepseek` | 情感标注 LLM |
-| `IKAROS_PORT_LLM` | `8080` | 本地 LLM 端口 |
-| `IKAROS_PORT_LLAMA` | `8080` | llama-server 端口 |
 | `IKAROS_PORT_EMBEDDING` | `8587` | Embedding 端口 |
-| `IKAROS_PORT_BRIDGE` | `7860` | 桥接端口（遗留定义，勿与 :8650 Hermes Bridge 混淆） |
+
+> **已退役变量**（不再设置/使用）：`IKAROS_MODEL_LLM`（本地 LLM 模型）、`IKAROS_PORT_LLM` / `IKAROS_PORT_LLAMA`（:8080）、`IKAROS_NEKO*`（N.E.K.O 前端）、`IKAROS_HERMES_AGENT` / `IKAROS_HERMES_HOME`（Hermes Agent）、`IKAROS_LABEL_EMOTION_PROVIDER`（情感标注 LLM）、`IKAROS_PORT_BRIDGE`（遗留桥接端口）。
 
 ### 2.4 PYTHONHOME 安全门
 
@@ -189,15 +167,9 @@ set "PATH=%IKAROS_RUST%\bin;%IKAROS_LLAMA_DIR%;...;%IKAROS_ROOT%\runtime\portabl
 
 便携 Python 始终在 PATH 首位，且 `PYTHONHOME` 被显式清空。
 
-### 2.5 Neko 的独立 Venv — ⚠️ 历史，N.E.K.O 已退役 2026-08-18（apps/neko 已删）
+### 2.5 N.E.K.O 独立 Venv — ⚠️ 已退役 2026-08-18
 
-`apps/neko/` 使用**独立的 venv**（非 portable-python）：
-
-```
-apps/neko/.venv/Scripts/python.exe
-```
-
-这是因为 Neko 的依赖（fastapi 0.115, websockets 15.0, SQLAlchemy 等）与 portable-python 的依赖不同。启动 Neko 相关组件时**必须**使用此 venv。
+N.E.K.O 前端（`apps/neko/`）已随底座退役删除，其独立 venv 不再存在。当前仅使用 portable-python。
 
 ---
 
@@ -235,15 +207,7 @@ _ROOT = Path(__file__).resolve().parent.parent   # → E:\Ikaros
 _v5_path = _ROOT / "core" / "memory_v5"          # → E:\Ikaros\core\memory_v5
 ```
 
-#### 规则 C：Neko 集成代码路径 — ⚠️ 已失效（N.E.K.O 退役 2026-08-18，apps/neko 已删）
-
-使用 `IKAROS_ROOT` 环境变量：
-
-```python
-# apps/neko/main_logic/ikaros_integration.py
-_IKAROS_ROOT = Path(os.environ.get("IKAROS_ROOT", os.environ.get("HERMES_ROOT", "E:\\Ikaros")))
-_IKAROS_MEMORY = _IKAROS_ROOT / "core" / "memory_v5"
-```
+#### 规则 C：~~Neko 集成代码路径~~ — ⚠️ 已失效（N.E.K.O 退役 2026-08-18）
 
 #### 规则 D：跨模块引用（sys.path）
 
@@ -288,10 +252,7 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 | `bin/ikaros-env.sh/.bat` | `IKAROS_CONFIG` | `config/` |
 | `bin/ikaros-env.sh/.bat` | `IKAROS_LLAMA_DIR` | `runtime/llama/<按 CUDA 自动选择>` |
 | `bin/ikaros-env.sh/.bat` | `IKAROS_MEMORY` | `core/memory_v5/` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_HERMES_AGENT` | `runtime/hermes-agent/` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_HERMES_HOME` | `data/hermes-agent/` |
-| `data/hermes-agent/.env` | 全部 IKAROS_*（同源镜像） | Hermes 进程上游（手工同步） |
-| `core/env/ikaros-paths.json` | 全部 IKAROS_* 变量 | 同上 + 子路径（Python 查询用） |
+| `core/env/ikaros-paths.json` | 全部 IKAROS_* 变量 | 子路径（Python 查询用） |
 | `__file__` 推导 | `V5_ROOT` | `core/memory_v5/` (仅 V5 内部) |
 
 ### 3.5 目录映射（旧 → 新）
@@ -300,11 +261,11 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 |--------|--------|---------|
 | `Ikaros-memory/` | `core/memory_v5/` | 2026-07-24 |
 | `Ikaros-environment/` | `core/env/` | 2026-07-24 |
-| `ikaros-dashboard/` | `core/dashboard/` | 2026-07-24 |
+| `ikaros-dashboard/` | `core/dashboard/` | 2026-07-24（2026-08-18 随 9100 面板退役删除） |
 | `ikaros-monitor/` | _(已移除)_ | 2026-07-24 |
 | `identity/` | `config/identity/` | 2026-07-24 |
-| `N.E.K.O-main/` | `apps/neko/` | 2026-07-24 |
-| `Ikaros-Control-Panel/` | `core/control-panel/` | 2026-07-24 |
+| `N.E.K.O-main/` | `apps/neko/` | 2026-07-24（2026-08-18 退役删除） |
+| `Ikaros-Control-Panel/` | `core/control-panel/` | 2026-07-24（已随 9100 面板退役） |
 
 ### 3.6 `.bat` 文件铁律
 
@@ -341,9 +302,9 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `memory_retrieval.py` | **统一检索入口**（`unified_retrieve`，scope=auto/semantic/lexical/graph/tree/temporal；auto 语义不足自动补图扩散路）。FTS5 关键词 + Chroma 向量 + 时间范围融合，权重/阈值由 `preprocess_config.yaml` 控制 | `unified_retrieve(query, scope="auto")`（`retrieve()` 为内部基础路） |
 | `entity_graph.py` | 实体图谱 (6 张 `eg_*` 表同库): 抽取(Stage A/B)+传播激活(spreading_activation_search)+整合 | `run_episodic_consolidation()` |
 | `validation.py` | 结构化内容守卫 (`V5-0109`): 拦截 LLM 旁白/裸 JSON/栅栏/超长，防污染 v5.db | `is_clean_structured_content()` |
-| `reflect/` | 记忆反射: consolidate/distill/llm_client/registry/scheduler。**全走 DeepSeek 云端 (deepseek-v4-flash)**；本地 :8080 仅 agent 按需懒加载，不参与反思认知 | `registry.run_all()` |
-| `extensions/` | **上下文压缩与检索增强层**：`token_compressor.py`（委派 `llmlingua` 现成库 + 离线规则回退，消费闲置的 `token_budget`，**已接入** hermes 插件 `on_pre_compress`）、`gated_retrieval.py`（分层门控，TencentDB 思路借鉴，**骨架阶段**）、`temporal_graph.py`（`eg_*` 加 `valid_from/valid_to` + `dissonance` supersede，Graphiti 思路借鉴但 SQLite 原生、不换图库，**已接入 2026-08-01**）。详见 §5.2.5 与 `docs/v5-context-compression.md` | `compress_text()` / `gated_retrieve()` / `apply_migration()` |
-| `models/model_config.py` | 本地 LLM 单一配置源: 模型/别名(`local-llm`)/端口(8080)/ctx/gpu_layers，落盘 `model_config.json` | `default_config()` |
+| `reflect/` | 记忆反射: consolidate/distill/llm_client/registry/scheduler。**全走 DeepSeek 云端 (deepseek-v4-flash)** | `registry.run_all()` |
+| `extensions/` | **上下文压缩与检索增强层**：`token_compressor.py`（委派 `llmlingua` 现成库 + 离线规则回退，消费闲置的 `token_budget`，原 hermes 插件 `on_pre_compress` 集成点已随底座退役）、`temporal_graph.py`（`eg_*` 加 `valid_from/valid_to` + `dissonance` supersede，Graphiti 思路借鉴但 SQLite 原生、不换图库，**已接入 2026-08-01**）。详见 §5.2.5 与 `docs/v5-context-compression.md` | `compress_text()` / `apply_migration()` |
+| `models/model_config.py` | 本地 LLM 配置源（**已退役**，`initial_model` 空串=禁用；恢复=放 gguf + 设模型名），落盘 `model_config.json` | `default_config()` |
 | `cogno_5d.py` | 5D 认知增强 (时间/设备/地理/情绪/上下文) | `enrich_reply()` |
 | `__init__.py` | V5 版本 5.1.0 + CONTROLLED_KINDS 注册表 (12 kinds) | `validate_state_key()` |
 
@@ -361,16 +322,12 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 文件 | 职责 |
 |------|------|
-| `ikaros-control-panel.bat` | 双击启动控制面板 :9100（只起面板后端+开浏览器，不拉全栈） |
-| `ikaros-env.sh` / `ikaros-env.bat` | **环境权威源**（自锚定，设置全部 IKAROS_*；Hermes 上游镜像 `data/hermes-agent/.env`） |
-| ~~`cloud_chat.py`~~ | ⚠️ 2026-08-14 已删除（companion 主链由对话树双模式 + bridge :8650 → gateway :8642 接替） |
-| `llama-help.py` | llama-server 辅助（`--hotload` 手动热载本地 LLM） |
+| `ikaros-env.sh` / `ikaros-env.bat` | **环境权威源**（自锚定，设置全部 IKAROS_*） |
+| ~~`cloud_chat.py`~~ | ⚠️ 2026-08-14 已删除（对话树双模式接替） |
 | `ikaros-soul-sync.py` | V5 → SOUL.md 同步 |
-| `hermes_paw_bridge.py` | Hermes Agent 驱动的猫爪桥 (:8088) |
-| `import-hermes-to-convtree.py` | Hermes 单会话 → 对话树 (:48920) 导入器 |
 | `conversation-tree/server.py` | 对话树面板后端 (REST, :48920) |
-| `hermes-bridge.py` | Hermes Bridge 启动器（studio 包装层 :8650，便携 Python 跑 `core/hermes-bridge/server.py`） |
-| `hermes-update-and-patch.py` | Hermes 克隆更新 + overlay 补丁重放（`--apply`；9100 面板「更新 Hermes」权威入口） |
+
+> **已退役脚本**：`ikaros-control-panel.bat`（:9100 面板）、`hermes_paw_bridge.py`（:8088 猫爪桥）、`hermes-bridge.py`（:8650）、`hermes-update-and-patch.py`（Hermes 更新器）、`llama-help.py`（本地 LLM 热载入）、`import-hermes-to-convtree.py`（Hermes 导入器）——均随 hermes/neko/:8080 退役删除。
 
 ---
 
@@ -383,7 +340,6 @@ setlocal 不可用（被 call 的子批中会丢失）
   → ikaros 单模式 (build_system_prompt 组装 Ikaros 伴侣人格: 公理 + SOUL + 心绪 + 树域记忆)
     → DeepSeek 直连 (CT_DEEPSEEK_MODEL, 首选; 预检索记忆 → 只读工具回路)
       → 失败回退 → 本地三层 chat 补全链路
-        → 本地 :8080 (Phi-4-mini, model_config.json 决定, 懒加载)
   → reply 流式推送 (SSE: content/reasoning/tool 生命周期/usage)
 ```
 
@@ -401,7 +357,7 @@ setlocal 不可用（被 call 的子批中会丢失）
   → is_clean_structured_content() 守卫 [V5-0109] 拦截旁白/裸JSON/栅栏/超长
 ```
 
-> 本地 LLM (`:8080`) 采用**懒加载**：看门狗只监测端口，不主动加载模型；agent 首次 `call_llm(provider="local")` 时由 `ensure_local_llm()` 热载入（见 §5.2.3）。
+> 本地 LLM (`:8080`) 已退役 2026-08-18，无自动热载入/看门狗。当前 LLM 仅云端 DeepSeek。
 
 ### 5.2.1 记忆库数据布局与现状（2026-07-24 清理后）
 
@@ -441,12 +397,9 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 后端 | 配置 | 路由 |
 |------|------|------|
-| 云端 DeepSeek | `DEEPSEEK_BASE_URL=https://api.deepseek.com`、`DEEPSEEK_MODEL=deepseek-v4-flash`、`DEEPSEEK_API_KEY` (env) | `call_llm()` / `call_llm_auto()` —— **反思/摘要/对话默认走云端** |
-| 本地 :8080 | `LOCAL_LLM_URL` (默认 `http://127.0.0.1:8080`)、别名 `local-llm`、模型由 `models/model_config.json` 决定（当前 `Qwen3-1.7B Q4_K_M`） | 仅 `call_llm(provider="local")` 触发，**懒加载** |
+| 云端 DeepSeek | `DEEPSEEK_BASE_URL=https://api.deepseek.com`、`DEEPSEEK_MODEL=deepseek-v4-flash`、`DEEPSEEK_API_KEY` (env) | `call_llm()` / `call_llm_auto()` —— **所有反思/摘要/对话唯一 LLM 后端** |
 
-- **懒加载链路（已改）**：本地 LLM (:8080) 已退役，无自动热载入 / 看门狗。`llm_client.call_llm(provider="local")` → `_call_local` 直接打 :8080（调用前须确保服务已自行启动），不再经 `bin/wd_import.py` / `ensure_local_llm` 热载入。
-- **本地小模型已从 V5 认知管线移除（2026-07-26）**：`call_llm_auto` 纯云端；`consolidate/distill/reflect` 全部 `provider="deepseek"`，`:8080` 不参与反思。
-- ⚠️ 内部不一致待修：`summary.py` 配置仍写 `model: local-llm`（与 `preprocess_config.yaml` 默认同），实际却调 `provider="deepseek"` —— 以代码为准。
+> **本地 LLM (:8080) 已退役 2026-08-18**。`provider="local"` 接口代码保留（:8080 按需恢复时直连，无自动热载入），但当前无服务运行。`call_llm_auto` 纯云端。
 
 ### 5.2.4 结构化内容守卫（`validation.py`）
 
@@ -461,14 +414,14 @@ API：`guard_structured_content(content) → list[ValidationError]`、`is_clean_
 
 ### 5.2.5 上下文压缩与检索增强层（extensions/，2026-08-14 融汇裁决后：token_compressor + temporal_graph + ontology_align + tree_adapter 已接入；gated_retrieval 已删）
 
-V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`summary.py`，20 轮才触发）、委托 Hermes `ContextCompressor` 压 transcript 中段、以及 `token_budget` 的**硬截断**（该配置此前在 `preprocess_config.yaml` 定义却**未被主检索代码消费**）。为补齐相对 TencentDB / LLMLingua / Graphiti 的差距，`core/memory_v5/extensions/` 下规划了三层增强骨架。**2026-08-14 P4 裁决后的接入状态**：
+V5 现有（5.1.0）的上下文缩减手段：LLM 摘要旧轮（`summary.py`，20 轮才触发）与 `token_budget` 的**硬截断**（该配置此前在 `preprocess_config.yaml` 定义却**未被主检索代码消费**）。为补齐相对 TencentDB / LLMLingua / Graphiti 的差距，`core/memory_v5/extensions/` 下规划了三层增强骨架。**2026-08-14 P4 裁决后的接入状态**：
 
 1. **`token_compressor.py` — token 级压缩（相对 LLMLingua 的硬缺口）**
    - 核心入口 `compress_text(text, quality="auto")`：装了 `llmlingua` 则委派其 `PromptCompressor.compress_prompt()`（README 实测 11x+ 压缩，对抗 lost-in-the-middle）；未装/离线则回退 `rule_compress`（折叠空白/重复行、删语气 filler、超目标保头尾截中段）。
    - **导入守护 + 离线回退**：U 盘离线便携，不硬依赖 HF 模型权重；`pip install llmlingua` 到 Ikaros venv 联网一次下模型后离线可用缓存。
    - 配套 `compress_old_rounds(tail_keep=6)`（保最近 N 轮原样、压旧轮）、`compress_retrieval_block`（高相关原样、低相关先压再裁，避免「要么全要要么全弃」）、`enforce_budget`（按 score/顺序截到预算内）。
    - **消费此前闲置的 `token_budget` 配置**（min 800 / max 1200 / `char_x` 估算）。
-   - **已接入主链路（2026-07-30 验证）**：`data/hermes-agent/plugins/ikaros_v5/memory_provider.py` 的 `on_pre_compress` 用 `compress_retrieval_block(max_chars_per_item=150)` 替换原有 `text[:150]` 硬截断，整段用 `try/except` 包裹，压缩器异常时自动回退原始硬截断。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
+   - **历史集成点（已随底座退役）**：原 hermes 插件 `data/hermes-agent/plugins/ikaros_v5/memory_provider.py` 的 `on_pre_compress` 集成已不存在；dsh 插件 `core/ikaros-dsh/plugins/ikaros-memory` 接替记忆召回/写回职责。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
 
 2. ~~**`gated_retrieval.py` — 分层检索门控**~~ **已删除（2026-08-14 P4 裁决）**：无调用方的骨架；其「高层优先、按需下钻」思想已被 `context_anchor.should_recall`（调用层门控）+ `type_decay`/`base_weight_factor`（排序层分层）覆盖，无需单独模块。
 
@@ -491,10 +444,9 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
 ```
 1. 不得硬编码 E:\Ikaros 或任何绝对路径
 2. 所有根路径通过 IKAROS_ROOT 环境变量或 __file__ 推导
-3. 新增子路径必须在 bin/ikaros-env.sh + bin/ikaros-env.bat 注册，并同步 core/env/ikaros-paths.json + data/hermes-agent/.env（Hermes 上游）
+3. 新增子路径必须在 bin/ikaros-env.sh + bin/ikaros-env.bat 注册，并同步 core/env/ikaros-paths.json
 4. Python 代码优先用 Path(__file__).resolve() 相对推导
 5. bin/ 的路径用 parent.parent + "core/memory_v5" 模式
-6. Neko 集成代码用 os.environ.get("IKAROS_ROOT")
 ```
 
 ### 6.2 导入规则
@@ -511,12 +463,8 @@ V5 现有（5.1.0）的上下文缩减手段只有三类：LLM 摘要旧轮（`s
 ```
 1. portable-python 用于所有 Ikaros 原生组件
    → E:\Ikaros\runtime\portable-python\python.exe
-2. Hermes Agent venv 用于 Hermes Agent 相关操作（2026-08-05 已迁至 `runtime/hermes-agent/`）
-   → E:\Ikaros\runtime\hermes-agent\venv\Scripts\python.exe
-3. Neko venv 用于 Neko 前端相关操作
-   → E:\Ikaros\apps\neko\.venv\Scripts\python.exe
-4. 不得在三个 venv 间混合使用
-5. PYTHONHOME 必须为空 (set "PYTHONHOME=")
+2. 不得混用其他 venv（Hermes venv / Neko venv 已随组件退役）
+3. PYTHONHOME 必须为空 (set "PYTHONHOME=")
 ```
 
 ### 6.4 V5 数据层规则
