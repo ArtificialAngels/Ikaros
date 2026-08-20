@@ -35,8 +35,10 @@ Log "started dsh PID $($p.Id)"
 
 # 3. 验证 3080 监听 + mcp_server spawn
 Start-Sleep -Seconds 10
-$l = Get-NetTCPConnection -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-if ($l) { Log "OK: 3080 listening" } else { Log "WARN: 3080 not listening yet — check ikaros-dsh-web.err.log" }
+$port = $env:IKAROS_DSH_WEB_PORT
+if (-not $port) { $port = 3080 }
+$l = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+if ($l) { Log "OK: $port listening" } else { Log "WARN: $port not listening yet — check ikaros-dsh-web.err.log" }
 
 $mcp = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'mcp_server\.py' -and $_.ParentProcessId -eq $p.Id }
 if ($mcp) { Log "OK: mcp_server spawned under dsh (PID $($mcp.ProcessId))" } else { Log "WARN: mcp_server not yet spawned directly under dsh $($p.Id)" }

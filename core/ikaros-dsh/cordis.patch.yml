@@ -42,7 +42,7 @@
     # ⚠️ name 不支持 !!js 表达式（Entry.name 不经过 interpolate, 只有 config 走），
     #    用裸包名从 profile 的 node_modules 解析（pnpm file: 链接, 源在 E 盘不复制）。
     # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build (tsc -> dist/)
-    # 装配: cd ~/.dsh/profiles/web && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory
+    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"
     - id: ikaros-memory
       name: '@ikaros/dsh-ikaros-memory'
       config: {}
