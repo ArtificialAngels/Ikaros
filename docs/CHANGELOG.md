@@ -8,6 +8,43 @@
 
 ---
 
+## [2026-08-20] — 线3 完成：dsh 基座固定 + Ikaros 启动器 v1 + 组件插件化
+
+> **背景**：线1（清理）+ 线2（V5 P0 修复）已落地，V5 记忆核心稳定；本轮把 dsh 基座固定，引入 `bin/ikaros` 统一启动器，组件按 schema 元数据化。
+> 设计文档：`docs/ikaros-launcher-design.md`（29KB）+ `docs/COMPONENT-PLUGIN-SPEC.md`（24KB）。
+
+### Added
+- **`bin/ikaros` 启动器**：三 shell 入口（bash / cmd / PowerShell）+ `core/ikarosctl.py`（563 行 Python 调度核心）
+  - 子命令：`web` / `tree` / `embed` / `all` / `doctor` / `update`（隐含 `status` / `ps` / `logs` / `stop` / `restart`）
+  - 跨平台子进程处理（`python` → `IKAROS_PYTHON` / `llama-server` 绝对路径 / `.bat` → `cmd.exe` / `.ps1` → `powershell`）
+  - `ikaros doctor` 自动检测 runtime 缺失（dsh-audit R1 风险已覆盖）
+- **`config/components.yaml`**：4 组件元数据（dsh / conversation-tree / embedding / herdr）
+  - 字段：`id` / `name` / `category` / `port` / `process_marker` / `dependencies` / `config_schema` / `healthcheck` / `lifecycle` / `dsh_integration`
+- **`core/components/registry.py`**（259 行）：`ComponentSpec` dataclass + `load_components()` / `get_component()` / `list_components()`
+- **`tests/test_component_registry.py`**（197 行, 13 用例）+ **`tests/test_ikarosctl.py`**（133 行, 6 用例）
+- **`dsh-base-audit-20260820.md`**：dsh 基座审计报告（300 行, 1 次严重 + 5 防腐化建议 + 5 风险点）
+- **设计文档 2 份**：`ikaros-launcher-design.md`（29KB）+ `COMPONENT-PLUGIN-SPEC.md`（24KB）
+
+### Changed
+- **`bin/start-dsh-ikaros.bat` / `start-omp.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat`**
+  重写为 thin wrapper（调 `ikaros` 启动器），保留作 backward compat
+- **`docs/ARCHITECTURE.md`** §1.6 加启动器段（24 行）
+- **`README.md`** "30 秒上手"改 `bin\ikaros web` / `ikaros tree`（保留老入口说明）
+- **`docs/naming.md`** §6 加启动器命名约定（8 行表）
+
+### Fixed
+- **`core/ikaros-dsh/cordis.patch.yml:45`** 注释硬编码 `E:/Ikaros` → `${IKAROS_ROOT}` 占位符
+- **`bin/restart-dsh-ikaros.ps1`** 验证逻辑端口硬编码 3080 → 读 `IKAROS_DSH_WEB_PORT` env (fallback 3080)
+  *(注: thin wrapper 后此修复移至 `ikaros doctor` 子命令)*
+
+### Verified
+- `python docs/lint.py` → **OK: no drift detected**
+- `pytest tests/ -q` → **73 passed** (67 基线 + 6 新)
+- `ikaros doctor` 跑通（4 组件状态 + runtime 检测）
+- 9 个文件 CRLF 正确（pre-commit OK）
+
+---
+
 ## [2026-08-19] — 线1 死引用清理：架构图重生 + 退役引用收敛
 
 > **背景**：2026-08-18 底座切换（hermes/neko → dsh）后，架构图生成器（`tools/gen_architecture_html.py`）

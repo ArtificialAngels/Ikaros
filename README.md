@@ -87,7 +87,8 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 2. cd Ikaros
 3. python scripts/fetch-upstreams.py     ← 拉取上游 (runtime / mcp / 模型权重)
 4. python scripts/setup-native.py        ← 落地 ikaros-paths.json + dsh profile env 参考
-5. bin\start-dsh-ikaros.bat web            ← 拉起工作引擎 :3080 (dsh)
+5. `bin\ikaros web`                          ← 拉起工作引擎 :3080 (dsh, 2026-08-20 启动器起)
+   (老入口 `bin\start-dsh-ikaros.bat web` 仍可用, 已收敛为 thin wrapper)
 ```
 
 > `scripts/fetch-upstreams.py` 支持 `--list` / `--dry-run` / 按名拉取;`setup-native.py` 支持 `--check` 校验。详见 `UPSTREAM.md`。
@@ -95,10 +96,13 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 ### 在你现在的电脑上(已经解压过)
 
 ```
-1. 双击 bin\start-dsh-ikaros.bat web       ← 工作引擎 :3080
-2. 启动对话树: python core/conversation-tree/server.py --port 48920
+1. `bin\ikaros web`                  ← 工作引擎 :3080
+2. `bin\ikaros tree`                 ← 启动对话树 :48920
 3. 浏览器开 http://127.0.0.1:3080 / http://127.0.0.1:48920, 开始对话
 ```
+
+> 启动器 (`bin\ikaros`) 跨 3 shell (bash / cmd / PowerShell), 支持子命令 `web` / `tree` / `embed` / `all` / `doctor` / `update`.
+> 详见 `docs/ikaros-launcher-design.md`. 老脚本 (`bin\start-dsh-ikaros.bat` / `start-omp.bat` / `restart-dsh-ikaros.ps1`) 仍兼容, 实际调 `ikaros` 启动器.
 
 ---
 

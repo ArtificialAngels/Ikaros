@@ -49,3 +49,19 @@
 | `:8080` 本地 LLM | **已退役 (2026-08-18)**，勿引用；LLM = 云端 DeepSeek |
 | `:9100` 控制面板 | **已退役 (2026-08-18)**，勿引用 |
 | 环境变量 `ikaros_root` | `IKAROS_ROOT` |
+
+## 6. 启动器命名（2026-08-20 起）
+
+启动器 `bin/ikaros` 是**所有 Ikaros 组件的统一入口**，跨 3 shell：
+
+| 类别 | 命名 | 说明 |
+|------|------|------|
+| **入口文件** | `bin/ikaros` / `bin/ikaros.bat` / `bin/ikaros.ps1` | 品牌 **Ikaros** 一律小写 `ikaros`（除品牌外） |
+| **Python 调度核心** | `core/ikarosctl.py` | `ikaros` + `ctl`（control），标识「启动器控制核心」 |
+| **子命令动词** | `web` / `tree` / `embed` / `all` / `doctor` / `update` | 全小写、单词；新子命令必须先在 `docs/ikaros-launcher-design.md` 文档化 |
+| **子命令命名空间**（隐含） | `status` / `ps` / `logs` / `stop` / `restart` | 全小写；与显式子命令同等地位 |
+| **组件元数据文件** | `config/components.yaml` | 单数 `component` schema，每个组件一个 dict |
+| **组件元数据键** | `id` / `name` / `category` / `port` / `process_marker` / `dependencies` / `config_schema` / `healthcheck` / `lifecycle` / `dsh_integration` | snake_case；详见 `docs/COMPONENT-PLUGIN-SPEC.md` |
+| **生命周期 watch dog** | enum: `self` / `none` / `central` | 字符串枚举（小写）；不允许其他值 |
+| **健康检查 type** | `port` / `pipe` / `http` | 小写；新增 type 需更新 registry 校验 |
+| **thin wrapper 模式** | 保留为 backward compat，调 `ikaros` 启动器 | 不删老脚本，**收敛为薄壳**（不重复启动逻辑）|

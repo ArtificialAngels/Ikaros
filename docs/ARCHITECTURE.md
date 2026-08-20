@@ -86,6 +86,42 @@ agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**�
 - **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
 
+### 1.6 启动器：`bin/ikaros`（2026-08-20 起）
+
+所有 Ikaros 组件的**统一入口**（dsh / 对话树 / embedding / herdr），跨 3 shell（bash / cmd / PowerShell）：
+
+```
+bin/ikaros         ← bash 入口（MSYS / Git-Bash / WSL）
+bin/ikaros.bat     ← cmd 入口（ASCII only, GBK safe）
+bin/ikaros.ps1     ← PowerShell 入口（UTF-8）
+core/ikarosctl.py  ← Python 调度核心（563 行）
+config/components.yaml  ← 4 组件元数据（dsh / conversation-tree / embedding / herdr）
+core/components/registry.py  ← ComponentSpec + load_components / get_component
+```
+
+**子命令契约**（详见 `docs/ikaros-launcher-design.md` §2）：
+
+| 子命令 | 行为 |
+|---|---|
+| `ikaros web` | 拉起 dsh web (:3080) |
+| `ikaros tree` | 拉起对话树 (:48920) |
+| `ikaros embed` | 拉起 embedding (:8587) |
+| `ikaros all` | 全栈启动 |
+| `ikaros doctor` | 诊断（读 components.yaml + 检查 runtime 缺失）|
+| `ikaros update` | 更新 upstream（TODO）|
+
+**IKAROS_ROOT 自锚定**：bash 用 `${BASH_SOURCE[0]}`、cmd 用 `%~dp0`、PS 用 `$PSScriptRoot`，**复用 `bin/ikaros-env.*` 的环境权威源**。
+
+**组件元数据 schema**（`config/components.yaml`，详见 `docs/COMPONENT-PLUGIN-SPEC.md`）：
+- `id` / `name` / `category` / `port` / `process_marker`
+- `dependencies` / `config_schema` / `healthcheck`（type: port|pipe|http）
+- `lifecycle`：`start_script` / `stop_script` / `restart_script` / `watchdog`（enum: self|none|central）
+- `dsh_integration`：`overlay` 路径 + `mcp_servers` 列表
+
+**Backward compat**（不删旧脚本）：
+- `bin/start-dsh-ikaros.bat` / `start-omp.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 都已重写为 thin wrapper，调 `ikaros` 启动器
+- 用户照旧可双击启动，**真实实现全部走 `core/ikarosctl.py`**
+
 ### 2.1 核心设计：零系统依赖
 
 Ikaros 运行所需的所有运行时环境**全部打包在项目目录内**，不依赖系统安装的 Python/Node/Rust。
