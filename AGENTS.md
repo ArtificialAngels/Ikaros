@@ -119,10 +119,10 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - 已实测在线（E:\Ikaros 内搜索秒回）。V5 directive #2 同步此规则。
 
 ## 9100 panel refactor (2026-07-26) — 历史，9100 已退役 2026-08-18
-- Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable).
-- Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control.
-- Person Sync removed (sync script deleted). Hermes API gateway (:8642) is ACTIVE again — served by `python -m hermes_cli.main gateway run` (used by dashboard + chat-tree). The legacy `bin/hermes-api-server.py` script is unused.
-- `hermes` cloud_chat provider now aliases to `dashboard`.
+- Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable). (:8080 本地 LLM 已退役 2026-08-18; 集中 watchdog 也已于 2026-08-19 退役)
+- Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control. (N.E.K.O 已退役 2026-08-18)
+- Person Sync removed (sync script deleted). Hermes API gateway (:8642) was ACTIVE again at the time — served by `python -m hermes_cli.main gateway run` (used by dashboard + chat-tree). (:8642 已随 hermes 底座退役 2026-08-18) The legacy `bin/hermes-api-server.py` script is unused.
+- `hermes` cloud_chat provider now aliases to `dashboard`. (dashboard :9119 已退役 2026-08-18)
 
 ## Conversation Tree 面板 (2026-07-28, 2026-08-01 得兼改造; 2026-08-04 S1/S2 结构性修复)
 - 新增 `:48920` 树形对话面板（Explore.poker 风格），启动 `core/conversation-tree/server.py --port 48920`。

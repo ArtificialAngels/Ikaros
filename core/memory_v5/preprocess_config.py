@@ -26,7 +26,7 @@ _DEFAULTS: dict = {
         "vector_weight": 0.7,
         "fts_weight": 0.3,
         "time_decay_per_day": 0.05,
-        "min_fused_score": 0.3,   # 2026-07-26 标定: 0.6 会把有效召回全过滤掉
+        "min_fused_score": 0.3,   # 2026-07-26 标定: 0.6 会把有效召回全过滤掉 (2026-08-14 改标 bge-m3 q8_0 1024 维, 融合尺度不变)
         "top_k": 5,
         "auto_route": True,
         "graph_min_score": 0.2,

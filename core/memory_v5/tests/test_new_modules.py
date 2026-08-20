@@ -99,16 +99,16 @@ class TestRelationship:
     def test_save_load_roundtrip(self):
         from memory_v5.relationship import Relationship
         r = Relationship(depth=0.4, warmth=0.6, interaction_count=10)
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
+        # Use a fresh tempdir path: atomic_write_json's drift guard refuses to
+        # overwrite an empty file (which NamedTemporaryFile leaves behind), so
+        # the path must be guaranteed-absent for a true "first save".
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "relationship.json"
             r.save(path)
             r2 = Relationship.load(path)
             assert r2.depth == 0.4
             assert r2.warmth == 0.6
             assert r2.interaction_count == 10
-        finally:
-            Path(path).unlink(missing_ok=True)
 
 
 class TestCare:
@@ -131,15 +131,15 @@ class TestCare:
     def test_save_load_roundtrip(self):
         from memory_v5.care import CareMonitor
         c = CareMonitor(total_reminders=5, cumulative_coding_sec=5400)
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            c.save(Path(path))
-            c2 = CareMonitor.load(Path(path))
+        # Use a fresh tempdir path: atomic_write_json's drift guard refuses to
+        # overwrite an empty file (which NamedTemporaryFile leaves behind), so
+        # the path must be guaranteed-absent for a true "first save".
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "care.json"
+            c.save(path)
+            c2 = CareMonitor.load(path)
             assert c2.total_reminders == 5
             assert c2.cumulative_coding_sec == 5400
-        finally:
-            Path(path).unlink(missing_ok=True)
 
 
 class TestDissonance:

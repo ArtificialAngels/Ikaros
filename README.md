@@ -119,12 +119,12 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 ## 🤖 本地模型
 
-本地模型用于 **记忆系统**(embedding + 反思归约兜底)与本地 LLM 兜底,chat 默认走云端 (DeepSeek)。
+本地模型仅剩 **embedding**（:8587，bge-m3，由组件启动脚本内嵌的分布式 watchdog 管理）；chat / 反思等一切 LLM 调用走云端 DeepSeek（本地 LLM :8080 已退役 2026-08-18）。
 
 | 模型 | 用途 | 端口 | 加载方式 |
 |------|------|------|---------|
 | bge-m3 q8_0 | embedding (1024 dim, 中英多语言) | :8587 | 常驻 |
-| Phi-4-mini-instruct Q4_K_M | 本地 LLM 推理兜底 | :8080 | **懒加载**(agent 首次调用时热载入) |
+| ~~Phi-4-mini-instruct Q4_K_M~~ | ~~本地 LLM 推理兜底~~ | ~~:8080~~ | **已退役**（恢复需放 gguf + 设 `model_config.json` 的 `initial_model`） |
 
 > 模型权重**不包含在本仓库**,由 `scripts/fetch-upstreams.py` 或手动从 HuggingFace / ModelScope 下载,落点与当前生效模型见 `core/memory_v5/models/model_config.json` 与 `bin/ikaros-env.bat` 的 `IKAROS_MODEL_EMBEDDING/IKAROS_MODEL_LLM`。
 
@@ -201,7 +201,7 @@ Ikaros\
 | dsh 没起 / :3080 无响应 | 面板 dsh 卡片 start;日志 `data\logs\dsh.log`(UTF-8) |
 | dsh overlay 未加载 | 检查用户层 `~/.dsh/profiles/web/cordis.patch.yml` 与规范源 `core/ikaros-dsh/cordis.patch.yml` 是否同步 |
 | 对话树只读工具 | 说明走了本地降级链(DeepSeek 直连失败) |
-| 端口被占 | `netstat -ano \| findstr :8587` / `:8080` / `:3080` / `:48920` |
+| 端口被占 | `netstat -ano \| findstr :8587` / `:3080` / `:48920` |
 | 云端 API 失败 | 检查 `.env` 的 API Key |
 | USB 盘符变了 | 无需处理 — IKAROS_ROOT 自锚定, 一切相对推导 |
 

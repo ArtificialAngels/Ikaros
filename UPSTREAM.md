@@ -86,8 +86,8 @@ python scripts/fetch-upstreams.py
 REM 2) 落地原生配置（校验 runtime exe、写 ikaros-paths.json、dsh profile env 参考）
 python scripts/setup-native.py
 
-REM 3) 启动（控制面板会按需拉起 embed :8587；:8080 懒加载；dsh web :3080 可手动启动）
-bin/ikaros-control-panel.bat
+REM 3) 启动（dsh web :3080；embed :8587 由组件启动脚本内嵌 watchdog 拉起；本地 LLM :8080 已退役）
+bin/start-dsh-ikaros.bat web
 ```
 
 ## 本地忽略汇总（`.gitignore` 已覆盖）
