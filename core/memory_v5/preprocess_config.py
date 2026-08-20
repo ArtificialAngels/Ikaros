@@ -107,6 +107,10 @@ _DEFAULTS: dict = {
         "retrieve_ttl_seconds": 20,
         "retrieve_ttl_enabled": True,
         "ontology_align_enabled": True,
+        # Task 2.0.2 (2026-08-20): 嵌入 :8587 短路 (与 yaml 对齐, 防漂移)
+        "circuit_breaker_enabled": True,
+        "circuit_breaker_threshold": 3,
+        "circuit_breaker_reset_seconds": 30,
     },
 }
 

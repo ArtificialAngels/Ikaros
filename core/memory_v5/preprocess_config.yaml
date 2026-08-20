@@ -114,6 +114,11 @@ cache:
   retrieve_ttl_seconds: 20     # 检索结果短 TTL: 同 query 20s 内直接返回, 跳过 embedding+chroma
   retrieve_ttl_enabled: true
   ontology_align_enabled: true  # 阶段3: 本体对齐 (difflib) 挂进实体候选 (2026-08-01 开启)
+  # ── Circuit breaker (Task 2.0.2, 2026-08-20): 嵌入 :8587 不可达时短路 ──
+  # 设计: docs/memory_v5-circuit-breaker-design.md §3.3
+  circuit_breaker_enabled:        true   # 总开关; false = 旧行为
+  circuit_breaker_threshold:      3      # 连续失败次数触发 closed → open
+  circuit_breaker_reset_seconds:  30     # open → half_open 探针冷却期
 
 # Validation rules (v5.validation module)
 # Each rule can be individually enabled/disabled.

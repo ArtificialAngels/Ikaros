@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger("ikaros.memory.v5.search")
 
@@ -93,6 +95,125 @@ def _cache_enabled() -> bool:
     except Exception:
         return True
 
+
+# ── Circuit breaker (Task 2.0.2, 2026-08-20) ──────────────────────────────
+# 设计: docs/memory_v5-circuit-breaker-design.md
+# 状态: closed → open (连续失败 ≥ threshold) → half_open (冷却后探针) → closed
+# 线程安全: threading.Lock (与 _EMBED_LOCK / _chroma_thread_lock 同模式)
+# 失败分类: 只计网络/OSError/HTTPException; 程序错误 (TypeError 等) 不计入
+_CIRCUIT_LOCK = threading.Lock()
+_CIRCUIT: dict = {
+    "state": "closed",       # "closed" | "open" | "half_open"
+    "failure_count": 0,       # resets to 0 on success
+    "opened_at": 0.0,         # time.monotonic() when breaker tripped
+    "last_failure_reason": "",
+}
+_NETWORK_EXC = (
+    OSError,                  # socket.* + Connection* + TimeoutError (3.10+)
+    http.client.HTTPException,
+)
+
+
+def _cb_enabled() -> bool:
+    try:
+        return bool(_cache_cfg().get("circuit_breaker_enabled", True))
+    except Exception:
+        return True
+
+
+def _cb_threshold() -> int:
+    try:
+        v = _cache_cfg().get("circuit_breaker_threshold", 3)
+        return max(1, int(v))
+    except Exception:
+        return 3
+
+
+def _cb_reset_seconds() -> float:
+    try:
+        v = _cache_cfg().get("circuit_breaker_reset_seconds", 30)
+        return max(0.0, float(v))
+    except Exception:
+        return 30.0
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """只把真正的网络错误计入短路; 程序错误 (TypeError 等) 不计入 (设计 §5.1)。"""
+    return isinstance(exc, _NETWORK_EXC)
+
+
+def _circuit_state() -> dict:
+    """读取 (浅拷贝) 状态字典; 给测试/调试用。设计 §2 可观测性。"""
+    with _CIRCUIT_LOCK:
+        return dict(_CIRCUIT)
+
+
+def _circuit_reset() -> None:
+    """测试用: 重置短路器到 closed。"""
+    with _CIRCUIT_LOCK:
+        _CIRCUIT["state"] = "closed"
+        _CIRCUIT["failure_count"] = 0
+        _CIRCUIT["opened_at"] = 0.0
+        _CIRCUIT["last_failure_reason"] = ""
+
+
+def _circuit_is_open() -> bool:
+    """短路器是否处于 open (拒服务) 状态。half_open 算"可放行"返回 False。
+
+    副作用: open → half_open 的状态转移在此处原地完成 (设计 §3.2)。
+    """
+    if not _cb_enabled():
+        return False
+    with _CIRCUIT_LOCK:
+        if _CIRCUIT["state"] == "open":
+            if time.monotonic() - _CIRCUIT["opened_at"] >= _cb_reset_seconds():
+                _CIRCUIT["state"] = "half_open"
+                logger.info("embedding circuit breaker HALF_OPEN: probing")
+                return False
+            return True
+        return False  # closed 或 half_open 均放行
+
+
+def _circuit_record_success() -> None:
+    """成功回调: closed 状态下重置计数; half_open → closed (探针成功)。"""
+    with _CIRCUIT_LOCK:
+        if _CIRCUIT["state"] == "half_open":
+            logger.info("embedding circuit breaker CLOSED: probe succeeded")
+        _CIRCUIT["state"] = "closed"
+        _CIRCUIT["failure_count"] = 0
+        _CIRCUIT["opened_at"] = 0.0
+        _CIRCUIT["last_failure_reason"] = ""
+
+
+def _circuit_record_failure(exc: BaseException) -> None:
+    """失败回调: closed 累计失败次数到阈值则跳闸; half_open 失败则立即重开。
+
+    非网络错误不计入 (避免程序 bug 把短路器误跳)。设计 §5.1。
+    """
+    if not _cb_enabled():
+        return
+    if not _is_network_error(exc):
+        return
+    reason = f"{type(exc).__name__}: {exc}"[:200]
+    with _CIRCUIT_LOCK:
+        if _CIRCUIT["state"] == "half_open":
+            # 探针失败 → 立即重新 open, 重置冷却计时 (设计 §3.2)
+            _CIRCUIT["state"] = "open"
+            _CIRCUIT["opened_at"] = time.monotonic()
+            _CIRCUIT["last_failure_reason"] = reason
+            logger.warning(
+                "embedding circuit breaker RE-OPEN: probe failed (%s)", reason)
+            return
+        _CIRCUIT["failure_count"] += 1
+        _CIRCUIT["last_failure_reason"] = reason
+        if _CIRCUIT["failure_count"] >= _cb_threshold():
+            _CIRCUIT["state"] = "open"
+            _CIRCUIT["opened_at"] = time.monotonic()
+            logger.warning(
+                "embedding circuit breaker OPEN: %d consecutive failures (last: %s)",
+                _CIRCUIT["failure_count"], reason,
+            )
+
 MEM_ROOT = Path(__file__).resolve().parent
 V5_DATA_DIR = MEM_ROOT / "data" / "v5"
 CHROMA_DIR = V5_DATA_DIR / "chroma"
@@ -110,7 +231,15 @@ _embed_conn = None  # http.client.HTTPConnection | None
 
 
 def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
-    """Call :8587 embedding service (network implementation, no cache).
+    """Call :8587 embedding service with circuit breaker (Task 2.0.2).
+
+    公开签名/返回契约保持不变: 仍返回 vec 或 None (None = fail-open)。
+
+    短路逻辑 (设计 §3.1):
+      1. 若 breaker open: 立即返回 None, 不碰网络 (微秒级)
+      2. 否则调 _do_fetch_embedding
+         - 成功: breaker.record_success() + 返回 vec
+         - 失败: breaker.record_failure(exc) + 返回 None
 
     V3 -> V4 improvements:
       - Uses relative path (urllib with absolute URI triggers 404, V3 comment recorded)
@@ -133,10 +262,35 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
     2026-08-14: 嵌入模型已换 bge-m3 (nomic-v2-moe 在 llama.cpp 下输出全零;
     nomic-v1.5 中文语义弱)。bge-m3 无需 document 前缀, query 按官方推荐加检索指令
     "为这个句子生成表示以用于检索相关文章："。
-    """
-    import http.client
-    from urllib.parse import urlparse
 
+    2026-08-20 (Task 2.0.2): 嵌入 :8587 不可达时短路 (circuit breaker),
+    避免每次调用挂满 10s 超时。设计: docs/memory_v5-circuit-breaker-design.md。
+    """
+    # 短路器 open → 立即返回 None (设计 §2: 微秒级, <1µs 开销)
+    if _circuit_is_open():
+        return None
+    try:
+        vec = _do_fetch_embedding(text, task)
+    except Exception as e:
+        _circuit_record_failure(e)
+        return None
+    if vec is None:
+        # 静默 None (json 解码失败、HTTP 500 等, 非异常路径) 不计入短路 ——
+        # 设计 §5.1: 只计网络/OSError/HTTPException。程序错误 / 数据错误
+        # 不应跳闸。这里 _do_fetch_embedding 已吞掉异常并返回 None,
+        # 不进入 except 分支, 因此无法获得 exc 类型 → 一律不计。
+        # 副作用: 持久性 JSON decode 错误不会跳闸 (后续 Task 排查)。
+        return None
+    _circuit_record_success()
+    return vec
+
+
+def _do_fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
+    """Call :8587 embedding service (network implementation, no cache, no breaker).
+
+    由 _fetch_embedding() 包裹调用; 公开 API 仍走 _fetch_embedding。
+    本函数保留原签名/语义, 仅被拆出以插入短路器钩子 (Task 2.0.2, 设计 §3.1)。
+    """
     if task == "document":
         prefix = ""
     else:
@@ -188,7 +342,7 @@ def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
             except Exception:
                 pass
             _embed_conn = None
-            return None
+            raise  # 抛给 _fetch_embedding 的 except 触发 _circuit_record_failure
 
     if len(vectors) == 1:
         return vectors[0]
