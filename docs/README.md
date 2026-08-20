@@ -9,51 +9,46 @@
 
 | 文档 | 日期 | 内容 | 规模 |
 |------|------|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-08-12 | Ikaros 全栈架构（分层/端口/路径/数据流/规则） | 40KB |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-08-19 | Ikaros 全栈架构（分层/端口/路径/数据流/规则，dsh 底座） | 40KB |
 | [naming.md](naming.md) | — | 命名规则（目录/包/端口/变量） | — |
 | [herdr-integration-design.md](herdr-integration-design.md) | 2026-08-10 | herdr coding-agent 多路复用器接入设计（含 omp/pi agent §omp） | — |
 | [SECURITY.md](SECURITY.md) | — | 安全说明 | — |
 | [observability.md](observability.md) | — | 可观测性 / 日志 | — |
 | [module-dependency-map.html](module-dependency-map.html) | 2026-07-27 | 模块依赖关系图（交互式 SVG） | — |
-| [neko-chat-architecture.md](neko-chat-architecture.md) | 2026-07-25 | N.E.K.O 前端聊天系统架构（记忆/会话/主动搭话前端实现） | 13KB |
-| [harness-engineering-notes.md](harness-engineering-notes.md) | 2026-07-15 | 运行链 / harness 工程笔记 | 2KB |
 | [thirdspace-integration.md](thirdspace-integration.md) | 2026-07-20 | ThirdSpace Vault 集成指南 | 4KB |
-| [evolution-path-2026-08-02.md](evolution-path-2026-08-02.md) | 2026-08-02 | 开发演化史（07-04 → 08-02，供「为什么这么设计」定位） | — |
 
 > **架构图三件套**（交互式 HTML，放 `docs/`）：`module-dependency-map.html`（模块依赖关系）/ `architecture-overview.html`（架构全景）/ `folder-tree.html`（文件夹层级）。全部基于 2026-07-27 真实扫描生成（已过时，仅作历史参考）。
-
 >
 > **清理记录**（2026-08-12）：删除 4 份过时文档（`p2-payload-schema-migration.md`（mem0/Qdrant 旧时代）、`upstream-candidates.md`、`附录-镜像与代理.md`、`16-资源链接.md`），镜像/代理配置以 `bin/ikaros-env.sh/.bat` 为准。
-
-### Hermes 集成与更新（Ikaros 套在 Hermes 之上的解耦 / 维护）
-- [hermes-v5-memory-efficiency-analysis.md](hermes-v5-memory-efficiency-analysis.md) — V5 记忆接入 Hermes 的效率分析（52 → 48 工具口径，2026-08-10 FTS5 兜底修复）
-- [ref-hermes-studio-chat.md](ref-hermes-studio-chat.md) — Hermes Studio chat 参考
+>
+> **归档记录**（2026-08-19）：13 份历史文档移入 `archive/`（N.E.K.O / Hermes 退役组件文档、对话链路历史报告、演化史、项目评审、UI 优化日志、Session 机制分析、架构清理方案）。工作引擎 = dsh :3080（2026-08-18 起）。
 
 ### 对话树 / 对话流
 - [conversation-tree-cards.md](conversation-tree-cards.md) — 对话树卡片系统（Artifact Deck 万用工具卡组 :::card DSL）
-- [chat-tree-unification-plan.md](chat-tree-unification-plan.md) — 对话树得兼改造计划（ikaros/hermes 双模式统一走 gateway :8642）
-- [conversation-flow-test-report.md](conversation-flow-test-report.md) — 对话链路测试报告
-- [conversation-flow-fix-report-2026-07-25.md](conversation-flow-fix-report-2026-07-25.md) — 对话链路 6 根因修复记录
-- [conversation-flow-upgrade-plan.md](conversation-flow-upgrade-plan.md) — 对话链路升级计划
-- [session-context-analysis.md](session-context-analysis.md) — Session 机制与上下文连贯性分析
 
 ### V5 规格与迁移
 - [v5.2-preprocess-factory-spec.md](v5.2-preprocess-factory-spec.md) — V5.2 预处理工厂规格（节奏/记忆/摘要/画像/情感）
 - [v5-memory-evolution-plan.md](v5-memory-evolution-plan.md) — V5 记忆演化计划
-- [v5-context-compression.md](v5-context-compression.md) — 上下文压缩与检索增强层（token_compressor / gated_retrieval / temporal_graph）
+- [v5-context-compression.md](v5-context-compression.md) — 上下文压缩与检索增强层（token_compressor / temporal_graph）
+- [v5-architecture-convergence.md](v5-architecture-convergence.md) — V5 架构收敛
+- [v5-memory-evolve / dsh-memory-evolve 对比](v5-vs-dsh-memory-evolve-20260819.md) — 2026-08-19
+- [memory_v5-analysis-20260819.md](memory_v5-analysis-20260819.md) — memory_v5 全量分析（2026-08-19）
 
 ### 智能体规则 / 身份
 - [agent-rules.md](agent-rules.md) — 智能体规则说明
 - [agent-rules.yaml](agent-rules.yaml) — 智能体规则配置
 - > 身份主文档已迁移到 `.workbuddy/SOUL.md`（BOOTSTRAP 流程管理）
 
-### 研究 / 评审 / 面板
+### 研究 / 面板
 - [research/deep-personality-prompt-engineering.md](research/deep-personality-prompt-engineering.md) — 深度人格提示工程研究
 - [research/anti-ai-tone-prompt-research.md](research/anti-ai-tone-prompt-research.md) — 反 AI 腔调提示研究
 - [omnipanel-research.md](omnipanel-research.md) — 全功能面板研究
 - [omnipanel-inspiration.md](omnipanel-inspiration.md) — 全功能面板灵感
-- [project-review-2026-08-02.md](project-review-2026-08-02.md) — 项目评审（2026-08-02）
-- [ui-optimization-log-2026-08-02.md](ui-optimization-log-2026-08-02.md) — UI 优化日志
+
+### 底座与集成（dsh 时代）
+- [ikaros-dsh-plugin-architecture.md](ikaros-dsh-plugin-architecture.md) — dsh 插件架构（overlay + ikaros-memory 插件）
+- [hermes-retirement-inventory.md](hermes-retirement-inventory.md) — hermes / N.E.K.O / 9100 面板退役清单（2026-08-18）
+- [herdr-integration-design.md](herdr-integration-design.md) — herdr 多路复用器（见架构总览）
 
 ### 示例
 - [examples/skills/README.md](examples/skills/README.md) — 技能示例说明
@@ -64,9 +59,10 @@
 
 ### 脚本注释归档（自动生成）
 - [scripts/README.md](scripts/README.md) — 归档约定与批次进度（入口）
-- `scripts/bin/` — `bin/*.bat` / `bin/*.py` 运维与控制脚本说明
 - `scripts/core-env/` — 环境配置脚本说明（init / ikaros-env / detect-root / validate-paths）
-- `scripts/core-v5/` — 记忆核心库说明（根 + v5/*，含内联注释摘录）
+
+### 历史归档
+- `archive/` — 24 份历史文档（N.E.K.O / Hermes 退役组件、对话链路报告、演化史等）
 
 ## 维护约定
 - 新增脚本说明：按 `scripts/README.md` 的映射规则放到 `scripts/<相对路径>.md`。

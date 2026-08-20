@@ -1,26 +1,26 @@
 # Ikaros 命名字典 (Naming Dictionary)
 
 > 项目历史上出现过多种大小写 / 缩写混用。本文档统一命名，避免文档与代码漂移。
-> 检查实现：`python docs/lint.py` 会扫描 `core/v5` 残留旧名（应已重命名为 `core/memory_v5`）、已删文件 `think.py`、已删端口 `:7870`/`:7871`。（`:8642` Hermes API 网关已重新启用，见 §5，不再列入删除端口。）
+> 检查实现：`python docs/lint.py` 会扫描 `core/v5` 残留旧名（应已重命名为 `core/memory_v5`）、已删文件 `think.py`、已删端口 `:7870`/`:7871`。
 
 ## 1. 品牌 vs 代码标识符
 
 | 概念 | 品牌写法 | 代码标识符（目录/包/变量） | 说明 |
 |------|----------|---------------------------|------|
 | 项目 | **Ikaros** | `ikaros`（路径/脚本前缀） | 品牌首字母大写；文件系统用小写 `ikaros-*` |
-| 桌面宠 / 前端 | **N.E.K.O**（品牌，带点） | `neko`（目录 `apps/neko/`、包、变量） | 品牌 **N.E.K.O**；代码一律小写 `neko` |
+| ~~桌面宠 / 前端~~ | ~~**N.E.K.O**~~ | ~~`neko`~~ | ⚠️ **已退役 2026-08-18**（`apps/neko/` 已删） |
 | 灵魂核心 | V5（版本代号） | `memory_v5`（包）/ `v5`（db + MCP 工具前缀） | 见 §3 |
 | 工作引擎 (2026-08-18 起) | DeepSeek Harness | `dsh`（目录 `runtime/dsh/`、变量 `IKAROS_DSH_*`） | 品牌 **dsh**；代码小写 `dsh` |
+| ~~旧底座~~ | ~~**Hermes**~~ | ~~`hermes-*`~~ | ⚠️ **已退役 2026-08-18**（gateway/bridge/dashboard 全删） |
 
 ## 2. 大小写铁律
 
-1. **代码标识符一律小写 + 下划线**：`neko`(历史)、`memory_v5`、`dsh`、`ikaros`。
-   - 目录：`core/memory_v5/`、`core/dashboard/`、`core/ikaros-dsh/`。
-   - Python 包：`import memory_v5`。（旧 `import v5` 已废弃；hermes 已退役。）
+1. **代码标识符一律小写 + 下划线**：`memory_v5`、`dsh`、`ikaros`。
+   - 目录：`core/memory_v5/`、`core/ikaros-dsh/`。
+   - Python 包：`import memory_v5`。（旧 `import v5` 已废弃；hermes/neko 已退役。）
 2. **品牌用规定大小写**：
    - 项目名写 **Ikaros**（文档/UI 文案）。
-   - 前端品牌写 **N.E.K.O**（带点，文档/UI 文案）。
-   - 基础设施品牌写 **Hermes**（文档/UI 文案）。
+   - 工作引擎写 **dsh**（文档/UI 文案）。
 3. **环境变量用 UPPER_SNAKE**：`IKAROS_ROOT`、`IKAROS_MEMORY`、`IKAROS_PYTHON`、`IKAROS_DSH_*`。
 
 ## 3. V5 / memory_v5 / v5 的精确区分（极易混淆）
@@ -32,11 +32,9 @@
 
 > 简记：**包是新名 `memory_v5`，db 与工具前缀是旧名 `v5`**——这是刻意保留的兼容性契约。
 
-## 4. 桌面壳 vs 前端服务
+## 4. ~~桌面壳 vs 前端服务~~ — ⚠️ 已退役 2026-08-18
 
-- `core/control-panel/` = **Electron 桌面壳**（Desktop Shell），拉起面板 `:9100` 与各组件。
-- `apps/neko/` = **前端服务**（Frontend Service），FastAPI + React；其可执行文件 **`N.E.K.O.exe`** 即 neko 壳。
-- 二者职责不同，文档中勿混用"桌面壳 / 前端"。
+`core/control-panel/`（Electron 桌面壳）与 `apps/neko/`（前端服务）均已退役删除。表现层 = dsh web :3080 + 对话树 :48920。
 
 ## 5. 常见错误写法（应避免）
 
@@ -48,5 +46,6 @@
 | `core/v5/` | `core/memory_v5/` |
 | `:8642` Hermes API 网关 | **已退役 (2026-08-18)**，勿引用；工作引擎 = dsh `:3080` |
 | `:7870` `:7871` 语音桥 | 已删除，勿引用 |
-| 文档写 "Neko" 当品牌 | 品牌写 **N.E.K.O**，代码写 `neko` |
+| `:8080` 本地 LLM | **已退役 (2026-08-18)**，勿引用；LLM = 云端 DeepSeek |
+| `:9100` 控制面板 | **已退役 (2026-08-18)**，勿引用 |
 | 环境变量 `ikaros_root` | `IKAROS_ROOT` |

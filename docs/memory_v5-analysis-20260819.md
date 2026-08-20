@@ -118,7 +118,7 @@ query
 ```
 
 - **意图检测**（纯规则，零 LLM）：`WHY/WHEN/ENTITY/GENERAL` → 调类型 boost（问"为什么"加权 decision/lesson）。
-- **可观测性**：每条结果带 `signals`（各路径分量）与 `explain_result()` 生成"为什么召回这条"，供 pi/Hermes 自主重排。
+- **可观测性**：每条结果带 `signals`（各路径分量）与 `explain_result()` 生成"为什么召回这条"，供 pi/dsh 自主重排。
 - **TTL 缓存**：同 query 20s 内直接返回，削 embedding 尖峰。
 - **P6 归一化**：`_norm()` 统一结果形状（dict/Row/Memory 三种输入兼容），结构化/语义/图检索输出同一字段集。
 

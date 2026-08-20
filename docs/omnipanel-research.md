@@ -281,7 +281,7 @@
 
 1. **不引外部 CDN**：48920 面板坚持离线可用，cmdk 是 React 组件，若要引入需内嵌打包或手写原生实现（现有 `cmd-overlay` 是原生 JS，建议保持）
 2. **不破坏 242 pytest**：任何后端改动（心跳、archive、深链）需配套测试
-3. **gateway 链路特殊性**：48920 走 hermes gateway `:8642`，心跳需 gateway 端配合；降级本地 DeepSeek 时心跳逻辑不同
+3. **gateway 链路特殊性**（⚠️ 2026-08-18 已退役）：48920 原走 hermes gateway `:8642`，现 ikaros 单模式直连 DeepSeek，心跳不再依赖 gateway；降级路径见 conversation-tree server 的 SSE warn 提示
 4. **marked 半截保护**：现有 rAF 限流在 done 时 flush，但流式期间若已做语法高亮会闪烁 —— 需确认是否已加 backtick 计数保护
 5. **字体已自托管**：Inter/Space Grotesk/JetBrains Mono 已在 `assets/`，无需再抓
 6. **explore.poker 抓取脚本在 `tmp/`**：可复用回归，但 `tmp/` 可能被清理，珍贵结论应沉淀到 docs（本文即此目的）

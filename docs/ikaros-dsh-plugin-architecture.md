@@ -15,7 +15,7 @@
 - UI（dashboard / conversation-tree）—— 一体，→ dsh Client Slot 插件
 
 **不进插件（用户自装 / 运行时生成）**：
-- `runtime/`（portable-python、node、bun、omp、hermes-agent）—— 环境，非能力
+- `runtime/`（portable-python、node、bun、omp、dsh、herdr）—— 环境，非能力
 - 模型文件（`memory_v5/models/*.gguf` 共 4.2GB）—— 改为可选下载 / 指向外部推理服务
 - `data/`（v5.db、配置、记忆）—— 每用户运行时生成
 - hermes 遗留（`core/hermes-bridge`、`patches/hermes`）—— 转 dsh 后废弃
@@ -64,7 +64,7 @@ chromadb  httpx  mcp  numpy  psutil  pyyaml
    `_resolve_root()`（`__file__.parents[4]` 猜 Ikaros 根）→ 改成标准 `import ikaros_memory`；
    数据目录用 `IKAROS_MEMORY_HOME`（默认 `~/.ikaros-memory`）。
 2. **模型耦合**：`memory_v5/models/*.gguf`（4.2GB）不进包 → embedding/LLM 改为**可配置外部服务**
-   （OpenAI 兼容端点；Ikaros 指向 :8080/:8587，其他用户指向自己的）。
+   （OpenAI 兼容端点；Ikaros 指向 :8587 embedding，LLM 走云端 DeepSeek——本地 :8080 已退役，其他用户指向自己的）。
 3. **服务耦合**：`services/` 子目录与 `httpx` 调用（本地 LLM/embedding）→ 走配置注入，
    保持「模型是部署选择，不是插件自带」的 dsh seam 哲学。
 
@@ -127,6 +127,6 @@ Client 插件把 React 组件注册到这些 Slot；Host↔Client 走包内私�
 1. **UI 重写成本**：FastAPI+HTML/Electron → React Slot 是重写，不是搬运；P4 前用路径 B 过渡。
 2. **dsh 是 developer preview**（0.1.0-rc.5，`SESSION_FORMAT_VERSION=0` 无兼容承诺）——
    插件要跟上游破坏性变更；策略照搬 hermes 的「纯净 + patch 幂等重打」。
-3. **模型/embedding 服务解耦**是 P1 最大行为变更点：Ikaros 现状依赖本地 :8080/:8587，
+3. **模型/embedding 服务解耦**是 P1 最大行为变更点：Ikaros 现状依赖 :8587 embedding（本地 LLM :8080 已退役、LLM = 云端 DeepSeek），
    包化后必须配置化，否则「给别人用」只是空话。
 4. **v5.db 兼容**：迁移只动包结构，DB schema 与 48 个 `v5_*` 工具前缀**不动**（外部契约）。

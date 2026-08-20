@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Ikaros doc-drift linter (stdlib only).
 
-Scans docs/ (recursively, excluding scripts/ archive + assets/) and the root
+Scans docs/ (recursively, excluding scripts/ archive/ assets/) and the root
 AGENTS.md / README.md for stale references that indicate the docs have drifted
 from the current implementation:
 
-  (a) deleted files:  think.py, supervisor_persist.py,
-                      bin/v5-sync-persona.py
-  (b) deleted ports:  :7870, :7871
-  (b2) alive-but-confusable: :8642 Hermes API gateway is ACTIVE again
-       (served by `python -m hermes_cli.main gateway run`; the legacy
-        bin/hermes-api-server.py script is UNUSED — do not call it "active")
+  (a) deleted files:  think.py, supervisor_persist.py, bin/v5-sync-persona.py,
+                      bin/ikaros-memory-watchdog.py (2026-08-19 分布式 watchdog),
+                      bin/wd_import.py, 2026-08-14 重构删除的 memory_v5 旧模块等
+  (b) deleted ports:  :7870, :7871 (语音桥)
+  (b2) retired ports (2026-08-18 底座退役): :8642, :8650, :9119, :9100, :8080,
+       :8088, :48911 — hermes gateway/bridge/dashboard、9100 面板、本地 LLM、
+       N.E.K.O 前端全部退役；工作引擎 = dsh :3080
   (c) literal core/v5 (should be core/memory_v5)
-  (d) hermes-agent/ as a *code* path (should be runtime/hermes-agent; data/hermes-agent
-      user-state dir is allowed and NOT flagged)
+  (d) hermes-agent/ as a *code* path (data/hermes-agent user-state dir allowed)
+  (e) retired dirs (2026-08-18): core/hermes/, apps/neko/, core/control-panel/
 
 Historical reports may still contain the old names for traceability; they are
-exempted when the line also carries an "2026-07-2" correction note.
+exempted when the line also carries a dated correction / retirement note.
 
 Prints one `WARN: <file>:<line> <text>` per hit, otherwise `OK: no drift detected`.
 
@@ -46,10 +47,14 @@ DELETED_FILES = (
     "core/memory_v5/drivers.py",
 )
 DELETED_PORTS = (":7870", ":7871")
+# 2026-08-18 底座退役端口：hermes 全家 + 9100 面板 + 本地 LLM + N.E.K.O 前端
+RETIRED_PORTS = (":8642", ":8650", ":9119", ":9100", ":8080", ":8088", ":48911")
 OLD_CORE_PATH = "core/v5"  # should now be core/memory_v5
 OLD_HERMES_CODE = "hermes-agent/"  # code path; data/hermes-agent is allowed
+# 2026-08-18 退役目录（随底座整体删除）
+RETIRED_DIRS = ("core/hermes/", "apps/neko/", "core/control-panel/")
 
-EXEMPT_DIRS = {"scripts", "assets", ".git"}
+EXEMPT_DIRS = {"scripts", "assets", "archive", ".git"}
 EXEMPT_FILENAMES = {"module-dependency-map.html", "architecture-overview.html",
                     "folder-tree.html"}
 # files where think.py / old paths appear only as historical analysis (not drift)
@@ -65,7 +70,11 @@ HISTORICAL_EXEMPT_FILES = {
     "evolution-path-2026-08-02.md",
     "ikaros-as-hermes-agent-proposal.md",
     "hermes-agent-full-survey.md",
-}
+}  # 2026-08-19 起多已迁入 docs/archive/（整目录豁免），此名单保留兜底
+# hermes 退役清单本身合法引用退役路径/端口
+RETIREMENT_INVENTORY_EXEMPT = "hermes-retirement-inventory.md"
+# herdr 提案：顶部横幅已声明 neko/9100/dashboard 引用按退役代入阅读
+BANNER_EXEMPT_FILES = {"herdr-integration-design.md"}
 # historical patch manifest; legitimately references hermes-agent venv paths
 # (it records Ikaros-specific patches against the upstream hermes-agent repo).
 HERMES_PATCH_EXEMPT_FILES = {
@@ -75,8 +84,9 @@ RESEARCH_DIR = "research"
 # lines carrying a 2026-07-2x / 2026-08-1x correction note keep old names
 # for traceability
 CORRECTION_MARKS = ("2026-07-2", "2026-08-1")
-# lines that merely DESCRIBE a deletion / obsolete state are exempt
-OBSOLETE_DESC_MARKS = ("🗑️", "已删除", "随重构删除", "勿引用", "移除", "已移除", "NousResearch/hermes-agent",
+# lines that merely DESCRIBE a deletion / obsolete / retired state are exempt
+OBSOLETE_DESC_MARKS = ("🗑️", "已删除", "随重构删除", "勿引用", "移除", "已移除", "退役",
+                       "不存在", "NousResearch/hermes-agent",
                        "github.com", "📦", "🎛️", "lint.py", "重命名", "搬迁", "移出")
 
 
@@ -124,10 +134,19 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
         for pat in DELETED_PORTS:
             if pat in line:
                 matched.append(pat)
+        # retired ports: only actionable drift if the line does NOT mark them
+        # as retired (OBSOLETE_DESC_MARKS "退役" already exempted such lines)
+        for pat in RETIRED_PORTS:
+            if pat in line:
+                matched.append(pat)
         if OLD_CORE_PATH in line:
             matched.append(OLD_CORE_PATH)
         if OLD_HERMES_CODE in line and "data/hermes-agent" not in line:
             matched.append(OLD_HERMES_CODE)
+        # retired dirs (core/hermes/, apps/neko/, core/control-panel/)
+        for pat in RETIRED_DIRS:
+            if pat in line:
+                matched.append(pat)
         # think.py is exempt in historical/analysis docs
         rel = path.name
         try:
@@ -140,10 +159,19 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
         # dated historical reports keep original paths (top note explains mapping)
         if rel in HISTORICAL_EXEMPT_FILES:
             matched = [m for m in matched if m in ("think.py", "supervisor_persist.py")]
-        # CHANGELOG entries are historical records: deleted-file names appear
-        # as dated milestones, never actionable drift; keep path/port checks.
+        # CHANGELOG entries are historical records: deleted-file names, retired
+        # ports and retired dirs appear as dated milestones, never actionable
+        # drift; keep core/v5 + hermes-agent/ code-path checks.
         if rel == "CHANGELOG.md":
-            matched = [m for m in matched if m not in DELETED_FILES]
+            matched = [m for m in matched if m not in DELETED_FILES
+                       and m not in RETIRED_PORTS and m not in RETIRED_DIRS]
+        # the retirement inventory itself legitimately references retired paths
+        if rel == RETIREMENT_INVENTORY_EXEMPT:
+            matched = [m for m in matched if m not in RETIRED_PORTS
+                       and m not in RETIRED_DIRS and m != OLD_HERMES_CODE]
+        # banner-exempt proposals (top banner declares retirement mapping)
+        if rel in BANNER_EXEMPT_FILES:
+            matched = [m for m in matched if m not in RETIRED_DIRS]
         # mapping-table rows (old -> new shown side by side) are intentional
         if OLD_CORE_PATH in line and "core/memory_v5" in line:
             matched = [m for m in matched if m != OLD_CORE_PATH]

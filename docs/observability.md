@@ -16,11 +16,13 @@ Every HTTP service should expose two distinct probes:
 
 ### Current gap (historical, central watchdog removed)
 
-The previous central watchdog only checked **port
-presence** (can it connect to `:8080`?). That is insufficient: the model server
-on 8080 is **lazy-loaded** — the port accepts connections before the model is
-actually ready to serve inference. A readiness check that only sees the port
-will report "healthy" while inference requests fail or queue.
+The previous central watchdog only checked **port presence**. That is
+insufficient for services with heavy initialization (e.g. the embedding server
+on `:8587`): the port may accept connections before the model is actually
+ready to serve inference. A readiness check that only sees the port will
+report "healthy" while inference requests fail or queue. (The local LLM on
+`:8080` — a former lazy-loaded example — was retired 2026-08-18; each
+component's start script now embeds its own watchdog.)
 
 ### Proposed change (service code, future)
 
@@ -59,7 +61,7 @@ All services should emit logs to a single, **gitignored** `logs/` directory as
 **JSON lines** (one JSON object per line), e.g.:
 
 ```json
-{"ts":"2026-07-27T10:00:00Z","level":"info","svc":"neko","msg":"started","pid":1234}
+{"ts":"2026-07-27T10:00:00Z","level":"info","svc":"conversation-tree","msg":"started","pid":1234}
 ```
 
 Conventions:

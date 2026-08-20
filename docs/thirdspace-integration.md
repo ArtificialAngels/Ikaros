@@ -73,6 +73,6 @@ python bin/sync-thirdspace-v5.py --dry-run    # 预览，不写入
 ## 已知偏差（相对 handoff 文档）
 1. `config.yaml` 无 `skills:` 注册段 —— Hermes 按目录自动发现 Skill，故未改 config（按 03 文档加 skills 段无效）。
 2. `data/**` 已整体 gitignore，故 03 文档 T1.4 的细粒度忽略规则为冗余，已省略（保留 vault 在 data/ 下不进仓库的设计）。
-3. 同步脚本原假设 `:8080/api/thoughts/latest` 与 `data/v5.db` 均不存在；已改为读取真实 `Ikaros-memory/data/v5/latest_thought.json`。
+3. 同步脚本原假设 `:8080/api/thoughts/latest`（:8080 本地 LLM 已于 2026-08-18 退役）与 `data/v5.db` 均不存在；已改为读取真实 `Ikaros-memory/data/v5/latest_thought.json`。
 4. T3.1 按 02 计划"只建引用/摘要、不移动原文件"执行（建 `03-知识/ikaros/` 索引+架构摘要卡片），未 bulk-copy 全部 106 个 `docs/*.md`。
 5. session-stop hook（`data/hermes-agent/hooks/session-stop.sh`）已创建，但 Hermes hooks 接线机制未验证（当前版本无 `hooks:` 配置证据）。

@@ -57,10 +57,10 @@ title: Logo
 title: 系统架构
 
 node fe 前端 48920
-node gw 网关 :8642
+node dsh 工作引擎 :3080
 node mem 记忆 V5
-link fe -> gw 请求
-link gw -> mem 查询
+link fe -> dsh 请求
+link dsh -> mem 查询
 :::
 ```
 - `node <id> <标签>` — 节点（id 供 link 引用，标签可含空格）

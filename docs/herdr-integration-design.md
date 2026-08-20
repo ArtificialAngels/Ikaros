@@ -1,6 +1,7 @@
 # herdr 集成设计文档（提案）
 
-> 状态：提案 / 待评审 —— 尚未进入实现
+> 状态：**已落地（部分）** —— 引擎层 + pi (omp) agent 已接入（`runtime/herdr/herdr.exe` + `data/omp/agent/`，见 AGENTS.md）；L2 编排 supervisor / L3 面板展示等阶段未做。
+> ⚠️ 2026-08-18 底座切换：文中引用的 `apps/neko/`、`:9100` 面板、`core/dashboard/`、Hermes 底座均已退役；当前工作引擎 = dsh :3080（本提案中涉及其角色处按此代入阅读）。
 > 范围：把 `herdr`（Rust coding-agent 终端多路复用器）作为受控组件接入 Ikaros
 > 主要用途：**在受监控 pane 中运行外部 coding agent（claude / codex / cursor / aider …），由 Ikaros 协调、读取状态与输出**
 > 参考源码：`E:\Ikaros-something\reference project\herdr-master\herdr-master`（ogulcancelik/herdr v0.7.5, Apache-2.0）
@@ -9,7 +10,7 @@
 
 ## 1. 背景与目标
 
-Ikaros 当前没有终端多路复用 / PTY 能力。`apps/neko/app/agent_server.py` 的自动化能力只覆盖 `browser_use` / `computer_use` / `OpenClaw`（桌面/浏览器自动化），无法在受监控的终端里跑、协调、并读取 coding agent 的实时状态。
+Ikaros 当前没有终端多路复用 / PTY 能力（原 `apps/neko/app/agent_server.py` 的桌面/浏览器自动化能力已随 2026-08-18 退役删除），无法在受监控的终端里跑、协调、并读取 coding agent 的实时状态。
 
 `herdr` 正好补这块空白：它是一个 agent-aware 的终端多路复用器，把终端组织成 `workspace / tab / pane`，识别 pane 内运行的 coding agent，并暴露其 `idle / working / blocked / done / unknown` 生命周期状态。集成后，Ikaros 可以：
 
@@ -42,7 +43,7 @@ Ikaros 当前没有终端多路复用 / PTY 能力。`apps/neko/app/agent_server
 ## 3. Ikaros 现状与缺口
 
 - 无 PTY / 终端多路复用组件；所有命令目前走裸 `subprocess` 或 neko 桌面自动化。
-- 端口表里没有 herdr（herdr 不用 TCP 端口，用命名管道，与 `:8080/:9119/…` 不冲突）。
+- 端口表里没有 herdr（herdr 不用 TCP 端口，用命名管道，与 `:8080/:9119/…`（均已于 2026-08-18 退役）不冲突）。
 - 已有「受控组件 + 面板卡片」范式（`core/dashboard/server.py` 的 `COMPONENTS`，如 `neko_group`），可直接复用。
 - 已有 Python↔外部进程桥接范式（`bin/hermes_paw_bridge.py`、`core/conversation-tree/server.py` 调 `v5s`）。
 - 已有记忆/对话落库通路（`core/memory_v5/store.py`、`core/memory_v5/conversation_tree.py`）。
@@ -515,7 +516,7 @@ herdr agent list   # 状态 idle / working
 
 ## §12.10 pi ↔ V5 记忆打通（2026-08-11，pi 纳入 V5 核心）
 
-**定位**：Hermes = 助理（对话/记忆/人格）；pi = 工作引擎（编码/任务执行）。pi 干活时直接读写 V5 记忆。
+**定位（2026-08-18 更新）**：dsh = 工作引擎（对话/记忆/人格）；pi = 编码 agent（任务执行）。pi 干活时直接读写 V5 记忆。
 
 **机制**：`data/omp/agent/mcp.json`（omp agent 级 MCP 配置，经 `PI_CODING_AGENT_DIR` 锚定）挂载 `ikaros-v5-memory`：
 - command: `E:\Ikaros\runtime\portable-python\python.exe E:\Ikaros\core\memory_v5\mcp_server.py`
