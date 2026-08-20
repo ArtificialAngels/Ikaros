@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# ikaros launcher (bash) - ASCII only
+set -e
+
+# IKAROS_ROOT self-anchored
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export IKAROS_ROOT="${SCRIPT_DIR%/*}"
+
+# source existing environment authority
+source "$IKAROS_ROOT/bin/ikaros-env.sh"
+
+# call Python core
+CORE_PATH="$IKAROS_ROOT/core/ikarosctl.py"
+if command -v cygpath >/dev/null 2>&1; then
+  CORE_PATH="$(cygpath -w "$CORE_PATH")"
+fi
+exec python "$CORE_PATH" "$@"
