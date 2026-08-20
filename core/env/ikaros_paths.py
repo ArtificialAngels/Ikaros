@@ -386,6 +386,24 @@ class IkarosPaths:
         env["IKAROS_LLAMA_PORT"] = str(self.get("ports.llama", 8080))
         env["IKAROS_EMBEDDING_PORT"] = str(self.get("ports.embedding", 8587))
 
+        # Embedding 客户端视角的 env (2026-08-20 audit fix):
+        # search.py 实际读 `IKAROS_EMBED_URL` / `IKAROS_EMBED_MODEL`, 这里统一
+        # 从 ikaros_paths 导出。注: `IKAROS_MODEL_EMBEDDING` (上面) 是嵌入
+        # 服务端要加载的模型 .gguf 路径, 由 bin/ikaros-env.* + services/start-embedding.bat
+        # 使用, 不能动; `IKAROS_EMBEDDING_PORT` 同理。这里新增的是"客户端视角"
+        # 的 URL + 模型名, 让 search.py 的 os.environ.get 拿到同一来源。
+        embed_host = self.get("embedding.host", "127.0.0.1")
+        env["IKAROS_EMBED_URL"] = f"http://{embed_host}:{env['IKAROS_EMBEDDING_PORT']}/embedding"
+        # 模型名: 配置里给的就是模型文件名 (如 bge-m3-q8_0.gguf), 客户端只要
+        # bge-m3 这种短名; 若没填则回退默认值 bge-m3
+        _embed_path = env["IKAROS_MODEL_EMBEDDING"]
+        if _embed_path:
+            _stem = Path(_embed_path).stem  # "bge-m3-q8_0"
+            _model_short = _stem.split("-q")[0]  # "bge-m3"
+            env["IKAROS_EMBED_MODEL"] = self.get("models.embedding_name", _model_short)
+        else:
+            env["IKAROS_EMBED_MODEL"] = self.get("models.embedding_name", "bge-m3")
+
         # PATH 组装
         path_parts = [
             env["IKAROS_LLAMA_DIR"],

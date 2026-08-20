@@ -111,11 +111,12 @@ def eg_conn() -> Iterator[sqlite3.Connection]:
     EG_DATA_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(EG_DB_PATH))
     c.row_factory = sqlite3.Row
-    try:
-        c.execute("PRAGMA busy_timeout=5000")
-        c.execute("PRAGMA journal_mode=WAL")
-    except Exception:
-        pass
+    # PRAGMA 失败直接 raise — 不静默降级 (2026-08-20 audit fix):
+    # busy_timeout / journal_mode=WAL 是并发 + 持久性的基础,
+    # 失败时退回默认 (无 busy_timeout / rollback journal) 会立刻出现
+    # "database is locked" 连锁错误, 调试链变长。
+    c.execute("PRAGMA busy_timeout=5000")
+    c.execute("PRAGMA journal_mode=WAL")
     c.executescript(ENTITY_GRAPH_SCHEMA)
     # V5.7: eg_edges 补 relation_type 列 (幂等; 旧库迁移)
     try:
@@ -128,12 +129,12 @@ def eg_conn() -> Iterator[sqlite3.Connection]:
     finally:
         try:
             c.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("eg_conn commit on exit failed: %s", e)
         try:
             c.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("eg_conn close failed: %s", e)
 
 
 # ---------------------------------------------------------------------------

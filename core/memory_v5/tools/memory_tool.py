@@ -145,4 +145,7 @@ def v5_memory_delete(memory_id: int) -> str:
 def v5_memory_stats() -> str:
     """Return storage statistics."""
     from memory_v5 import store as store
-    return answer(f"共 {store.stats()["total"]} 条记忆", store.stats())
+    # NOTE: 2026-08-20 — PEP 701 嵌套同引号 f-string (Python 3.12+) 不能在 3.11 编译。
+    # 这里把 f-string 拆成普通字符串 + .format(), 既兼容 3.11 又 3.12 安全。
+    stats = store.stats()
+    return answer("共 {} 条记忆".format(stats["total"]), stats)

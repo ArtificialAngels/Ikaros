@@ -131,9 +131,7 @@ def make_promote_op() -> ReflectOp:
     配合 1h 频率, 短期记忆转存窗口从 12h 缩到 1h。
     """
     from memory_v5 import store
-
-    PROMOTE_WEIGHT = 0.55
-    PROMOTE_ACCESSES = 2
+    from memory_v5.constants import PROMOTE_WEIGHT, PROMOTE_ACCESS
 
     def _fn() -> int:
         with store.committed() as c:
@@ -141,7 +139,7 @@ def make_promote_op() -> ReflectOp:
                 "UPDATE memory SET short_term = 0, long_term = 1 "
                 "WHERE short_term = 1 AND archived = 0 "
                 "  AND (weight >= ? OR access_count >= ?)",
-                (PROMOTE_WEIGHT, PROMOTE_ACCESSES),
+                (PROMOTE_WEIGHT, PROMOTE_ACCESS),
             )
             n = cur.rowcount
             # 关键: conn() 退出默认 rollback, 写操作必须显式 commit

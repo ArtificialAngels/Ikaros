@@ -14,11 +14,13 @@ lifecycle.retention_pass (生命周期归档) 三处的"重要性"概念, 收敛
 
 from __future__ import annotations
 
-# 晋升/归档阈值 (与旧 lifecycle 一致)
-PROMOTE_ACCESS = 2
-PROMOTE_WEIGHT = 0.55
-PROMOTE_EI = 0.6
-ARCHIVE_WEIGHT = 0.45
+# 晋升/归档阈值 (与旧 lifecycle 一致) — 单一口径见 constants.py
+from memory_v5.constants import (  # noqa: F401
+    PROMOTE_ACCESS,
+    PROMOTE_WEIGHT,
+    PROMOTE_EI,
+    ARCHIVE_WEIGHT,
+)
 
 
 def effective_importance(

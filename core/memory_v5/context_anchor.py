@@ -49,8 +49,8 @@ def time_str() -> str:
     if cog and hasattr(cog, "get_time_str"):
         try:
             return cog.get_time_str()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
     return datetime.now().strftime("%Y/%m/%d %H:%M")
 
 
@@ -60,8 +60,8 @@ def weekday_str() -> str:
     if cog and hasattr(cog, "get_weekday_str"):
         try:
             return cog.get_weekday_str(datetime.now().weekday())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
     return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][datetime.now().weekday()]
 
 
@@ -71,8 +71,8 @@ def time_narrative() -> str:
     if cog and hasattr(cog, "_get_time_narrative"):
         try:
             return cog._get_time_narrative()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
     now = datetime.now()
     return f"{weekday_str()}（{now.hour:02d}:{now.minute:02d}）"
 
@@ -91,13 +91,13 @@ def activity() -> str:
                 act = cog._match_activity(title)
                 if act:
                     return act
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
         # 2) 作息推断
         try:
             return cog.infer_activity(datetime.now().hour, datetime.now().weekday())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
     hour = datetime.now().hour
     if 23 <= hour or hour < 6:
         return "深夜"
@@ -116,8 +116,8 @@ def foreground_window() -> str:
     if cog and hasattr(cog, "_get_foreground_window_title"):
         try:
             return cog._get_foreground_window_title() or ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("context_anchor failed: %s", e)
     return ""
 
 
