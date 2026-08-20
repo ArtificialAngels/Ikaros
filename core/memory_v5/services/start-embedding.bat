@@ -1,31 +1,17 @@
 @echo off
 REM See docs/scripts/core/memory_v5/services/start-embedding.md
+REM
+REM Thin wrapper (2026-08-20 收敛为 ikaros 启动器, see docs/ikaros-launcher-design.md)
+REM 真实实现: core/ikarosctl.py 的 embed 子命令
 
-REM Load Ikaros environment
-call "%~dp0..\..\core\env\ikaros-env.bat"
+set "IKAROS_ROOT=%~dp0..\..\..\.."
+for %%i in ("%IKAROS_ROOT%") do set "IKAROS_ROOT=%%~fi"
+
+call "%IKAROS_ROOT%\bin\ikaros-env.bat"
 if errorlevel 1 (
-    echo [FATAL] Ikaros-environment\ikaros-env.bat failed.
-    pause
+    echo [FATAL] ikaros-env.bat failed.
     exit /b 1
 )
 
-set "MODEL=%IKAROS_MODEL_EMBEDDING%"
-set "LLAMA=%IKAROS_LLAMA_SERVER%"
-set "PORT=%IKAROS_PORT_EMBEDDING%"
-set "HOST=127.0.0.1"
-
-if not exist "%LLAMA%" (
-    echo [FATAL] llama-server not found: %LLAMA%
-    pause
-    exit /b 1
-)
-
-if not exist "%MODEL%" (
-    echo [FATAL] Model not found: %MODEL%
-    pause
-    exit /b 1
-)
-
-echo [Ikaros Memory] Starting embedding service on %HOST%:%PORT%
-echo [Ikaros Memory] Model: bge-m3-q8_0.gguf
-"%LLAMA%" -m "%MODEL%" --host %HOST% --port %PORT% -ngl auto --embedding --pooling mean
+"%IKAROS_ROOT%\bin\ikaros.bat" embed %*
+exit /b %ERRORLEVEL%

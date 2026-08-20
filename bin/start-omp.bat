@@ -1,9 +1,8 @@
 @echo off
-rem start-omp.bat — 拉起搭载 V5 记忆的 omp TUI (独立窗口, 根目录自锚定)
-rem 2026-08-12: omp 启动检查 bun 在 PATH, 必须显式注入
+rem start-omp.bat — thin wrapper (2026-08-20 收敛为 ikaros 启动器, see docs/ikaros-launcher-design.md)
 set "IKAROS_ROOT=%~dp0.."
-set "PATH=%IKAROS_ROOT%\runtime\bun\bin;%IKAROS_ROOT%\runtime\node\node_modules\bun\bin;%PATH%"
-rem 2026-08-13: omp 配置迁出 C 盘, 锚定项目 data/omp/agent
-set "PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent"
-cd /d "%IKAROS_ROOT%"
-"%IKAROS_ROOT%\runtime\bun\bin\omp.exe" --model go-deepseek/deepseek-v4-pro
+for %%i in ("%IKAROS_ROOT%") do set "IKAROS_ROOT=%%~fi"
+call "%IKAROS_ROOT%\bin\ikaros-env.bat"
+if errorlevel 1 exit /b 1
+"%IKAROS_ROOT%\bin\ikaros.bat" omp %*
+exit /b %ERRORLEVEL%
