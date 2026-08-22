@@ -3,7 +3,7 @@
 # 叠加在 dsh-headless 或 dsh-web 之上（dsh-base 已含 llm/session/tools/fs/
 # sandbox/subagent/compaction/skill/goal/workflow/ralph 等全部基础能力）。
 # 本 overlay 补上 dsh-base 默认没挂、但 Ikaros 工作引擎需要的三块能力：
-#   1) memory_v5 记忆（MCP 直连，已验证 48 工具）
+#   1) memory_v5 记忆（MCP 直连，已验证 49 工具）
 #   2) 持久 PTY 终端（terminal + terminal-bash + tool-terminal）
 #   3) LSP 精确代码导航（lsp + lsp-stdio + tool-lsp）
 # 并覆盖 system-prompt 的 persona 为 Ikaros 工作引擎人格。
@@ -18,7 +18,7 @@
 
 - insert:
     # ── 1) memory_v5 长期记忆（MCP 直连） ─────────────────────────────
-    # 48 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
+    # 49 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
     # 与 pi 的 data/omp/agent/mcp.json 同源；路径经 IKAROS_ROOT 推导。
     - id: memory-ikaros-v5
       name: '@deepseek-ai/dsh-mcp-client'
@@ -35,7 +35,7 @@
         toolCallTimeoutMs: 60000
 
     # ── 1b) ikaros-memory 自动记忆工程层（2026-08-18 新增） ─────────────
-    # mcp-client 暴露 48 个 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
+    # mcp-client 暴露 49 个 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
     #   - turn-stopping 自动沉淀: 每轮结束把真实对话提炼写回 v5 (source:dsh, upsert)
     #   - pre-step 召回注入: should_recall 门控 + 检索 + systemPrompt.context() 快照
     #     (user-role 快照, 前缀缓存友好; 静态纪律走 section 字节稳定锚)

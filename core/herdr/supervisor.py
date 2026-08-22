@@ -87,7 +87,8 @@ class SupervisorTask:
     label: Optional[str] = None                 # workspace 标签
     timeout_s: int = 600                        # 单个等待阶段超时（秒）
     approval_cb: Optional[Callable[["NeedsApproval"], str]] = None
-    # 结果回写钩子（可选）：orchestrator 用它把输出写进 V5 记忆
+    # 结果回写钩子（可选）：orchestrator（已随 hermes 底座退役）曾用它把输出写进 V5 记忆
+    # 当前由 core/ikaros-dsh/plugins/ikaros-memory 的 turn-stopping 自动沉淀接替
     on_result: Optional[Callable[["SupervisorResult"], None]] = None
 
 

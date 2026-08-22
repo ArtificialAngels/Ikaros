@@ -1,9 +1,9 @@
 @echo off
-rem ikaros-env.bat �� Ikaros ��Я���� (��һȨ��Դ, ��ê��)
-rem �ɸ���� bat call ���ļ� (start-dsh-ikaros.bat / ������� / memory services)��
-rem ê��ԭ�� (ѧ ComfyUI-aki): һ��·����� IKAROS_ROOT �Ƶ�, ��д���̷�;
-rem IKAROS_ROOT �� %%~fI �淶�� (���� %~dp0.. ������ \bin\.. ��˫��б��)��
-rem ����: 2026-08-11 �� �ع�: 2026-08-18 (�Ƴ� hermes/neko, ���� dsh)
+rem ikaros-env.bat -- Ikaros portable environment (single authority source, self-anchored)
+rem Other bat scripts call this file (start-dsh-ikaros.bat / control panel / memory services).
+rem Anchor principle (from ComfyUI-aki): all paths are derived from IKAROS_ROOT, no drive letters.
+rem IKAROS_ROOT is normalized by %%~fI (bypass %~dp0.. double-slash path).
+rem Refactored: 2026-08-11  Rewritten: 2026-08-18 (removed hermes/neko, added dsh)
 setlocal DisableDelayedExpansion
 for %%I in ("%~dp0..") do set "IKAROS_ROOT=%%~fI"
 
@@ -35,14 +35,9 @@ rem ---- omp (oh-my-pi) ���� agent ----
 set "IKAROS_OMP_AGENT=%IKAROS_DATA%\omp\agent"
 set "PI_CODING_AGENT_DIR=%IKAROS_OMP_AGENT%"
 
-)
-
 rem ---- ��������ʱ ----
 set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
 set "IKAROS_HERDR=%IKAROS_RUNTIME%\herdr\herdr.exe"
-set "IKAROS_MCP=%IKAROS_RUNTIME%\MCPServe"
-set "IKAROS_GRAPHIFY=%IKAROS_MCP%\graphify"
-set "IKAROS_GRAPHIFY_SERVE=%IKAROS_GRAPHIFY%\graphify\serve.py"
 set "THIRDSPACE_VAULT=%IKAROS_DATA%\thirdspace-vault"
 
 rem ---- �˿� ----
