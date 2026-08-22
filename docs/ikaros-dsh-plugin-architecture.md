@@ -45,7 +45,7 @@ dsh 的「插件」是分层概念，Ikaros 用组合而非单层：
 ikaros-memory                            # Python 包（pip install ikaros-memory，独立于 dsh）
 ├── pyproject.toml                        #   chromadb/httpx/mcp/numpy/psutil/pyyaml（6 个）
 ├── ikaros_memory/                        #   从 core/memory_v5 迁出（store/retrieval/self_model/affect/…35 模块）
-├── mcp_server.py                         #   MCP stdio 入口（48 个 v5_* 工具，已验证）
+├── mcp_server.py                         #   MCP stdio 入口（49 个 v5_* 工具，已验证）
 └── models/  data/                        #   默认空；模型可选下载，数据运行时生成
 ```
 
@@ -84,7 +84,7 @@ chromadb  httpx  mcp  numpy  psutil  pyyaml
 
 - **召回**：`agent/pre-step`（waterfall，须 `next()`）→ `should_recall` 门控 → `agent.inject()`
 - **写回**：`agent/turn-stopping`（serial）→ 异步写 `v5_memory_store`
-- **MCP**：`dsh-mcp-client` 挂 `ikaros-memory/mcp_server.py`，48 工具 → `mcp__ikaros-v5__v5_*`（已验证可启动可执行）
+- **MCP**：`dsh-mcp-client` 挂 `ikaros-memory/mcp_server.py`，49 工具 → `mcp__ikaros-v5__v5_*`（已验证可启动可执行）
 
 ## 6. UI 一体集成方案（本文档重点，定义边界给 UI 窗口）
 
@@ -129,4 +129,4 @@ Client 插件把 React 组件注册到这些 Slot；Host↔Client 走包内私�
    插件要跟上游破坏性变更；策略照搬 hermes 的「纯净 + patch 幂等重打」。
 3. **模型/embedding 服务解耦**是 P1 最大行为变更点：Ikaros 现状依赖 :8587 embedding（本地 LLM :8080 已退役、LLM = 云端 DeepSeek），
    包化后必须配置化，否则「给别人用」只是空话。
-4. **v5.db 兼容**：迁移只动包结构，DB schema 与 48 个 `v5_*` 工具前缀**不动**（外部契约）。
+4. **v5.db 兼容**：迁移只动包结构，DB schema 与 49 个 `v5_*` 工具前缀**不动**（外部契约）。

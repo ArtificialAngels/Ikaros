@@ -89,7 +89,7 @@ flowchart LR
 
 - 放置：`runtime/herdr/herdr.exe`（Windows beta 二进制）。
 - 环境变量：在 `core/env/ikaros-env.bat` + `.ps1` + `ikaros-paths.json` 注册 `IKAROS_HERDR=%IKAROS_ROOT%\runtime\herdr\herdr.exe`（遵循 `docs/ARCHITECTURE.md` §3.2 路径注册规则）。
-- 获取方式：用现有 `bin/ikaros-fastdl.py`（gopeed → aria2c → urllib，mirror `hf-mirror.com` 同款）下载 GitHub Release 的 Windows 资产，落到 `runtime/herdr/`。**不**从源码构建（避免引入 Zig 工具链）。
+- 获取方式：用 `scripts/fetch-upstreams.py`（内嵌 WorkBuddy skill `ikaros-fastdl`，gopeed → aria2c → urllib，mirror `hf-mirror.com` 同款）下载 GitHub Release 的 Windows 资产，落到 `runtime/herdr/`。**不**从源码构建（避免引入 Zig 工具链）。
 - 探活：`herdr status` 或检查命名管道存在性（Windows：`\\.\pipe\herdr` 一类；具体路径由 `herdr server` 启动日志/`HERDR_SOCKET_PATH` 决定）。
 
 ### 5.2 9100 面板卡片
@@ -205,7 +205,7 @@ class CodingAgentSupervisor:
 | 端口/资源冲突 | herdr 用命名管道，不占 TCP；与 Ikaros 端口表无冲突。 |
 | 外部 agent 执行任意命令的安全边界 | supervisor 只启动**用户显式指定的 kind**；`blocked` 必须人工确认后才继续；不自动 `agent.send_keys` 绕过批准。 |
 | 协议演进 | 每次调用前 `ping` 校验 `protocol_version`；对未知字段 `serde_ignored` 风格宽容。 |
-| herdr 非 Ikaros 受控依赖 | 二进制走 `runtime/herdr/`，下载有 checksum 校验（`herdr` 自带签名/哈希），与 `ikaros-fastdl.py` 一致。 |
+| herdr 非 Ikaros 受控依赖 | 二进制走 `runtime/herdr/`，下载有 checksum 校验（`herdr` 自带签名/哈希），与 `scripts/fetch-upstreams.py` 一致。 |
 
 ---
 

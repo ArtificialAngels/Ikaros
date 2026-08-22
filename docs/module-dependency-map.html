@@ -89,7 +89,7 @@
         <text x="460" y="222" text-anchor="middle" class="sub">自我/情感/认知/关系引擎</text>
         <text x="460" y="240" text-anchor="middle" class="sub">包名 memory_v5</text>
         <text x="460" y="258" text-anchor="middle" class="sub">data/v5: v5.db + chroma + 人格JSON</text>
-        <text x="460" y="276" text-anchor="middle" class="sub">48 个 v5_* MCP 工具（stdio）</text>
+        <text x="460" y="276" text-anchor="middle" class="sub">49 个 v5_* MCP 工具（stdio）</text>
         <text x="460" y="294" text-anchor="middle" class="sub">conversation_tree 后端</text>
       </g>
 
@@ -182,7 +182,7 @@
       <summary>四条边界约定</summary>
       <ul>
         <li>✅ <b>dsh 零源码侵入</b>：所有 Ikaros 定制走 <code>cordis.patch.yml</code> overlay，<code>runtime/dsh/</code> 始终是上游原版。</li>
-        <li>✅ <b>v5.db 契约保留</b>：包改名 memory_v5，但 DB 文件名与 48 个 <code>v5_*</code> 工具名不改。</li>
+        <li>✅ <b>v5.db 契约保留</b>：包改名 memory_v5，但 DB 文件名与 49 个 <code>v5_*</code> 工具名不改。</li>
         <li>✅ <b>IKAROS_ROOT 自锚定</b>：<code>bin/ikaros-env.sh/.bat</code> 自锚定项目根目录，移动项目仍正确。</li>
         <li>⚠️ <b>E:\v5-memory 独立开源版</b>：无运行数据，与主工程手动同步，按需更新。</li>
       </ul>
@@ -206,7 +206,7 @@
 
 <p class="note">
   <b>如何读这张图：</b>dsh <code>:3080</code> 是工作引擎总入口（web GUI），通过 <code>core/ikaros-dsh/</code> overlay
-  注入 <code>v5_* MCP</code>（48 工具，stdio）+ 持久 PTY 终端（terminal / tool-terminal）+ LSP + Ikaros persona；
+  注入 <code>v5_* MCP</code>（49 工具，stdio）+ 持久 PTY 终端（terminal / tool-terminal）+ LSP + Ikaros persona；
   对话树 <code>:48920</code> 是独立的卡片图面板（ikaros 单模式 → DeepSeek 直连 + 只读工具回路）；
   memory_v5 是灵魂引擎，<code>sync_turn</code> 推送节点到对话树（<code>ui_conversation_tree.json</code>）；
   Embedding <code>:8587</code>（bge-m3 Q8_0, 1024 维）为 v5 注入与对话树检索提供向量；

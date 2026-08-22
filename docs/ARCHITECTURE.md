@@ -27,7 +27,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 ├─────────────────────────────────────────────────────────────┤
 │      L1: 基础设施 (Runtime Infrastructure) — 逻辑分组           │
 │  runtime/dsh/ — 工作引擎 (DeepSeek Harness, npm 本地安装)                    │
-│  ikaros-dsh overlay — memory_v5 MCP(48 工具) + terminal + lsp + persona     │
+│  ikaros-dsh overlay — memory_v5 MCP(49 工具) + terminal + lsp + persona     │
 │  Embed :8587 — 各组件启动脚本自带 watchdog (本地 LLM 已退役)              │
 ├─────────────────────────────────────────────────────────────┤
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
@@ -67,11 +67,11 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 - **定位**：Explore.poker 风格的**卡片图对话面板**——把多轮 / 分支对话按「卡片 = 一段连续会话」聚合，卡片间用显式连线（links）连成图（贝塞尔连线 + 拖拽连线 + 缩放 + 右键菜单 + 双主题 + splitter + localStorage）。
 - **后端引擎**：`core/memory_v5/conversation_tree.py`（`ConversationTree` + `ConvCard`，引擎 47 tests + 服务 62 tests）；REST 接口 `fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context` / `set_trunk`（主线提升，废弃分支拒绝）+ 卡片接口 `card/create|read|parent|link|unlink|branch_point` / `card_branch_chain`；`build_context_v2`（L0 祖先 + L1 兄弟 + L2 合并，MAX 50）。
 - **S1 主线模型（2026-08-04）**：显式 `trunk_id` 主线终点取代 node_type 时序快照判定（旧逻辑会把 branch 下继续对话误标 trunk）；`add_turn` 按 `trunk_id` 判定主线延续，`set_trunk(node, cascade)` 显式提升分支为主线，序列化带 `trunk_id`，旧 JSON 自动按最深 trunk 链推断。前端 trunk 徽标（★）+ 右键「设为主线终点」。
-- **S2 降级工具协议（2026-08-04）**：降级链从「纯文本补全」升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮；模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
+- **S2 降级工具协议（2026-08-04；2026-08-05 轮次加宽）**：降级链从「纯文本补全」升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=6`（2026-08-05 由 4 加宽到 6，给诊断→日志→重启→复查的自救链留足轮次）多轮；模型名用 `CT_DEEPSEEK_MODEL`（已废弃的 deepseek-chat 别名不再使用）。
 - **S4 SSE chunked（2026-08-04）**：`_send_sse` 手动 `Transfer-Encoding: chunked`（HTTP/1.1 标准客户端不再等 EOF 挂起）。
 - **数据布局**：对话内容存 V5，`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`（`super-conv-2.0` schema）；树 JSON 只存指针（节点 + `cards_meta` 手动卡片元数据 + `links` 显式连接），真实记忆在 `v5.db`。
 - **与 V5 集成**：`memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复）。
-- **LLM 路由（2026-08-05 更新；2026-08-18 单模式）**：`/api/chat` **ikaros 单模式**，注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。**主链路 = DeepSeek 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`），先预检索记忆（memory_search）再把结果作为 system 前缀喂给 LLM，工具回路为**只读工具集**（memory_search 等），模型可自主选择调用工具（`MAX_TOOL_ROUNDS` 上限）；DeepSeek 不可达时降级本地三层 chat 补全链路，并通过 SSE `warn` 事件（黄色提示条）向前端提示降级。SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
+- **LLM 路由（2026-08-05 更新；2026-08-18 单模式）**：`/api/chat` **ikaros 单模式**，注入「完整 persona（axiom+SOUL+心绪）+ 树域记忆」。**主链路 = DeepSeek 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`），先预检索记忆（memory_search）再把结果作为 system 前缀喂给 LLM，工具回路为**只读工具集**（memory_search 等），模型可自主选择调用工具（`MAX_TOOL_ROUNDS` 上限）；DeepSeek 不可达时降级本地 **两层** chat 补全链路（`_call_llm`：DeepSeek API → Local LLM → `RuntimeError`，`MAX_TOOL_ROUNDS=6`），并通过 SSE `warn` 事件（黄色提示条）向前端提示降级。SSE 透出 `content / reasoning / tool 生命周期(含结果) / usage`；工具结果截断 2000 透出。
 - **触控/平板模式（2026-08-10）**：全局 touch-action 策略（手势区 none：画布/节点/卡组头/白板/3D 查看器；滚动区 pan-y + overscroll-behavior:contain）；画布单指平移/双指捏合 + 可交互元素分流（不拦截、保留原生 mouse 合成）；长按手势（~500ms：树节点/组卡 → 右键菜单、L1 小卡 → 直接 L3；位移 10px 取消；吃原生 contextmenu/click 防双菜单）；卡组头部 pointer 事件拖拽（鼠标/触控/笔统一）；触控最小目标 ≥40px（`@media (pointer:coarse)`）；软键盘避让（visualViewport → `--kb-h` 输入区上移）；safe-area-inset 边距（刘海屏）；平板竖屏树面板收窄（--tree-w:220px）。
 - **已知限制（2026-08-01 更新）**：`skills_used` 用「本轮工具名列表」近似落库（gateway 无 skill 专属事件源，精确元数据待 gateway 侧补事件）；`build_tree_aware_context` 树感知压缩已修复可用（原漏 import 致 NameError 被静默吞掉，实际一直走线性回退）；`MemoryRetriever._node_memories` 已持久化（`memory_ids` 字段）。Ikaros 人格由 `build_system_prompt` / chat tree 使用（dsh overlay persona 独立）。
 - **万用工具卡组（Artifact Deck，2026-08-10）**：agent 在 markdown 正文输出 `:::card TYPE` 块（`key: value` 属性行 + 可选正文，`:::` 闭合），前端**抽取进独立卡组** `#cardDeck`（不在 chat 正文内嵌，正文只留 chip 占位链接）。卡组悬浮画布右侧、可拖拽，与 chat 卡同构三态：**L1 = 90×60 小卡**（未调用态，堆叠成卡组，>3 张时只露 3 张 +N 徽章）、**L2 = 中等面板**（只读展示）、**L3 = 全功能面板**（可交互，如 browser 地址栏）。自动布局：1~3 张全 L2 展开；>3 张时被调用的卡展开、其余收缩 L1。被调用卡（active）环绕**淡蓝→粉流光阴影**动画。卡组展开时**让位**：chat 卡（L2/L3）宽度收缩 `--deck-w` 被往左挤。类型：`browser`（Mini 浏览器 iframe）/ `file`（image/text/pdf/audio/video/markdown 预览）/ `whiteboard`（SVG 白板，DSL：`node id 标签` / `link a -> b 说明`）/ `emoji`（大表情）/ `animation`（typing/float/pulse/spin/bounce/rainbow/wave/heartbeat）/ `model`（3D glb 预览卡）/ `audio` / `video` / `code`（大代码框）/ `note|info|warn|ok`（提示条）。安全：属性全 escapeHtml，iframe/媒体 src 走 http(s) 白名单，白板 DSL 走 textContent，零脚本执行；与正文同走 `mdRender` 抽取链路（流式实时 + 持久化重渲染双路径自动生效，降级链路同样可用）。工具生命周期卡（`tool_call`/`tool_result` 三态 running/ok/fail，emoji 取工具事件）仍在 chat 卡 `renderExtras`/`extrasHtml`。语法参考见 `docs/conversation-tree-cards.md`。
@@ -81,8 +81,8 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 
 agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**（0 源码侵入）：
 
-- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，48 个 `v5_*` 工具）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp）+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
-- **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。
+- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，49 个 `v5_*` 工具，7 组可按 `V5_MCP_TOOL_GROUPS` 过滤）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
+- **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。**构建/装配链**：`npm run build`（tsc `src/`→`dist/`）→ `pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"` 装到 `~/.dsh/profiles/web/`。插件名 `@ikaros/dsh-ikaros-memory` 不走 `!!js` 表达式（`Entry.name` 不经过 interpolate），用裸包名从 profile 的 node_modules 解析。
 - **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
 
@@ -94,7 +94,7 @@ agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**�
 bin/ikaros         ← bash 入口（MSYS / Git-Bash / WSL）
 bin/ikaros.bat     ← cmd 入口（ASCII only, GBK safe）
 bin/ikaros.ps1     ← PowerShell 入口（UTF-8）
-core/ikarosctl.py  ← Python 调度核心（563 行）
+core/ikarosctl.py  ← Python 调度核心（583 行）
 config/components.yaml  ← 4 组件元数据（dsh / conversation-tree / embedding / herdr）
 core/components/registry.py  ← ComponentSpec + load_components / get_component
 ```
@@ -106,9 +106,18 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 | `ikaros web` | 拉起 dsh web (:3080) |
 | `ikaros tree` | 拉起对话树 (:48920) |
 | `ikaros embed` | 拉起 embedding (:8587) |
-| `ikaros all` | 全栈启动 |
-| `ikaros doctor` | 诊断（读 components.yaml + 检查 runtime 缺失）|
-| `ikaros update` | 更新 upstream（TODO）|
+| `ikaros all` | 拓扑序启动 web 栈三件套（`START_COMPONENTS` = embedding / conversation-tree / dsh；herdr 由 `ikaros herdr` 单独 opt-in） |
+| `ikaros herdr` / `ikaros omp` | 拉起 herdr 编码 agent 多路复用器（命名管道, 前端 `bin/start-omp.bat`→`ikaros omp`; omp 本体 = `runtime/bun/bin/omp.exe`） |
+| `ikaros dsh headless <任务>` | ⚠️ **非一级子命令**：`headless` 是 `ikarosctl.start_component` 内部对 dsh 组件的 `web|headless` 分支（`ikarosctl.py:172`）；一级走 `web`(web GUI)，headless one-shot 走 `bin/start-dsh-ikaros.bat headless <任务>`（薄壳转 `ikaros web`） |
+| `ikaros status` | 组件状态（`component_state`） |
+| `ikaros ps` | 列出各组件进程（`_cmd_ps`） |
+| `ikaros logs <组件>` | 打印指定组件日志（`_cmd_logs`） |
+| `ikaros stop <组件>` | 停止指定组件（`stop_component`） |
+| `ikaros restart <组件>` | 停 + 启指定组件（`stop_component` → `start_component`） |
+| `ikaros doctor` | 诊断（读 components.yaml + 检查 runtime 缺失） |
+| `ikaros update` | 更新 upstream（TODO） |
+
+> **契约来源**：上表 = `core/ikarosctl.py::dispatch` 的 14 个分支 + `argparse` `choices` 元组（二者一致，实测）。注意 `choices` 里**没有 `headless`**：headless 是 `start_component` 对 dsh 的内部模式分支，非顶层子命令。早期文档仅列 `web/tree/embed/all/doctor/update` 6 个，已补齐 `status/ps/logs/stop/herdr/omp/restart` 共 8 个运维子命令。
 
 **IKAROS_ROOT 自锚定**：bash 用 `${BASH_SOURCE[0]}`、cmd 用 `%~dp0`、PS 用 `$PSScriptRoot`，**复用 `bin/ikaros-env.*` 的环境权威源**。
 
@@ -167,32 +176,37 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 
 ### 2.3 环境变量注册表
 
-所有 Agent 可依赖的 `IKAROS_*` 环境变量由 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（权威源，自锚定、可随目录移动）统一设置；`core/env/` 保留 Python 侧副本（含 `ikaros-paths.json`）。**注册表 `IKAROS_*` 已清零，勿再 `setx`**。
+所有 Agent 可依赖的 `IKAROS_*` 环境变量由 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat` / `bin/ikaros-env.ps1`**（三件套权威源，自锚定、可随目录移动）统一设置；`core/env/` 保留 Python 侧副本（含 `ikaros-paths.json`）。**注册表 `IKAROS_*` 已清零，勿再 `setx`**。三件套锚点原则（学 ComfyUI-aki）：`IKAROS_ROOT` 由脚本自身位置推导（`BASH_SOURCE[0]` / `%~dp0` / `$PSScriptRoot`），**一切路径从 `IKAROS_ROOT` 相对推导，不写死盘符**。
 
 | 变量名 | 值示例 | 说明 |
 |--------|--------|------|
 | `IKAROS_ROOT` | `E:\Ikaros` | 项目根（所有路径的锚点） |
-| `IKAROS_PYTHON` | `%IKAROS_ROOT%\runtime\portable-python\python.exe` | 便携 Python |
-| `IKAROS_NODE` | `%IKAROS_ROOT%\runtime\node\node.exe` | 便携 Node |
-| `IKAROS_RUNTIME` | `%IKAROS_ROOT%\runtime` | 运行时根 |
-| `IKAROS_RUST` | `%IKAROS_ROOT%\runtime\rust` | 便携 Rust |
 | `IKAROS_BIN` | `%IKAROS_ROOT%\bin` | 启动脚本 |
 | `IKAROS_CONFIG` | `%IKAROS_ROOT%\config` | 配置 |
 | `IKAROS_DATA` | `%IKAROS_ROOT%\data` | 数据 |
+| `IKAROS_RUNTIME` | `%IKAROS_ROOT%\runtime` | 运行时根 |
 | `IKAROS_LOGS` | `%IKAROS_ROOT%\data\logs` | 统一日志目录 |
-| `IKAROS_MODULES` | `%IKAROS_ROOT%\modules` | 模块目录（扩展挂载点） |
+| `IKAROS_PYTHON` | `%IKAROS_ROOT%\runtime\portable-python\python.exe` | 便携 Python |
+| `IKAROS_NODE` | `%IKAROS_ROOT%\runtime\node\node.exe` | 便携 Node |
+| `IKAROS_NODE_MODULES` | `%IKAROS_ROOT%\runtime\node\node_modules` | 便携 Node 模块 |
+| `IKAROS_RUST` | `%IKAROS_ROOT%\runtime\rust` | 便携 Rust 工具链 |
 | `IKAROS_MEMORY` | `%IKAROS_ROOT%\core\memory_v5` | V5 代码根 |
 | `IKAROS_MEMORY_DATA` | `%IKAROS_ROOT%\core\memory_v5\data` | V5 数据根（`v5.db`、JSON 拓扑） |
 | `IKAROS_MEMORY_MODELS` | `%IKAROS_ROOT%\core\memory_v5\models` | 模型目录（bge-m3 embedding） |
 | `IKAROS_MEMORY_SCRIPT` | `%IKAROS_ROOT%\core\memory_v5\store.py` | V5 存储脚本入口 |
-| `IKAROS_MODEL_EMBEDDING` | `...\models\bge-m3-q8_0.gguf` | Embedding 模型 |
-| `IKAROS_LLAMA_DIR` | `%IKAROS_ROOT%\runtime\llama\b10000-cuda` | llama.cpp 目录（embedding :8587 用，`.bat` 默认 CUDA13；跨设备自动选择见 `core/env/llama_resolver.py`） |
-| `IKAROS_LLAMA_SERVER` | `...\b10000-cuda\llama-server.exe` | llama-server 可执行（embedding 服务） |
-| `IKAROS_LLAMA_VERSION` | `b10000-cuda` | 当前 CUDA 版本标签 |
-| `IKAROS_NODE_MODULES` | `%IKAROS_ROOT%\runtime\node\node_modules` | 便携 Node 模块 |
-| `IKAROS_PORT_EMBEDDING` | `8587` | Embedding 端口 |
+| `IKAROS_MODEL_EMBEDDING` | `...\models\bge-m3-q8_0.gguf` | Embedding 模型权重 |
+| `IKAROS_DSH` | `%IKAROS_ROOT%\runtime\dsh` | dsh 工作引擎（npm 本地安装） |
+| `IKAROS_DSH_SOURCE` | `%IKAROS_ROOT%\runtime\deepseek-harness-master` | dsh 源码参考树 |
+| `IKAROS_DSH_PROFILE` | `%IKAROS_ROOT%\data\dsh\profiles` | dsh 用户 profile 目录 |
+| `IKAROS_DSH_WEB_PORT` | `3080`（bat 备用 `3085`） | dsh web GUI 端口；三件套默认 3080，bat 作备用 3085（3080 被占时顺延） |
+| `IKAROS_DSH_OVERLAY` | `%IKAROS_ROOT%\core\ikaros-dsh\cordis.patch.yml` | dsh overlay 规范源 |
+| `IKAROS_OMP_AGENT` | `%IKAROS_ROOT%\data\omp\agent` | omp 编码 agent 配置目录 |
+| `PI_CODING_AGENT_DIR` | `%IKAROS_ROOT%\data\omp\agent` | 同上，omp 兼容别名 |
+| `IKAROS_HERDR` | `%IKAROS_ROOT%\runtime\herdr\herdr.exe` | Herdr 编码 agent 多路复用器 |
+| `THIRDSPACE_VAULT` | `%IKAROS_ROOT%\data\thirdspace-vault` | ThirdSpace 知识库 vault |
+| `IKAROS_PORT_EMBEDDING` | `8587` | Embedding 端口（bge-m3, :8587） |
 
-> **已退役变量**（不再设置/使用）：`IKAROS_MODEL_LLM`（本地 LLM 模型）、`IKAROS_PORT_LLM` / `IKAROS_PORT_LLAMA`（:8080）、`IKAROS_NEKO*`（N.E.K.O 前端）、`IKAROS_HERMES_AGENT` / `IKAROS_HERMES_HOME`（Hermes Agent）、`IKAROS_LABEL_EMOTION_PROVIDER`（情感标注 LLM）、`IKAROS_PORT_BRIDGE`（遗留桥接端口）。
+> **退役与向后兼容**：`IKAROS_PORT_LLM` / `IKAROS_PORT_LLAMA`（均为 `8080`）仍保留在三件套 env 中（向后兼容，本地 LLM 已退役 2026-08-18，无实际服务监听）。`IKAROS_MODEL_LLM`、`IKAROS_NEKO*`、`IKAROS_HERMES_AGENT` / `IKAROS_HERMES_HOME`、`IKAROS_LABEL_EMOTION_PROVIDER`、`IKAROS_PORT_BRIDGE` 已随 hermes/neko 底座退役，不再设置。
 
 ### 2.4 PYTHONHOME 安全门
 
@@ -281,13 +295,21 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 
 | 注册位置 | 环境变量 | 目标路径 |
 |---------|---------|---------|
-| `bin/ikaros-env.sh/.bat` | `IKAROS_PYTHON` | `runtime/portable-python/python.exe` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_NODE` | `runtime/node/node.exe` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_BIN` | `bin/` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_DATA` | `data/` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_CONFIG` | `config/` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_LLAMA_DIR` | `runtime/llama/<按 CUDA 自动选择>` |
-| `bin/ikaros-env.sh/.bat` | `IKAROS_MEMORY` | `core/memory_v5/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_PYTHON` | `runtime/portable-python/python.exe` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_NODE` | `runtime/node/node.exe` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_BIN` | `bin/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DATA` | `data/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_CONFIG` | `config/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_MEMORY` | `core/memory_v5/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH` | `runtime/dsh/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH_PROFILE` | `data/dsh/profiles` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH_OVERLAY` | `core/ikaros-dsh/cordis.patch.yml` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_OMP_AGENT` | `data/omp/agent` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_HERDR` | `runtime/herdr/herdr.exe` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_RUST` | `runtime/rust/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_LOGS` | `data/logs/` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_NODE_MODULES` | `runtime/node/node_modules` |
+| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_RUNTIME` | `runtime/` |
 | `core/env/ikaros-paths.json` | 全部 IKAROS_* 变量 | 子路径（Python 查询用） |
 | `__file__` 推导 | `V5_ROOT` | `core/memory_v5/` (仅 V5 内部) |
 
@@ -320,9 +342,9 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 ### 4.1 core/memory_v5/ — V5 灵魂核心
 
-> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，48 个 MCP 工具仍以前缀 **`v5_*`** 暴露（2026-08-10 实测，含 V5.3 activity/compression、V5.4 project、V5.5 skill 各系列）。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
+> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，49 个 MCP 工具仍以前缀 **`v5_*`** 暴露（2026-08-10 实测，含 V5.3 activity/compression、V5.4 project、V5.5 skill 各系列）。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
 >
-> **依赖环警示（gitnexus `check --cycles` 2026-08-12 发现）**：`core/memory_v5/extensions/temporal_graph.py ↔ core/memory_v5/memory_retrieval.py` 存在循环依赖（temporal_graph 调 `unified_retrieve`/`retrieve_temporal` 挂接，memory_retrieval 引 temporal_graph 的 supersede 闭环）。当前靠 Python 模块级延迟引用未炸，但重构时优先解开（把 supersede 挂接改由 `store.py`/`dissonance.py` 侧回调注入即可）。
+> **依赖环警示（gitnexus `check --cycles` 2026-08-12 发现，2026-08-14 部分化解）**：`core/memory_v5/extensions/temporal_graph.py ↔ core/memory_v5/memory_retrieval.py` 曾存在循环依赖。2026-08-14 已将 `retrieve_temporal` 从 `temporal_graph.py` 迁至 `memory_retrieval.py` 以断一路；但 `temporal_graph` 仍调 `unified_retrieve` 挂接、`memory_retrieval` 仍引 `temporal_graph` 的 `supersede_memory` 闭环，**环仍在**。当前靠 Python 模块级延迟引用未炸，重构时优先解开（把 supersede 挂接改由 `store.py`/`dissonance.py` 侧回调注入）。
 
 | 模块 | 职责 | 入口 |
 |------|------|------|
@@ -348,7 +370,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 2026-08-18 起为 dsh (DeepSeek Harness) 的 Ikaros 集成层:
 
-- `cordis.patch.yml` — 规范源 overlay: memory_v5 MCP (48 个 v5_* 工具, stdio 挂 `runtime/portable-python/python.exe`)、terminal、typescript LSP、persona。
+- `cordis.patch.yml` — 规范源 overlay: memory_v5 MCP (49 个 v5_* 工具, stdio 挂 `runtime/portable-python/python.exe`)、terminal、typescript LSP、persona。
 - 路径全部经 `!!js process.env.IKAROS_ROOT + ...` 推导, 0 盘符硬编码, 可整体移动。
 - 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 为自动加载副本, 与规范源保持同步 (启动脚本不传 `--patch`, 避免 duplicate loader)。
 - 启动: `bin/start-dsh-ikaros.bat web` (web :3080) / `headless <task>`; 面板 dsh 组件可启停 (kill 精确匹配 dsh CLI 进程, 不误伤 DSH Desktop)。
@@ -358,10 +380,17 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 文件 | 职责 |
 |------|------|
-| `ikaros-env.sh` / `ikaros-env.bat` | **环境权威源**（自锚定，设置全部 IKAROS_*） |
-| ~~`cloud_chat.py`~~ | ⚠️ 2026-08-14 已删除（对话树双模式接替） |
-| `ikaros-soul-sync.py` | V5 → SOUL.md 同步 |
-| `conversation-tree/server.py` | 对话树面板后端 (REST, :48920) |
+| `ikaros` / `ikaros.bat` / `ikaros.ps1` | **统一启动器** 3-shell 入口，全部 exec 到 `core/ikarosctl.py`（14 子命令：web/tree/embed/all/herdr/omp/status/ps/logs/stop/restart/doctor/update） |
+| `ikaros-env.sh` / `ikaros-env.bat` / `ikaros-env.ps1` | **环境权威源三件套**（自锚定 `IKAROS_ROOT`，设置全部 `IKAROS_*` 变量，锚点原则学 ComfyUI-aki） |
+| `start-dsh-ikaros.bat` | dsh 启动器薄壳 → `ikaros web` / `ikaros dsh headless <任务>` |
+| `restart-dsh-ikaros.ps1` | dsh 重启器（杀旧 dsh web 进程 + `--patch` 重启 + 日志，`$port` 兜底 3080） |
+| `start-omp.bat` | omp 编码 agent TUI 薄壳 → `ikaros omp` |
+| `sync-dsh-profile-patch.bat` | 规范源 `core/ikaros-dsh/cordis.patch.yml` → 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 同步 |
+| `proc.py` | 进程管理（`ps` 列出 python/node 进程、`kill <port|name>` 按端口/关键词强杀） |
+| `secret-scan.py` | 仓库密钥泄露扫描（stdlib only，非阻塞 exit 0，可挂 pre-commit） |
+| `wb.py` | WorkBuddy / CodeBuddy CLI 封装（让 Ikaros / 子代理直接驱动 WorkBuddy，不再文件交接 TASK.md） |
+
+> **位于 core/ 的启动器相关**：`core/ikarosctl.py`（调度核心，583 行，解析 `ikaros <子命令>`）、`config/components.yaml`（4 组件元数据）、`core/components/registry.py`（`ComponentSpec` 加载器）。
 
 > **已退役脚本**：`ikaros-control-panel.bat`（:9100 面板）、`hermes_paw_bridge.py`（:8088 猫爪桥）、`hermes-bridge.py`（:8650）、`hermes-update-and-patch.py`（Hermes 更新器）、`llama-help.py`（本地 LLM 热载入）、`import-hermes-to-convtree.py`（Hermes 导入器）——均随 hermes/neko/:8080 退役删除。
 
@@ -456,15 +485,14 @@ V5 现有（5.1.0）的上下文缩减手段：LLM 摘要旧轮（`summary.py`�
    - 核心入口 `compress_text(text, quality="auto")`：装了 `llmlingua` 则委派其 `PromptCompressor.compress_prompt()`（README 实测 11x+ 压缩，对抗 lost-in-the-middle）；未装/离线则回退 `rule_compress`（折叠空白/重复行、删语气 filler、超目标保头尾截中段）。
    - **导入守护 + 离线回退**：U 盘离线便携，不硬依赖 HF 模型权重；`pip install llmlingua` 到 Ikaros venv 联网一次下模型后离线可用缓存。
    - 配套 `compress_old_rounds(tail_keep=6)`（保最近 N 轮原样、压旧轮）、`compress_retrieval_block`（高相关原样、低相关先压再裁，避免「要么全要要么全弃」）、`enforce_budget`（按 score/顺序截到预算内）。
-   - **消费此前闲置的 `token_budget` 配置**（min 800 / max 1200 / `char_x` 估算）。
-   - **历史集成点（已随底座退役）**：原 hermes 插件 `data/hermes-agent/plugins/ikaros_v5/memory_provider.py` 的 `on_pre_compress` 集成已不存在；dsh 插件 `core/ikaros-dsh/plugins/ikaros-memory` 接替记忆召回/写回职责。验证见 `tests/test_token_compressor_module.py`（10 项，覆盖离线规则回退）+ `tests/test_token_compressor_integration.py`（2 项，增强/回退双路径）。
+   - ⚠️ **真实消费点（2026-08-22 实测）**：`compress_text` / `enforce_budget` 在整个 `core/` 生产代码中**唯一调用点 = `extensions/tree_adapter.py`**（对话树树域检索的预算裁剪）。V5 主记忆写入 / system 前缀链路**尚未消费**（`token_budget` 配置仍为定义态，主链路未接入）——不要据此假定 V5 主链路已启用 token 压缩。验证见 `tests/test_token_compressor_module.py`（10 项）+ `tests/test_token_compressor_integration.py`（2 项）。
 
 2. ~~**`gated_retrieval.py` — 分层检索门控**~~ **已删除（2026-08-14 P4 裁决）**：无调用方的骨架；其「高层优先、按需下钻」思想已被 `context_anchor.should_recall`（调用层门控）+ `type_decay`/`base_weight_factor`（排序层分层）覆盖，无需单独模块。
 
 3. **`temporal_graph.py` — 时效图谱（相对 Graphiti 的缺口，SQLite 原生）**
    - `apply_migration()`：在现有 `eg_*` 表上幂等 `ALTER` 加 `valid_from`/`valid_to`（**不换图库后端**）。
    - `supersede_memory()` / `resolve_dissonance_supersede()`：接在 `dissonance.py` 检测矛盾之后，把冲突旧事实 `valid_to=now` 失效（Graphiti 的「矛盾即更替」）。
-   - `retrieve_temporal()`：检索优先有效事实、降权/排除已过期。
+   - `retrieve_temporal()`：**已迁至 `memory_retrieval.py`**（2026-08-14，为解 `temporal_graph ↔ memory_retrieval` 循环依赖，从原 `extensions/temporal_graph.py` 移出）——检索优先有效事实、直接剔除已过期（`valid_to < now` 即失效，非降权）。
    - **已接入主链路（2026-08-01）**：`dissonance._record_dissonance` 末尾接 `resolve_dissonance_supersede`（supersede 闭环生效）+ 对冲突旧记忆 `reinforcement -= 0.5` 降权；`unified_retrieve(scope="temporal")` 路由到 `retrieve_temporal`；新增 `reflect/registry.py` 的 `temporal_extract` op（24h，LLM 抽时间戳写 `valid_from`，fail-open）与 `memory_promote` op（6h，两档记忆桥接）。
 4. **`ontology_align.py`**（difflib 轻量本体对齐，`cache.ontology_align_enabled` 控制）→ 已接入 `search.entity_graph_search` 实体候选。
 5. **`tree_adapter.py`**（树域加权检索）→ 已接入 `unified_retrieve(scope="tree")`。
@@ -519,7 +547,7 @@ V5 现有（5.1.0）的上下文缩减手段：LLM 摘要旧轮（`summary.py`�
 1. 停进程: SIGTERM 不可靠 → 用 taskkill /F /T 或按端口强杀
 2. 隐藏窗口: 控制面板用 pythonw.exe，legacy 用 launch-hidden.vbs
 3. MCP 原生 stdout 提取: 套 Python subprocess 包装 (mcp_wrapper.py)
-4. GitHub release 下载: 走 gopeed (bin/ikaros-fastdl.py)，不走 urllib
+4. GitHub release 下载: 走 `scripts/fetch-upstreams.py`（内嵌 `bin/ikaros-fastdl.py` 已抽离为 WorkBuddy skill `ikaros-fastdl`），不走 urllib
 ```
 
 ### 6.6 协作约定
@@ -527,6 +555,6 @@ V5 现有（5.1.0）的上下文缩减手段：LLM 摘要旧轮（`summary.py`�
 ```
 1. 临时文件一律放 E:\Ikaros\tmp\
 2. 不自动 push。等"等哥哥一句 commit"指令
-3. 下载用 bin/ikaros-fastdl.py + bin/fastdl.json (gopeed :9999 → aria2c → urllib)
+3. 下载用 `scripts/fetch-upstreams.py`（内嵌 gopeed/aria2 上游；`bin/ikaros-fastdl.py` 已抽离为 WorkBuddy skill `ikaros-fastdl`）
    --mirror hf → hf-mirror.com
 ```

@@ -46,7 +46,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 * 本地 LLM(:8080) 已退役(2026-08-18): 云端 DeepSeek 为主, 按需恢复(见 AGENTS.md)。
 * 对话树 :48920 单模式 DeepSeek 直连(人格 = Ikaros 伴侣), 不可达时降级本地三层链路 + 只读工具回路。
-* dsh :3080 为 DeepSeek Harness 工作引擎 (overlay 挂载 memory_v5 MCP: 48 个 v5_* 工具 + terminal + typescript LSP + persona)。
+* dsh :3080 为 DeepSeek Harness 工作引擎 (overlay 挂载 memory_v5 MCP: 49 个 v5_* 工具 + ikaros-memory 自动记忆插件 + terminal + typescript LSP + persona)。
 ```
 
 ### 核心端口
@@ -68,7 +68,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 - **零系统依赖** — 自带便携 Python **3.12.10**(`runtime\portable-python\`)、Node.js(`runtime\node\`)、llama.cpp Windows 二进制 + DLL(`runtime/llama/`)、**dsh**(`runtime/dsh\`,npm 本地安装)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
 - **U 盘即插即用** — 项目根路径由 `bin/ikaros-env.sh/.bat/.ps1`(单一权威源,自锚定 `%%~fI` 归一化)自动解析,不写死盘符;换盘符后无需手工改路径。
-- **dsh 工作引擎** — DeepSeek Harness 承接过往 agent 底座职责:web 界面(:3080)+ memory_v5 MCP(48 工具)+ terminal + typescript LSP + persona(overlay `core/ikaros-dsh/cordis.patch.yml`,路径经 `!!js process.env.IKAROS_ROOT` 推导,0 硬编码,可整体移动)。
+- **dsh 工作引擎** — DeepSeek Harness 承接过往 agent 底座职责:web 界面(:3080)+ memory_v5 MCP(49 工具,stdio)+ **ikaros-memory 自动记忆插件**(turn-stopping 自动沉淀 + pre-step 召回注入)+ terminal + typescript LSP + persona(overlay `core/ikaros-dsh/cordis.patch.yml`,路径经 `!!js process.env.IKAROS_ROOT` 推导,0 硬编码,可整体移动)。
 - **本地记忆系统 (V5)** — SQLite(FTS5 关键词)+ Chroma(向量语义)+ 时间范围 **三路融合召回**(`min_fused_score` 默认 0.3),统一入口 `unified_retrieve(scope=auto|semantic|lexical|graph|tree|temporal)`;`store()` 实时写入、`consolidate/distill/reflect` 经云端 LLM 归约。无 Qdrant 依赖。
 - **5D 认知注入** — `cogno_5d.py` 在每轮对话注入时间/设备/地理/情绪/上下文锚点。
 - **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 LLM 已退役,不占资源(按需恢复)。
@@ -177,11 +177,10 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 Ikaros\
 ├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + ikaros-env(环境权威) + start-dsh-ikaros
 ├── core\                 ← 核心系统
-│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思) + 48 个 v5_* MCP 工具
-│  ├── conversation-tree\  ← 对话树面板 (:48920)
+│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思) + 49 个 v5_* MCP 工具
+│  ├── conversation-tree\  ← 对话树面板 (:48920; index.html 前端 + server.py 后端)
 │  ├── env\               ← Python 侧环境引导副本 (ikaros-paths.json / llama_resolver.py)
-│  ├── conversation-tree\ ← 对话树面板后端 (:48920)
-│  └── ikaros-dsh\        ← dsh overlay (cordis.patch.yml: MCP/terminal/lsp/persona)
+│  └── ikaros-dsh\        ← dsh overlay (cordis.patch.yml: MCP/ikaros-memory/terminal/lsp/persona)
 ├── config\               ← 配置文件 (identity/axiom.md 等)
 ├── data\                 ← ★ 运行时数据 (全部 git ignored; 含 soul/SOUL.md 身份)
 ├── docs\                 ← 文档

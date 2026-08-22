@@ -118,7 +118,7 @@
     <div class="layers">
       <div class="layer"><div class="lh">🧠 灵魂核心</div>
         <div class="items">
-          <span class="pill"><code>core/memory_v5/</code> V5 自我认知引擎（包名 memory_v5，48 个 v5_* MCP 工具）</span>
+          <span class="pill"><code>core/memory_v5/</code> V5 自我认知引擎（包名 memory_v5，49 个 v5_* MCP 工具）</span>
           <span class="pill"><code>core/memory_v5/data/v5/</code> 人格+记忆库（v5.db + chroma，对外契约不改）</span>
         </div></div>
       <div class="layer"><div class="lh">🪟 表现层</div>
@@ -142,7 +142,7 @@
     <h2><span class="tag t-teal">数据流</span> 一次对话怎么走</h2>
     <div class="flow">
       <div class="step"><div class="dot">1</div><div>用户在 <b>dsh web :3080</b>（React + Monaco + terminal + LSP）发起对话或代码任务</div></div>
-      <div class="step"><div class="dot">2</div><div>dsh overlay 注入 <code>v5_* MCP</code>（memory_v5 stdio, 48 工具）+ 持久 PTY 终端 + LSP + Ikaros persona</div></div>
+      <div class="step"><div class="dot">2</div><div>dsh overlay 注入 <code>v5_* MCP</code>（memory_v5 stdio, 49 工具）+ 持久 PTY 终端 + LSP + Ikaros persona</div></div>
       <div class="step"><div class="dot">3</div><div><b>对话树 :48920</b>（独立面板，Explore.poker 卡片图风格）走 ikaros 单模式：注入完整 persona + 树域记忆 → DeepSeek 直连 + 只读工具回路</div></div>
       <div class="step"><div class="dot">4</div><div>Embedding :8587（bge-m3 Q8_0，1024 维）为 v5 注入与对话树检索提供向量</div></div>
       <div class="step"><div class="dot">5</div><div>逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型</div></div>
