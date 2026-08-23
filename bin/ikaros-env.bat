@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 rem ikaros-env.bat -- Ikaros portable environment (single authority source, self-anchored)
 rem Other bat scripts call this file (start-dsh-ikaros.bat / control panel / memory services).
 rem Anchor principle (from ComfyUI-aki): all paths are derived from IKAROS_ROOT, no drive letters.
@@ -28,16 +28,12 @@ rem ---- DeepSeek Harness (dsh) �������� ----
 set "IKAROS_DSH=%IKAROS_ROOT%\runtime\dsh"
 set "IKAROS_DSH_SOURCE=%IKAROS_ROOT%\runtime\deepseek-harness-master"
 set "IKAROS_DSH_PROFILE=%IKAROS_DATA%\dsh\profiles"
-set "IKAROS_DSH_WEB_PORT=3085"
+set "IKAROS_DSH_WEB_PORT=3080"
 set "IKAROS_DSH_OVERLAY=%IKAROS_ROOT%\core\ikaros-dsh\cordis.patch.yml"
 
-rem ---- omp (oh-my-pi) ���� agent ----
-set "IKAROS_OMP_AGENT=%IKAROS_DATA%\omp\agent"
-set "PI_CODING_AGENT_DIR=%IKAROS_OMP_AGENT%"
 
 rem ---- ��������ʱ ----
 set "IKAROS_RUST=%IKAROS_RUNTIME%\rust"
-set "IKAROS_HERDR=%IKAROS_RUNTIME%\herdr\herdr.exe"
 set "THIRDSPACE_VAULT=%IKAROS_DATA%\thirdspace-vault"
 
 rem ---- �˿� ----
@@ -49,7 +45,7 @@ rem ---- Python / PATH ----
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 set "PYTHONPATH=%IKAROS_ROOT%;%IKAROS_ROOT%\core"
-set "PATH=%IKAROS_RUST%\bin;%IKAROS_ROOT%\runtime\herdr;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node;%IKAROS_ROOT%\runtime\portable-python\Scripts;%IKAROS_ROOT%\runtime\portable-python;%PATH%"
+set "PATH=%IKAROS_RUST%\bin;%IKAROS_RUNTIME%;%IKAROS_RUNTIME%\node;%IKAROS_ROOT%\runtime\portable-python\Scripts;%IKAROS_ROOT%\runtime\portable-python;%PATH%"
 set "NODE_PATH=%IKAROS_NODE_MODULES%"
 set "PYTHONHOME="
 

@@ -39,10 +39,6 @@
     "embedding": "core/memory_v5/models/bge-m3-q8_0.gguf",
     "llm": ""
   },
-  "omp": {
-    "root": "data/omp",
-    "agent": "data/omp/agent"
-  },
   "mcp": {
     "root": "runtime/MCPServe",
     "codebase_memory_exe": "runtime/MCPServe/codebase-memory/package/bin/codebase-memory-mcp.exe",

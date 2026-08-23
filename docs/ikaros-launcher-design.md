@@ -9,7 +9,7 @@
 
 ## 0. 一句话目标
 
-**统一 Ikaros 启动入口（命令行 + Windows GUI 双击），收敛 4 个组件（dsh / conversation-tree / embedding / herdr）的生命周期命令，让"启动 Ikaros"这件事不再依赖散落在 `bin/` 里的 6 个互不感知的 bat/ps1 脚本。**
+**统一 Ikaros 启动入口（命令行 + Windows GUI 双击），收敛 3 个组件（dsh / conversation-tree / embedding）的生命周期命令；herdr / omp (pi 底座) 已于 2026-08-23 退役，不再管理。让"启动 Ikaros"这件事不再依赖散落在 `bin/` 里的 6 个互不感知的 bat/ps1 脚本。**
 
 ---
 
@@ -46,7 +46,7 @@
 
 理由：
 1. line3 工作流以 AI agent + 远程 CLI 为主，GUI 双击不是核心需求；
-2. 单组件脚本（`start-dsh-ikaros.bat`、`start-omp.bat`、`memory_v5/services/start-embedding.bat`、`restart-dsh-ikaros.ps1`）仍是事实标准，新启动器必须**共存**而非替换；
+2. 单组件脚本（`start-dsh-ikaros.bat`、`memory_v5/services/start-embedding.bat`、`restart-dsh-ikaros.ps1`）仍是事实标准，新启动器必须**共存**而非替换；`start-omp.bat` 已随 pi 底座删除（2026-08-23）；
 3. 候选 A 是"调度层"，候选 B 是"展示层"——二者职责清晰、不冲突。
 
 GUI 入口若要做，定义为薄壳：
@@ -101,13 +101,12 @@ goto menu
 
 ### 2.4 `ikaros all`
 
-按拓扑顺序启动全部组件，等价 `ikaros embed && ikaros tree && ikaros web` + `herdr` 按需。
+按拓扑顺序启动全部组件，等价 `ikaros embed && ikaros tree && ikaros web`。
 
 - **拓扑**（来自 `components.yaml` 的 `dependencies`）：
   - `embedding` (无依赖) → 最先
   - `conversation-tree` 依赖 `memory_v5`（隐式 = embedding）→ 第二
   - `dsh` 依赖 `embedding` → 第三
-  - `herdr` 无 TCP 端口、无依赖 → **默认不拉起**（按需 `ikaros herdr`，避免占终端）
 - **失败策略（fail-fast vs best-effort）**：
   - **fail-fast 模式（默认 `--strict`）**：任一组件启动失败 → 立即停止后续组件 + 保留已起进程 + exit 非 0；
   - **best-effort 模式（默认行为）**：失败组件跳过 + 警告，后续组件继续；最终汇总报告。
@@ -120,7 +119,7 @@ goto menu
 - **检查项**：
   - IKAROS_ROOT 是否锚定到合法目录（路径含 `bin/ikaros-env.bat`）；
   - `bin/ikaros-env.sh|bat|ps1` 三份文件存在且 mtime 一致；
-  - `runtime/node/node.exe` / `runtime/dsh/.../bin.js` / `runtime/portable-python/python.exe` / `runtime/llama/.../llama-server.exe` / `runtime/herdr/herdr.exe` 全部存在；
+  - `runtime/node/node.exe` / `runtime/dsh/.../bin.js` / `runtime/portable-python/python.exe` / `runtime/llama/.../llama-server.exe` 全部存在；
   - 模型文件 `bge-m3-q8_0.gguf` 存在（体积 ≥ 500MB）；
   - patch overlay `core/ikaros-dsh/cordis.patch.yml` 存在；
   - 端口扫描（`:3080 / :48920 / :8587`）当前是否被占用、被谁占（`python bin/proc.py ps`）；
@@ -132,7 +131,7 @@ goto menu
 
 ### 2.6 `ikaros update`
 
-**本子命令在 line3 工作流下语义有限**，因为 `runtime/` 是 git-ignored 上游二进制（dsh npm 包 / portable-python / llama.cpp / herdr），不是 git pull 能解决的。
+**本子命令在 line3 工作流下语义有限**，因为 `runtime/` 是 git-ignored 上游二进制（dsh npm 包 / portable-python / llama.cpp），不是 git pull 能解决的。
 **实际语义**：
 
 - 拉取 line3 自身（git fetch + git status）→ 若有未提交改动，**拒绝 update 并提示**（教训：AGENTS.md 2026-08-18 真实 FS 不一致大修就是 harness 编辑落虚拟视图 + 游离 patch 进程覆盖源码）；
@@ -148,7 +147,6 @@ goto menu
 | `ikaros ps` | 等价 `python bin/proc.py ps`（已存在；启动器可直接代理） |
 | `ikaros logs <component>` | tail `$IKAROS_LOGS/<component>.out.log` |
 | `ikaros stop <component>` | 杀单个组件进程（`bin/proc.py kill <port>`） |
-| `ikaros herdr` | 按需拉起 herdr（默认不随 all 启动） |
 
 ---
 
@@ -203,10 +201,10 @@ goto menu
 |------|------|------|
 | `bin/start-dsh-ikaros.bat` | 单组件 bat | dsh 启动器（事实标准） |
 | `bin/restart-dsh-ikaros.ps1` | 单组件 ps1 | dsh 重启（杀旧 + --patch 重启） |
-| `bin/start-omp.bat` | 单组件 bat | omp/pi TUI（herdr 链路前端） |
 | `core/memory_v5/services/start-embedding.bat` | 单组件 bat | embedding llama-server 启动 |
 | `core/memory_v5/services/start-llm.bat` | 单组件 bat | **已退役**（本地 LLM 2026-08-18 退役） |
 | `core/memory_v5/services/start-all.bat` | 单组件 bat | 历史"全部"启动入口（已陈旧，不引用） |
+| ~~`bin/start-omp.bat`~~ | 单组件 bat | **已删除**（pi/omp 底座退役 2026-08-23） |
 
 ### 4.2 共存策略 —— 启动器是调度层，组件脚本是 worker 层
 
@@ -269,8 +267,7 @@ subprocess.Popen(
 - **各组件脚本负责**：
   - embedding：必须校验一个 probe 向量非零（教训固化）；
   - dsh：校验 `/healthz`（若 dsh 提供）+ mcp_server 子进程已 spawn；
-  - conversation-tree：校验 `/healthz`（待 server.py 添加）；
-  - herdr：校验命名管道可达（`test -p` / Windows `WaitNamedPipe`）。
+  - conversation-tree：校验 `/healthz`（待 server.py 添加）。
 - **上报通道**：
   - 简单方案：每组件写 `data/logs/<id>.status.json`（`{"status":"healthy","checked_at":...,"detail":{...}}`），启动器读这个聚合到 `ikaros status`；
   - 进阶方案（Phase 3）：共享 SQLite `data/runtime/health.db`（多组件并写）。
@@ -304,7 +301,7 @@ subprocess.Popen(
 
 ### 6.3 自锚定必须保证的不变量
 
-1. **不写死盘符**：`E:\`、`C:\` 一律不出现在 `bin/` 下任何脚本（教训：现存 `bin/start-omp.bat` 没有盘符，但 `restart-dsh-ikaros.ps1` 第 6 行有 `$env:USERPROFILE`，这是 %USERPROFILE% 派生，不是硬编码，可接受）；
+1. **不写死盘符**：`E:\`、`C:\` 一律不出现在 `bin/` 下任何脚本（教训：`restart-dsh-ikaros.ps1` 第 6 行有 `$env:USERPROFILE`，这是 %USERPROFILE% 派生，不是硬编码，可接受）；
 2. **支持整个项目文件夹移动**：把 `E:\Ikaros-line3` 整目录拷到 `D:\whatever\line3` 仍然能起——靠的是 `%~dp0` / `${BASH_SOURCE[0]}` / `$PSScriptRoot` 的相对推导；
 3. **路径分隔符在跨 shell 边界要显式转换**：bash → Python 用 `/`，cmd → Python 用 `\`，Python `pathlib.Path` 自动适配（不要在脚本里手写 `os.path.join`）；
 4. **`components.yaml` 里所有路径都是相对 IKAROS_ROOT**——绝对禁止在 YAML 里写 `E:\\` / `/home/x/Ikaros`（教训：`core/env/ikaros-paths.json` 头注释明示）。
@@ -377,7 +374,7 @@ subprocess.Popen(
 **风险**：
 - **bash ↔ PowerShell 切换**：WLS 用户 / Git-Bash 用户 / 系统 PowerShell 用户三套环境差异（路径分隔符、命令内建）；
 - **Windows 长路径**：260 字符限制（dsh node_modules 深嵌套常踩）；
-- **macOS / Linux**：line3 当前是 Windows-only（herdr 是 Windows 命名管道二进制、llama.cpp b10000-cuda 是 Windows），跨平台属于 Phase 5+；
+- **macOS / Linux**：line3 当前是 Windows-only（llama.cpp b10000-cuda 是 Windows），跨平台属于 Phase 5+；
 - **cmd GBK**：见 §3.3，新 bat 不能写中文注释。
 
 **缓解**：
@@ -428,17 +425,17 @@ subprocess.Popen(
 | **Phase 2** | 实现 `web` / `tree` / `embed` 三个启动子命令；混合 watchdog（端口 + 进程存活） | Phase 1 |
 | **Phase 3** | 实现 `all` + `stop` + `logs`；语义校验（embedding probe / dsh mcp spawn）；`data/runtime/health.db` 上报 | Phase 2 |
 | **Phase 4** | 实现 `update`（限定 git fetch + scripts/setup-native.py 重跑，**不**触碰 runtime/） | Phase 3 |
-| **Phase 5** | 跨平台（macOS / Linux）；herdr 拉起 + 命名管道健康检查 | 评估 line3 是否真有跨平台需求 |
+| **Phase 5** | 跨平台（macOS / Linux）；评估 line3 是否真有跨平台需求 | 评估阶段 |
 
 ---
 
 ## 10. 核心结论（≤ 10 行）
 
 1. **入口选 CLI 优先**（`bin/ikaros` 三 shell 壳 + Python `ikarosctl.py` 调度核心），GUI 双击 bat 作为 thin wrapper（菜单 → CLI）。
-2. **6 子命令契约**：web/tree/embed/all/doctor/update；外加隐含 status/ps/logs/stop/herdr；详细行为见 §2。
+2. **11 子命令契约**：web/tree/embed/all/doctor/check/status/ps/logs/stop/restart；详细行为见 §2（herdr/omp 已退役，不再列出）。
 3. **三 shell 共用**：`bin/ikaros-env.sh|bat|ps1` 是单一权威源，启动器只 source/call，不再各自实现 IKAROS_ROOT 锚定。
 4. **cmd 硬约束**：注释限 ASCII + 文件 GBK + setlocal 兜底 + 不在嵌套批处理里切 chcp。
-5. **共存不替换**：现有 4 个单组件脚本（start-dsh-ikaros.bat / start-omp.bat / start-embedding.bat / restart-dsh-ikaros.ps1）是 worker 层，新启动器是调度层，subprocess 调它们。
+5. **共存不替换**：现有 3 个单组件脚本（start-dsh-ikaros.bat / start-embedding.bat / restart-dsh-ikaros.ps1）是 worker 层，新启动器是调度层，subprocess 调它们（start-omp.bat 已删）。
 6. **watchdog = C 混合**：启动器只管端口 + 进程存活；语义校验（embedding probe / dsh mcp spawn）归各组件脚本，避免复活集中 watchdog 的盲区。
 7. **IKAROS_ROOT 自锚定复用**：`%~dp0` / `${BASH_SOURCE[0]}` / `$PSScriptRoot` 三 shell 各自实现，已就绪，启动器不再造轮子。
 8. **失败处理 best-effort 默认 + --strict**：失败组件警告但不阻断；进程清理只在 strict 模式做。
@@ -454,7 +451,6 @@ subprocess.Popen(
 | `bin/ikaros-env.sh\|bat\|ps1` | IKAROS_ROOT 单一权威源（自锚定） |
 | `bin/start-dsh-ikaros.bat` | dsh 启动器（worker 层） |
 | `bin/restart-dsh-ikaros.ps1` | dsh 重启器（worker 层） |
-| `bin/start-omp.bat` | omp/pi TUI 启动（herdr 链路） |
 | `core/memory_v5/services/start-embedding.bat` | embedding llama-server 启动（worker 层） |
 | `core/memory_v5/mcp_server.py` | memory_v5 MCP stdio server（dsh 调它） |
 | `core/ikaros-dsh/cordis.patch.yml` | dsh overlay（dsh 用 `!!js process.env.IKAROS_ROOT` 推导路径，0 硬编码） |

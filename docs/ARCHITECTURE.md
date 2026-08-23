@@ -33,8 +33,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 │      L0: 运行时层 (Portable Runtime) — 逻辑分组                │
 │  runtime/portable-python/ — Python 3.12.10                  │
 │  runtime/llama/ — llama.cpp（b10000-cuda / b10000-cuda-12.4，按设备 CUDA 自动选择）                   │
-│  runtime/node/ — Node.js  |  runtime/bun/ — Bun（omp.exe）   │
-│  runtime/herdr/ — Herdr coding-agent 多路复用器 (命名管道)    │
+│  runtime/node/ — Node.js  |  runtime/dsh/ — (npm 本地安装)     │
 │  bin/ikaros-env.sh|bat — 环境权威 (路径发现 + 变量注入)       │
 │  core/env/ — Python 侧环境引导副本 (ikaros-paths.json 等)     │
 └─────────────────────────────────────────────────────────────┘
@@ -51,10 +50,9 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 | :8587 | Embedding (bge-m3, 本地) | 各组件启动脚本自带 watchdog | 自动拉起 |
 | :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | `bin/start-dsh-ikaros.bat web` |
 | :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | `python core/conversation-tree/server.py --port 48920` |
-| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（headless server，命名管道 `\\.\pipe\...`，无 TCP 端口） | 按需启动 |
 | :8080 | 本地 LLM | **已退役 2026-08-18**（`model_config.json` `initial_model` 空串=禁用；恢复=放 gguf + 设模型名） | 禁用 |
 
-> **端口状态**：上述 TCP 端口为当前生效服务。**2026-08-18**：控制面板 :9100、Hermes 底座（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw）、N.E.K.O `:48911-48915` 全部退役删除；工作引擎 = dsh (DeepSeek Harness) :3080。更早移除：语音桥 7870/7871（07-24）。
+> **端口状态**：上述 TCP 端口为当前生效服务。**2026-08-18**：控制面板 :9100、Hermes 底座（`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / `:8088` QwenPaw）、N.E.K.O `:48911-48915` 全部退役删除；工作引擎 = dsh (DeepSeek Harness) :3080。**2026-08-23**：pi / herdr (omp) 编码 agent 底座（命名管道）整体退役，组件收敛为 3（dsh / conversation-tree / embedding）。更早移除：语音桥 7870/7871（07-24）。
 
 ### 1.3 控制面板 :9100 — ⚠️ 已退役 2026-08-18
 
@@ -88,14 +86,14 @@ agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**�
 
 ### 1.6 启动器：`bin/ikaros`（2026-08-20 起）
 
-所有 Ikaros 组件的**统一入口**（dsh / 对话树 / embedding / herdr），跨 3 shell（bash / cmd / PowerShell）：
+所有 Ikaros 组件的**统一入口**（dsh / 对话树 / embedding），跨 3 shell（bash / cmd / PowerShell）：
 
 ```
 bin/ikaros         ← bash 入口（MSYS / Git-Bash / WSL）
 bin/ikaros.bat     ← cmd 入口（ASCII only, GBK safe）
 bin/ikaros.ps1     ← PowerShell 入口（UTF-8）
 core/ikarosctl.py  ← Python 调度核心（583 行）
-config/components.yaml  ← 4 组件元数据（dsh / conversation-tree / embedding / herdr）
+config/components.yaml  ← 3 组件元数据（dsh / conversation-tree / embedding）
 core/components/registry.py  ← ComponentSpec + load_components / get_component
 ```
 
@@ -106,8 +104,7 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 | `ikaros web` | 拉起 dsh web (:3080) |
 | `ikaros tree` | 拉起对话树 (:48920) |
 | `ikaros embed` | 拉起 embedding (:8587) |
-| `ikaros all` | 拓扑序启动 web 栈三件套（`START_COMPONENTS` = embedding / conversation-tree / dsh；herdr 由 `ikaros herdr` 单独 opt-in） |
-| `ikaros herdr` / `ikaros omp` | 拉起 herdr 编码 agent 多路复用器（命名管道, 前端 `bin/start-omp.bat`→`ikaros omp`; omp 本体 = `runtime/bun/bin/omp.exe`） |
+| `ikaros all` | 拓扑序启动 web 栈三件套（`START_COMPONENTS` = embedding / conversation-tree / dsh） |
 | `ikaros dsh headless <任务>` | ⚠️ **非一级子命令**：`headless` 是 `ikarosctl.start_component` 内部对 dsh 组件的 `web|headless` 分支（`ikarosctl.py:172`）；一级走 `web`(web GUI)，headless one-shot 走 `bin/start-dsh-ikaros.bat headless <任务>`（薄壳转 `ikaros web`） |
 | `ikaros status` | 组件状态（`component_state`） |
 | `ikaros ps` | 列出各组件进程（`_cmd_ps`） |
@@ -117,7 +114,7 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 | `ikaros doctor` | 诊断（读 components.yaml + 检查 runtime 缺失） |
 | `ikaros update` | 更新 upstream（TODO） |
 
-> **契约来源**：上表 = `core/ikarosctl.py::dispatch` 的 14 个分支 + `argparse` `choices` 元组（二者一致，实测）。注意 `choices` 里**没有 `headless`**：headless 是 `start_component` 对 dsh 的内部模式分支，非顶层子命令。早期文档仅列 `web/tree/embed/all/doctor/update` 6 个，已补齐 `status/ps/logs/stop/herdr/omp/restart` 共 8 个运维子命令。
+> **契约来源**：上表 = `core/ikarosctl.py::dispatch` 的分支 + `argparse` `choices` 元组（二者一致，实测）。注意 `choices` 里**没有 `headless`**：headless 是 `start_component` 对 dsh 的内部模式分支，非顶层子命令。早期文档 `web/tree/embed/all/doctor/update` 6 个，补齐 `status/ps/logs/stop/restart` 共 11 个；`herdr` / `omp` 已于 2026-08-23 退役移除。
 
 **IKAROS_ROOT 自锚定**：bash 用 `${BASH_SOURCE[0]}`、cmd 用 `%~dp0`、PS 用 `$PSScriptRoot`，**复用 `bin/ikaros-env.*` 的环境权威源**。
 
@@ -128,8 +125,8 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 - `dsh_integration`：`overlay` 路径 + `mcp_servers` 列表
 
 **Backward compat**（不删旧脚本）：
-- `bin/start-dsh-ikaros.bat` / `start-omp.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 都已重写为 thin wrapper，调 `ikaros` 启动器
-- 用户照旧可双击启动，**真实实现全部走 `core/ikarosctl.py`**
+- `bin/start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 都已重写为 thin wrapper，调 `ikaros` 启动器
+- 用户照旧可双击启动，**真实实现全部走 `core/ikarosctl.py`**（`start-omp.bat` 已随 pi 底座删除）
 
 ### 2.1 核心设计：零系统依赖
 
@@ -141,7 +138,6 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 │   ├── python.exe              ← 主解释器
 │   └── Scripts\                ← pip 安装的可执行脚本
 ├── node\                       ← Node.js (node.exe, v26.3.0)
-├── bun\                        ← Bun (omp/oh-my-pi 可执行在 bin\omp.exe, 2026-08-12 便携化)
 ├── dsh\                        ← DeepSeek Harness (npm 本地安装, 工作引擎 :3080)
 ├── llama\b10000-cuda\          ← llama.cpp (CUDA 13.x, 用于 :8587 embedding)
 │   └── llama-server.exe
@@ -149,7 +145,6 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 │   └── llama-server.exe
 ├── rust\bin\                   ← 便携 Rust 工具
 │   └── cargo.exe
-├── herdr\                      ← Herdr coding-agent 终端多路复用器 (headless, 命名管道)
 └── MCPServe\                   ← MCP 服务套件
     ├── gitnexus\               ← GitNexus 代码智能 (图索引, CLI + MCP)
     ├── everything\             ← Everything 搜索 (es.exe)
@@ -198,11 +193,8 @@ E:\Ikaros\runtime\              ← 便携运行时根目录
 | `IKAROS_DSH` | `%IKAROS_ROOT%\runtime\dsh` | dsh 工作引擎（npm 本地安装） |
 | `IKAROS_DSH_SOURCE` | `%IKAROS_ROOT%\runtime\deepseek-harness-master` | dsh 源码参考树 |
 | `IKAROS_DSH_PROFILE` | `%IKAROS_ROOT%\data\dsh\profiles` | dsh 用户 profile 目录 |
-| `IKAROS_DSH_WEB_PORT` | `3080`（bat 备用 `3085`） | dsh web GUI 端口；三件套默认 3080，bat 作备用 3085（3080 被占时顺延） |
+| `IKAROS_DSH_WEB_PORT` | `3080` | dsh web GUI 端口（三件套统一 3080） |
 | `IKAROS_DSH_OVERLAY` | `%IKAROS_ROOT%\core\ikaros-dsh\cordis.patch.yml` | dsh overlay 规范源 |
-| `IKAROS_OMP_AGENT` | `%IKAROS_ROOT%\data\omp\agent` | omp 编码 agent 配置目录 |
-| `PI_CODING_AGENT_DIR` | `%IKAROS_ROOT%\data\omp\agent` | 同上，omp 兼容别名 |
-| `IKAROS_HERDR` | `%IKAROS_ROOT%\runtime\herdr\herdr.exe` | Herdr 编码 agent 多路复用器 |
 | `THIRDSPACE_VAULT` | `%IKAROS_ROOT%\data\thirdspace-vault` | ThirdSpace 知识库 vault |
 | `IKAROS_PORT_EMBEDDING` | `8587` | Embedding 端口（bge-m3, :8587） |
 
@@ -304,8 +296,6 @@ sys.path.insert(0, str(V5_ROOT))   # V5_ROOT = core/memory_v5/
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH` | `runtime/dsh/` |
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH_PROFILE` | `data/dsh/profiles` |
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_DSH_OVERLAY` | `core/ikaros-dsh/cordis.patch.yml` |
-| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_OMP_AGENT` | `data/omp/agent` |
-| `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_HERDR` | `runtime/herdr/herdr.exe` |
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_RUST` | `runtime/rust/` |
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_LOGS` | `data/logs/` |
 | `bin/ikaros-env.sh/.bat/.ps1` | `IKAROS_NODE_MODULES` | `runtime/node/node_modules` |
@@ -380,17 +370,16 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 | 文件 | 职责 |
 |------|------|
-| `ikaros` / `ikaros.bat` / `ikaros.ps1` | **统一启动器** 3-shell 入口，全部 exec 到 `core/ikarosctl.py`（14 子命令：web/tree/embed/all/herdr/omp/status/ps/logs/stop/restart/doctor/update） |
+| `ikaros` / `ikaros.bat` / `ikaros.ps1` | **统一启动器** 3-shell 入口，全部 exec 到 `core/ikarosctl.py`（11 子命令：web/tree/embed/all/status/ps/logs/stop/restart/doctor/check） |
 | `ikaros-env.sh` / `ikaros-env.bat` / `ikaros-env.ps1` | **环境权威源三件套**（自锚定 `IKAROS_ROOT`，设置全部 `IKAROS_*` 变量，锚点原则学 ComfyUI-aki） |
 | `start-dsh-ikaros.bat` | dsh 启动器薄壳 → `ikaros web` / `ikaros dsh headless <任务>` |
 | `restart-dsh-ikaros.ps1` | dsh 重启器（杀旧 dsh web 进程 + `--patch` 重启 + 日志，`$port` 兜底 3080） |
-| `start-omp.bat` | omp 编码 agent TUI 薄壳 → `ikaros omp` |
 | `sync-dsh-profile-patch.bat` | 规范源 `core/ikaros-dsh/cordis.patch.yml` → 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 同步 |
 | `proc.py` | 进程管理（`ps` 列出 python/node 进程、`kill <port|name>` 按端口/关键词强杀） |
 | `secret-scan.py` | 仓库密钥泄露扫描（stdlib only，非阻塞 exit 0，可挂 pre-commit） |
 | `wb.py` | WorkBuddy / CodeBuddy CLI 封装（让 Ikaros / 子代理直接驱动 WorkBuddy，不再文件交接 TASK.md） |
 
-> **位于 core/ 的启动器相关**：`core/ikarosctl.py`（调度核心，583 行，解析 `ikaros <子命令>`）、`config/components.yaml`（4 组件元数据）、`core/components/registry.py`（`ComponentSpec` 加载器）。
+> **位于 core/ 的启动器相关**：`core/ikarosctl.py`（调度核心，583 行，解析 `ikaros <子命令>`）、`config/components.yaml`（3 组件元数据，2026-08-23 起 herdr 已删）、`core/components/registry.py`（`ComponentSpec` 加载器）。
 
 > **已退役脚本**：`ikaros-control-panel.bat`（:9100 面板）、`hermes_paw_bridge.py`（:8088 猫爪桥）、`hermes-bridge.py`（:8650）、`hermes-update-and-patch.py`（Hermes 更新器）、`llama-help.py`（本地 LLM 热载入）、`import-hermes-to-convtree.py`（Hermes 导入器）——均随 hermes/neko/:8080 退役删除。
 

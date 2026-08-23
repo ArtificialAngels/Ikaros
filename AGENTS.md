@@ -4,7 +4,7 @@
 > Full architecture: `docs/ARCHITECTURE.md`. Naming rules: `docs/naming.md`.
 > Drift guard: `python docs/lint.py` (run after doc edits).
 
-## Ports (4 active services + 1 named-pipe)
+## Ports (3 active services)
 
 | Port | Service | Component |
 |------|---------|----------|
@@ -12,17 +12,14 @@
 | :8587 | Embedding (bge-m3 q8_0, 1024 dim) | 各组件启动脚本自带 watchdog |
 | :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` (npm 本地安装; 启动 `bin/start-dsh-ikaros.bat web`; overlay `core/ikaros-dsh/cordis.patch.yml`) |
 | :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
-| 命名管道 | Herdr 终端编排 (coding-agent 多路复用器) | `runtime/herdr/herdr.exe`（`\\.\pipe\...`，无 TCP 端口，按需启动） |
 
-Added (2026-08-10): herdr agent `pi` = omp (oh-my-pi 17.2.12, go-deepseek 通道)。接入用法见 docs/herdr-integration-design.md §omp。
-Added (2026-08-11): **pi 纳入 V5 核心** — `data/omp/agent/mcp.json` 挂载 ikaros-v5-memory MCP（全量组），pi 干活时可直接检索/存储 V5 记忆（v5_memory_search/store/self_model/relationship 等实测可用）。**分工（2026-08-18 更新）：dsh = 工作引擎（对话/记忆/工具链），pi = 编码 agent（任务执行）**。
-Added (2026-08-12): **pi 干活必须带记忆** — 开工先 `v5_project_retrieve`/`v5_memory_search` 检索相关项目决策与教训（跨会话连续性不能只押在手工 summary 上）；收尾把关键决策/坑用 `v5_project_note` 落库（kind=decision|pitfall|convention）。实测：conversation-tree 多卡重构 B+C 决策/降级归位 pitfall/zoom 弃用均已入库（#3179-3184）。
-Added (2026-08-19): **`[dsh-only]` 内容隔离** — 内容含 `[dsh-only]` 标记 = 仅 dsh 工作引擎可见（平台纪律/密钥类）；**pi/herdr 等外部执行器检索时须传 `include_dsh_only=false`**（`v5_memory_search`/`v5_project_retrieve` 均已支持该参，默认 true 不过滤）。dsh 本体不传参（默认全量）。
-Added (2026-08-13): **omp 便携化（配置迁出 C 盘）** — omp 可执行迁到 `runtime/bun/bin/omp.exe`（bun 全局安装 `BUN_INSTALL=E:\Ikaros\runtime\bun`）；配置目录经 `PI_CODING_AGENT_DIR=%IKAROS_ROOT%\data\omp\agent` 锚定项目（agent.db / mcp.json / models.yml / config.yml / .env 全部迁入，密钥 `OPENCODE_GO_API_KEY` 放 `data/omp/agent/.env`）。⚠️ 用 `PI_CODING_AGENT_DIR`（走 path.resolve，绝对路径覆盖有效）；`PI_CONFIG_DIR` 走 path.join 遇绝对路径不重置、junction 方案已被 bun bug 堵死——勿再尝试。三处注入：`bin/ikaros-env.sh|bat`（shell 权威源）、`bin/start-omp.bat`（TUI 直启）、`bin/ikaros-env.*` 环境注入（pi 链路）。旧 `C:\Users\PZS0X\.omp\` 现为兜底，确认新链路稳定后可删。
+Added (2026-08-10 → 退役 2026-08-23): herdr agent `pi` = omp (oh-my-pi, go-deepseek 通道)、pi 的 V5 MCP 挂载、omp 便携化（`data/omp/`、`runtime/bun/omp.exe`、`PI_CODING_AGENT_DIR`、`bin/start-omp.bat`、`core/herdr/`、herdr 命名管道）**已整体退役删除**——底座统一为 dsh (deepseek-harness) 工作引擎，外部 agent 能力由其 overlay（terminal / LSP / MCP）承载。相关文件/组件/脚本勿再恢复。
+Added (2026-08-19): **`[dsh-only]` 内容隔离** — 内容含 `[dsh-only]` 标记 = 仅 dsh 工作引擎可见（平台纪律/密钥类）；**外部执行器检索时须传 `include_dsh_only=false`**（`v5_memory_search`/`v5_project_retrieve` 均已支持该参，默认 true 不过滤）。dsh 本体不传参（默认全量）。
 
 Added (2026-07-28): Conversation Tree 面板 `:48920`.
 Removed (do not re-add): voice bridge (ports 7870 / 7871).
 2026-08-18: Hermes gateway (:8642) / Bridge (:8650) / Dashboard (:9119) 已随底座整体退役; 工作引擎 = dsh (:3080, DeepSeek Harness).
+2026-08-23: pi/herdr (omp) 编码 agent 底座整体退役; 组件收敛为 3 (dsh / conversation-tree / embedding); 对话树底座语义统一为 deepseek-harness (推理经 DeepSeek API, 同 dsh 源).
 
 ## Startup
 - dsh 工作引擎（Web GUI）: `bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080（`--patch` 加载 Ikaros overlay: memory_v5 MCP + 终端 + LSP + persona）

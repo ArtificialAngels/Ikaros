@@ -57,15 +57,15 @@ def specs() -> list[ComponentSpec]:
 # ---------------------------------------------------------------------------
 
 
-def test_load_components_returns_four_components(specs: list[ComponentSpec]) -> None:
-    """Task 3.6 ships exactly four components."""
-    assert len(specs) == 4, f"expected 4 components, got {len(specs)}"
+def test_load_components_returns_three_components(specs: list[ComponentSpec]) -> None:
+    """2026-08-23 herdr/pi 退役后恰有三枚组件."""
+    assert len(specs) == 3, f"expected 3 components, got {len(specs)}"
 
 
 def test_load_components_ids(specs: list[ComponentSpec]) -> None:
-    """The four ids are the canonical line3 set."""
+    """三枚 id = dsh / conversation-tree / embedding."""
     ids = {s.id for s in specs}
-    assert ids == {"dsh", "conversation-tree", "embedding", "herdr"}
+    assert ids == {"dsh", "conversation-tree", "embedding"}
 
 
 def test_load_components_ids_unique(specs: list[ComponentSpec]) -> None:
@@ -179,12 +179,7 @@ def test_port_matches_architecture(
     assert spec.port == expected_port
 
 
-def test_herdr_has_no_tcp_port(specs: list[ComponentSpec]) -> None:
-    """Herdr uses a Windows named pipe; the registry must record port=None."""
-    herdr = next(s for s in specs if s.id == "herdr")
-    assert herdr.port is None
-    assert herdr.healthcheck.get("type") == "pipe"
-
+# 2026-08-23: herdr (named-pipe) 组件已随 pi 底座退役, 相关断言移除
 
 # ---------------------------------------------------------------------------
 # to_dict round-trip

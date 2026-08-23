@@ -738,6 +738,76 @@ class TestCards:
         # 分支卡带 branch_label
         assert d_card.branch_label == "fork"
 
+    def test_deep_fork_splits_into_new_card(self):
+        """深层分支链 fork (父无 ≥2 子): fork 出的节点仍独立成卡 (branch_start 标记).
+
+        回归: 2026-08-23 —— ROOT->A->B, B fork D(fork)->E, E 再 fork F(fork)->G。
+        修复前 F 的父 E 只有 1 个子 → 不是分叉点 → F 被并入 D 卡 (卡片切分丢失);
+        修复后 fork 节点经 meta.branch_start 天然成卡片头 → D 卡(d,e) / F 卡(f,g) 独立。
+        """
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_cards_deepfork", _store=ms.store,
+                                _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "q1"}])
+        b = t.add_turn([{"role": "user", "content": "q2"}])
+        d = t.branch_from(b.id, [{"role": "user", "content": "f1"}], branch_label="fork")
+        e = t.add_turn([{"role": "user", "content": "f2"}])
+        f = t.branch_from(e.id, [{"role": "user", "content": "g1"}], branch_label="deep")
+        g = t.add_turn([{"role": "user", "content": "g2"}])
+        cards = t.build_cards()
+        by_id = {c.id: c for c in cards}
+        assert len(cards) == 3, [c.id for c in cards]
+        root_card = by_id["card_" + t.root_id]
+        assert root_card.node_ids == [t.root_id, a.id, b.id]
+        d_card = by_id["card_" + d.id]
+        assert d_card.node_ids == [d.id, e.id]
+        f_card = by_id["card_" + f.id]
+        assert f_card.node_ids == [f.id, g.id]
+        assert d_card.parent_id == root_card.id
+        assert f_card.parent_id == d_card.id
+        # branch_start 标记持久化 (往返后卡头判定一致)
+        raw = t.serialize()
+        t2 = ct.ConversationTree.deserialize(raw, persist_key="test_cards_deepfork",
+                                             _store=ms.store, _load=ms.load, _search=ms.search)
+        assert t2.build_cards().__len__() == 3
+
+    def test_edit_resend_records_source_and_splits(self):
+        """卡内消息编辑重发 (2026-08-23): force_branch + edit_source 持久化 + 独立成卡.
+
+        场景: root->a(msgX), a->b。编辑重发消息 msgX → 挂回 a 的父 (root) 下,
+        force_branch 新节点独立成卡; meta.edit_source 记录 {node_id,message_index}
+        (UI"修订自"标注/记忆追溯); 上下文只到编辑点之前, 不含被编辑消息原文。
+        """
+        ms = MockStore()
+        t = ct.ConversationTree(persist_key="test_edit_resend", _store=ms.store,
+                                _load=ms.load, _search=ms.search)
+        t.init([{"role": "system", "content": "root"}])
+        a = t.add_turn([{"role": "user", "content": "msgX"}, {"role": "assistant", "content": "a_r"}])
+        b = t.add_turn([{"role": "user", "content": "b"}, {"role": "assistant", "content": "b_r"}])
+        r = t.add_turn([{"role": "user", "content": "编辑后的新消息"}, {"role": "assistant", "content": "r_r"}],
+                       parent_id=a.parent_id, force_branch=True,
+                       edit_source={"node_id": a.id, "message_index": 0})
+        # 编辑源已持久化到节点 meta
+        assert r.meta.get("edit_source") == {"node_id": a.id, "message_index": 0}
+        # 新节点独立成卡 (branch_start)
+        card = t.card_of_node(r.id)
+        assert card is not None and card.id == "card_" + r.id
+        cards = t.build_cards()
+        assert len(cards) == 2, [c.id for c in cards]   # 主线卡(root,a,b) + 编辑重发卡(r)
+        assert [x for x in cards if x.id == "card_" + r.id][0].node_ids == [r.id]
+        # 上下文 = 编辑点前 (root), 不含被编辑消息/编辑后新文本
+        ctx = t.get_context(r.parent_id)
+        ctx_txt = " ".join(str(m.get("content", "")) for m in ctx)
+        assert "msgX" not in ctx_txt and "编辑后的新消息" not in ctx_txt
+        # 序列化往返: edit_source 不丢, 卡片切分不漂移
+        t2 = ct.ConversationTree.deserialize(
+            t.serialize(), persist_key="test_edit_resend",
+            _store=ms.store, _load=ms.load, _search=ms.search)
+        r2 = t2.get_node(r.id)
+        assert r2.meta.get("edit_source") == {"node_id": a.id, "message_index": 0}
+        assert len(t2.build_cards()) == 2
+
     def test_cards_meta_merge_and_roundtrip(self):
         """cards_meta (标题/未读/分支点标记) 持久化往返并合并进自动卡."""
         ms = MockStore()

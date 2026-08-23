@@ -28,21 +28,21 @@ TODAY = datetime.date.today().isoformat()  # e.g. 2026-08-19
 # DATA MODEL  (edit here, then re-run)
 # ---------------------------------------------------------------------------
 
-# Current architecture (post 2026-08-18 dsh transition):
+# Current architecture (post 2026-08-18 dsh transition; 2026-08-23 herdr/pi 退役):
 #   * :3080  dsh web         — DeepSeek Harness 工作引擎 GUI (npm 本地安装)
 #   * :48920 对话树面板       — Explore.poker 风格树形对话 (server.py 48920)
 #   * :8587  Embedding       — bge-m3 q8_0, 1024 维 (各启动脚本自带 watchdog)
-#   * 命名管道 Herdr         — coding-agent 终端多路复用器 (无 TCP 端口)
 #
 # 已退役 (不再画):  hermes :8642 / :8650 / :9119 / :8088, N.E.K.O :48911-48915,
-#                   :9100 控制面板, 本地 LLM :8080, 语音桥 :7870 / :7871。
+#                   :9100 控制面板, 本地 LLM :8080, 语音桥 :7870 / :7871,
+#                   herdr / omp (pi 底座)。
 SERVICES = [
     ("3080", "dsh 工作引擎", "DeepSeek Harness web GUI（npm 本地安装 + Ikaros overlay）", "Backend"),
     ("48920", "对话树面板", "Explore.poker 风格卡片图对话 · 后端=conversation_tree 引擎", "Frontend"),
     ("8587", "Embedding 向量", "bge-m3 Q8_0 (1024 维) · 各启动脚本自带 watchdog", "Backend"),
 ]
 
-# Full port mapping table (TCP ports + the named-pipe component).
+# Full port mapping table (TCP services only; naming-pipe herdr 已退役).
 PORT_TABLE = [
     (":3080", "dsh 工作引擎 (DeepSeek Harness web)",
      "runtime/dsh/ + overlay core/ikaros-dsh/cordis.patch.yml",
@@ -53,16 +53,12 @@ PORT_TABLE = [
     (":8587", "Embedding (bge-m3 Q8_0)",
      "各组件启动脚本自带 watchdog（v5 注入 / 对话树检索）",
      "✅ 自动拉起"),
-    ("命名管道", "Herdr 终端编排 (coding-agent 多路复用器)",
-     "runtime/herdr/herdr.exe（无 TCP 端口）",
-     "✅ 按需启动"),
 ]
 
 PORT_TABLE_FOOTNOTE = (
-    "Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），"
-    "由 dsh overlay 的 terminal / tool-terminal 工具按需启动。<br>"
     "已退役（勿加回）：本地 LLM :8080、控制面板 :9100、Hermes 底座 :8642 / :8650 / :9119 / :8088、"
-    "N.E.K.O 桌宠 :48911 / :48912 / :48915、语音桥 :7870 / :7871。"
+    "N.E.K.O 桌宠 :48911 / :48912 / :48915、语音桥 :7870 / :7871、herdr / omp (pi 底座)。<br>"
+    "dsh overlay（terminal / tool-terminal）为工作引擎提供持久 PTY，2026-08-23 起不再需要 herdr 命名管道。"
 )
 
 CORE_LAYERS = [
@@ -76,7 +72,6 @@ CORE_LAYERS = [
     ]),
     ("🛠️ 基础设施", [
         ("runtime/dsh/", "DeepSeek Harness 工作引擎（npm 本地安装）"),
-        ("runtime/herdr/", "coding-agent 终端多路复用器（herdr.exe + 命名管道）"),
         ("core/env/", "环境配置 / CLI / 初始化（ikaros-paths.json + llama_resolver）"),
         ("bin/", "启动器（start-dsh-ikaros / ikaros-env / restart / secret-scan）"),
         ("scripts/", "setup-native.py / fetch-upstreams.py（bootstrap 工具）"),
@@ -90,7 +85,6 @@ DATA_FLOW = [
     "Embedding :8587（bge-m3 Q8_0，1024 维）为 v5 注入与对话树检索提供向量",
     "逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型",
     "V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索（dsh web + 对话树共享）",
-    "Herdr 命名管道为 dsh terminal / tool-terminal 提供持久的 PTY 会话（无 TCP 端口）",
 ]
 
 BOUNDARY_NOTES = [
@@ -297,7 +291,7 @@ def render_overview() -> str:
 
     body = f"""<div class="wrap">
   <h1>Ikaros 项目架构全景</h1>
-  <div class="sub">快照日期 {TODAY} · dsh (DeepSeek Harness) 时代 · 3 个常驻 TCP 服务 + Herdr 命名管道</div>
+  <div class="sub">快照日期 {TODAY} · dsh (DeepSeek Harness) 时代 · 3 个常驻 TCP 服务</div>
 
   <!-- 工作引擎总入口 -->
   <div class="card panel">
@@ -311,7 +305,7 @@ def render_overview() -> str:
 
   <!-- 服务层 -->
   <div class="card">
-    <h2><span class="tag t-blue">服务层</span> 3 个常驻 TCP 组件 (+ Herdr 命名管道)</h2>
+    <h2><span class="tag t-blue">服务层</span> 3 个常驻 TCP 组件</h2>
     <div class="svcs">
 {svc_html}
     </div>
@@ -370,7 +364,6 @@ const T = {
     {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
       {n:"ikaros-env.sh / ikaros-env.ps1 / ikaros-env.bat", k:true, c:"环境权威源 (IKAROS_ROOT 自锚定)"},
       {n:"start-dsh-ikaros.bat", k:true, c:"拉 dsh 工作引擎 :3080 (web|headless)"},
-      {n:"start-omp.bat", c:"omp 启动器"},
       {n:"restart-dsh-ikaros.ps1", c:"杀旧 dsh web + --patch 重启"},
       {n:"proc.py / wb.py", c:"进程/工作簿工具"},
       {n:"secret-scan.py", c:"密钥扫描"},
@@ -406,12 +399,11 @@ const T = {
         {n:"plugins/ikaros-memory/", c:"记忆插件 (recallMemory / writeMemory)"},
         {n:"persona/", c:"Ikaros 工作引擎 system-prompt"}
       ]},
-      {n:"herdr/", k:true, c:"Herdr coding-agent 多路复用器 (命名管道)", b:"基础设施"},
       {n:"env/", c:"环境配置/CLI", children:[{n:"ikaros-cli/ / scripts/ / detect-root/"}]},
       {n:"taskbus.py", c:"任务总线"}
     ]},
     {n:"deploy/", c:"部署", children:[{n:"Dockerfile"},{n:"README.md"}]},
-    {n:"runtime/", c:"运行时依赖 (vendored, 未展开) · 含 dsh / herdr / portable-python / llama / node / bun", b:"基础设施"},
+    {n:"runtime/", c:"运行时依赖 (vendored, 未展开) · 含 dsh / portable-python / llama / node / bun", b:"基础设施"},
     {n:"scripts/", c:"setup-native.py / fetch-upstreams.py"},
     {n:"tests/", c:"测试", children:[]},
     {n:"tools/", c:"工具", children:[{n:"dwg/ / experiments/ / gen_architecture_html.py"}]},
@@ -467,7 +459,7 @@ const T = {
         "        <span class=\"badge b-purple\">基础设施</span><span class=\"badge b-green\">前端</span><span class=\"badge b-amber\">数据</span></span>\n"
         "    </div>\n\n"
         "    <div class=\"tree\" id=\"tree\"></div>\n\n"
-        "    <div class=\"note\">说明：<code>runtime/</code> 内置 dsh / herdr / portable-python / llama / node / bun（vendored，未展开）；\n"
+        "    <div class=\"note\">说明：<code>runtime/</code> 内置 dsh / portable-python / llama / node / bun（vendored，未展开）；\n"
         "      <code>data/</code> 含模型权重 + 运行时日志（仅在顶层标注）。\n"
         "      虚线折叠项可点击展开。</div>\n"
         "  </div>\n\n"
@@ -528,10 +520,9 @@ def render_dep_map() -> str:
       <g class="node">
         <rect x="660" y="180" width="220" height="120" rx="10" fill="var(--infra-bg)" stroke="var(--infra)"></rect>
         <text x="770" y="200" text-anchor="middle" font-weight="600" fill="var(--infra)">基础设施 · runtime/</text>
-        <text x="770" y="222" text-anchor="middle" class="sub">runtime/dsh/ · runtime/herdr/</text>
+        <text x="770" y="222" text-anchor="middle" class="sub">runtime/dsh/</text>
         <text x="770" y="240" text-anchor="middle" class="sub">runtime/portable-python / llama / node</text>
-        <text x="770" y="258" text-anchor="middle" class="sub">Herdr 命名管道 (coding-agent)</text>
-        <text x="770" y="276" text-anchor="middle" class="sub">bin/ikaros-env.* · 路径自锚定</text>
+        <text x="770" y="258" text-anchor="middle" class="sub">bin/ikaros-env.* · 路径自锚定</text>
         <text x="770" y="294" text-anchor="middle" class="sub">core/env/ · Python 侧引导副本</text>
       </g>
 
@@ -540,7 +531,6 @@ def render_dep_map() -> str:
         <text x="460" y="370" text-anchor="middle" font-weight="600" fill="var(--back)">后端服务</text>
         <text x="460" y="390" text-anchor="middle" class="sub">:8587 Embedding (bge-m3 Q8_0, 1024 dim)</text>
         <text x="460" y="408" text-anchor="middle" class="sub">看门狗 = 各组件启动脚本自带</text>
-        <text x="460" y="426" text-anchor="middle" class="sub">Herdr 命名管道 (coding-agent 多路复用)</text>
       </g>
 
       <g class="node">
@@ -585,10 +575,6 @@ def render_dep_map() -> str:
       <!-- V5 ↔ 数据层 -->
       <path class="edge" d="M570,260 C640,300 700,320 770,360" marker-end="url(#ah)"></path>
       <text x="640" y="305" class="elabel">读写 v5.db / chroma</text>
-
-      <!-- Herdr ↔ dsh :3080 -->
-      <path class="edge" d="M770,180 L770,260 L770,350" marker-end="url(#ah)"></path>
-      <text x="775" y="270" class="elabel">命名管道</text>
 
       <!-- 对话树 ↔ :8587 -->
       <path class="edge" d="M260,260 C300,320 350,360 360,378" marker-end="url(#ah)"></path>
@@ -641,8 +627,7 @@ def render_dep_map() -> str:
   注入 <code>v5_* MCP</code>（48 工具，stdio）+ 持久 PTY 终端（terminal / tool-terminal）+ LSP + Ikaros persona；
   对话树 <code>:48920</code> 是独立的卡片图面板（ikaros 单模式 → DeepSeek 直连 + 只读工具回路）；
   memory_v5 是灵魂引擎，<code>sync_turn</code> 推送节点到对话树（<code>ui_conversation_tree.json</code>）；
-  Embedding <code>:8587</code>（bge-m3 Q8_0, 1024 维）为 v5 注入与对话树检索提供向量；
-  Herdr（coding-agent 终端多路复用器）使用命名管道，无 TCP 端口。
+  Embedding <code>:8587</code>（bge-m3 Q8_0, 1024 维）为 v5 注入与对话树检索提供向量。
   <br><br>
   配套图：<a href="architecture-overview.html">架构全景图</a> ·
   <a href="folder-tree.html">文件夹层级图</a>（由 tools/gen_architecture_html.py 生成）。

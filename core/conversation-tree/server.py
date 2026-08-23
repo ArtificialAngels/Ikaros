@@ -1122,25 +1122,7 @@ def _export_txt(sess: dict) -> str:
     return "\n".join(lines)
 
 
-# ── B5: supervisor 端点 ───────────────────────────────────────────────
-_supervisor = None
-_SUPERVISOR_OVERRIDE = None  # 测试注入用 (FakeSupervisor)
-
-
-def _get_supervisor() -> "CodingAgentSupervisor":
-    """惰性创建 CodingAgentSupervisor；优先返回测试注入的 override。"""
-    global _supervisor
-    if _SUPERVISOR_OVERRIDE is not None:
-        return _SUPERVISOR_OVERRIDE
-    ensure_tree()
-    if _supervisor is None:
-        try:
-            from herdr import CodingAgentSupervisor, SessionRegistry  # noqa: F401
-        except Exception as exc:
-            raise RuntimeError(f"herdr 桥不可用: {exc}")
-        _supervisor = CodingAgentSupervisor(_tree, SessionRegistry())
-    return _supervisor
-
+# 2026-08-23: herdr supervisor 桥已随 pi/omp 底座整体退役，/api/supervisor/* 端点移除。
 
 # ───────────────────────── HTTP 处理 ─────────────────────────
 
@@ -1690,22 +1672,28 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"error": "format must be json or txt"}, 400)
             elif path == "/api/health":
-                # 连接状态探测: 本地 LLM / DeepSeek key
-                health = {"local_llm": False, "deepseek_key": bool(_DEEPSEEK_KEY),
-                          "model": CT_DEEPSEEK_MODEL, "ts": time.time()}
-                try:
-                    urllib.request.urlopen(LOCAL_CHAT_URL + "/health", timeout=2)
-                    health["local_llm"] = True
-                except Exception:
-                    health["local_llm"] = False
-                self._send_json(health)
+                # 底座语义 (2026-08-23): 对话树 LLM 底座 = deepseek-harness (dsh),
+                # 推理经 DeepSeek API (与 dsh 同源). local_llm 字段随本地 LLM 退役移除.
+                self._send_json({"base": "deepseek-harness",
+                                 "deepseek_key": bool(_DEEPSEEK_KEY),
+                                 "model": CT_DEEPSEEK_MODEL, "ts": time.time()})
+            elif path == "/api/providers":
+                # 2026-08-23: 底座 provider 状态 (只读脱敏; 密钥不落此响应)
+                self._send_json({"base": "deepseek-harness", "providers": [
+                    {"id": "deepseek-harness",
+                     "name": "DeepSeek Harness 底座 (dsh)",
+                     "base_url": DEEPSEEK_CHAT_URL,
+                     "configured": bool(_DEEPSEEK_KEY),
+                     "models": [CT_DEEPSEEK_MODEL],
+                     "note": "对话树经 deepseek-harness 底座推理 (DeepSeek API, 同 dsh 源)"},
+                ]})
             elif path == "/api/model_switch":
                 self._send_json({
                     "ok": True,
                     "current": dict(_CT_RUNTIME),
                     "defaults": {"ikaros": CT_DEEPSEEK_MODEL},
                     "available": [{"mode": "ikaros", "model": CT_DEEPSEEK_MODEL,
-                                   "label": f"Ikaros 本地直连（{CT_DEEPSEEK_MODEL}）",
+                                   "label": f"Ikaros · DeepSeek Harness 底座（{CT_DEEPSEEK_MODEL}）",
                                    "context_window": CT_CONTEXT_WINDOW}],
                 })
             elif path == "/api/events":
@@ -2159,6 +2147,14 @@ class Handler(BaseHTTPRequestHandler):
                                     skills_used=skills_used,
                                     # S1: 前端显式 fork (从此分叉) 时强制 branch
                                     force_branch=bool(data.get("force_branch", False)),
+                                    # 2026-08-23 (编辑重发链路): edit_of {node_id, message_index}
+                                    # 校验源节点在树内后持久化编辑来源 (UI"修订自"标注/记忆追溯)
+                                    edit_source=(
+                                        data.get("edit_of")
+                                        if isinstance(data.get("edit_of"), dict)
+                                        and tree.get_node((data.get("edit_of") or {}).get("node_id"))
+                                        else None
+                                    ),
                                 )
                                 # F7: 传局部 tree, 防止 chat 在飞时切会话把摘要写进新会话
                                 _touch_active_session(tree)
@@ -2342,53 +2338,6 @@ class Handler(BaseHTTPRequestHandler):
                 sess["title"] = title[:60]
                 _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
-            # ── B5: supervisor 编排端点 ──
-            elif path == "/api/supervisor/run":
-                # 在 herdr pane 里跑一个外部 coding agent; 后台线程执行, 结果经 exec_state 回流
-                try:
-                    from herdr import SupervisorTask  # noqa: F401
-                except Exception as exc:
-                    self._send_json({"ok": False, "error": f"herdr 桥不可用: {exc}"}, 500)
-                    return
-                try:
-                    task = SupervisorTask(
-                        task=str(data.get("task", "")),
-                        kind=str(data.get("kind", "aider")),
-                        node_id=str(data.get("node_id", "")),
-                        cwd=data.get("cwd"),
-                        label=data.get("label"),
-                        timeout_s=int(data.get("timeout_s", 600) or 600),
-                    )
-                except Exception as exc:
-                    self._send_json({"ok": False, "error": f"invalid task: {exc}"}, 400)
-                    return
-                if not task.node_id or _tree.get_node(task.node_id) is None:
-                    self._send_json({"ok": False, "error": "node_id 不存在"}, 400)
-                    return
-                sup = _get_supervisor()
-                def _bg_run(t):  # noqa: E306
-                    try:
-                        sup.run_task(t)
-                    except Exception as e:
-                        sys.stderr.write(f"[ct] supervisor run_task error: {e}\n")
-                threading.Thread(target=_bg_run, args=(task,), daemon=True).start()
-                self._send_json({"ok": True, "node_id": task.node_id,
-                                 "msg": "任务已派发，进度见节点 exec_state"})
-            elif path == "/api/supervisor/approve":
-                # 为一个停在 blocked 的任务提供决策并继续
-                node_id = data.get("node_id")
-                decision = data.get("decision", "")
-                if not node_id:
-                    self._send_json({"ok": False, "error": "node_id required"}, 400)
-                    return
-                try:
-                    sup = _get_supervisor()
-                    res = sup.approve(node_id, decision)
-                except Exception as exc:
-                    code = 400 if "没有进行中" in str(exc) else 500
-                    self._send_json({"ok": False, "error": str(exc)}, code)
-                    return
-                self._send_json({"ok": True, "result": res.__dict__})
             else:
                 self._send_json({"error": "not found", "path": path}, 404)
         except Exception as exc:

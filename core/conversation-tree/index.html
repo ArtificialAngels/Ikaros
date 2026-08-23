@@ -12,6 +12,7 @@
 /* 全局统一字体: Source Han Sans (移除自托管 Inter/Space Grotesk/JetBrains Mono 以符合全局字体要求) */
 :root{
   --brand:#13E425;--brand-secondary:#13E425;--brand-danger:#EF4444;--brand-opposite:#EC1BDA;
+  --fx-blue:#3B82F6;--fx-pink:#EC1BDA;--card-alpha:1;
   --bg:#101010;--bg-modal:#222;--bg-card:#222;--bg-card-up:#222;--bg-card-down:#222;
   --bg-floating:#2f2f2f;--bg-btn:#3c3c3c;--bg-btn-hover:#5e5e5e;--bg-item:#363636;--bg-item-hover:#484848;
   --bg-usermsg:#4c4c4c;--bg-input:#3a3a3a;--bg-bar:#5a5a5a;--bg-separator:#848484;
@@ -255,7 +256,7 @@ background-size:24px 24px;opacity:.5}
 .temp-svg{position:absolute;top:0;left:0;pointer-events:none;z-index:10;overflow:visible}
 
 /* ===== Node Card ===== */
-.node-card{position:absolute;background:var(--bg-card);border:1.5px solid var(--border-std);
+.node-card{position:absolute;background:color-mix(in srgb,var(--bg-card) calc(var(--card-alpha,1) * 100%),transparent);border:1.5px solid var(--border-std);
 border-radius:var(--radius-md);padding:8px 10px;width:180px;
 box-shadow:var(--shadow-card);cursor:pointer;pointer-events:auto;
 transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out),opacity .25s,transform .65s cubic-bezier(.22,1,.36,1);
@@ -371,18 +372,19 @@ cursor:pointer;z-index:7;transition:all .15s;font-family:var(--font-mono);opacit
 .node-fold.collapsed:hover{background:var(--brand);color:#000}
 .node-fold .fold-count{font-size:8px;margin-left:0;font-weight:700}
 
-/* Edge (bezier) — 参照 chattree: 透明宽热区触发 hover, 主路径发光, 中点'+'快捷分支 */
-.edge-path{fill:none;stroke:var(--border-std);stroke-width:1.5;transition:stroke .2s,stroke-width .2s,filter .2s,opacity .2s}
+/* Edge (bezier) — 实线 + 颜色沿线段流动 (无彩球, 无虚线) */
+.edge-path{fill:none;stroke:url(#edgeGrad);stroke-width:2;opacity:.75;transition:stroke-width .2s,opacity .2s}
 .edge-hotzone{fill:none;stroke:transparent;stroke-width:18;cursor:pointer;pointer-events:stroke;vector-effect:non-scaling-stroke}
-/* 列配色: 边按父节点深度列着色 (半透明), hover 发光时被品牌绿规则覆盖 */
-.edge-path.parent-edge.col-0{stroke:var(--col0);opacity:.5}
-.edge-path.parent-edge.col-1{stroke:var(--col1);opacity:.5}
-.edge-path.parent-edge.col-2{stroke:var(--col2);opacity:.5}
-.edge-path.parent-edge.col-3{stroke:var(--col3);opacity:.5}
-.edge-path.parent-edge.col-4{stroke:var(--col4);opacity:.5}
-.edge-path.parent-edge.col-5{stroke:var(--col5);opacity:.5}
-.edge-group:hover .edge-path.parent-edge{stroke:var(--brand);stroke-width:2.2;filter:drop-shadow(0 0 6px var(--brand));opacity:.95}
-.edge-group:hover .edge-path.merge-line{stroke:var(--brand-opposite);stroke-width:2.2;opacity:.95;filter:drop-shadow(0 0 6px var(--brand-opposite))}
+.edge-path.parent-edge.col-0{opacity:.7}
+.edge-path.parent-edge.col-1{opacity:.7}
+.edge-path.parent-edge.col-2{opacity:.7}
+.edge-path.parent-edge.col-3{opacity:.7}
+.edge-path.parent-edge.col-4{opacity:.7}
+.edge-path.parent-edge.col-5{opacity:.7}
+.edge-group:hover .edge-path.parent-edge{stroke-width:2.8;opacity:1}
+.edge-group:hover .edge-path.merge-line{stroke-width:2.8;opacity:1}
+/* 焦点卡连线: 父线+子线变亮 */
+.edge-group.is-focus-edge .edge-path{stroke-width:3.5;opacity:1}
 .edge-add{opacity:0;cursor:pointer;transition:opacity .15s;pointer-events:all}
 .edge-group:hover .edge-add{opacity:1}
 .edge-add circle{fill:var(--bg-floating);stroke:var(--brand);stroke-width:1.6;transition:fill .15s,stroke .15s}
@@ -397,10 +399,10 @@ cursor:pointer;z-index:7;transition:all .15s;font-family:var(--font-mono);opacit
 .node-card.lineage-self{border-color:var(--brand)!important;
   box-shadow:0 0 0 1px var(--brand),0 0 30px color-mix(in srgb,var(--brand) 40%,transparent)!important;
   z-index:7!important}
-.edge-path.merge-line{stroke:var(--brand-opposite);stroke-width:1.5;stroke-dasharray:6 4;opacity:.5}
+.edge-path.merge-line{stroke:var(--brand-opposite);stroke-width:1.5;opacity:.5}
 /* 2026-08-16 (连线体系重建): 分支/发散来源虚线 (从来源卡某条消息分叉出去) */
-.edge-path.source-line{stroke:var(--color-warning);stroke-width:1.5;stroke-dasharray:5 4;opacity:.55}
-.edge-group:hover .edge-path.source-line{stroke:var(--color-warning);stroke-width:2.2;opacity:.95;filter:drop-shadow(0 0 6px var(--color-warning))}
+.edge-path.source-line{stroke:var(--color-warning);stroke-width:1.5;opacity:.55}
+.edge-group:hover .edge-path.source-line{stroke:var(--color-warning);stroke-width:2.2;opacity:.95}
 /* 2026-08-16 (显式连接图): 连线中点断开按钮 + hover 高亮 */
 .edge-close{opacity:.55;cursor:pointer;transition:opacity .15s;fill:var(--bg-floating)}
 .edge-group:hover .edge-close,.edge-close:hover{opacity:1}
@@ -408,7 +410,7 @@ cursor:pointer;z-index:7;transition:all .15s;font-family:var(--font-mono);opacit
 .edge-close-x{stroke:var(--text-secondary);stroke-width:1.8;stroke-linecap:round}
 .edge-close:hover .edge-close-x{stroke:#fff}
 .edge-path.edge-active{stroke:var(--brand);stroke-width:2.2;opacity:.95}
-.edge-path.temp-line{stroke:var(--brand);stroke-width:2;stroke-dasharray:8 4;opacity:.8}
+.edge-path.temp-line{stroke:var(--brand);stroke-width:2;opacity:.8}
 .edge-path.selected-edge{stroke:var(--brand);stroke-width:2.5}
 .arrow-marker{fill:var(--border-std)}
 
@@ -488,7 +490,7 @@ transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),trans
    背景 var(--bg-card); 渐变 96px 五段 + 40px 底; header z-40 焦点 absolute */
 .mini-thread{position:absolute;inset:0;display:flex;flex-direction:column;
   container-type:inline-size;   /* 2026-08-16: 卡片组件随自身窗口宽度缩放 (cqw) */
-  background:var(--bg-card);
+  background:color-mix(in srgb,var(--bg-card) calc(var(--card-alpha,1) * 100%),transparent);
   --card-float:color-mix(in srgb,var(--bg-card) 94%,#fff 6%)}   /* 浮动背景色(比卡片背景稍亮), 仿 poker floating-up/down */
 .mini-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:44px 2% 0;display:flex;flex-direction:column;   /* padding-top 44px 给浮层上横条留空间; 2026-08-16 加 flex 供空态双向居中 */
   background:transparent;
@@ -799,24 +801,33 @@ animation:spin .8s linear infinite;display:inline-block;vertical-align:-1px;marg
   font-size:11px;cursor:pointer;transition:all .15s;padding:0 5px}
 .deck-btn:hover{border-color:var(--brand);color:var(--brand)}
 .deck-body{overflow-y:auto;overflow-x:hidden;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:0}
-/* 收起态: 小卡堆叠 */
-.deck-stack{position:relative;display:flex;flex-direction:column;align-items:center;padding:6px 0 10px}
-.deck-stack .deck-item.l1{position:relative}
-.deck-stack .deck-item.l1:nth-child(1){transform:rotate(-4deg) translateY(2px)}
-.deck-stack .deck-item.l1:nth-child(2){transform:rotate(3deg) translateY(-2px)}
-.deck-stack .deck-item.l1:nth-child(3){transform:rotate(0) translateY(-6px)}
-.deck-stack .deck-item.l1:not(:last-child){margin-right:-34px}
-.deck-stack-more{position:absolute;top:-8px;right:-4px;font-family:var(--font-mono);font-size:10px;
-  color:var(--text-primary);background:var(--brand-danger);border-radius:9px;padding:1px 6px;
+/* 收起态: 水平堆叠小卡 (最多9张, 60%重叠, 边缘淡出, 滚轮切换) */
+.deck-stack{position:relative;overflow:hidden;padding:4px 6px;display:flex;align-items:center;
+  transition:transform .35s var(--ease-out)}
+.deck-stack-strip{display:flex;flex-direction:row;align-items:center;
+  transition:transform .4s var(--ease-out)}
+/* 边缘淡出: 超过9张时左右遮罩 */
+.deck-stack.has-more{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%);
+}
+/* L1 小卡: 45x30 (缩小50%), 60%重叠 (margin-left=-27px) */
+.deck-stack-strip .deck-item.l1{margin-left:-27px;flex:none;position:relative}
+.deck-stack-strip .deck-item.l1:first-child{margin-left:0}
+.deck-stack-more{position:absolute;top:-6px;right:-2px;font-family:var(--font-mono);font-size:9px;
+  color:var(--text-primary);background:var(--brand-danger);border-radius:9px;padding:0 5px;
   box-shadow:0 2px 8px rgba(0,0,0,.4)}
-/* L1 小卡: 90x60 未调用态 */
-.deck-item.l1{width:90px;height:60px;flex:none;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:3px;background:var(--bg-card-down);border:1.5px solid var(--border-std);
-  border-radius:10px;cursor:pointer;transition:all .25s var(--ease-out);box-shadow:var(--shadow-card)}
-.deck-item.l1:hover{border-color:var(--brand);transform:translateY(-3px) scale(1.03);z-index:2}
-.deck-l1-ico{font-size:22px;line-height:1}
-.deck-l1-name{font-size:10px;color:var(--text-secondary);font-family:var(--font-sans);max-width:78px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* L1 小卡: 45x30 (原 90x60 缩小50%) */
+.deck-item.l1{width:45px;height:30px;flex:none;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:1px;background:var(--bg-card-down);border:1px solid var(--border-std);
+  border-radius:6px;cursor:pointer;transition:all .25s var(--ease-out);box-shadow:var(--shadow-card)}
+.deck-item.l1:hover{border-color:var(--brand);transform:translateY(-2px) scale(1.08);z-index:2}
+.deck-l1-ico{font-size:14px;line-height:1}
+/* 文字: 主题色, 无阴影, 默认隐藏, 悬停卡组时显示 */
+.deck-l1-name{font-size:7px;color:var(--brand);font-family:var(--font-sans);max-width:40px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:none;
+  opacity:0;transition:opacity .25s var(--ease-out)}
+.deck-stack:hover .deck-l1-name{opacity:1}
 /* L2 中等面板 / L3 全功能面板 */
 .deck-item.l2,.deck-item.l3{width:100%;background:var(--bg-card-down);border:1.5px solid var(--border-std);
   border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
@@ -848,18 +859,19 @@ body.deck-open .node-card.is-card.l3{width:max(340px,calc(85vw - var(--deck-w,40
   font-size:11.5px;cursor:pointer;transition:all .15s;vertical-align:middle}
 .card-chip:hover{background:color-mix(in srgb,var(--brand) 16%,transparent);box-shadow:0 0 10px color-mix(in srgb,var(--brand) 25%,transparent)}
 
-/* ===== 工具调用牌组 (Tool Deck) — 右下角扇形独立三态工具卡 =====
+/* ===== 工具调用牌组 (Tool Deck) — 右下角扇形三态工具卡 =====
  * L1 = 万能卡片图片卡面, 扇形(最大165°)停驻右下角, 悬停触发选牌动画
  * L2 = 展开只读小卡 (右列) | L3 = 完整工具态 (参数/结果全量 + 复制)
- * 激活树卡 → 工具卡从右下角飞出(1s)向右展开; 树卡右边界收缩让位 */
+ * 激活树卡 → 工具卡从右下角飞出 (1s) 向右展开; 树卡右边界收缩 (body.tooldeck-open) */
 #toolDeck{position:fixed;inset:0;pointer-events:none;z-index:118}
 .tool-deck-fan{position:absolute;right:18px;bottom:18px;width:0;height:0;pointer-events:auto}
+/* L1 扇形小卡: 46x68 (原 92x135 缩小50%) */
 .tool-card-l1{
-  position:absolute;left:0;top:0;width:92px;height:135px;
+  position:absolute;left:0;top:0;width:46px;height:68px;
   transform-origin:50% 100%;
-  background:#0b0e14;border-radius:9px;overflow:hidden;
-  border:1.5px solid color-mix(in srgb,var(--brand) 26%,transparent);
-  box-shadow:0 6px 18px rgba(0,0,0,.5);
+  background:#0b0e14;border-radius:6px;overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--brand) 26%,transparent);
+  box-shadow:0 3px 9px rgba(0,0,0,.5);
   cursor:var(--cur-hand);
   transform:rotate(var(--a0,0deg)) translateY(var(--l0,0px));
   transition:transform .5s cubic-bezier(.22,1,.36,1),box-shadow .25s,border-color .25s;
@@ -868,14 +880,17 @@ body.deck-open .node-card.is-card.l3{width:max(340px,calc(85vw - var(--deck-w,40
 .tool-card-l1 .tc-face{position:absolute;inset:0;background-image:url('/assets/wanneg-card.png');
   background-size:cover;background-position:center;filter:brightness(.9) saturate(1.06)}
 .tool-card-l1 .tc-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,14,20,.02) 0%,rgba(11,14,20,.78) 64%)}
-.tool-card-l1 .tc-name{position:absolute;left:6px;right:6px;bottom:6px;font-family:var(--font-sans);
-  font-size:10px;font-weight:700;color:#fff;text-align:center;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;letter-spacing:.2px;text-shadow:0 1px 3px rgba(0,0,0,.85)}
-.tool-card-l1 .tc-status{position:absolute;top:5px;right:5px;width:8px;height:8px;border-radius:50%;z-index:1}
-.tool-card-l1 .tc-status.ok{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.8)}
-.tool-card-l1 .tc-status.fail{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.8)}
-.tool-card-l1 .tc-status.running{background:var(--brand);box-shadow:0 0 8px var(--brand);animation:tcPulse 1s ease-in-out infinite}
-.tool-card-l1:hover{border-color:var(--brand);box-shadow:0 12px 30px rgba(0,0,0,.6),0 0 22px color-mix(in srgb,var(--brand) 32%,transparent);z-index:2}
+/* 文字: 主题色, 无阴影, 默认隐藏, 悬停牌组时显示 */
+.tool-card-l1 .tc-name{position:absolute;left:3px;right:3px;bottom:2px;font-family:var(--font-sans);
+  font-size:7px;font-weight:700;color:var(--brand);text-align:center;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;letter-spacing:.1px;text-shadow:none;
+  opacity:0;transition:opacity .25s var(--ease-out)}
+.tool-deck-fan:hover .tool-card-l1 .tc-name{opacity:1}
+.tool-card-l1 .tc-status{position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;z-index:1}
+.tool-card-l1 .tc-status.ok{background:#22c55e;box-shadow:0 0 4px rgba(34,197,94,.8)}
+.tool-card-l1 .tc-status.fail{background:#ef4444;box-shadow:0 0 4px rgba(239,68,68,.8)}
+.tool-card-l1 .tc-status.running{background:var(--brand);box-shadow:0 0 6px var(--brand);animation:tcPulse 1s ease-in-out infinite}
+.tool-card-l1:hover{border-color:var(--brand);box-shadow:0 6px 16px rgba(0,0,0,.6),0 0 12px color-mix(in srgb,var(--brand) 32%,transparent);z-index:2}
 /* 悬停牌组 → 选牌动画: 张角扩大 + 卡面整体抬升 (--a1/--l1 由 JS 计算) */
 .tool-deck-fan:hover .tool-card-l1{transform:rotate(var(--a1,0deg)) translateY(var(--l1,0px))}
 @keyframes tcPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(1.5)}}
@@ -1172,6 +1187,22 @@ border:1.5px solid var(--border-std);border-radius:7px}
 .settings-btn:hover{background:var(--bg-btn-hover);border-color:var(--border-turn)}
 .settings-btn.primary{background:var(--brand);border-color:var(--brand);color:#000;font-weight:600}
 .settings-btn.primary:hover{filter:brightness(1.1)}
+/* ═══ 粒子特效设置控件 (参考 ud5 particle-effect-generator) ═══ */
+.fx-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-divider)}
+.fx-row:last-child{border-bottom:none}
+.fx-row-label{font-size:13px;color:var(--text-primary)}
+.fx-row-desc{font-size:11px;color:var(--text-tertiary);margin-top:2px}
+.fx-val{font-size:12px;color:var(--brand);font-weight:600;min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
+.fx-range{width:170px;accent-color:var(--brand);height:6px;cursor:pointer}
+.fx-select{padding:6px 10px;border-radius:8px;background:var(--bg-input);border:1px solid var(--border-std);color:var(--text-primary);font-size:12px;font-family:inherit;outline:none}
+.fx-select:focus{border-color:var(--brand)}
+.fx-swatches{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.fx-swatch{width:26px;height:26px;border-radius:50%;border:2px solid var(--border-std);cursor:pointer;transition:transform .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.fx-swatch:hover{transform:scale(1.12)}
+.fx-swatch.active{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand)}
+.fx-sub{padding:6px 0 6px 14px;border-left:2px solid var(--border-divider);margin:6px 0 6px 6px}
+.fx-sub .fx-row{border-bottom:none;padding:6px 0}
+.fx-actions{display:flex;gap:8px;margin-top:14px}
 
 
 /* ═══ 统一视图：L1/L2/L3 = 同一张卡片在画布上的三种形态 (2026-08-12 架构重构 A+B) ═══
@@ -1186,7 +1217,7 @@ border:1.5px solid var(--border-std);border-radius:7px}
 .node-card.is-card{
   width:min(440px,76vw);height:min(360px,62vh);
   --scale:1;opacity:1!important;padding:0;overflow:hidden;border-radius:18px;
-  background:var(--bg-card);   /* 卡片底色: mini 上横条透明时透出与主卡一致的浅色卡片背景 */
+  background:color-mix(in srgb,var(--bg-card) calc(var(--card-alpha,1) * 100%),transparent);   /* 卡片底色: mini 上横条透明时透出与主卡一致的浅色卡片背景 */
   /* 主题色边框: 画在外层仅受 canvasZoom 缩放 (面板内容实时渲染不缩放), 实际宽度由 applyTransform 按 canvasZoom 反算 (目标视觉 3.5px) */
   border:3.5px solid color-mix(in srgb,var(--brand) 18%,transparent);
   /* 默认无阴影 (不悬浮); hover 时浮起阴影过渡出现 */
@@ -1291,15 +1322,27 @@ border:1.5px solid var(--border-std);border-radius:7px}
   font-family:"Playfair Display","Didot","Bodoni MT",Georgia,"Times New Roman",serif;
   font-weight:700;font-size:32px;line-height:1;
   letter-spacing:-1px;
-  text-shadow:0 0 12px color-mix(in srgb,var(--brand) 55%,transparent);
+  text-shadow:0 0 10px currentColor,
+              0 0 20px color-mix(in srgb,currentColor 70%,transparent),
+              0 1px 1px rgba(0,0,0,.35);
   cursor:var(--cur-hand);
-  transition:transform .35s cubic-bezier(.22,1,.36,1),filter .35s var(--ease-out);
+  transition:transform .35s cubic-bezier(.22,1,.36,1),filter .35s var(--ease-out),text-shadow .35s var(--ease-out);
   z-index:9999;
 }
 #logoBatch{top:80px}
 .logo-batch-btn{top:147px}
-#logoBatch:hover,.logo-batch-btn:hover{transform:scale(1.1);filter:brightness(1.25)}
-#logoBatch:active,.logo-batch-btn:active{transform:scale(.88)}
+#logoBatch:hover,.logo-batch-btn:hover{
+  transform:perspective(420px) rotateX(8deg) rotateY(-10deg) scale(1.12);
+  box-shadow:0 0 0 1px rgba(255,255,255,.10),
+             0 10px 34px rgba(0,0,0,.42),
+             0 0 28px color-mix(in srgb,var(--brand,#7c5cff) 25%,transparent);
+  filter:brightness(1.08);
+  text-shadow:0 0 14px currentColor,
+              0 0 28px color-mix(in srgb,currentColor 80%,transparent),
+              0 0 44px color-mix(in srgb,currentColor 55%,transparent),
+              0 1px 1px rgba(0,0,0,.35);
+}
+#logoBatch:active,.logo-batch-btn:active{transform:perspective(420px) rotateX(4deg) rotateY(-5deg) scale(1.04)}
 #ikarosLogo::after{ /* 顶部高光弧 — 已去除 (纯高斯) */
   content:none;
 }
@@ -1328,6 +1371,10 @@ border:1.5px solid var(--border-std);border-radius:7px}
   filter:brightness(1.08);
 }
 #ikarosLogo:active{transform:perspective(420px) rotateX(4deg) rotateY(-5deg) scale(1.04)}
+/* ═══ 碰撞视觉反馈 + 过渡动画增强 (2026-08-20) ═══ */
+.node-card.colliding{box-shadow:0 0 0 1px color-mix(in srgb,var(--brand) 25%,transparent),0 10px 32px rgba(0,0,0,.35),0 0 18px color-mix(in srgb,var(--brand) 10%,transparent)!important}
+.node-card.is-card .mini-body{transition:opacity .3s var(--ease-out) .12s}
+.node-card.is-card .mini-thread{transition:opacity .25s var(--ease-out)}
 </style>
 <!-- poker 原版输入栏样式 (Tailwind 类 + color 变量) -->
 <link rel="stylesheet" href="assets/fonts/noto-sans-sc/noto-sans-sc.css">
@@ -1765,11 +1812,41 @@ function mdRender(src){
     // 宽度: 有 l3 卡 → 620px, 否则 400px; 收起时 130px
     let w=expanded?(cards.some(c=>c.level==='l3')?620:400):132;
     document.documentElement.style.setProperty('--deck-w',w+'px');
-    // 堆叠小卡 (收起态): 最多露 3 张 +N 徽章
+    // 堆叠小卡 (收起态): 最多显示9张, 超过则水平滚动 + 边缘淡出
     if(!expanded){
-      const vis=cards.slice(-3).map(c=>deckItemHtml(c)).join('');
-      const extra=cards.length>3?`<div class="deck-stack-more">+${cards.length-3}</div>`:'';
-      body.innerHTML=`<div class="deck-stack">${vis}${extra}</div>`;
+      const MAX_VIS=9;
+      const total=cards.length;
+      const hasMore=total>MAX_VIS;
+      // 滚轮偏移: deckState._scroll 记录当前滚动位置
+      if(deckState._scroll==null)deckState._scroll=0;
+      if(hasMore){
+        const maxScroll=total-MAX_VIS;
+        deckState._scroll=Math.max(0,Math.min(maxScroll,deckState._scroll));
+      }
+      const start=hasMore?deckState._scroll:0;
+      const visCards=hasMore?cards.slice(start,start+MAX_VIS):cards;
+      const vis=visCards.map(c=>deckItemHtml(c)).join('');
+      const extra=hasMore?`<div class="deck-stack-more">+${total-MAX_VIS}</div>`:'';
+      body.innerHTML=`<div class="deck-stack${hasMore?' has-more':''}" id="deckStack">
+        <div class="deck-stack-strip" id="deckStackStrip">${vis}${extra}</div>
+      </div>`;
+      // 滚轮切换: 悬停卡组上滚轮 → 堆叠左右滑动
+      const stackEl=document.getElementById('deckStack');
+      if(stackEl&&hasMore){
+        stackEl.addEventListener('wheel',function(ev){
+          ev.preventDefault();ev.stopPropagation();
+          const dir=ev.deltaY>0||ev.deltaX>0?1:-1;
+          const maxScroll=total-MAX_VIS;
+          deckState._scroll=Math.max(0,Math.min(maxScroll,deckState._scroll+dir));
+          // 重新渲染滑动动画
+          const strip=document.getElementById('deckStackStrip');
+          if(strip){
+            const cardW=45-27; // 18px 可见宽度 (45-27重叠)
+            const offset=-deckState._scroll*cardW;
+            strip.style.transform=`translateX(${offset}px)`;
+          }
+        },{passive:false});
+      }
       return;
     }
     body.innerHTML=cards.map(c=>deckItemHtml(c)).join('');
@@ -2004,7 +2081,6 @@ function mdRender(src){
  * 激活树卡 → 工具卡从右下角飞出 (1s) 向右展开; 树卡右边界收缩 (body.tooldeck-open)
  */
 (function(){
-  const MAX_SPREAD=165, SPREAD_STEP=24;
   const MAX_RES_L2=200, MAX_RES_L3=4000;
   const state={ cards:[], expanded:{} };   // expanded: cid -> 'l2'|'l3'
 
@@ -2067,16 +2143,17 @@ function mdRender(src){
   }
   // 扇形布局 (径向): 枢轴在右下角内侧, 卡片沿 165° 弧径向展开 (完整落在画布内);
   // 返回每张卡 {left,top,a0,a1,l1}; 悬停时张角放大 (a1) + 抬升 (l1) 形成选牌动画
+  const MAX_SPREAD=60, SPREAD_STEP=8;   // 缩小张角: 卡片紧叠, 上层遮挡下层≥60%
   function fanLayout(n){
     const out=[];
     const spread=n<=1?0:Math.min(MAX_SPREAD,(n-1)*SPREAD_STEP);
     const vw=window.innerWidth, vh=window.innerHeight;
-    const PX=vw-215, PY=vh-28, R=150;              // 枢轴 (右下角内侧) + 半径
+    const PX=vw-215, PY=vh-28, R=80;               // 枢轴 (右下角内侧) + 半径缩小: 卡片靠拢
     for(let i=0;i<n;i++){
       const f=n<=1?0:(i/(n-1)-0.5);                // -0.5..0.5
       const phi=f*spread*Math.PI/180;              // 弧度 (0=直立, 正=右倾, 负=左倾)
       const cx=PX+R*Math.sin(phi), cy=PY-R*Math.cos(phi);
-      const left=cx-46-(vw-18), top=cy-135-(vh-18); // 相对右下角锚 (fan 0x0 @ right:18/bottom:18)
+      const left=cx-23-(vw-18), top=cy-68-(vh-18);  // 相对右下角锚 (fan 0x0 @ right:18/bottom:18), 缩小50%: 46/2=23, 68
       const deg=phi*180/Math.PI;
       out.push({
         left:left.toFixed(1), top:top.toFixed(1),
@@ -2373,6 +2450,8 @@ class TreeView{
 }
 
 let tree=null,currentMem={path:[],cross:[]},branchParentId=null,branchForkMode=false;
+// 2026-08-23 (编辑重发链路): 待发送的编辑来源 {node_id, message_index}, sendMessage 带上 edit_of
+let editSource=null;
 
 /* ===== 视图模式 (2026-08-16: 已收敛为单一卡片视图) ===== */
 // 视图模式固定为 'card': 画布 = 卡片 (一段连续会话一张卡)。
@@ -2423,6 +2502,25 @@ function installState(s){
 
 /* ===== Canvas State ===== */
 let panX=20,panY=20,zoom=1;
+let zoomTarget=1,zoomVel=0,zoomAnimId=null;
+let _wheelZoom=false;
+let _zAnchorMx=0,_zAnchorMy=0,_zAnchorWx=0,_zAnchorWy=0;
+let _fxLoopTick=0;
+function zoomAnimLoop(){
+  _fxLoopTick++;
+  if(_wheelZoom || Math.abs(zoomVel)>0.001){
+    var force=(zoomTarget-zoom)*0.10 - zoomVel*0.80;
+    zoomVel+=force; zoom+=zoomVel;
+    if(Math.abs(zoomTarget-zoom)<0.0015 && Math.abs(zoomVel)<0.0015){ zoom=zoomTarget; zoomVel=0; _wheelZoom=false; }
+    panX=_zAnchorMx-_zAnchorWx*zoom;
+    panY=_zAnchorMy-_zAnchorWy*zoom;
+    applyTransform();
+  }
+  requestAnimationFrame(zoomAnimLoop);
+}
+zoomAnimLoop();
+window.__fxLoopTick=function(){return _fxLoopTick;};
+window.__fxZoomStatus=function(){return {zoom:zoom,zoomTarget:zoomTarget,wheelZoom:_wheelZoom};};
 const nodePositions={};      // id -> {x,y} in layout coordinates
 const displayPositions={};   // id -> {x,y} 覆盖层: reflow 推挤位移; 存在时优于 nodePositions (重渲染后存活)
 const manualPositions={};    // id -> {x,y} manual override (persists across re-renders)
@@ -2545,6 +2643,7 @@ function applyTransform(){
   layer.style.zoom='';
   layer.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
   layer.style.transformOrigin='0 0';
+  window.__fxZoom=zoom;
   layer.style.setProperty('--ui-scale', zoom);   // 卡片文字/间距按缩放规范上下限 (clamp 用)
   // 视觉恒定: canvas zoom 会缩放卡片边框/按钮, 这里按 zoom 反算实际 CSS 值
   // 目标视觉: L2/L3 卡片边框 2.5px, 输入框边框 3px(加粗1倍), 按钮 28px(L3)/22.4px(L2, 视觉等大)
@@ -2816,6 +2915,22 @@ function cardPorts(id){
 }
 function nodeHalfH(id){ const pt=cardPorts(id); return pt?(pt.bottom.y-pt.top.y)/2:CARD_H/2; }
 
+/* 智能贝塞尔曲线: 根据端口方向和距离动态计算控制点, 避免连线混乱重叠 */
+function smartBezier(sp,tp,fromPort,toPort){
+  const dx=tp.x-sp.x, dy=tp.y-sp.y;
+  const dist=Math.hypot(dx,dy);
+  const off=Math.max(28, dist*0.42);
+  let c1x,c1y,c2x,c2y;
+  if(fromPort==='bottom'){c1x=sp.x;c1y=sp.y+off;}
+  else if(fromPort==='top'){c1x=sp.x;c1y=sp.y-off;}
+  else if(fromPort==='right'){c1x=sp.x+off;c1y=sp.y;}
+  else{c1x=sp.x-off;c1y=sp.y;}
+  if(toPort==='top'){c2x=tp.x;c2y=tp.y-off;}
+  else if(toPort==='bottom'){c2x=tp.x;c2y=tp.y+off;}
+  else if(toPort==='left'){c2x=tp.x-off;c2y=tp.y;}
+  else{c2x=tp.x+off;c2y=tp.y;}
+  return `M${sp.x},${sp.y} C${c1x},${c1y} ${c2x},${c2y} ${tp.x},${tp.y}`;
+}
 function renderCardEdges(posOverride){
   const svg=document.getElementById('edgesSvg');
   if(!svg)return;
@@ -2845,19 +2960,17 @@ function renderCardEdges(posOverride){
     const tp=lk.to_port==='left'?'left':'top';
     const sp=portOf(fh,fp),tpp=portOf(th,tp);
     if(!sp||!tpp)return;
-    const midY=sp.y+(tpp.y-sp.y)*0.4;
-    const d=`M${sp.x},${sp.y} C${sp.x},${midY} ${tpp.x},${midY} ${tpp.x},${tpp.y}`;
-    const m={x:(sp.x+tpp.x)/2,y:sp.y+(tpp.y-sp.y)*0.6};
+    const d=smartBezier(sp,tpp,fp,tp);
     const cls=(lk.kind==='branching'||lk.kind==='parallel')?'edge-path source-line':'edge-path parent-edge';
-    paths+=`<g class="edge-group" data-from="${fh}" data-to="${th}" data-from-card="${lk.from_card}" data-to-card="${lk.to_card}">
+    const fid=_focusId();
+    const isFocus=(fh===fid||th===fid)?' is-focus-edge':'';
+    paths+=`<g class="edge-group${isFocus}" data-from="${fh}" data-to="${th}" data-from-card="${lk.from_card}" data-to-card="${lk.to_card}" oncontextmenu="event.preventDefault();event.stopPropagation();onEdgeContextMenu(event,'${fh}','${th}','${lk.from_card}','${lk.to_card}')">
       <path class="edge-hotzone" d="${d}"/>
       <path class="${cls}" data-from="${fh}" data-to="${th}" d="${d}"/>
-      <g class="edge-close" transform="translate(${m.x},${m.y})" title="断开连接" onclick="event.stopPropagation();unlinkCardByEl(this)" onmouseenter="this.parentNode.querySelectorAll('.edge-path').forEach(p=>p.classList.add('edge-active'))" onmouseleave="this.parentNode.querySelectorAll('.edge-path').forEach(p=>p.classList.remove('edge-active'))">
-        <circle r="14"/><path class="edge-close-x" d="M-5,-5L5,5M5,-5L-5,5"/>
-      </g>
     </g>`;
   });
-  svg.innerHTML=paths;
+  const defs='<defs><linearGradient id="edgeGrad" x1="0%" y1="0%" x2="100%" y2="100%" spreadMethod="repeat"><stop offset="0%" stop-color="#60a5fa" stop-opacity="0.8"/><stop offset="25%" stop-color="#a78bfa" stop-opacity="0.7"/><stop offset="50%" stop-color="#f9a8d4" stop-opacity="0.8"/><stop offset="75%" stop-color="#a78bfa" stop-opacity="0.7"/><stop offset="100%" stop-color="#60a5fa" stop-opacity="0.8"/><animate attributeName="x1" from="0%" to="100%" dur="3s" repeatCount="indefinite"/><animate attributeName="x2" from="100%" to="200%" dur="3s" repeatCount="indefinite"/></linearGradient></defs>';
+  svg.innerHTML=defs+paths;
 }
 function renderEdges(posOverride){
   if(viewMode==='card'){renderCardEdges(posOverride);return;}
@@ -2872,18 +2985,16 @@ function renderEdges(posOverride){
     if(!n.parentId)return;
     const sp=ep(n.parentId,'bottom'), tp=ep(n.id,'top');
     if(!sp||!tp)return;
-    const midY=sp.y+(tp.y-sp.y)*0.4;
-    const d=`M${sp.x},${sp.y} C${sp.x},${midY} ${tp.x},${midY} ${tp.x},${tp.y}`;
-    const m=edgeMidpoint(sp.x,sp.y,tp.x,tp.y,midY);
+    const d=smartBezier(sp,tp,'bottom','top');
+    const m={x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2};
     paths+=edgeGroup(n.parentId,n.id,d,m,'parent',(tree.nodes.get(n.parentId)||{}).depth||0);
   });
   tree.nodes.forEach(n=>{
     if(!n.mergeTarget)return;
     const sp=ep(n.id,'bottom'), tp=ep(n.mergeTarget,'top');
     if(!sp||!tp)return;
-    const midY=(sp.y+tp.y)/2;
-    const d=`M${sp.x},${sp.y} C${sp.x},${midY} ${tp.x},${midY} ${tp.x},${tp.y}`;
-    const m=edgeMidpoint(sp.x,sp.y,tp.x,tp.y,midY);
+    const d=smartBezier(sp,tp,'bottom','top');
+    const m={x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2};
     paths+=edgeGroup(n.id,n.mergeTarget,d,m,'merge');
   });
   svg.innerHTML=paths;   // (defs/marker 箭头已删, 直接写路径)
@@ -2916,9 +3027,8 @@ function animateEdges(fromMap){
       const fromPt=cardPorts(p.dataset.from), toPt=cardPorts(p.dataset.to);
       const sp=fromPt?fromPt.bottom:{x:fc.x,y:fc.y+nodeHalfH(p.dataset.from)};
       const tp=toPt?toPt.top:{x:tc.x,y:tc.y-nodeHalfH(p.dataset.to)};
-      const merge=p.classList.contains('merge-line');
-      const midY=merge?(sp.y+tp.y)/2:sp.y+(tp.y-sp.y)*0.4;
-      p.setAttribute('d',`M${sp.x},${sp.y} C${sp.x},${midY} ${tp.x},${midY} ${tp.x},${tp.y}`);
+      const d=smartBezier(sp,tp,'bottom','top');
+      p.setAttribute('d',d);
     });
     if(k<1){_edgeAnimId=requestAnimationFrame(step);}
     else{_edgeAnimId=null;}
@@ -3164,6 +3274,38 @@ function unlinkCardByEl(svgnode){
   API.unlinkCards(null,fc.id,tc.id).then(r=>{
     if(r&&r.state){installState(r.state);renderAll();toast('已断开');}
   }).catch(err=>console.error('unlink failed',err));
+}
+/* 连线右键菜单: 断开连接 */
+function onEdgeContextMenu(e,fromNodeId,toNodeId,fromCardId,toCardId){
+  const menu=document.getElementById('ctxMenu');
+  if(!menu)return;
+  hideCtxMenu();
+  const items=[
+    {label:'断开连接',action:'unlinkEdge',icon:'✂',danger:true},
+  ];
+  menu.innerHTML=items.map(it=>{
+    const dis=it.disabled?' style="opacity:.4;pointer-events:none"':'';
+    return `<div class="ctx-menu-item${it.danger?' danger':''}"${dis} data-action="${it.action}">
+      <span style="font-size:13px;width:18px;text-align:center;flex:none">${it.icon||''}</span><span>${it.label}</span></div>`;
+  }).join('');
+  menu.querySelectorAll('.ctx-menu-item').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const a=el.dataset.action;
+      if(a==='unlinkEdge'){
+        API.unlinkCards(null,fromCardId,toCardId).then(r=>{
+          if(r&&r.state){installState(r.state);renderAll();toast('已断开连接');}
+        }).catch(err=>{console.error('unlink failed',err);toast('断开失败');});
+      }
+    });
+  });
+  menu.classList.add('show');
+  const mw=menu.offsetWidth, mh=menu.offsetHeight;
+  let x=e.clientX, y=e.clientY;
+  if(x+mw>window.innerWidth) x=Math.max(4,window.innerWidth-mw-4);
+  if(y+mh>window.innerHeight) y=Math.max(4,window.innerHeight-mh-4);
+  menu.style.left=x+'px';
+  menu.style.top=y+'px';
+  setTimeout(()=>document.addEventListener('click',hideCtxMenu,{once:true}),50);
 }
 
 /* ===== 消息级建卡 (2026-08-15 poker 对齐: 卡片 = 一段多轮会话) ===== */
@@ -3459,10 +3601,8 @@ function toast(msg){
     if(!t||!t.closest)return;
     const card=t.closest('.node-card.is-card.l2,.node-card.is-card.l3');
     if(!card)return;
-    e.stopPropagation();                          // 阻断 wrap bubble 的画布缩放分支
-    e.preventDefault();
-    const body=card.querySelector('.mini-body');
-    if(body)body.scrollTop+=e.deltaY;             // 所有卡统一原生滚动 (scrollTop)
+    // 卡内滚轮交给 .mini-body 的 wheel handler (miniScTick 阻尼引擎, 无级平滑);
+    // 画布缩放由 wrap bubble 的卡内 guard 阻止 — 此处不再 stop/scroll
   },true);
   // 双击画布空白处: 缩小一级 (L3→L2, L2→L1); 任何节点/树卡/工具卡/按钮上不触发
   // (响应边界 2026-08-15: 树卡双击 = 卡自身命令 (内容区切级/上横条切焦点), 工具卡双击 = 工具卡切级, 仅画布空白双击才缩小)
@@ -3481,14 +3621,16 @@ function toast(msg){
       return;
     }
     e.preventDefault();
-    cancelAutoAnim();
+    cancelAutoCenter();
     const delta=e.deltaY>0?0.9:1.1;
-    const newZoom=Math.min(3,Math.max(0.15,zoom*delta));
+    const newZoom=Math.min(3,Math.max(0.15,zoomTarget*delta));
     const rect=wrap.getBoundingClientRect();
     const mx=e.clientX-rect.left,my=e.clientY-rect.top;
-    panX=mx-(mx-panX)*(newZoom/zoom);
-    panY=my-(my-panY)*(newZoom/zoom);
-    zoom=newZoom;applyTransform();bumpIdle();
+    _zAnchorMx=mx; _zAnchorMy=my;
+    _zAnchorWx=(mx-panX)/zoom; _zAnchorWy=(my-panY)/zoom;
+    zoomTarget=newZoom;
+    _wheelZoom=true;
+    bumpIdle();
   },{passive:false});
   // Touch support
   let touches=[];
@@ -3702,6 +3844,10 @@ function bumpIdle(){
   _idleTimer=setTimeout(autoCenterCurrent,IDLE_MS);
 }
 function cancelAutoAnim(){
+  if(_animId){cancelAnimationFrame(_animId);_animId=null;}
+  _wheelZoom=false; zoomVel=0;
+}
+function cancelAutoCenter(){
   if(_animId){cancelAnimationFrame(_animId);_animId=null;}
 }
 function autoCenterCurrent(){
@@ -4456,11 +4602,23 @@ async function sendMessage(){
   const fcNode=tree.nodes.get(fcId)||tree.current;
   const labelSrc=(branchParentId&&tree.nodes.get(branchParentId))||fcNode;
   const branchLabel=labelSrc?(labelSrc.branchLabel||'main'):'main';
-  const parentId=branchParentId||fcId||undefined;
+  // 2026-08-23 (卡片聚合修复): 连续对话挂焦点卡内"最新节点"(node_ids 最后回合),
+  // 而非卡片头 —— 否则每次都从卡头分叉, 每对话生成一个新卡片。
+  // 设计: 一个对话卡 = 一段完整连续对话; 仅显式 fork (branchParentId) 才挂指定分叉点。
+  let parentId=branchParentId;
+  if(!parentId){
+    const fcCard=tree.cardOfNode(fcId);
+    if(fcCard&&fcCard.nodeIds&&fcCard.nodeIds.length){
+      parentId=fcCard.nodeIds[fcCard.nodeIds.length-1];
+    }else{
+      parentId=fcId||undefined;
+    }
+  }
   pushInputHist(text);
   // 乐观创建: 用户气泡 + 空 AI 卡 + 空 extras 容器 (思考/工具实时注入)
   const area=_focusEl('messagesArea');
-  const depth=fcNode?fcNode.depth+1:1;
+  const parentNode=parentId?tree.nodes.get(parentId):null;
+  const depth=(parentNode?parentNode.depth:(fcNode?fcNode.depth:0))+1;
   const turn=document.createElement('div');turn.className='turn';
   const userBubbleHtml=mdRender(fullText)||escapeHtml(fullText);
   turn.innerHTML=`<div class="turn-head"><span class="turn-badge">#${depth} ${branchLabel||'main'}</span></div>
@@ -4498,7 +4656,7 @@ async function sendMessage(){
   sb.onclick=stopGenerating;
   const ac=new AbortController();activeChat=ac;
   try{
-    await API.chatStream({message:fullText,parent_id:parentId,branch_label:branchLabel,force_branch:branchForkMode},(ev)=>{
+    await API.chatStream({message:fullText,parent_id:parentId,branch_label:branchLabel,force_branch:branchForkMode,edit_of:editSource||undefined},(ev)=>{
       if(ev.type==='thinking'){
         live.thinking+=ev.delta;renderExtras(extras,live);area.scrollTop=area.scrollHeight;
       }else if(ev.type==='content'){
@@ -4524,7 +4682,7 @@ async function sendMessage(){
         window.__ikToolLive=null;   // 流式结束: 工具改读持久化 node.toolCalls
         // 用 store 渲染覆盖 live (含持久化 thinking/工具), 重渲染画布
         installState(ev.state);selectedNode=tree.currentId;
-        branchParentId=null;branchForkMode=false;
+        branchParentId=null;branchForkMode=false;editSource=null;
         Promise.resolve(refreshMem()).then(()=>{renderAll();fitView();});
         // 会话预览刷新已移除 (侧栏已删除)
       }else if(ev.type==='error'){
@@ -4552,7 +4710,7 @@ async function sendMessage(){
   sb.onclick=sendMessage;
   clearAttaches();
   if(activeChat===ac)activeChat=null;
-  branchParentId=null;branchForkMode=false;
+  branchParentId=null;branchForkMode=false;editSource=null;
 }
 function editResendDraft(text){
   const f=_focusEl('inputField');
@@ -5130,6 +5288,7 @@ async function editAndResend(nodeId,idx){
   await ensureNodeMessages(n);            // M1: 确保对话内容已拉取
   const msgs=(n.messages||[]).filter(x=>x.role!=='system');
   const m=msgs[idx];if(!m||m.role!=='user')return;
+  editSource={node_id:n.id,message_index:idx};   // 2026-08-23 (编辑重发链路): 发送时带 edit_of 持久化编辑源
   const f=_focusEl('inputField');
   f.value=typeof m.content==='string'?m.content:JSON.stringify(m.content);
   autoResize(f);
@@ -5149,6 +5308,8 @@ async function editAndResend(nodeId,idx){
   toast('已载入编辑模式 — 修改后 Enter 发送将创建新分支');
 }
 async function retryNode(nodeId){
+  // 2026-08-23 (编辑重发): 重试非编辑语义, 清空编辑来源避免误带 edit_of
+  editSource=null;
   // 重试: 跳回父节点, 用该节点的 user 消息重新发送
   const n=tree.nodes.get(nodeId);if(!n)return;
   await ensureNodeMessages(n);            // M1: 确保对话内容已拉取
@@ -5174,8 +5335,33 @@ function isFavNode(nodeId){
   try{return JSON.parse(localStorage.getItem('conv-tree-favs')||'[]').includes(nodeId)}catch(e){return false}
 }
 
+/* ═══ 粒子特效配置 (全局, localStorage 持久化; 参考 ud5 particle-effect-generator 参数集) ═══ */
+var FX_KEY='conv-tree-fx';
+var __fxConfig={
+  count:90, size:3, speed:1, alpha:0.85,
+  lines:true, lineDist:100, lineAlpha:0.32,
+  interaction:'attract', interactRange:150,
+  theme:'bluepink', hueBlue:210, huePink:330,
+  bgGradient:true, bgStrength:0.12,
+  cardAlpha:1,
+  gwShape:'ring', gwHue:270, gwBright:88,
+  enableParticles:true, enableLines:true,
+  enableElectrons:true, enableGravityWaves:true, enableBgGradient:true,
+  fxCur:1, fxVel:0, lastRebuildFx:1,
+  __rebuild:false};
+(function initFxConfig(){
+  try{var s=JSON.parse(localStorage.getItem(FX_KEY)||'{}');Object.assign(__fxConfig,s);__fxConfig.__rebuild=false;}catch(e){}
+})();
+function __fxSave(){try{var c={};for(var k in __fxConfig)if(k!=='__rebuild')c[k]=__fxConfig[k];localStorage.setItem(FX_KEY,JSON.stringify(c));}catch(e){}}
+var FX_THEMES={
+  bluepink:{hueBlue:210,huePink:330},
+  pureblue:{hueBlue:200,huePink:240},
+  purepink:{hueBlue:300,huePink:340},
+  purple:{hueBlue:250,huePink:290},
+  full:{hueBlue:0,huePink:360}};
+
 /* ═══ 特效层 v3 JS (2026-08-03) ═══ */
-/* ── 粒子系统 v3: 多色尾迹 / 点击迸发 / 环形冲击波 / 星火 + 可见性暂停 ── */
+/* ── 粒子网络 v4: 常驻漂浮节点 + 近距连线 + 鼠标连线/轻吸引 + 点击/拖拽迸发叠加 (参考 bootstrapmb/15657) ── */
 (function fxParticles(){
   var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
   if (mq.matches) return;
@@ -5187,18 +5373,24 @@ function isFavNode(nodeId){
 
   /* 从 CSS 变量读品牌色 (支持主题切换 / 自定义强调色) */
   var brandRGB = '19,228,37', oppositeRGB = '236,27,218';
+  var fxBlueRGB = '59,130,246', fxPinkRGB = '236,27,218';
+  function hex2rgb(h){
+    return parseInt(h.slice(1,3),16)+','+parseInt(h.slice(3,5),16)+','+parseInt(h.slice(5,7),16);
+  }
+  function lerpRGB(a,b,t){
+    var pa=a.split(','),pb=b.split(',');
+    return Math.round(pa[0]+(pb[0]-pa[0])*t)+','+Math.round(pa[1]+(pb[1]-pa[1])*t)+','+Math.round(pa[2]+(pb[2]-pa[2])*t);
+  }
   function readBrand(){
     try{
       var bv = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
-      if(bv && bv[0]==='#'){
-        var h=parseInt(bv.slice(1,3),16), s=parseInt(bv.slice(3,5),16), l=parseInt(bv.slice(5,7),16);
-        brandRGB = h+','+s+','+l;
-      }
+      if(bv && bv[0]==='#') brandRGB = hex2rgb(bv);
       var ov = getComputedStyle(document.documentElement).getPropertyValue('--brand-opposite').trim();
-      if(ov && ov[0]==='#'){
-        var h2=parseInt(ov.slice(1,3),16), s2=parseInt(ov.slice(3,5),16), l2=parseInt(ov.slice(5,7),16);
-        oppositeRGB = h2+','+s2+','+l2;
-      }
+      if(ov && ov[0]==='#'){ oppositeRGB = hex2rgb(ov); fxPinkRGB = oppositeRGB; }
+      var xb = getComputedStyle(document.documentElement).getPropertyValue('--fx-blue').trim();
+      if(xb && xb[0]==='#') fxBlueRGB = hex2rgb(xb);
+      var xp = getComputedStyle(document.documentElement).getPropertyValue('--fx-pink').trim();
+      if(xp && xp[0]==='#') fxPinkRGB = hex2rgb(xp);
     }catch(e){}
   }
   readBrand();
@@ -5206,81 +5398,345 @@ function isFavNode(nodeId){
   new MutationObserver(readBrand).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']});
 
   function resize(){
-    W = cv.width = Math.floor(innerWidth * DPR);
-    H = cv.height = Math.floor(innerHeight * DPR);
-    cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+    W = cv.width = innerWidth;
+    H = cv.height = innerHeight;
+    createParticles();
   }
-  resize(); addEventListener('resize', resize);
 
-  /* 对象池: 扩容至 280, 支持 richer 效果 */
-  var POOL = 280, parts = [], pool = [];
-  for (var i = 0; i < POOL; i++) pool.push({on:false});
-  function get(){
-    for (var i = 0; i < POOL; i++) if (!pool[i].on) return pool[i];
-    return null;
+  /* ── 粒子网络 v4 (参考 bootstrapmb/15657): 节点 + 连线 + 鼠标吸引 + 拖尾 + 烟花 + 涟漪 + 灰尘 ── */
+  /* 色相区间从 __fxConfig 读 (主题切换即时生效, 参考 ud5 颜色主题) */
+  function hueShift(h, d){
+    var HB=__fxConfig.hueBlue, HP=__fxConfig.huePink, span=(HP-HB)||360;
+    h = h - HB + d;
+    h = ((h % span) + span) % span;
+    return HB + h;
   }
-  /* spawn: n 个粒子, spread 速度散布, hueMode: 0=品牌绿, 1=对偶色(粉), 2=混合彩虹 */
-  function spawn(x, y, n, spread, hueMode){
-    for (var i = 0; i < n; i++){
-      var p = get(); if (!p) return;
-      var a = Math.random() * Math.PI * 2, sp = Math.random() * spread + 0.5;
-      p.on = true;
-      p.x = x * DPR; p.y = y * DPR;
-      p.vx = Math.cos(a) * sp * DPR; p.vy = Math.sin(a) * sp * DPR - 0.5 * DPR;
-      p.life = 1; p.decay = 0.014 + Math.random() * 0.022;
-      p.r = (1 + Math.random() * 2.5) * DPR;
-      p.spark = Math.random() < 0.15; /* 15% 星火粒子 (发光更亮) */
-      /* 颜色: 60% 品牌, 25% 对偶色, 15% 白色点缀 */
-      var cr = Math.random();
-      if(hueMode===1) p.rgb = oppositeRGB;
-      else if(hueMode===2) p.rgb = cr<.5?brandRGB:oppositeRGB;
-      else p.rgb = cr<.6?brandRGB:(cr<.85?oppositeRGB:'255,255,255');
-      parts.push(p);
+  function randHue(){ var HB=__fxConfig.hueBlue, HP=__fxConfig.huePink; return HB + Math.random()*(HP-HB); }
+
+  var mouse = (function(){
+    var s = { x: null, y: null };
+    return {
+      get x(){ return s.x; }, get y(){ return s.y; },
+      set: function(o){ s = { x: o.x, y: o.y }; },
+      reset: function(){ s = { x: null, y: null }; }
+    };
+  })();
+  var backgroundHue = __fxConfig.hueBlue, frameCount = 0, autoDrift = true;
+  var particles = [], gravityWaves = [];
+  var mouseActive = false;
+  var minX = 0, maxX = 0, minY = 0, maxY = 0;
+  /* 动态粒子池: 视窗内不够→逐步生成, 视窗外 6 秒→删除, 不预设大世界 */
+  var TARGET_DENSITY = 1/15000; /* 每 ~15000 px² 一个粒子 */
+  var SPAWN_INTERVAL = 500;      /* 逐步生成间隔 (ms) */
+  var CULL_DELAY = 6000;         /* 视窗外存活时间 (ms) */
+  var lastSpawnTime = 0;
+
+  /* ── 电子云拖尾: 多个电子在不同倾角椭圆轨道绕鼠标运行, 各自带发光拖尾 ── */
+  var ELECTRON_COUNT = 12;
+  var electrons = [];
+  for (var ei = 0; ei < ELECTRON_COUNT; ei++){
+    electrons.push({
+      phase: Math.random() * Math.PI * 2,           /* 轨道起始相位 */
+      speed: 1.2 + Math.random() * 1.5,             /* 角速度 (各不同) */
+      speedDir: Math.random() < 0.5 ? 1 : -1,       /* 顺/逆时针 */
+      rx: 11 + Math.random() * 18,                  /* 轨道 X 半轴 (缩小 1/2) */
+      ry: 6 + Math.random() * 12,                   /* 轨道 Y 半轴 (缩小 1/2) */
+      tilt: Math.random() * Math.PI,                /* 轨道倾角 (3D 感) */
+      hue: randHue(),                               /* 电子色相 */
+      size: 1.5 + Math.random() * 1.5,             /* 电子大小 */
+      trail: []                                     /* 拖尾 [{x,y,hue}] */
+    });
+  }
+  var eMouseX = 0, eMouseY = 0, eInited = false, eTime = 0;
+
+  function updateElectrons(mw, mh, dt){
+    eTime += dt;
+    if (mw !== null){
+      if (!eInited){ eMouseX = mw; eMouseY = mh; eInited = true; }
+      /* 即时跟随鼠标, 不做平滑延迟 */
+      eMouseX = mw;
+      eMouseY = mh;
+    }
+    for (var i = 0; i < electrons.length; i++){
+      var e = electrons[i];
+      var a = e.phase + eTime * e.speed * e.speedDir;
+      /* 倾斜椭圆轨道: 先在椭圆上算位置, 再绕鼠标旋转 tilt */
+      var ox = Math.cos(a) * e.rx;
+      var oy = Math.sin(a) * e.ry;
+      var ct = Math.cos(e.tilt), st = Math.sin(e.tilt);
+      var px = eMouseX + ox * ct - oy * st;
+      var py = eMouseY + ox * st + oy * ct;
+      /* 深度: sin(a) 决定前后 */
+      var depth = (Math.sin(a) + 1) * 0.5;
+      e.trail.push({ x: px, y: py, hue: e.hue, depth: depth });
+      if (e.trail.length > 25) e.trail.shift();
+      /* 色相漂移 */
+      e.hue = hueShift(e.hue, 0.15);
     }
   }
-  /* 环形冲击波 (点击时) */
-  var rings = [];
-  function ringBurst(x, y, maxR){
-    rings.push({x:x*DPR,y:y*DPR,r:maxR*0.1*DPR,maxR:maxR*DPR,life:1,decay:0.035});
+
+  function drawElectrons(ctx){
+    if (!eInited) return;
+    /* 按 Z 深度排序: 后面的先画 */
+    var all = [];
+    for (var i = 0; i < electrons.length; i++){
+      var e = electrons[i];
+      if (e.trail.length === 0) continue;
+      var last = e.trail[e.trail.length - 1];
+      all.push({ e: e, depth: last.depth });
+    }
+    all.sort(function(a, b){ return a.depth - b.depth; });
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (var ai = 0; ai < all.length; ai++){
+      var e = all[ai].e;
+      var tr = e.trail;
+      if (tr.length < 2) continue;
+      /* 整条拖尾一条 path 一次 stroke, 统一宽度, 无 shadowBlur → 无接头圆点 */
+      var head = tr[tr.length - 1];
+      var dep = head.depth;
+      var alpha = 0.3 + dep * 0.4;
+      var w = e.size * 0.7 * (0.5 + dep * 0.5);
+      ctx.strokeStyle = 'hsla(' + e.hue + ',70%,80%,' + alpha + ')';
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(tr[0].x, tr[0].y);
+      for (var j = 1; j < tr.length - 1; j++){
+        var mx = (tr[j].x + tr[j+1].x) / 2;
+        var my = (tr[j].y + tr[j+1].y) / 2;
+        ctx.quadraticCurveTo(tr[j].x, tr[j].y, mx, my);
+      }
+      ctx.lineTo(tr[tr.length-1].x, tr[tr.length-1].y);
+      ctx.stroke();
+      /* 电子核: 最亮的小球 (浅色) */
+      ctx.shadowBlur = 0;
+      var head = tr[tr.length - 1];
+      var hAlpha = 0.4 + head.depth * 0.5;
+      var hR = e.size * (0.5 + head.depth * 0.5);
+      var headHue = (e.hue + 360) % 360;
+      ctx.fillStyle = 'hsla(' + headHue + ',70%,92%,' + hAlpha + ')';
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, hR, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
+
+  /* 粒子: 径向渐变 + 发光 + 拖尾 + 色相漂移, speed 实时生效 */
+  function Particle(x, y){
+    var base = (Math.random()*0.5 + 0.3);
+    this.x = x; this.y = y;
+    this.vx = Math.cos(Math.random()*Math.PI*2) * base;
+    this.vy = Math.sin(Math.random()*Math.PI*2) * base;
+    this.size = (Math.random()*3 + 1) * (__fxConfig.size/3);
+    this.hue = randHue();
+    this.alpha = 1;
+    this.sizeDir = Math.random() < 0.5 ? -1 : 1;
+    this.trail = [];
+    this.lastVisible = performance.now();
+  }
+  Particle.prototype.update = function(mw, mh, R2){
+    /* 粒子不再被鼠标吸引/排斥, 仅自由飘动 */
+    if (autoDrift){
+      this.vx += (Math.random()-0.5)*0.03;
+      this.vy += (Math.random()-0.5)*0.03;
+    }
+    this.vx *= 0.998;
+    this.vy *= 0.998;
+    /* speed 实时生效: 作为位移倍率 */
+    var spd = __fxConfig.speed;
+    this.x += this.vx * spd; this.y += this.vy * spd;
+    this.size += this.sizeDir * 0.1;
+    if (this.size > 4 || this.size < 1) this.sizeDir *= -1;
+    this.hue = hueShift(this.hue, 0.3);
+    if (frameCount % 2 === 0 && (Math.abs(this.vx) > 0.1 || Math.abs(this.vy) > 0.1)){
+      this.trail.push({ x: this.x, y: this.y, hue: this.hue, alpha: this.alpha });
+      if (this.trail.length > 15) this.trail.shift();
+    }
+  };
+  Particle.prototype.draw = function(ctx){
+    var r = Math.max(0.5, this.size);
+    var g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
+    g.addColorStop(0, 'hsla(' + this.hue + ',80%,88%,' + (Math.max(this.alpha,0) * __fxConfig.alpha) + ')');
+    g.addColorStop(1, 'hsla(' + hueShift(this.hue, 30) + ',80%,70%,' + (Math.max(this.alpha,0) * __fxConfig.alpha) + ')');
+    ctx.fillStyle = g;
+    ctx.shadowBlur = W > 900 ? 10 : 0;
+    ctx.shadowColor = 'hsl(' + this.hue + ',80%,88%)';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    if (this.trail.length > 1){
+      ctx.lineWidth = 1.5;
+      for (var i = 0; i < this.trail.length - 1; i++){
+        var t1 = this.trail[i];
+        ctx.strokeStyle = 'hsla(' + t1.hue + ',80%,88%,' + (Math.max(t1.alpha,0) * __fxConfig.alpha) + ')';
+        ctx.beginPath();
+        ctx.moveTo(t1.x, t1.y);
+        ctx.lineTo(this.trail[i+1].x, this.trail[i+1].y);
+        ctx.stroke();
+      }
+    }
+  };
+
+  /* 灰尘粒子已删除 */
+
+  function adjustParticleCount(){
+    /* 粒子数 = 设置面板的 count 值, 允许 ±10% 波动 */
+    return Math.max(20, Math.round(__fxConfig.count));
+  }
+  function createParticles(){
+    particles.length = 0;
+    var n = adjustParticleCount();
+    /* 初始填充: 在视口世界范围内随机散布 */
+    var vx = minX || 0, vw = (maxX-minX) || W;
+    var vy = minY || 0, vh = (maxY-minY) || H;
+    for (var i = 0; i < n; i++){
+      particles.push(new Particle(vx + Math.random()*vw, vy + Math.random()*vh));
+    }
+  }
+  /* ── 引力波: 触发后 3 秒冷却, 形状/颜色/亮度可调 ── */
+  var GW_COOLDOWN = 3000; /* 3 秒冷却 (ms) */
+  var lastGWTime = 0;
+  function GravityWave(x, y){
+    this.x=x; this.y=y; this.t=0; this.life=1;
+    this.hue = __fxConfig.gwHue !== undefined ? __fxConfig.gwHue : (Math.random()<0.5 ? __fxConfig.hueBlue : __fxConfig.huePink);
+  }
+  GravityWave.prototype.update = function(){ this.t += 0.04; this.life -= 0.006; };
+  GravityWave.prototype.draw = function(ctx){
+    var gwShape = __fxConfig.gwShape || 'ring'; /* ring / star / polygon */
+    var gwBright = __fxConfig.gwBright !== undefined ? __fxConfig.gwBright : 88; /* 亮度 % */
+    var gwHue = this.hue;
+    if (this.life > 0.7){
+      var cr = 3 + this.t * 6;
+      ctx.fillStyle = 'hsla(' + gwHue + ',80%,' + gwBright + '%,' + ((this.life-0.7)*0.7) + ')';
+      ctx.beginPath(); ctx.arc(this.x, this.y, Math.max(0.5, cr*0.35), 0, Math.PI*2); ctx.fill();
+    }
+    for (var i=0; i<5; i++){
+      var baseR = this.t * (35 + i*26);
+      if (baseR < 1) continue;
+      var a = this.life * (1 - i*0.15) * 0.45 * (__fxConfig.gwBright !== undefined ? __fxConfig.gwBright/88 : 1);
+      if (a > 0){
+        ctx.strokeStyle = 'hsla(' + gwHue + ',80%,' + gwBright + '%,' + a + ')';
+        ctx.lineWidth = 2.5 - i*0.4;
+        ctx.beginPath();
+        var steps = 48;
+        for (var a2=0; a2<=Math.PI*2+0.15; a2+=Math.PI*2/steps){
+          var rr = baseR;
+          if (gwShape === 'star'){
+            /* 星形: 5 角星, 半径周期性变化 */
+            rr = baseR * (1 + 0.3 * Math.sin(a2*5 + this.t*3));
+          } else if (gwShape === 'polygon'){
+            /* 多边形: 6 边形 */
+            rr = baseR * (1 + 0.15 * Math.cos(a2*6));
+          }
+          var wob = Math.sin(a2*6 + this.t*5 + i) * baseR * 0.03;
+          var wave = Math.sin(this.t*4 - i*0.8) * baseR * 0.04;
+          rr += wave + wob;
+          var px = this.x + Math.cos(a2)*rr;
+          var py = this.y + Math.sin(a2)*rr;
+          if (a2===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+  };
+  GravityWave.prototype.isDone = function(){ return this.life <= 0; };
+  resize(); addEventListener('resize', resize);
+  /* ═══ 星宿图谱叠加层 已删除 (性能开销过大) ═══ */
+
   function frame(){
     ctx.clearRect(0, 0, W, H);
+    if (__fxConfig.bgGradient && __fxConfig.enableBgGradient){
+      backgroundHue = hueShift(backgroundHue, 0.2);
+      var bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, 'hsla(' + backgroundHue + ',65%,18%,' + __fxConfig.bgStrength + ')');
+      bg.addColorStop(1, 'hsla(' + hueShift(backgroundHue, 90) + ',65%,10%,' + __fxConfig.bgStrength + ')');
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    }
     ctx.globalCompositeOperation = 'lighter';
-    /* 粒子 */
-    for (var i = parts.length - 1; i >= 0; i--){
-      var p = parts[i];
-      p.x += p.vx; p.y += p.vy; p.vy += 0.024 * DPR; p.vx *= 0.988;
-      p.life -= p.decay;
-      if (p.life <= 0 || p.x < -30 || p.x > W + 30 || p.y < -30 || p.y > H + 30){
-        p.on = false; parts.splice(i, 1); continue;
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(zoom, zoom);
+    var invZ = 1/zoom;
+    minX = -panX*invZ; maxX = (W-panX)*invZ;
+    minY = -panY*invZ; maxY = (H-panY)*invZ;
+    var grid = Math.max(40, Math.min(160, Math.sqrt(W*H/Math.max(20,__fxConfig.count)) * 0.85));
+    var t = frameCount * 0.016 * __fxConfig.speed;
+    var mw = (mouse.x !== null) ? (mouse.x - panX)*invZ : null;
+    var mh = (mouse.y !== null) ? (mouse.y - panY)*invZ : null;
+    var R = __fxConfig.interactRange*invZ, R2 = R*R;
+    var LD = __fxConfig.lineDist*invZ, LD2 = LD*LD, LA = __fxConfig.lineAlpha;
+    /* 视口剔除余量: 粒子在视口外不参与连线/渲染, 但位置仍正常更新 */
+    var margin = LD * 0.5;
+    var now = performance.now();
+    var vis = [];
+    /* 有状态粒子: update + 视口内收集/渲染 + 视窗外 6 秒删除 + 缩小太小剔除 */
+    var minScreenR = 1.0 / zoom; /* 粒子世界半径小于此值时屏幕上看不见 → 删除 */
+    for (var i = particles.length-1; i >= 0; i--){
+      var p = particles[i];
+      if (__fxConfig.enableParticles) p.update(mw, mh, R2);
+      /* 缩小太多时小粒子直接删除 */
+      if (p.size < minScreenR){
+        particles.splice(i, 1);
+        continue;
       }
-      var alpha = p.life * (p.spark ? 0.85 : 0.55);
-      var rad = Math.max(0.3, p.r * p.life);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(' + p.rgb + ',' + alpha.toFixed(3) + ')';
-      ctx.fill();
-      /* 星火: 额外光晕 */
-      if(p.spark){
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, rad * 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(' + p.rgb + ',' + (alpha * 0.15).toFixed(3) + ')';
-        ctx.fill();
+      if (__fxConfig.enableParticles && p.x > minX-margin && p.x < maxX+margin && p.y > minY-margin && p.y < maxY+margin){
+        p.draw(ctx);
+        vis.push(p);
+        p.lastVisible = now;
+      } else if (now - p.lastVisible > CULL_DELAY){
+        particles.splice(i, 1);
       }
     }
-    /* 冲击环 */
-    for (var j = rings.length - 1; j >= 0; j--){
-      var r = rings[j];
-      r.r += (r.maxR - r.r) * 0.12;
-      r.life -= r.decay;
-      if (r.life <= 0){ rings.splice(j, 1); continue; }
-      ctx.beginPath();
-      ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + brandRGB + ',' + (r.life * 0.4).toFixed(3) + ')';
-      ctx.lineWidth = 2 * r.life * DPR;
-      ctx.stroke();
+    /* 动态生成: 视口内粒子不足, 每 500ms 逐步补充到 count ±10% */
+    var target = adjustParticleCount();
+    var lo = Math.round(target * 0.9), hi = Math.round(target * 1.1);
+    if (vis.length < lo && now - lastSpawnTime > SPAWN_INTERVAL){
+      var need = Math.min(8, target - vis.length);
+      var vw = maxX - minX, vh = maxY - minY;
+      for (var si = 0; si < need; si++){
+        particles.push(new Particle(minX + Math.random()*vw, minY + Math.random()*vh));
+      }
+      lastSpawnTime = now;
     }
-    ctx.globalCompositeOperation = 'source-over';
+    /* 超多时逐步删除多余粒子 (超过 hi) */
+    if (vis.length > hi && now - lastSpawnTime > SPAWN_INTERVAL){
+      var excess = vis.length - hi;
+      for (var ei = 0; ei < excess; ei++){
+        particles.splice(particles.indexOf(vis[vis.length-1-ei]), 1);
+      }
+      lastSpawnTime = now;
+    }
+    if (__fxConfig.lines && __fxConfig.enableLines){
+      ctx.lineWidth = 1.5;
+      for (var i=0;i<vis.length;i++){
+        var a = vis[i];
+        for (var j=i+1;j<vis.length;j++){
+          var b = vis[j];
+          var dx=a.x-b.x, dy=a.y-b.y; var dd=dx*dx+dy*dy;
+          if (dd < LD2){
+            ctx.strokeStyle='hsla('+((a.hue+b.hue)/2)+',80%,88%,'+((1-Math.sqrt(dd)/LD)*LA*__fxConfig.alpha)+')';
+            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+          }
+        }
+      }
+    }
+    /* 电子云拖尾: 多个电子在不同倾角椭圆轨道绕鼠标运行 */
+    if (__fxConfig.enableElectrons){
+      updateElectrons(mw, mh, 0.016);
+      drawElectrons(ctx);
+    }
+    if (__fxConfig.enableGravityWaves){
+      for (var gi=gravityWaves.length-1; gi>=0; gi--){
+        var gw=gravityWaves[gi]; gw.update(); gw.draw(ctx);
+        if (gw.isDone()) gravityWaves.splice(gi,1);
+      }
+    }
+    ctx.restore();
+    frameCount++;
     raf = requestAnimationFrame(frame);
   }
   var raf = null, running = false;
@@ -5291,52 +5747,46 @@ function isFavNode(nodeId){
   });
   start();
 
-  /* 鼠标尾迹 v3: 移动越快粒子越多, 带速度感知 */
-  var lx = -99, ly = -99, lastT = 0;
+  function fxWX(cx){ var fxC=Math.pow(Math.max(0.01,zoom),0.6); return (cx - panX)/fxC; }
+  function fxWY(cy){ var fxC=Math.pow(Math.max(0.01,zoom),0.6); return (cy - panY)/fxC; }
+
+  /* 鼠标移动: 更新 mouse 位置 (视口, frame 内转世界) */
   addEventListener('pointermove', function(e){
-    var now = Date.now();
-    if (now - lastT < 16) return; lastT = now;
-    var dx = e.clientX - lx, dy = e.clientY - ly;
-    var dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist < 6) return;
-    lx = e.clientX; ly = e.clientY;
-    /* 按速度生成 1-3 粒子 (更快 = 更多) */
-    var n = dist > 40 ? 3 : (dist > 18 ? 2 : 1);
-    spawn(e.clientX, e.clientY, n, dist > 30 ? 1.8 : 1.2);
+    mouse.set({x: e.clientX, y: e.clientY});
+    mouseActive = true;
   }, { passive: true });
+  addEventListener('pointerleave', function(){ mouse.reset(); mouseActive = false; });
+  addEventListener('blur', function(){ mouse.reset(); mouseActive = false; });
 
-  /* 点击迸发: 粒子 + 冲击环 */
+  /* 点击: 水波 (世界坐标) */
   addEventListener('pointerdown', function(e){
-    spawn(e.clientX, e.clientY, 8, 2.8);
-    ringBurst(e.clientX, e.clientY, 28);
+    var now = Date.now();
+    if (now - lastGWTime < GW_COOLDOWN) return;
+    lastGWTime = now;
+    var wx=fxWX(e.clientX), wy=fxWY(e.clientY);
+    gravityWaves.push(new GravityWave(wx, wy));
   }, { passive: true });
 
-  /* 树节点/组卡拖拽迸发: 双色 (品牌+对偶) + 更大环 */
+  /* 树节点/组卡拖拽: 水波 */
   document.addEventListener('pointerdown', function(e){
     var t = e.target;
     if (t && t.closest && t.closest('.node-card, .node-handle, .group-card')){
-      spawn(e.clientX, e.clientY, 14, 3.5, 2);
-      ringBurst(e.clientX, e.clientY, 40);
+      var now = Date.now();
+      if (now - lastGWTime < GW_COOLDOWN) return;
+      lastGWTime = now;
+      var wx=fxWX(e.clientX), wy=fxWY(e.clientY);
+      gravityWaves.push(new GravityWave(wx, wy));
     }
   }, { passive: true });
 
-  /* 发送按钮特殊迸发 (品牌绿向上飞) */
+  /* 发送按钮: 水波 */
   document.addEventListener('click', function(e){
     if(e.target.closest && e.target.closest('.send-btn')){
-      spawn(e.clientX, e.clientY, 16, 3.0, 0);
-      ringBurst(e.clientX, e.clientY, 36);
-      /* 向上飞的粒子 */
-      var rect = e.target.closest('.send-btn').getBoundingClientRect();
-      for(var k=0;k<6;k++){
-        var p = get(); if(!p) break;
-        p.on = true; p.x = (rect.left + rect.width/2) * DPR;
-        p.y = (rect.top + rect.height/2) * DPR;
-        p.vx = (Math.random()-0.5) * 2 * DPR;
-        p.vy = -(2+Math.random()*3) * DPR;
-        p.life = 1; p.decay = 0.02; p.r = (1.5+Math.random()*2)*DPR;
-        p.rgb = brandRGB; p.spark = true;
-        parts.push(p);
-      }
+      var now = Date.now();
+      if (now - lastGWTime < GW_COOLDOWN) return;
+      lastGWTime = now;
+      var wx=fxWX(e.clientX), wy=fxWY(e.clientY);
+      gravityWaves.push(new GravityWave(wx, wy));
     }
   }, { passive: true });
 })();
@@ -5520,13 +5970,13 @@ function applyLanguage(lang){
   };
   const move=(x,y)=>{
     const r=tip.getBoundingClientRect();
-    let left=x+12;
-    if(left+r.width>window.innerWidth-8)left=Math.max(8,x-12-r.width);
+    let left=x+20;
+    if(left+r.width>window.innerWidth-8)left=Math.max(8,x-20-r.width);
     const top=Math.max(8,Math.min(y-r.height/2,window.innerHeight-r.height-8));
     tip.style.left=left+'px';tip.style.top=top+'px';
   };
   document.addEventListener('mouseover',e=>{
-    const el=e.target.closest&&e.target.closest('[data-i18n-title]');
+    const el=e.target.closest&&e.target.closest('[data-i18n-title],[title]');
     if(!el){
       // 鼠标移到非提示元素上: 隐藏 (边界)
       if(cur)hide();
@@ -5555,14 +6005,14 @@ function applyLanguage(lang){
     if(!shown||!cur)return;
     // 鼠标已离开提示源区域则不跟随 (边界)
     const el=document.elementFromPoint(e.clientX,e.clientY);
-    if(!el||!el.closest('[data-i18n-title]'))return;
+    if(!el||!el.closest('[data-i18n-title],[title]'))return;
     move(e.clientX,e.clientY);
   });
   document.addEventListener('mouseout',e=>{
     if(!cur)return;
     // 边界: 判断鼠标是否移出 cur (relatedTarget 不在 cur 内即离开)
     const to=e.relatedTarget;
-    if(to&&to.closest&&to.closest('[data-i18n-title]')===cur)return;
+    if(to&&to.closest&&to.closest('[data-i18n-title],[title]')===cur)return;
     hide();
   });
   // 滚动/窗口变化时隐藏
@@ -5586,6 +6036,7 @@ function openSettings(){
   renderAssignSection();
   renderPermToggles();
   renderGridToggle();
+  renderFxParticlesSettings();
   const m=document.getElementById('settingsModal');
   if(m){m.classList.add('open'); showSettingsSection(_currentSettingsSection||'models');}
 }
@@ -5811,7 +6262,7 @@ background:conic-gradient(from 0deg,transparent 30%,var(--text-primary) 40%,var(
 
 /* ═══ 特效层 v3.1: 卡片过渡用 transition (无无限浮动) ═══ */
 /* 粒子 canvas 层 (48920 新增) */
-#fx-canvas-ct{position:fixed;inset:0;pointer-events:none;z-index:9998}
+#fx-canvas-ct{position:fixed;inset:0;pointer-events:none;z-index:0}
 
 /* ═══ 自定义 Tooltip (非浏览器原生 title): fixed 卡片跟随鼠标, 150ms 淡入淡出 ═══
    z-index 须高于 #ikarosLogo(9999), 否则提示框被 I 按钮挡住 */
@@ -5944,7 +6395,7 @@ body,.tree-panel,.main,.ai-card,.bubble-user,.input-wrapper{transition:backgroun
 /* ═══ poker 视觉 (2026-08-06) ═══ */
 /* 画布 = tree-panel 最底层面板 (absolute 填满) */
 .tree-panel{position:relative;background:var(--bg);display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.canvas-wrap{position:absolute;inset:0;background:var(--bg);overflow:hidden}
+.canvas-wrap{position:absolute;inset:0;background:transparent;overflow:hidden}
 /* [REMOVED] 点格图 (.canvas-grid) — 用户要求不需要点格背景, 直接隐藏 */
 .canvas-grid{display:none}
 
@@ -5970,7 +6421,7 @@ body,.tree-panel,.main,.ai-card,.bubble-user,.input-wrapper{transition:backgroun
    卡片锚定在画布节点上 → L2/L3 时 tree 画布仍可见且可拖动; #main 仅作透明承载层 */
 .app{position:relative;display:flex;overflow:hidden}
 /* 内容区: tree-panel 与 .main 在同一区域叠加; 三种 mode 下画布始终可见可拖动 */
-.tree-panel{position:absolute;top:0;left:0;right:0;bottom:0;width:auto;display:flex;flex-direction:column;z-index:10;background:var(--bg);opacity:1;transform:scale(1);pointer-events:auto;transition:opacity .35s var(--ease-out),transform .35s var(--ease-out)}
+.tree-panel{position:absolute;top:0;left:0;right:0;bottom:0;width:auto;display:flex;flex-direction:column;z-index:10;background:transparent;opacity:1;transform:scale(1);pointer-events:auto;transition:opacity .35s var(--ease-out),transform .35s var(--ease-out)}
 .main{position:absolute;top:0;left:0;right:0;bottom:0;width:auto;display:flex;flex-direction:column;min-width:0;background:transparent;overflow:hidden;z-index:25;opacity:1;pointer-events:none}
 /* 三种 mode 下画布均可见可拖动; 卡片(masked deck)在 .main 内由 pointer-events 单独接管 */
 .app.mode-l1 .tree-panel,.app.mode-l2 .tree-panel,.app.mode-l3 .tree-panel{opacity:1;transform:scale(1);pointer-events:auto}
@@ -6041,8 +6492,8 @@ function setCardLevel(level,nodeId,originEl){
     const bc=panel.querySelector('[data-fid="breadcrumb"]'); if(bc)bc.textContent=node?nodeText(node):'';
   }
   // ═══ FLIP 形变 (面板已在容器内: 只切类 + 尺寸过渡, 无迁移部分) ═══
-  const EASE='cubic-bezier(.22,1,.36,1)';
-  const TR='transform .65s '+EASE+',box-shadow .25s,opacity .25s';   // 不再过渡 width/height
+  const EASE='cubic-bezier(.4,0,.2,1)';           // ease-in-out: scale + opacity 风格
+  const TR='transform .6s '+EASE+',opacity .5s '+EASE+',box-shadow .5s '+EASE;
   const sf=parseFloat(ne?ne.style.getPropertyValue('--scale'):'1')||1;      // 当前画布缩放因子 (视觉乘数)
   const fw=ne?ne.offsetWidth:0, fh=ne?ne.offsetHeight:0;                   // First: 形变前视觉尺寸
   if(level==='l1'){
@@ -6057,15 +6508,16 @@ function setCardLevel(level,nodeId,originEl){
         ne.removeEventListener('transitionend',clearInline);
         if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
       const play=()=>{ ne.style.transition=TR; ne.style.transform=base+' scale(1)';
-        ne.addEventListener('transitionend',clearInline); };
-      clearInline._t=setTimeout(clearInline,750);
+        ne.style.opacity='1'; ne.addEventListener('transitionend',clearInline); };
+      clearInline._t=setTimeout(clearInline,650);
       ne.style.transition='none';                          // 类切换瞬间禁用过渡 (防声明式 transform 抢先)
       ne.classList.remove('is-card','l2','l3');
       ne.style.removeProperty('--scale');
       ne.style.removeProperty('width'); ne.style.removeProperty('height');
       const lw=ne.offsetWidth, lh=ne.offsetHeight;         // Last: L1 实际尺寸 (card-node 240×auto)
-      // Invert: 视觉倒回 L2/L3 起点 (scale = First视觉 / Last视觉)
+      // Invert: 视觉倒回 L2/L3 起点 (scale = First视觉 / Last视觉), opacity 从 0 淡入
       ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';
+      ne.style.opacity='0';
       void ne.offsetWidth;
       // Play: 双 rAF 确保 Invert 帧已渲染后再过渡
       requestAnimationFrame(()=>requestAnimationFrame(play));
@@ -6083,9 +6535,10 @@ function setCardLevel(level,nodeId,originEl){
         ne.removeEventListener('transitionend',clearInline);
         if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
       const play=()=>{ ne.style.transition=TR; ne.style.transform=base+' scale(1)';
-        ne.addEventListener('transitionend',clearInline); };
-      clearInline._t=setTimeout(clearInline,750);
+        ne.style.opacity='1'; ne.addEventListener('transitionend',clearInline); };
+      clearInline._t=setTimeout(clearInline,650);
       ne.style.transition='none';                          // 类切换瞬间禁用一切过渡 (防声明式 scale 抢先)
+      ne.style.opacity='0';                            // 内容初始透明, Play 时淡入
       ne.classList.add('is-card');
       ne.classList.toggle('l2', level==='l2');
       ne.classList.toggle('l3', level==='l3');
@@ -6097,10 +6550,11 @@ function setCardLevel(level,nodeId,originEl){
       void ne.offsetWidth;
       // Play (双 rAF)
       requestAnimationFrame(()=>requestAnimationFrame(play));
-      // 展开后卡片按视口适配 zoom (等形变动画完成再归位, 避免动画期间 zoom 抢跑)
-      // 2026-08-16: 缩放过程不再 80ms 提前 autoCenterCurrent (改 pan 会让泡泡物理视角漂移),
-      // 改为 _bubble 模拟完全停止后由 onStop 统一收束视口。
-      // setTimeout(()=>{ if(_focusLevel()===level && tree.currentId===newId) autoCenterCurrent(); },80);
+      // L3 展开后: 立即触发归正居中 (autoCenterCurrent 缩放+居中适配); 清 displayPositions 防 L1 闪烁
+      if(level==='l3' && ne && ne.isConnected){
+        for(var k in displayPositions) delete displayPositions[k];
+        autoCenterCurrent();
+      }
     }else if(ne){
       ne.classList.add('is-card');
       ne.classList.toggle('l2', level==='l2');
@@ -6292,7 +6746,7 @@ function cardSizeOf(el){
    ═══════════════════════════════════════════════════════════════════════ */
 const _bubble={
   nodes:new Map(), running:false, raf:0, alpha:0, alphaMin:0.001,
-  GAP:16, ALPHA_DECAY:0.0228, ANCHOR_K:0.18, COLLIDE_K:0.9, MAXV:40,
+  GAP:24, ALPHA_DECAY:0.0228, ANCHOR_K:0.15, COLLIDE_K:1.0, MAXV:40,
   rearm(){
     if(this.raf) return;
     this.running=true;
@@ -6361,6 +6815,13 @@ const _bubble={
           }
         }
       }
+    }
+    // 3.5) 碰撞视觉反馈: 碰撞中的卡添加光晕脉冲 (仅在状态变化时操作 DOM)
+    for(const n of ns){
+      const el=document.querySelector('.node-card[data-id="'+CSS.escape(n.nid)+'"]');
+      if(!el)continue;
+      if(hit.has(n.nid)){if(!el.classList.contains('colliding'))el.classList.add('colliding');}
+      else{if(el.classList.contains('colliding'))el.classList.remove('colliding');}
     }
     // 4) 粘性记忆: 未参与任何碰撞的非焦点卡, 把当前位置采纳为新"家" —— 推开后记住, 缩小不回拉
     for(const n of ns){ if(!n.fixed && !hit.has(n.nid)){ n.fx=n.x; n.fy=n.y; } }
@@ -6771,44 +7232,96 @@ function bindMiniScrollDrag(body,id){   // mini 卡对话区鼠标拖动 (与主
     miniScTick(id,body,sc);
   },{passive:false});                            // preventDefault 生效需 passive:false
 }
-function miniUpgradeToL3(id){   // mini 卡 L2↔L3 切换 (标准容器): 尺寸变化 + 输入框显隐, 触发体积碰撞
+function miniUpgradeToL3(id){   // mini 卡 L2↔L3 切换: FLIP 形变动画 + 尺寸变化 + 输入框显隐 + 体积碰撞
   const mini=_cards.get(id);if(!mini)return;
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  const toL3 = !mini.classList.contains('l3');      // 目标态 = 取反当前 (collapse=降级, expand 走 setCardLevel 不经过此)
-  if(!toL3) delete displayPositions[id];   // 降级: 先回基础位 (nodePositions), 再按 L2 尺寸重排 — 他卡保持 (2026-08-12 阶段 B)
+  if(!ne){return;}
+  const toL3 = !mini.classList.contains('l3');      // 目标态 = 取反当前
+  // ═══ FLIP 形变动画 (与 setCardLevel 同源): First → Last → Invert → Play ═══
+  const EASE='cubic-bezier(.4,0,.2,1)';           // ease-in-out: scale + opacity 风格
+  const TR='transform .6s '+EASE+',opacity .5s '+EASE+',box-shadow .5s '+EASE;
+  const fw=ne.offsetWidth, fh=ne.offsetHeight;                   // First: 形变前尺寸
+  const sf=parseFloat(ne.style.getPropertyValue('--scale'))||1;
+  if(!toL3) delete displayPositions[id];   // 降级: 先回基础位 (nodePositions), 再按 L2 尺寸重排
+  ne.style.transition='none';                          // 类切换瞬间禁用过渡 (防声明式 scale 抢先)
+  ne.style.opacity='0';                            // 内容初始透明, Play 时淡入
   mini.classList.toggle('l3',toL3);
-  mini.classList.toggle('l2',!toL3);            // 显式互补: 降级回 L2 时类完整 (CSS 虽用 :not(.l3), 保持一致性)
-  if(ne){
-    ne.classList.toggle('l3',toL3);
-    ne.classList.toggle('l2',!toL3);            // 关键: 只 toggle l3 会让降级卡丢 l2 类 → is-card 无等级 → 尺寸回落 180px 小卡叠在 L3 上
-  }
-  // 2026-08-12 架构重构 A: 焦点面板 L2↔L3 → 同步全局 cardLevel/mode 类 (仅 _focusId — currentId 是后端当前节点, 参与判断会把非焦点卡 collapse 误当全局降级)
+  mini.classList.toggle('l2',!toL3);            // 显式互补: 降级回 L2 时类完整
+  ne.classList.toggle('l3',toL3);
+  ne.classList.toggle('l2',!toL3);
+  ne.style.removeProperty('width'); ne.style.removeProperty('height');
+  const lw=ne.offsetWidth, lh=ne.offsetHeight;                   // Last: 形变后尺寸
+  const base='translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%)';
+  ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';   // Invert: 视觉倒回起点
+  void ne.offsetWidth;
+  const clearInline=()=>{ ne.style.removeProperty('width'); ne.style.removeProperty('height');
+    ne.style.removeProperty('transform'); ne.style.transition='';
+    ne.removeEventListener('transitionend',clearInline);
+    if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
+  clearInline._t=setTimeout(clearInline,650);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{           // Play (双 rAF 确保 Invert 帧已渲染)
+    ne.style.transition=TR;
+    ne.style.transform=base+' scale(1)';
+    ne.style.opacity='1';                        // 内容淡入 (scale + opacity)
+    ne.addEventListener('transitionend',clearInline);
+  }));
+  // 2026-08-12 架构重构 A: 焦点面板 L2↔L3 → 同步全局 cardLevel/mode 类 (仅 _focusId)
   if(_focusLevel()!=='l1'&&_focusId()===id){
     cardLevel=toL3?'l3':'l2';
     applyModeClass(cardLevel);   // 焦点卡 L2↔L3 → 主卡模式类
   }
-  if(toL3&&_focusId()!==id){   // 每卡统一用模板 input-area (重构): 无需再建 mini-input
-  }
   scheduleReflow(id,toL3?'l3':'l2');   // 尺寸变化 → 体积碰撞让位 (批处理, 增量推挤: 降级仅自身回原始位, 他卡保持)
   updateLogoBatch();updateThreadPad();
 }
-function closeMiniCard(id){   // 关闭卡 (含焦点卡): 移除面板 + 节点还原; 焦点卡 → 内嵌回退 L1 + id 清空
+function closeMiniCard(id){   // 关闭卡 (含焦点卡): FLIP 缩小动画 → 移除面板 + 节点还原 L1
   const wasFocus=_focusId()===id;              // 提前记录 (卸焦点后 _focusId 失效)
   const mini=_cards.get(id);
-  if(mini)mini.remove();
-  _cards.delete(id);
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  if(ne){ne.classList.remove('is-card','l2','l3');ne.style.removeProperty('--scale');}
-  // 2026-08-12 架构重构 A: 焦点面板关闭 → 回退 L1 (id 全卸, 无焦点卡); 仅 _focusId — currentId 是后端当前节点, 参与判断会把非焦点卡关闭误当焦点回退
+  // ═══ FLIP 缩小动画 (L2/L3 → L1): 先测 First 尺寸, 再切类测 Last, Invert → Play ═══
+  if(ne){
+    const EASE='cubic-bezier(.4,0,.2,1)';
+    const TR='transform .6s '+EASE+',opacity .5s '+EASE+',box-shadow .5s '+EASE;
+    const fw=ne.offsetWidth, fh=ne.offsetHeight;
+    const sf=parseFloat(ne.style.getPropertyValue('--scale'))||1;
+    const base='translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%)';
+    const clearInline=()=>{ ne.style.removeProperty('width'); ne.style.removeProperty('height');
+      ne.style.removeProperty('transform'); ne.style.opacity=''; ne.style.transition='';
+      ne.removeEventListener('transitionend',clearInline);
+      if(clearInline._t){clearTimeout(clearInline._t);clearInline._t=null;} };
+    clearInline._t=setTimeout(clearInline,650);
+    ne.style.transition='none';
+    // 移除面板 + 节点还原 L1
+    if(mini)mini.remove();
+    _cards.delete(id);
+    ne.classList.remove('is-card','l2','l3');
+    ne.style.removeProperty('--scale');
+    ne.style.removeProperty('width'); ne.style.removeProperty('height');
+    const lw=ne.offsetWidth, lh=ne.offsetHeight;
+    // Invert: 视觉倒回 L2/L3 起点 + 透明
+    ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';
+    ne.style.opacity='0';
+    void ne.offsetWidth;
+    // Play: 缩小到 L1 + 淡入
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      ne.style.transition=TR;
+      ne.style.transform=base+' scale(1)';
+      ne.style.opacity='1';
+      ne.addEventListener('transitionend',clearInline);
+    }));
+  }else{
+    if(mini)mini.remove();
+    _cards.delete(id);
+  }
+  // 2026-08-12 架构重构 A: 焦点面板关闭 → 回退 L1 (id 全卸, 无焦点卡)
   if(_focusLevel()!=='l1'&&wasFocus){
     cardLevel='l1';
     applyModeClass('l1');
     _transferFocusIds(null);   // 只卸不赋: 焦点面板已移除
   }
-  // 2026-08-12 阶段 B (独立容器语义): 焦点卡关闭 → 全量归位 (回树视图); 非焦点 mini 关闭 → 仅自身回原始位 (他卡保持)
+  // 2026-08-12 阶段 B: 焦点卡关闭 → 全量归位; 非焦点 mini 关闭 → 仅自身回原始位
   if(wasFocus){ clearReflow(); } else { delete displayPositions[id]; }
   renderEdges();
-  updateLogoBatch();                  // k/r 按钮随卡数刷新
+  updateLogoBatch();
 }
 function refreshMiniCards(){          // 消息变化后刷新所有展开的 mini 卡
   const fid=_focusId();
@@ -6854,6 +7367,7 @@ function updateLogoBatch(){
   const showK=l2s>=2, showR=l3s>=1;   // r: L3 卡存在即显示 (焦点卡 L3 → 一键缩回 L2)
   // k (I 下方 18.34px 黄金间距)
   if(showK){ b.textContent='k'; b.style.display='flex';
+    b.setAttribute('data-i18n-title','btn.shrinkAllL2'); b.removeAttribute('title');
     b.title='一键缩小所有 L2 卡至 L1';
     b.onclick=e=>{ e.stopPropagation(); _cards.forEach((_,id)=>closeMiniCard(id));
       if(_focusLevel()!=='l1')setCardLevel('l1'); updateLogoBatch(); };
@@ -6864,6 +7378,7 @@ function updateLogoBatch(){
     if(!rb){ rb=document.createElement('div'); rb.id='logoBatchR'; rb.className='logo-batch-btn'; document.body.appendChild(rb); }
     rb.textContent='r';
     rb.style.display='flex';
+    rb.setAttribute('data-i18n-title','btn.shrinkAllL3'); rb.removeAttribute('title');
     rb.title='一键缩小所有 L3 卡至 L2';
     rb.onclick=e=>{ e.stopPropagation(); _cards.forEach((_,id)=>closeMiniCard(id));
       if(_focusLevel()==='l3')setCardLevel('l2'); updateLogoBatch(); };
@@ -7095,6 +7610,7 @@ window.addEventListener('resize',()=>{
         <button class="settings-nav-item" data-section="shortcuts" onclick="showSettingsSection('shortcuts')" data-i18n="nav.shortcuts">快捷键</button>
         <button class="settings-nav-item" data-section="language" onclick="showSettingsSection('language')" data-i18n="nav.language">语言</button>
         <button class="settings-nav-item" data-section="layout" onclick="showSettingsSection('layout')" data-i18n="nav.layout">布局</button>
+        <button class="settings-nav-item" data-section="particles" onclick="showSettingsSection('particles')">粒子特效</button>
       </nav>
       <div class="settings-content" id="settingsContent">
         <!-- Available Models (来自 Ikaros 根 .env / 运行时配置, 点击切换当前会话模型) -->
@@ -7159,10 +7675,90 @@ window.addEventListener('resize',()=>{
           <p class="settings-desc" data-i18n="desc.layout">画布显示选项。</p>
           <div class="settings-row"><div><div class="settings-row-label" data-i18n="layout.grid">网格背景</div><div class="settings-row-desc" data-i18n="layout.grid.d">在画布上显示点阵网格。</div></div><div class="settings-toggle on" id="layoutGrid" onclick="toggleGrid()"></div></div>
         </div>
+        <!-- Particle Effects (粒子网络特效参数, 参考 ud5 particle-effect-generator) -->
+        <div class="settings-section" data-section="particles">
+          <h3>粒子特效</h3>
+          <p class="settings-desc">鼠标粒子网络的视觉参数。实时预览,偏好保存在本地。蓝粉为默认主题。</p>
+          <div class="fx-row"><div><div class="fx-row-label">粒子数量</div><div class="fx-row-desc">背景漂浮节点数</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCount" min="20" max="220" step="5"><span class="fx-val" id="fxCountVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">粒子大小</div><div class="fx-row-desc">节点半径基准</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSize" min="1" max="8" step="0.5"><span class="fx-val" id="fxSizeVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">移动速度</div><div class="fx-row-desc">漂移速度倍率</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSpeed" min="0.2" max="3" step="0.1"><span class="fx-val" id="fxSpeedVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">透明度</div><div class="fx-row-desc">节点不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxAlphaVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">颜色主题</div><div class="fx-row-desc">蓝粉 / 纯蓝 / 纯粉 / 紫幻 / 全彩</div></div><div class="fx-swatches" id="fxThemes"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">粒子连线</div><div class="fx-row-desc">近距节点连线成网</div></div><div class="settings-toggle" id="fxLines" onclick="toggleFx('lines')"></div></div>
+          <div class="fx-sub" id="fxLinesSub">
+            <div class="fx-row"><div class="fx-row-label">连线距离</div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineDist" min="40" max="220" step="5"><span class="fx-val" id="fxLineDistVal">—</span></div></div>
+            <div class="fx-row"><div class="fx-row-label">连线透明度</div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineAlpha" min="0.05" max="0.8" step="0.05"><span class="fx-val" id="fxLineAlphaVal">—</span></div></div>
+          </div>
+          <div class="fx-row"><div><div class="fx-row-label">鼠标交互</div><div class="fx-row-desc">节点对鼠标的响应</div></div><select class="fx-select" id="fxInteraction"><option value="attract">吸引</option><option value="repel">排斥</option><option value="none">无交互</option></select></div>
+          <div class="fx-row"><div><div class="fx-row-label">影响范围</div><div class="fx-row-desc">鼠标作用半径</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxRange" min="50" max="300" step="10"><span class="fx-val" id="fxRangeVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">渐变背景</div><div class="fx-row-desc">蓝粉色相循环底色 (半透明, 不遮挡 UI)</div></div><div class="settings-toggle" id="fxBg" onclick="toggleFx('bgGradient')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">背景强度</div><div class="fx-row-desc">底色不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxBgStr" min="0" max="0.4" step="0.02"><span class="fx-val" id="fxBgStrVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">卡片透明度</div><div class="fx-row-desc">节点卡片不透明度 (调低让下层粒子透出)</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCardAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxCardAlphaVal">—</span></div></div>
+          <div class="fx-row" style="border-top:2px solid var(--border-divider);margin-top:8px;padding-top:12px"><div><div class="fx-row-label" style="font-weight:600">引力波</div><div class="fx-row-desc">点击/拖拽时触发的扩散波纹</div></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">波纹形状</div><div class="fx-row-desc">圆环 / 星形 / 多边形</div></div><select class="fx-select" id="fxGwShape"><option value="ring">圆环</option><option value="star">星形</option><option value="polygon">多边形</option></select></div>
+          <div class="fx-row"><div><div class="fx-row-label">波纹颜色</div><div class="fx-row-desc">色相 (0-360)</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwHue" min="0" max="360" step="5"><span class="fx-val" id="fxGwHueVal">—</span></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">波纹亮度</div><div class="fx-row-desc">亮度百分比</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwBright" min="30" max="100" step="2"><span class="fx-val" id="fxGwBrightVal">—</span></div></div>
+          <div class="fx-row" style="border-top:2px solid var(--border-divider);margin-top:8px;padding-top:12px"><div><div class="fx-row-label" style="font-weight:600">特效开关</div><div class="fx-row-desc">逐项开关, 便于排查性能开销</div></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">背景渐变</div><div class="fx-row-desc">蓝粉色相循环底色</div></div><div class="settings-toggle" id="fxEnBg" onclick="toggleFx('enableBgGradient')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">粒子</div><div class="fx-row-desc">背景漂浮节点</div></div><div class="settings-toggle" id="fxEnParticles" onclick="toggleFx('enableParticles')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">灰尘</div><div class="fx-row-desc">背景氛围微粒</div></div><div class="settings-toggle" id="fxEnDust" onclick="toggleFx('enableDust')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">粒子连线</div><div class="fx-row-desc">近距节点连线</div></div><div class="settings-toggle" id="fxEnLines" onclick="toggleFx('enableLines')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">鼠标电子云</div><div class="fx-row-desc">电子绕鼠标轨道运行</div></div><div class="settings-toggle" id="fxEnElectrons" onclick="toggleFx('enableElectrons')"></div></div>
+          <div class="fx-row"><div><div class="fx-row-label">引力波</div><div class="fx-row-desc">点击触发扩散波纹</div></div><div class="settings-toggle" id="fxEnGW" onclick="toggleFx('enableGravityWaves')"></div></div>
+          <div class="fx-actions"><button class="settings-btn" onclick="resetFx()">重置默认</button></div>
+        </div>
       </div>
     </div>
   </div>
 </div>
+<script>
+/* ═══ 粒子特效设置面板绑定 (控件 ↔ __fxConfig, 实时生效) ═══ */
+(function initFxControls(){
+  function $(id){return document.getElementById(id)}
+  var themes=[
+    {id:'bluepink',name:'蓝粉',grad:'linear-gradient(135deg,#3b82f6,#ec1bda)'},
+    {id:'pureblue',name:'纯蓝',grad:'linear-gradient(135deg,#1e90ff,#00d4ff)'},
+    {id:'purepink',name:'纯粉',grad:'linear-gradient(135deg,#ff5da2,#ec1bda)'},
+    {id:'purple',name:'紫幻',grad:'linear-gradient(135deg,#7b2ff7,#a855f7)'},
+    {id:'full',name:'全彩',grad:'conic-gradient(red,yellow,lime,cyan,blue,magenta,red)'}
+  ];
+  function renderThemes(){
+    var box=$('fxThemes'); if(!box) return;
+    box.innerHTML=themes.map(function(t){return '<span class="fx-swatch'+(__fxConfig.theme===t.id?' active':'')+'" data-theme="'+t.id+'" title="'+t.name+'" style="background:'+t.grad+'"></span>';}).join('');
+    box.querySelectorAll('.fx-swatch').forEach(function(s){
+      s.onclick=function(){
+        __fxConfig.theme=s.dataset.theme;
+        var p=FX_THEMES[s.dataset.theme]||FX_THEMES.bluepink;
+        __fxConfig.hueBlue=p.hueBlue; __fxConfig.huePink=p.huePink; __fxConfig.__rebuild=true;
+        __fxSave(); renderThemes(); renderFxVals();
+      };
+    });
+  }
+  function renderFxVals(){
+    var map=[['fxCount','count',0],['fxSize','size',1],['fxSpeed','speed',1],['fxAlpha','alpha',2],['fxLineDist','lineDist',0],['fxLineAlpha','lineAlpha',2],['fxRange','interactRange',0],['fxBgStr','bgStrength',2],['fxCardAlpha','cardAlpha',2],['fxGwHue','gwHue',0],['fxGwBright','gwBright',0]];
+    map.forEach(function(m){var el=$(m[0]),val=$(m[0]+'Val'); if(el)el.value=__fxConfig[m[1]]; if(val)val.textContent=(+__fxConfig[m[1]]).toFixed(m[2]);});
+    document.documentElement.style.setProperty('--card-alpha', __fxConfig.cardAlpha);
+    var il=$('fxInteraction'); if(il)il.value=__fxConfig.interaction;
+    var gs=$('fxGwShape'); if(gs)gs.value=__fxConfig.gwShape||'ring';
+    var lt=$('fxLines'); if(lt)lt.classList.toggle('on',__fxConfig.lines);
+    var bt=$('fxBg'); if(bt)bt.classList.toggle('on',__fxConfig.bgGradient);
+    var sub=$('fxLinesSub'); if(sub)sub.style.opacity=__fxConfig.lines?'1':'0.45';
+    var enBg=$('fxEnBg'); if(enBg)enBg.classList.toggle('on',__fxConfig.enableBgGradient!==false);
+    var enP=$('fxEnParticles'); if(enP)enP.classList.toggle('on',__fxConfig.enableParticles!==false);
+    var enL=$('fxEnLines'); if(enL)enL.classList.toggle('on',__fxConfig.enableLines!==false);
+    var enE=$('fxEnElectrons'); if(enE)enE.classList.toggle('on',__fxConfig.enableElectrons!==false);
+    var enG=$('fxEnGW'); if(enG)enG.classList.toggle('on',__fxConfig.enableGravityWaves!==false);
+  }
+  window.renderFxParticlesSettings=function(){renderThemes();renderFxVals();};
+  window.toggleFx=function(key){__fxConfig[key]=!__fxConfig[key];__fxConfig.__rebuild=true;__fxSave();renderFxVals();};
+  window.resetFx=function(){Object.assign(__fxConfig,{count:90,size:3,speed:1,alpha:0.85,lines:true,lineDist:100,lineAlpha:0.32,interaction:'attract',interactRange:150,theme:'bluepink',hueBlue:210,huePink:330,bgGradient:true,bgStrength:0.12,cardAlpha:1,gwShape:'ring',gwHue:270,gwBright:88,enableParticles:true,enableLines:true,enableElectrons:true,enableGravityWaves:true,enableBgGradient:true,__rebuild:true});__fxSave();renderFxVals();renderThemes();};
+  function bindRange(id,key){var el=$(id); if(!el) return; el.addEventListener('input',function(){__fxConfig[key]=parseFloat(el.value); if(key==='count')__fxConfig.__rebuild=true; __fxSave(); renderFxVals();});}
+  [['fxCount','count'],['fxSize','size'],['fxSpeed','speed'],['fxAlpha','alpha'],['fxLineDist','lineDist'],['fxLineAlpha','lineAlpha'],['fxRange','interactRange'],['fxBgStr','bgStrength'],['fxCardAlpha','cardAlpha'],['fxGwHue','gwHue'],['fxGwBright','gwBright']].forEach(function(m){bindRange(m[0],m[1]);});
+  var ii=$('fxInteraction'); if(ii) ii.addEventListener('change',function(){__fxConfig.interaction=ii.value;__fxSave();});
+  var gs=$('fxGwShape'); if(gs) gs.addEventListener('change',function(){__fxConfig.gwShape=gs.value;__fxSave();});
+  renderThemes(); renderFxVals();
+})();
+</script>
 
 <script type="module">
 /** three.js r180 MIT (c) 2010-2025 Three.js Authors — 内联自包含 (local, no CDN) */

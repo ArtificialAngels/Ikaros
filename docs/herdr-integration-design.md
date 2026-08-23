@@ -1,6 +1,7 @@
 # herdr 集成设计文档（提案）
 
 > 状态：**已落地（部分）** —— 引擎层 + pi (omp) agent 已接入（`runtime/herdr/herdr.exe` + `data/omp/agent/`，见 AGENTS.md）；L2 编排 supervisor / L3 面板展示等阶段未做。
+> ⚠️ **2026-08-23 已整体退役**：`herdr` 与 `pi/omp` 编码 agent 底座已删除（`core/herdr/`、`runtime/herdr/`、`data/omp/`、`bin/start-omp.bat`、herdr 命名管道）；外部 agent 能力由 dsh overlay（terminal / LSP / MCP）承载。本文保留作历史设计参考，勿按它接线。
 > ⚠️ 2026-08-18 底座切换：文中引用的 `apps/neko/`、`:9100` 面板、`core/dashboard/`、Hermes 底座均已退役；当前工作引擎 = dsh :3080（本提案中涉及其角色处按此代入阅读）。
 > 范围：把 `herdr`（Rust coding-agent 终端多路复用器）作为受控组件接入 Ikaros
 > 主要用途：**在受监控 pane 中运行外部 coding agent（claude / codex / cursor / aider …），由 Ikaros 协调、读取状态与输出**

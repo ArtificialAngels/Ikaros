@@ -30,12 +30,12 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
                     └──────────┬─────────────┘
                                │ 联动
        ┌───────────────────────┼───────────────────┐
-       ▼                       ▼                   ▼
-┌─────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ Memory      │      │ 对话树 :48920     │      │ pi / herdr       │
-│ :8587 embed │◄────►│ DeepSeek 直连     │      │ 编码 agent       │
-│ (bge-m3)    │      │ + 只读工具回路    │      │ (omp, 命名管道)  │
-└──────┬──────┘      └──────────────────┘      └──────────────────┘
+        ▼                       ▼                   
+┌─────────────┐      ┌──────────────────┐
+│ Memory      │      │ 对话树 :48920     │
+│ :8587 embed │◄────►│ DeepSeek 直连     │
+│ (bge-m3)    │      │ + 只读工具回路    │
+└──────┬──────┘      └──────────────────┘
        │
        ▼
 ┌─────────────┐
@@ -45,8 +45,9 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 └─────────────┘
 
 * 本地 LLM(:8080) 已退役(2026-08-18): 云端 DeepSeek 为主, 按需恢复(见 AGENTS.md)。
-* 对话树 :48920 单模式 DeepSeek 直连(人格 = Ikaros 伴侣), 不可达时降级本地三层链路 + 只读工具回路。
+* 对话树 :48920 单模式 DeepSeek 直连(人格 = Ikaros 伴侣), 底座 = deepseek-harness (dsh), 不可达时降级本地三层链路 + 只读工具回路。
 * dsh :3080 为 DeepSeek Harness 工作引擎 (overlay 挂载 memory_v5 MCP: 49 个 v5_* 工具 + ikaros-memory 自动记忆插件 + terminal + typescript LSP + persona)。
+* pi / herdr (omp, 命名管道) 编码 agent 底座已整体退役 (2026-08-23)。
 ```
 
 ### 核心端口
@@ -102,7 +103,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 ```
 
 > 启动器 (`bin\ikaros`) 跨 3 shell (bash / cmd / PowerShell), 支持子命令 `web` / `tree` / `embed` / `all` / `doctor` / `update`.
-> 详见 `docs/ikaros-launcher-design.md`. 老脚本 (`bin\start-dsh-ikaros.bat` / `start-omp.bat` / `restart-dsh-ikaros.ps1`) 仍兼容, 实际调 `ikaros` 启动器.
+> 详见 `docs/ikaros-launcher-design.md`. 旧脚本 (`bin\start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1`) 仍兼容, 实际调 `ikaros` 启动器.
 
 ---
 
@@ -184,7 +185,7 @@ Ikaros\
 ├── config\               ← 配置文件 (identity/axiom.md 等)
 ├── data\                 ← ★ 运行时数据 (全部 git ignored; 含 soul/SOUL.md 身份)
 ├── docs\                 ← 文档
-├── runtime\              ← 运行时依赖 (git ignored): portable-python + node + llama + dsh + omp + herdr + MCPServe
+├── runtime\              ← 运行时依赖 (git ignored): portable-python + node + llama + dsh + MCPServe
 ├── scripts\              ← 上游拉取 / 原生配置脚本
 ├── tests\                ← 测试
 ├── UPSTREAM.md           ← 上游组件清单
@@ -237,6 +238,9 @@ Ikaros\
 ---
 
 ## 📈 更新日志
+
+### 2026-08-23 — 底座收敛为 deepseek-harness, pi/omp 退役
+- 🔄 **pi/herdr (omp) 底座整体退役** — 删除 `core/herdr/`、`runtime/herdr/`、`data/omp/`、`runtime/bun/omp.exe`、`bin/start-omp.bat`;herdr 组件移除(组件收敛为 3:dsh / conversation-tree / embedding);`conversation-tree/server.py` 移除 supervisor 桥,底座语义统一标注 deepseek-harness。
 
 ### 2026-08-18 — Hermes/N.E.K.O 底座退役,切换 dsh 工作引擎
 - 🔄 **底座切换** — agent 底座从 `hermes-agent` 整体切换为 **DeepSeek Harness (dsh)**;N.E.K.O 桌宠整体移除(仓库瘦身 ~7.4GB)。删除: `runtime/hermes-agent` / `data/hermes-agent` / `core/hermes-bridge` / `apps/neko` / `patches/hermes` / 7 个 bin hermes 脚本。

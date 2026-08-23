@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 文件夹层级图 · 2026-08-19</title>
+<title>Ikaros 文件夹层级图 · 2026-08-23</title>
 <style>
   :root{--bg:#f5f7fa;--card:#fff;--ink:#1f2933;--muted:#647084;--line:#d6dde6;
         --blue:#2f6fed;--teal:#0fb5a6;--purple:#8b5cf6;--green:#22a06b;--amber:#f0a020;--red:#e8743b}
@@ -39,7 +39,7 @@
 <body>
 <div class="wrap">
   <h1>Ikaros 文件夹层级图</h1>
-  <div class="sub">快照 2026-08-19 · dsh 时代 · 已排除 vendored（runtime/ node_modules/ .git/ __pycache__）· 展开折叠可点击 ▸</div>
+  <div class="sub">快照 2026-08-23 · dsh 时代 · 已排除 vendored（runtime/ node_modules/ .git/ __pycache__）· 展开折叠可点击 ▸</div>
 
   <div class="card">
     <div class="legend">
@@ -52,12 +52,12 @@
 
     <div class="tree" id="tree"></div>
 
-    <div class="note">说明：<code>runtime/</code> 内置 dsh / herdr / portable-python / llama / node / bun（vendored，未展开）；
+    <div class="note">说明：<code>runtime/</code> 内置 dsh / portable-python / llama / node / bun（vendored，未展开）；
       <code>data/</code> 含模型权重 + 运行时日志（仅在顶层标注）。
       虚线折叠项可点击展开。</div>
   </div>
 
-  <footer>Ikaros Folder Tree · 由 tools/gen_architecture_html.py 于 2026-08-19 生成 · 数据来自实际目录扫描</footer>
+  <footer>Ikaros Folder Tree · 由 tools/gen_architecture_html.py 于 2026-08-23 生成 · 数据来自实际目录扫描</footer>
 </div>
 
 <script>
@@ -73,7 +73,6 @@ const T = {
     {n:"bin/", c:"启动器/桥接脚本", b:"核心", children:[
       {n:"ikaros-env.sh / ikaros-env.ps1 / ikaros-env.bat", k:true, c:"环境权威源 (IKAROS_ROOT 自锚定)"},
       {n:"start-dsh-ikaros.bat", k:true, c:"拉 dsh 工作引擎 :3080 (web|headless)"},
-      {n:"start-omp.bat", c:"omp 启动器"},
       {n:"restart-dsh-ikaros.ps1", c:"杀旧 dsh web + --patch 重启"},
       {n:"proc.py / wb.py", c:"进程/工作簿工具"},
       {n:"secret-scan.py", c:"密钥扫描"},
@@ -89,7 +88,7 @@ const T = {
         {n:"affect.py / vitality.py", c:"情感/精力"},
         {n:"self_model.py / metacog.py / relationship.py", c:"自我/元认知/关系"},
         {n:"conversation_tree.py", k:true, c:"对话树后端引擎 (ConvCard + 卡片图)"},
-        {n:"mcp_server.py", k:true, c:"49 个 v5_* MCP 工具"},
+        {n:"mcp_server.py", k:true, c:"48 个 v5_* MCP 工具"},
         {n:"reflect/", c:"后台整合流水线"}, {n:"extensions/", c:"认知扩展"},
         {n:"models/", c:"模型配置"}, {n:"data/", k:true, c:"运行态记忆", b:"数据", open:true, children:[
           {n:"v5/", k:true, c:"人格+记忆库", children:[
@@ -109,12 +108,11 @@ const T = {
         {n:"plugins/ikaros-memory/", c:"记忆插件 (recallMemory / writeMemory)"},
         {n:"persona/", c:"Ikaros 工作引擎 system-prompt"}
       ]},
-      {n:"herdr/", k:true, c:"Herdr coding-agent 多路复用器 (命名管道)", b:"基础设施"},
       {n:"env/", c:"环境配置/CLI", children:[{n:"ikaros-cli/ / scripts/ / detect-root/"}]},
       {n:"taskbus.py", c:"任务总线"}
     ]},
     {n:"deploy/", c:"部署", children:[{n:"Dockerfile"},{n:"README.md"}]},
-    {n:"runtime/", c:"运行时依赖 (vendored, 未展开) · 含 dsh / herdr / portable-python / llama / node / bun", b:"基础设施"},
+    {n:"runtime/", c:"运行时依赖 (vendored, 未展开) · 含 dsh / portable-python / llama / node / bun", b:"基础设施"},
     {n:"scripts/", c:"setup-native.py / fetch-upstreams.py"},
     {n:"tests/", c:"测试", children:[]},
     {n:"tools/", c:"工具", children:[{n:"dwg/ / experiments/ / gen_architecture_html.py"}]},

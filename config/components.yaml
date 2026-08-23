@@ -17,7 +17,7 @@
 #   central -- legacy central watchdog (retired 2026-08-XX; new components
 #              must use 'self' -- see embed below)
 #
-# Last updated: 2026-08-19 (Task 3.6 line3-dsh-base).
+# Last updated: 2026-08-23 (pi/herdr 底座退役, 组件收敛为 3: dsh / conversation-tree / embedding)
 components:
   # ------------------------------------------------------------------
   # 1) DeepSeek Harness (dsh) -- 工作引擎 (L3/L1)
@@ -80,28 +80,6 @@ components:
       # 启动由各上层组件脚本自带 watchdog (历史: 集中 watchdog 已退役 2026-08-XX)。
       # 这里仅登记元数据，不作为独立进程被本表直接拉起。
       start_script: null
-      stop_script: null
-      restart_script: null
-      watchdog: self
-    dsh_integration:
-      overlay: null
-      mcp_servers: []
-
-  # ------------------------------------------------------------------
-  # 4) Herdr -- coding-agent 多路复用器 (L0, 命名管道无 TCP)
-  # ------------------------------------------------------------------
-  - id: herdr
-    name: Herdr Coding-Agent Multiplexer
-    category: runtime
-    port: null   # headless server 走命名管道 \\.\pipe\...，无 TCP 端口
-    process_marker: herdr
-    dependencies: []
-    config_schema: {}
-    healthcheck:
-      type: pipe
-      endpoint: '\\\\.\\pipe\\herdr'   # 占位命名管道名 (实际由 runtime/herdr/herdr.exe 配置)
-    lifecycle:
-      start_script: bin/start-omp.bat
       stop_script: null
       restart_script: null
       watchdog: self

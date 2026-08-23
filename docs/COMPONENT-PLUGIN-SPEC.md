@@ -1,7 +1,7 @@
 # Ikaros 组件插件接口规范（Component Plugin Spec）
 
 > 状态：规范文档（line3，2026-08-20）。与 `config/components.yaml`（事实源）+ `core/components/registry.py::ComponentSpec`（类型校验）配套。
-> 适用范围：line3 工作树的 4 个活跃组件（`dsh` / `conversation-tree` / `embedding` / `herdr`）。
+> 适用范围：line3 工作树的 3 个活跃组件（`dsh` / `conversation-tree` / `embedding`）；herdr (pi/omp) 已于 2026-08-23 退役。
 > 阅读对象：注册新组件 / 修改组件元数据 / 编写启动器 / 写 dsh overlay 的开发者与 AI agent。
 
 ---
@@ -47,8 +47,8 @@ components:
 | `id` | string | ✅ | 稳定 kebab-case 标识（如 `dsh`、`conversation-tree`、`memory_v5`）。**唯一键**——`get_component(id)` 用它查找。**永不重用**（一个 id 退役后不要复用，避免监控/日志错位）。 |
 | `name` | string | ✅ | 人类可读显示名。自由文本，用于 UI / 文档 / 日志标签。 |
 | `category` | enum | ✅ | 粗粒度角色。当前枚举：`memory` / `ui` / `runtime` / `tool` / `embedding`。`VALID_CATEGORIES` 在 `core/components/registry.py` 强制（loader 会 raise ValueError）。 |
-| `port` | int\|null | ✅ | TCP 端口；非 TCP 传输（如 herdr 的 Windows 命名管道）置 `null`。**不要发明默认值**——`null` 是合法值。 |
-| `process_marker` | string | ✅ | OS 进程表匹配子串（Windows `tasklist` / POSIX `pgrep`）。例：`dsh`、`embed`、`herdr`、`conversation_tree`。**注意**：`conversation-tree` id 对应的 process_marker 是 `conversation_tree`（Python 模块名 / 文件名约定）。 |
+| `port` | int\|null | ✅ | TCP 端口；非 TCP 传输（如命名管道承载的服务）置 `null`。**不要发明默认值**——`null` 是合法值。 |
+| `process_marker` | string | ✅ | OS 进程表匹配子串（Windows `tasklist` / POSIX `pgrep`）。例：`dsh`、`embed`、`conversation_tree`。**注意**：`conversation-tree` id 对应的 process_marker 是 `conversation_tree`（Python 模块名 / 文件名约定）。 |
 | `dependencies` | list[string] | optional | 必须**先于本组件启动**的 id 列表。顺序信息性——拓扑排序由 caller 负责（Kahn 算法）。**不**自递归依赖。 |
 | `config_schema` | dict | optional | 预留 JSON-Schema 片段。line3 当前所有组件都是 `{}`——未启用校验。 |
 | `healthcheck.type` | enum | optional | 健康检查类型：`port`（TCP 端口监听）/ `pipe`（命名管道）/ `http`（HTTP endpoint）。 |
@@ -107,7 +107,7 @@ components:
 - `dependencies: [embedding]`——dsh 在启动时挂 MCP memory-v5，MCP server 启动会探活嵌入端口。这意味着 dsh 强依赖 embedding **启动**，但不要求 embedding **健康**（dsh 的 MCP 配置 `failOnStartupError: false`，端口起不来时工具列表为空但不报错）。
 - `watchdog: self` + `start_script: bin/start-dsh-ikaros.bat`——bat 内嵌 self-respawn 循环（计划中，待实测），启动器不重复拉起。
 - `restart_script` 用 ps1 而非 bat——杀 node.exe 进程 + 重启需要 PowerShell `Get-CimInstance` 跨进程命令行匹配（cmd 的 `wmic` 已废弃）。
-- `dsh_integration.overlay: core/ikaros-dsh/cordis.patch.yml`——这是 dsh 的"插件入口"。其他组件（tree/embed/herdr）此字段为 `null`。
+- `dsh_integration.overlay: core/ikaros-dsh/cordis.patch.yml`——这是 dsh 的"插件入口"。其他组件（tree/embed）此字段为 `null`。
 - `mcp_servers: [ikaros-v5-memory]`——`ikaros-v5-memory` 对应 `cordis.patch.yml` 第 23-35 行的 `id: memory-ikaros-v5` 段（注意 MCP server id 是 `memory-ikaros-v5`，但服务名 `serverName: ikaros-v5`；registry 字段记 `ikaros-v5-memory` 是为了与 v5 工具前缀 `v5_*` 区分的命名约定）。
 
 ### 2.2 `conversation-tree` —— 树形对话面板
@@ -174,39 +174,14 @@ components:
 - **健康校验缺语义**：port + health 不够——必须加 probe 向量非零校验（AGENTS.md 2026-08-14 教训）。当前 schema 没体现；**修正建议**：`healthcheck.extra: {probe: "verify-non-zero-vector"}`，loader 不强制，由启动器自行读取。
 - `dsh_integration.mcp_servers: []`——embedding 本身不挂 MCP（dsh 通过 MCP memory-v5 间接触达 embedding）。
 
-### 2.4 `herdr` —— Coding-Agent 多路复用器
+### 2.4 ~~`herdr`~~ —— ⚠️ 已退役（2026-08-23）
 
-```yaml
-- id: herdr
-  name: Herdr Coding-Agent Multiplexer
-  category: runtime         # 运行时基础设施（vs tool 是用户态工具）
-  port: null                # ⚠️ 非 TCP，走命名管道 \\.\pipe\...
-  process_marker: herdr     # herdr.exe 进程
-  dependencies: []          # 无依赖
-  config_schema: {}
-  healthcheck:
-    type: pipe
-    endpoint: '\\\\.\\pipe\\herdr'   # 占位命名管道名（实际由 herdr.exe 配置决定）
-  lifecycle:
-    start_script: bin/start-omp.bat   # 当前用 omp/pi TUI 入口（herdr 链路前端）
-    stop_script: null
-    restart_script: null
-    watchdog: self                   # herdr 自带（按 AGENTS.md 约定）
-  dsh_integration:
-    overlay: null
-    mcp_servers: []
-```
+herdr（Coding-Agent 多路复用器，含 `core/herdr/` 包、`bin/start-omp.bat`、命名管道健康检查）已随 **pi/omp 底座整体退役**：
+- `config/components.yaml` 不再登记该组件（当前 3 组件：dsh / conversation-tree / embedding）；
+- 底座统一为 **deepseek-harness (dsh) 工作引擎**，外部编码 agent 执行由 dsh overlay（terminal / LSP / MCP）承载；
+- `core/herdr/`、`runtime/herdr/herdr.exe`、`data/omp/`、`runtime/bun/omp.exe` 均已移除。
 
-**语义解读**：
-
-- `category: runtime`——herdr 是"基础设施运行时"，区别于 `tool`（用户态工作引擎）。未来若引入更多 runtime（celery worker / redis / 等等），它们都归此 category。
-- `port: null`——**关键**。herdr 是 Windows 命名管道 `\\.\pipe\herdr`，不是 TCP。registry 明确：`port: int | None`，`None` 表示"无 TCP 端口；不要发明默认值"。`process_marker` + 健康检查走 `pipe` 类型兜底。
-- `healthcheck.endpoint: '\\\\.\\pipe\\herdr'`——YAML 里反斜杠需要**双重转义**（YAML 字符串里 `\\` 表示一个 `\`，再加 `\.\pipe\herdr` 的字面反斜杠）。实际 Windows API 调用还需要再处理一次（Python raw string 或 `os.path.normpath`）。
-- **endpoint 占位问题**：`\\.\pipe\herdr` 是**猜测的**管道名。实际 herdr.exe 配置决定管道名（看 `runtime/herdr/herdr.exe --help` 或文档）。**已知问题**：YAML 当前是占位，启动器若按此检查会失败。**修正建议**：实际管道名确认后更新；或让 herdr 在 `data/logs/herdr.status.json` 自报管道名，启动器读这个文件。
-- `lifecycle.start_script: bin/start-omp.bat`——**实际启动的是 omp TUI**（omp = oh-my-pi，编码 agent），herdr 是 omp 的后端引擎。换言之，`start-omp.bat` 间接拉起 herdr。**这个 indirection 反映在 schema 里不优雅**——`start_script` 字段名暗示直接启动，实际是间接启动。**修正建议**：拆出 `bin/start-herdr.bat` 作为独立 worker，`start-omp.bat` 改为只启动 omp TUI（依赖 herdr 已运行）。
-- `dependencies: []`——herdr 无依赖；omp TUI 启动时若 herdr 没起会自己起（omp 内置 herdr 检测）。
-- `watchdog: self`——herdr.exe 自带 watchdog（herdr 是进程管理框架，原生支持子进程死掉重拉）。
-- `dsh_integration: {}`——herdr 与 dsh **不直接集成**；dsh 与 herdr 的桥接是经 conversation-tree 的 `CodingAgentSupervisor`（`core/herdr/supervisor.py`），把 herdr 当 Socket API 客户端调，不挂 MCP。
+> 若未来需要"外部 agent 复用器"，按本规范新注册组件即可——`process_marker` 与 `healthcheck.type: pipe` 的通用能力仍在 registry 保留（`port: null` 表示无 TCP 端口）。
 
 ---
 
@@ -230,18 +205,12 @@ components:
                 ┌─────────────────┐
                 │ conversation-   │  ← 用户面板 (:48920)
                 │     tree        │     V5 检索路由（unified_retrieve）
-                │  (ThreadingHTTP)│
-                └─────────────────┘
-
-                ┌─────────────────┐
-                │     herdr       │  ← 按需启动（独立管道，dsh/tree 不依赖）
-                │  (命名管道)     │     经 CodingAgentSupervisor 被 tree 调
-                └─────────────────┘
+│  (ThreadingHTTP)│
+                 └─────────────────┘
 ```
 
 **注意**：
 - `memory_v5` 在拓扑上是 `embedding` 的下游 + `dsh` / `conversation-tree` 的上游；但 components.yaml 当前**未注册** `memory_v5` 为独立条目（被当作 core 子模块）。**line3 实施时建议补全**（详见 §2.2 修正建议 + §6 open questions）。
-- `herdr` 拓扑独立——既不是 dsh 的依赖，也不被 dsh 依赖。
 
 ---
 
@@ -260,7 +229,7 @@ components:
 5. **跑端到端 smoke**：
    ```sh
    ikaros <id>           # 启动
-   # 用实际功能测试一次（v5_memory_search / 树面板聊天 / herdr 管道探测 / embedding 检索）
+   # 用实际功能测试一次（v5_memory_search / 树面板聊天 / embedding 检索）
    ikaros status          # 必须显示 healthy
    ikaros stop <id>       # 验证 stop 路径
    ```
@@ -298,7 +267,7 @@ assert dsh.dsh_integration["overlay"].endswith("cordis.patch.yml")
 `core/components/registry.py` 末尾已带 `__main__`：
 ```sh
 python core/components/registry.py
-# {"count": 4, "ids": ["dsh", "conversation-tree", "embedding", "herdr"]}
+# {"count": 3, "ids": ["dsh", "conversation-tree", "embedding"]}
 ```
 
 未来可扩为 `ikaros doctor` 的子检查项（详 §1.1 `ikaros doctor` 检查项清单）。
@@ -317,7 +286,7 @@ specs = load_components()  # 缺字段 → ValueError
 ## 6. Open Questions（line3 实施时需 line3 owner 决策）
 
 - [ ] **`memory_v5` 是否升级为独立组件条目？** 当前 dsh 的 `dependencies: [embedding]` 显式列了 embedding，但 conversation-tree 写的 `[memory_v5]` 是个未注册的 id。**建议**：要么把 memory_v5 升级为 `category: memory` 的独立条目（`port: null`，进程嵌入在调用方里），要么把 conversation-tree 的 dependencies 改为 `[embedding]`。前者更准确（memory_v5 是有 MCP server 进程的子服务），后者更简单。
-- [ ] **`process_marker` 命名规范是否统一为下划线？** 当前 dsh/embed/herdr 都是单词（直接用 id），但 conversation-tree 的 marker 是下划线。**建议**：约定 `process_marker` = `id` 去掉 dash（kebab-case → snake_case），但**实测 Windows tasklist 命令行是否保留 dash**——若保留，则 marker 必须含 dash。
+- [ ] **`process_marker` 命名规范是否统一为下划线？** 当前 dsh/embed 都是单词（直接用 id），但 conversation-tree 的 marker 是下划线。**建议**：约定 `process_marker` = `id` 去掉 dash（kebab-case → snake_case），但**实测 Windows tasklist 命令行是否保留 dash**——若保留，则 marker 必须含 dash。
 - [ ] **`watchdog: self` 的"自管"语义如何校验？** 当前是声明式（YAML 字段），无强制。**建议**：加 loader 验证——worker 脚本存在且 `grep -E 'while|loop|respawn|restart' worker` 非空（启发式）。
 - [ ] **`healthcheck.extra` 字段什么时候启用？** line3 当前空。**建议**：embedding 第一个启用（`{"probe": "verify-non-zero-vector"}`），loader 透传不解析，启动器读 extra 自行决定校验逻辑。
 - [ ] **`category` 是否要扩枚举？** 当前 `memory / ui / runtime / tool / embedding` 5 个；将来加 `mcp_server` / `cli` 等类别时要同步 `VALID_CATEGORIES`。
@@ -336,14 +305,15 @@ specs = load_components()  # 缺字段 → ValueError
 
 ---
 
-## 附录 A：当前 4 个组件元数据速查表
+## 附录 A：当前 3 个组件元数据速查表
 
 | id | category | port | process_marker | start_script | watchdog |
 |----|----------|------|----------------|--------------|----------|
 | `dsh` | tool | 3080 | `dsh` | `bin/start-dsh-ikaros.bat` | self |
 | `conversation-tree` | ui | 48920 | `conversation_tree` | `python core/conversation-tree/server.py --port 48920` | self (planned) |
 | `embedding` | embedding | 8587 | `embed` | `null` | self (gap: 当前 bat 无 self-respawn) |
-| `herdr` | runtime | null | `herdr` | `bin/start-omp.bat` (间接) | self |
+
+> `herdr`（runtime / null / `bin/start-omp.bat`）已于 2026-08-23 随 pi 底座删除。
 
 ## 附录 B：必需字段最小集（loader 强校验）
 

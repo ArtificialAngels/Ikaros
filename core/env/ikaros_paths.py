@@ -67,10 +67,6 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "models": {
         "embedding": "core/memory_v5/models/bge-m3-q8_0.gguf",
     },
-    "omp": {
-        "root": "data/omp",
-        "agent": "data/omp/agent",
-    },
     "ports": {
         "embedding": 8587,
         "llama": 8080,
@@ -374,9 +370,7 @@ class IkarosPaths:
         env["IKAROS_DSH_WEB_PORT"] = str(self.get("dsh.web_port", 3080))
         env["IKAROS_DSH_OVERLAY"] = self.get("dsh.overlay", str(self.root / "core/ikaros-dsh/cordis.patch.yml"))
 
-        # omp
-        env["IKAROS_OMP_AGENT"] = self.get("omp.agent", str(self.root / "data/omp/agent"))
-        env["PI_CODING_AGENT_DIR"] = env["IKAROS_OMP_AGENT"]
+        # 2026-08-23: omp / pi 底座已退役 (IKAROS_OMP_AGENT / PI_CODING_AGENT_DIR 移除)
 
         # LLM / Embedding
         env["LLAMA_SERVER"] = self.get("llama.server", str(self.root / "runtime/llama/b10000-cuda/llama-server.exe"))

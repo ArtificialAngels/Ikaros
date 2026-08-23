@@ -764,6 +764,7 @@ class ConversationTree:
         usage: Optional[Dict[str, Any]] = None,
         skills_used: Optional[List[str]] = None,
         force_branch: bool = False,
+        edit_source: Optional[Dict[str, Any]] = None,
     ) -> ConvNode:
         with self._lock:
             pid = parent_id or self.current_id
@@ -810,13 +811,22 @@ class ConversationTree:
                 summary=sm,
                 state=_clone(state) if state is not None else _clone(parent.state),
                 config=_clone(config) if config is not None else _clone(parent.config),
-                meta={"created_at": time.time(), "title": title},
+                # 2026-08-23 (卡片切分修复): 显式分叉节点打 branch_start 标记 →
+                # build_cards._card_heads 据此认定卡片头。手动 fork (branch_from / 前端
+                # force_branch) 永开新卡, 连续对话 (未 fork) 永并入当前卡 —— 完整落实
+                # "一个对话卡 = 一段完整对话" 设计 (fork 出的新节点天然成为卡片头)。
+                meta={"created_at": time.time(), "title": title,
+                      "branch_start": bool(force_branch)},
                 thinking=thinking,
                 tool_calls=list(tool_calls) if tool_calls else [],
                 usage=usage or {},
                 skills_used=list(skills_used) if skills_used else [],
                 created_at=time.time(),
             )
+            # 2026-08-23 (编辑重发链路): 记录编辑来源 {node_id, message_index} →
+            # UI 可作"修订自"标注, 记忆/审计可追溯; 不参与卡片切分判定 (branch_start 已定案)
+            if edit_source:
+                node.meta["edit_source"] = dict(edit_source)
             self.nodes[node.id] = node
             parent.children.append(node.id)
             self.current_id = node.id
@@ -1432,6 +1442,10 @@ class ConversationTree:
             kids = [c for c in parent.children if c in self.nodes]
             if len(kids) >= 2 and n.id not in trunk_path:
                 heads.add(n.id)          # 分支起点 (非主线延续) → 新卡头
+            elif (n.meta or {}).get("branch_start") and n.id not in trunk_path:
+                # 2026-08-23 (卡片切分修复): 显式 fork (branch_from / force_branch) 节点
+                # 即使父节点无 ≥2 子 (深层分支链) 也独立成卡 —— fork 出的新节点天然卡片头。
+                heads.add(n.id)
         return heads
 
     def _collect_card(self, head_id: str, heads: set) -> "ConvCard":

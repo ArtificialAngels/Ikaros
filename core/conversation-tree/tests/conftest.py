@@ -138,15 +138,12 @@ def reset_state():
     server._retriever = None
     server._sessions = []
     server._active_session_id = None
-    # supervisor 单例可能也已构造, 重置让下个测试惰性重建
-    server._supervisor = None
     yield
     # 还原 (避免 fixture 间互相干扰)
     server._tree = saved["tree"]
     server._retriever = saved["retriever"]
     server._sessions = saved["sessions"]
     server._active_session_id = saved["active_id"]
-    server._supervisor = None
 
 
 @pytest.fixture

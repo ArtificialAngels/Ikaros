@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ikaros 项目架构 · 2026-08-19</title>
+<title>Ikaros 项目架构 · 2026-08-23</title>
 <style>
   :root{
     --bg:#f5f7fa; --card:#ffffff; --ink:#1f2933; --muted:#647084;
@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Ikaros 项目架构全景</h1>
-  <div class="sub">快照日期 2026-08-19 · dsh (DeepSeek Harness) 时代 · 3 个常驻 TCP 服务 + Herdr 命名管道</div>
+  <div class="sub">快照日期 2026-08-23 · dsh (DeepSeek Harness) 时代 · 3 个常驻 TCP 服务</div>
 
   <!-- 工作引擎总入口 -->
   <div class="card panel">
@@ -90,7 +90,7 @@
 
   <!-- 服务层 -->
   <div class="card">
-    <h2><span class="tag t-blue">服务层</span> 3 个常驻 TCP 组件 (+ Herdr 命名管道)</h2>
+    <h2><span class="tag t-blue">服务层</span> 3 个常驻 TCP 组件</h2>
     <div class="svcs">
       <div class="svc"><div class="p">:3080</div><h3>dsh 工作引擎</h3>
         <p>DeepSeek Harness web GUI（npm 本地安装 + Ikaros overlay）</p><span class="badge b-back">Backend</span></div>
@@ -106,9 +106,8 @@
         <tr><td>:3080</td><td>dsh 工作引擎 (DeepSeek Harness web)</td><td>runtime/dsh/ + overlay core/ikaros-dsh/cordis.patch.yml</td><td>✅ bin/start-dsh-ikaros.bat web</td></tr>
         <tr><td>:48920</td><td>对话树面板 (Conversation Tree)</td><td>core/conversation-tree/server.py（后端引擎 core/memory_v5/conversation_tree.py）</td><td>✅ python core/conversation-tree/server.py --port 48920</td></tr>
         <tr><td>:8587</td><td>Embedding (bge-m3 Q8_0)</td><td>各组件启动脚本自带 watchdog（v5 注入 / 对话树检索）</td><td>✅ 自动拉起</td></tr>
-        <tr><td>命名管道</td><td>Herdr 终端编排 (coding-agent 多路复用器)</td><td>runtime/herdr/herdr.exe（无 TCP 端口）</td><td>✅ 按需启动</td></tr>
       </table>
-      <p style="font-size:11px;color:var(--muted)">Herdr 终端编排（coding-agent 多路复用器）使用 <b>命名管道</b>（无 TCP 端口），由 dsh overlay 的 terminal / tool-terminal 工具按需启动。<br>已退役（勿加回）：本地 LLM :8080、控制面板 :9100、Hermes 底座 :8642 / :8650 / :9119 / :8088、N.E.K.O 桌宠 :48911 / :48912 / :48915、语音桥 :7870 / :7871。</p>
+      <p style="font-size:11px;color:var(--muted)">已退役（勿加回）：本地 LLM :8080、控制面板 :9100、Hermes 底座 :8642 / :8650 / :9119 / :8088、N.E.K.O 桌宠 :48911 / :48912 / :48915、语音桥 :7870 / :7871、herdr / omp (pi 底座)。<br>dsh overlay（terminal / tool-terminal）为工作引擎提供持久 PTY，2026-08-23 起不再需要 herdr 命名管道。</p>
     </details>
   </div>
 
@@ -118,7 +117,7 @@
     <div class="layers">
       <div class="layer"><div class="lh">🧠 灵魂核心</div>
         <div class="items">
-          <span class="pill"><code>core/memory_v5/</code> V5 自我认知引擎（包名 memory_v5，49 个 v5_* MCP 工具）</span>
+          <span class="pill"><code>core/memory_v5/</code> V5 自我认知引擎（包名 memory_v5，48 个 v5_* MCP 工具）</span>
           <span class="pill"><code>core/memory_v5/data/v5/</code> 人格+记忆库（v5.db + chroma，对外契约不改）</span>
         </div></div>
       <div class="layer"><div class="lh">🪟 表现层</div>
@@ -129,7 +128,6 @@
       <div class="layer"><div class="lh">🛠️ 基础设施</div>
         <div class="items">
           <span class="pill"><code>runtime/dsh/</code> DeepSeek Harness 工作引擎（npm 本地安装）</span>
-          <span class="pill"><code>runtime/herdr/</code> coding-agent 终端多路复用器（herdr.exe + 命名管道）</span>
           <span class="pill"><code>core/env/</code> 环境配置 / CLI / 初始化（ikaros-paths.json + llama_resolver）</span>
           <span class="pill"><code>bin/</code> 启动器（start-dsh-ikaros / ikaros-env / restart / secret-scan）</span>
           <span class="pill"><code>scripts/</code> setup-native.py / fetch-upstreams.py（bootstrap 工具）</span>
@@ -142,12 +140,11 @@
     <h2><span class="tag t-teal">数据流</span> 一次对话怎么走</h2>
     <div class="flow">
       <div class="step"><div class="dot">1</div><div>用户在 <b>dsh web :3080</b>（React + Monaco + terminal + LSP）发起对话或代码任务</div></div>
-      <div class="step"><div class="dot">2</div><div>dsh overlay 注入 <code>v5_* MCP</code>（memory_v5 stdio, 49 工具）+ 持久 PTY 终端 + LSP + Ikaros persona</div></div>
+      <div class="step"><div class="dot">2</div><div>dsh overlay 注入 <code>v5_* MCP</code>（memory_v5 stdio, 48 工具）+ 持久 PTY 终端 + LSP + Ikaros persona</div></div>
       <div class="step"><div class="dot">3</div><div><b>对话树 :48920</b>（独立面板，Explore.poker 卡片图风格）走 ikaros 单模式：注入完整 persona + 树域记忆 → DeepSeek 直连 + 只读工具回路</div></div>
       <div class="step"><div class="dot">4</div><div>Embedding :8587（bge-m3 Q8_0，1024 维）为 v5 注入与对话树检索提供向量</div></div>
       <div class="step"><div class="dot">5</div><div>逐轮记忆轻写进 <b>V5（core/memory_v5/data/v5/）</b>；后台 reflect 流水线提炼事实/情感/自我模型</div></div>
       <div class="step"><div class="dot">6</div><div>V5 经 <code>memory_api / v5_* MCP 工具</code> 暴露检索（dsh web + 对话树共享）</div></div>
-      <div class="step"><div class="dot">7</div><div>Herdr 命名管道为 dsh terminal / tool-terminal 提供持久的 PTY 会话（无 TCP 端口）</div></div>
     </div>
   </div>
 
@@ -171,7 +168,7 @@
     </div>
   </div>
 
-  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-08-19 生成 · 数据来自 docs/ARCHITECTURE.md §1.1 §1.2 §1.5 与目录核查</footer>
+  <footer>Ikaros Architecture Snapshot · 由 tools/gen_architecture_html.py 于 2026-08-23 生成 · 数据来自 docs/ARCHITECTURE.md §1.1 §1.2 §1.5 与目录核查</footer>
 </div>
 </body>
 </html>

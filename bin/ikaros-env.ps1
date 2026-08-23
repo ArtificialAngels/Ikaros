@@ -1,4 +1,4 @@
-# ikaros-env.ps1 — Ikaros 便携环境 (单一权威源, 自锚定)
+﻿# ikaros-env.ps1 — Ikaros 便携环境 (单一权威源, 自锚定)
 # 由 PowerShell 脚本 dot-source 本文件; 锚点 = $PSScriptRoot 规范化推导, 不写死盘符
 # 重构: 2026-08-18 (移除 hermes/neko, 新增 dsh)
 $env:IKAROS_ROOT = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path.TrimEnd('\')
@@ -27,14 +27,10 @@ $env:IKAROS_DSH_PROFILE = Join-Path $root "data\dsh\profiles"
 $env:IKAROS_DSH_WEB_PORT = "3080"
 $env:IKAROS_DSH_OVERLAY = Join-Path $root "core\ikaros-dsh\cordis.patch.yml"
 
-# omp (oh-my-pi) 编码 agent
-$env:IKAROS_OMP_AGENT = Join-Path $root "data\omp\agent"
-$env:PI_CODING_AGENT_DIR = $env:IKAROS_OMP_AGENT
 
 
 # 其它
 $env:IKAROS_RUST = Join-Path $root "runtime\rust"
-$env:IKAROS_HERDR = Join-Path $root "runtime\herdr\herdr.exe"
 $env:THIRDSPACE_VAULT = Join-Path $root "data\thirdspace-vault"
 
 # 端口

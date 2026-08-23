@@ -26,14 +26,10 @@ export IKAROS_DSH_PROFILE="${IKAROS_DATA}/dsh/profiles"
 export IKAROS_DSH_WEB_PORT="3080"
 export IKAROS_DSH_OVERLAY="${IKAROS_ROOT}/core/ikaros-dsh/cordis.patch.yml"
 
-# omp (oh-my-pi) 编码 agent
-export IKAROS_OMP_AGENT="${IKAROS_DATA}/omp/agent"
-export PI_CODING_AGENT_DIR="${IKAROS_OMP_AGENT}"
 
 
 # 其它运行时
 export IKAROS_RUST="${IKAROS_RUNTIME}/rust"
-export IKAROS_HERDR="${IKAROS_RUNTIME}/herdr/herdr.exe"
 export THIRDSPACE_VAULT="${IKAROS_DATA}/thirdspace-vault"
 
 # 端口
@@ -41,5 +37,5 @@ export IKAROS_PORT_EMBEDDING="8587"
 export IKAROS_PORT_LLM="8080"
 export IKAROS_PORT_LLAMA="8080"
 
-# omp / bun 便携二进制
-export PATH="${IKAROS_ROOT}/runtime/bun/bin:${IKAROS_ROOT}/runtime/node/node_modules/bun/bin:${PATH}"
+# bun portable runtime
+export PATH="${IKAROS_ROOT}/runtime/node/node_modules/bun/bin:${PATH}"

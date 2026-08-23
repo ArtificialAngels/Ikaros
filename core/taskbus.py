@@ -7,7 +7,8 @@
 - :class:`EventBus` —— 单进程内线程安全 pub/sub。``subscribe(handler)`` 返回退订函数,
   ``publish(event)`` 广播给所有订阅者; 单个 handler 异常不影响其他订阅者。
 
-零第三方依赖 (标准库)。可被 conversation-tree 的 SSE 端点、CodingAgentSupervisor 共用同一总线。
+零第三方依赖 (标准库)。当前由 conversation-tree SSE 端点与节点 exec_state 徽标共用。
+(2026-08-23: herdr / CodingAgentSupervisor 已随 pi 底座退役, 此总线保留为对话树内部事件服务)
 
 事件协议版本化 (``EVENT_PROTOCOL_VERSION``) 以便向前兼容 —— 对应 herdr 的 ``PROTOCOL_VERSION``。
 """
@@ -32,8 +33,8 @@ __all__ = [
 # Ikaros 自有事件协议从 1 开始, 与 herdr wire 协议号独立)。
 EVENT_PROTOCOL_VERSION = 1
 
-# 节点执行状态: 对齐 herdr idle/working/blocked/done, 扩展 pending/done/unknown
-# 供 conversation-tree 节点徽标 + CodingAgentSupervisor 状态机共用。
+# 节点执行状态: 继承 herdr idle/working/blocked/done 语义, 扩展 pending/unknown
+# 供 conversation-tree 节点 exec_state 徽标共用。
 EXEC_STATES = ("idle", "pending", "working", "blocked", "done", "unknown")
 
 # 常用事件类型 (类型化事件名)
