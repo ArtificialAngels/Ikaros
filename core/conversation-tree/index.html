@@ -2942,11 +2942,17 @@ function smartBezier(sp,tp,fromPort,toPort){
 }
 /* ═══ 渲染脏标记: 卡片移动/缩放时标记, renderCardEdges 检查后清除 ═══ */
 let _edgesDirty = true;   // 首次必须渲染
+let _edgeTopoSig = '';   // 2026-08-24: 链接拓扑签名 (from>to@port 集合+焦点id), 变化强制重画
 let _edgeFrameCache = null;  // 帧级 getBoundingClientRect 缓存 {frameId, map:{id:{w,h}}}
 
 function markEdgesDirty(){ _edgesDirty = true; }
 
 function renderCardEdges(posOverride){
+  // 2026-08-24 修复: 拓扑签名自检 — links 增删/端口变化/焦点切换 = 结构性画面变化,
+  // 即使静止 (脏标记 false) 也强制重画。脏标记门控只应节流"几何微变" (拖拽/气泡逐帧),
+  // 结构变化不能依赖每个调用方记得标脏 (此前 link/unlink/展开/关卡后连线不刷新)。
+  const _topo=((tree&&tree.links)||[]).map(l=>l.from_card+'>'+l.to_card+'@'+(l.from_port||'')+'-'+(l.to_port||'')).join('|')+'#'+_focusId();
+  if(_topo!==_edgeTopoSig){_edgeTopoSig=_topo;_edgesDirty=true;}
   // 优化 2: 脏标记 — 静止时跳过
   if(!_edgesDirty && !posOverride) return;
   _edgesDirty = false;
@@ -3152,7 +3158,7 @@ function onNodeMouseDown(e,nodeId){
       // 2026-08-16 (显式连接图重构): 拖卡 = 自由摆放 (关系经锚点拖线, 不再拖卡挂接)
       // Persist manual position so re-renders don't reset it
       manualPositions[nodeId]={x:p.x, y:p.y};
-      collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
+      markEdgesDirty();collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
     }
   }
   window.addEventListener('mousemove',onMove);
@@ -3759,7 +3765,7 @@ function toast(msg){
       if(_touchDragRAF){cancelAnimationFrame(_touchDragRAF);_touchDragRAF=null;}
       const nd=_touchDrag.nodeId;
       manualPositions[nd]={x:displayPositions[nd].x,y:displayPositions[nd].y};
-      collidePushCards(nd); renderNodes();renderEdges();miniLayout();
+      markEdgesDirty();collidePushCards(nd); renderNodes();renderEdges();miniLayout();
       _touchDrag=null;
       return;
     }
@@ -4053,6 +4059,7 @@ let _threadTimer=null;
 function renderAll(){
   calcLayout();
   renderNodes();
+  markEdgesDirty();   // 2026-08-24 修复: calcLayout 可能重排位置, 全量重渲染后连线必须重画 (此前静止态门控跳过)
   renderEdges();
   // 对话渲染拆帧: 大块 markdown/DOM 构建 (~100ms) 不与卡片 FLIP 形变动画抢主线程 —
   // L2/L3 时延迟到动画结束后渲染; L1 时卡片在 holder 内, 对话无需渲染
@@ -6872,7 +6879,7 @@ function headerDragStart2(e,nodeId){
       document.body.classList.remove('dragging-node');
       if(moved){
         manualPositions[nodeId]={x:displayPositions[nodeId].x,y:displayPositions[nodeId].y};  // 持久化拖动结果
-        collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
+        markEdgesDirty();collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
       }else if(nodeId&&_focusId()!==nodeId){
         setFocusCard(nodeId);                                           // 点击上横条 = 焦点切换 (L2/L3 卡之间切换主卡; 焦点判定 _focusId)
       }
