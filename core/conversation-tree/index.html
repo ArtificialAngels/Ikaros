@@ -2564,11 +2564,17 @@ function installState(s){
 
 /* ===== Canvas State ===== */
 let panX=20,panY=20,zoom=1;
-let zoomTarget=1,zoomVel=0,zoomAnimId=null;
+let zoomTarget=1,zoomVel=0;
 let _wheelZoom=false;
+let _lastBarZoom=null;   // chat-topbar 字号反算缓存 (zoom 不变时跳过)
 let _zAnchorMx=0,_zAnchorMy=0,_zAnchorWx=0,_zAnchorWy=0;
 let _fxLoopTick=0;
+let _zoomLoopOn=false;   // rAF 循环启停: 静止时挂起 (零空转开销), 缩放活动时唤醒
+function _zoomLoopWake(){
+  if(!_zoomLoopOn){ _zoomLoopOn=true; requestAnimationFrame(zoomAnimLoop); }
+}
 function zoomAnimLoop(){
+  if(!_zoomLoopOn)return;
   _fxLoopTick++;
   if(_wheelZoom || Math.abs(zoomVel)>0.001){
     var force=(zoomTarget-zoom)*0.10 - zoomVel*0.80;
@@ -2578,9 +2584,12 @@ function zoomAnimLoop(){
     panY=_zAnchorMy-_zAnchorWy*zoom;
     applyTransform();
   }
-  requestAnimationFrame(zoomAnimLoop);
+  if(_wheelZoom || Math.abs(zoomVel)>0.001){
+    requestAnimationFrame(zoomAnimLoop);
+  }else{
+    _zoomLoopOn=false;   // 收敛: 挂起, 静止时不再空转
+  }
 }
-zoomAnimLoop();
 window.__fxLoopTick=function(){return _fxLoopTick;};
 window.__fxZoomStatus=function(){return {zoom:zoom,zoomTarget:zoomTarget,wheelZoom:_wheelZoom};};
 const nodePositions={};      // id -> {x,y} in layout coordinates
@@ -2723,10 +2732,15 @@ function applyTransform(){
     // 按钮为绝对大小 (CSS 固定 30.24px), 不反算缩放 — 随画布缩放自然变化
   }
   // 上横条标题字号反算: 视觉恒 12px (L2/L3 标题不随比例缩放, 无内容 zoom — 实时渲染)
-  document.querySelectorAll('.mini-thread .chat-topbar').forEach(t=>{
-    t.style.fontSize=(12/zoom)+'px';
-  });
-  if(typeof renderEdges==='function') renderEdges();   // 缩放/平移: 直接重建连线
+  // 仅在 zoom 变化时重算 (pan 平移不触发; zoom 不变时跳过循环)
+  if(zoom!==_lastBarZoom){
+    _lastBarZoom=zoom;
+    document.querySelectorAll('.mini-thread .chat-topbar').forEach(t=>{
+      t.style.fontSize=(12/zoom)+'px';
+    });
+  }
+  // 连线无需在 pan/zoom 时重画: edgesSvg 在 canvasLayer 内随 transform 同步移动/缩放,
+  // 几何变化 (拖拽/开卡/推挤) 已由 markEdgesDirty 驱动 renderEdges (renderCardEdges 内脏标记门控)。
   const zi=document.getElementById('zoomInfo');if(zi)zi.textContent=Math.round(zoom*100)+'%';
   miniUpdateViewport();
   // 卡片已是聚焦节点子元素 (canvasLayer 内), 随画布缩放/平移天然同步, 无需手动跟随
@@ -2740,7 +2754,7 @@ function screenToCanvas(sx,sy){
 /* ===== Rendering: Nodes ===== */
 /* 卡片视图渲染 (2026-08-15 poker 对齐): 只渲染卡片头节点 (整链折叠成一张卡),
    卡面 = 卡片信息 (标题/消息数/未读/类型徽标, nodeCardInner 已含)。 */
-function renderCardNodes(){
+function renderCardNodes(light){
   const layer=document.getElementById('nodesLayer');
   const existing=new Map();
   Array.from(layer.children).forEach(el=>existing.set(el.dataset.id,el));
@@ -2766,6 +2780,16 @@ function renderCardNodes(){
       }
     }
     const p=dispPos(n.id);if(!p)return;
+    if(light){
+      // 拖拽/推挤路径: 内容不变, 只同步位置 (跳过 nodeCardInner 全构建 + innerHTML 字符串比较)
+      const el=existing.get(n.id);
+      if(el){
+        el.style.setProperty('--nx',p.x+'px');el.style.setProperty('--ny',p.y+'px');
+        existing.delete(n.id);
+        return;
+      }
+      // 元素不存在 (理论不发生): 落完整路径兜底创建
+    }
     const cls=nodeCardCls(n)+' card-node';
     const style=nodeCardStyle(n,p);
     const inner=nodeCardInner(n);
@@ -2774,44 +2798,9 @@ function renderCardNodes(){
   existing.forEach(el=>el.remove());
   layer.appendChild(frag);
 }
-function renderNodes(){
-  if(viewMode==='card'){renderCardNodes();return;}
-  // 2026-08-16: node/group 视图已移除; 保留此分支以防未来扩展, 默认只走卡片视图
-  // DOM 复用: 已有节点只更新 style/class/内容 (元素保留 -> transform transition 平滑过渡),
-  // 新节点 append 并带 node-enter 入场动画; 消失节点移除
-  const layer=document.getElementById('nodesLayer');
-  const existing=new Map();
-  Array.from(layer.children).forEach(el=>existing.set(el.dataset.id,el));
-  const frag=document.createDocumentFragment();
-  tree.nodes.forEach(n=>{
-    // 聚焦卡片节点 + 多卡 mini 卡: 不重建, 保留子元素 (mini-thread 面板) 与 is-card 形态
-    // (避免 doJump→installState→renderAll 把卡片重置回 180px 导致形变闪烁/清空 mini 卡)
-    // 2026-08-12: 仅 _cards 登记节点跳过 — currentId 可能被 installState 重置为后端值 (无面板), 不应跳过 (残留空壳 is-card)
-    if(_cards.has(n.id)){
-      const el=existing.get(n.id);
-      if(el){
-        const p=dispPos(n.id);
-        if(p){ el.style.setProperty('--nx',p.x+'px'); el.style.setProperty('--ny',p.y+'px'); }
-        el.classList.add('is-card');
-        // 更新焦点/选中标记 (currentId 切换后旧卡残留 current 会误导视觉/输入框判断)
-        el.classList.toggle('current', n.id===tree.currentId);
-        el.classList.toggle('selected', n.id===selectedNode);
-        const miniEl=_cards.get(n.id);                            // mini 是等级权威: 宿主卡类随 mini 同步 (防 L3 闪回 L2)
-        if(miniEl)el.classList.toggle('l3', miniEl.classList.contains('l3'));
-        el.classList.toggle('l2', !el.classList.contains('l3'));   // mini 卡默认 l2 浏览形态, L3 卡保持
-        existing.delete(n.id);
-        return;                         // 保留元素与子元素, 直接复用
-      }
-      // 无既有元素则落到下方正常创建 (首次), 由 renderAll 的 ensurePanel 兜底补建面板
-    }
-    const p=dispPos(n.id);if(!p)return;
-    const cls=nodeCardCls(n);
-    const style=nodeCardStyle(n,p);
-    const inner=nodeCardInner(n);
-    applyNodeEl(frag,layer,existing,n.id,cls,style,inner,true);
-  });
-  existing.forEach(el=>el.remove());
-  layer.appendChild(frag);
+function renderNodes(light){
+  // 2026-08-16 起单一卡片视图: node/group 视图已移除, 直接走卡片渲染。
+  renderCardNodes(light);
 }
 
 // 组卡/节点 DOM 复用 (与 renderNodes 同策略)
@@ -3214,7 +3203,7 @@ function onNodeMouseDown(e,nodeId){
       _nodeRAF=null;
       collidePushCards(nodeId);
       if(typeof markEdgesDirty==='function') markEdgesDirty();
-      renderNodes();renderEdges();
+      renderNodes(true);renderEdges();
       miniLayout();bumpIdle();
     });
   }
@@ -3733,12 +3722,14 @@ function toast(msg){
     _zAnchorWx=(mx-panX)/zoom; _zAnchorWy=(my-panY)/zoom;
     zoomTarget=newZoom;
     _wheelZoom=true;
+    _zoomLoopWake();
     bumpIdle();
   },{passive:false});
   // Touch support (2026-08-23: +惯性滚动 fling + 松手时速度采样 + 触屏卡片直接拖动)
   let touches=[],
       _t0=0,_tLast=0,_tX=0,_tY=0,_flingVX=0,_flingVY=0,_flingRAF=null,
-      _touchDrag=null;  // {nodeId, startX, startY, startPX, startPY}
+      _touchDrag=null,  // {nodeId, startX, startY, startPX, startPY}
+      _touchDragRAF=null;  // 触屏卡拖 rAF 节流 (事件只更新坐标, 渲染/碰撞合并到帧)
   function _stopFling(){ if(_flingRAF){cancelAnimationFrame(_flingRAF);_flingRAF=null;} _flingVX=0;_flingVY=0; }
   function _flingLoop(){
     if(Math.abs(_flingVX)<0.3&&Math.abs(_flingVY)<0.3){_flingRAF=null;return;}
@@ -3798,13 +3789,18 @@ function toast(msg){
       if(nodePositions[d.nodeId]){nodePositions[d.nodeId].x=d.x;nodePositions[d.nodeId].y=d.y;}
       const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(d.nodeId)+'"]');
       if(dragEl){dragEl.style.setProperty('--nx',d.x+'px');dragEl.style.setProperty('--ny',d.y+'px');}
-      // 走桌面等同路径: 同步 collidePushCards + renderNodes + 强制重排 + renderEdges (确保连线锚点与卡片位置同时)
-      if(typeof markEdgesDirty==='function') markEdgesDirty();
-      collidePushCards(d.nodeId);
-      renderNodes();
-      if(dragEl) void dragEl.offsetHeight;
-      if(typeof renderEdges==='function') renderEdges();
-      e.preventDefault();
+      e.preventDefault();   // 先阻止原生滚动/缩放, 再节流 (漏掉会导致节流期页面跟随滚动)
+      // rAF 节流: 碰撞推挤/重渲染/连线合并到帧 (touchmove 可达 120Hz, 同步全量渲染会脱钩)
+      if(_touchDragRAF)return;
+      _touchDragRAF=requestAnimationFrame(()=>{
+        _touchDragRAF=null;
+        if(typeof markEdgesDirty==='function') markEdgesDirty();
+        collidePushCards(d.nodeId);
+        renderNodes(true);
+        const de=document.querySelector('.node-card[data-id="'+CSS.escape(d.nodeId)+'"]');
+        if(de) void de.offsetHeight;   // 强制同步重排: 确保 --nx/--ny 已布局, 再重建连线 (防首帧脱钩)
+        if(typeof renderEdges==='function') renderEdges();
+      });
       return;
     }
     // 画布平移
@@ -3822,7 +3818,7 @@ function toast(msg){
       const newZoom=Math.min(3,Math.max(0.15,zoomTarget*(d1/Math.max(1,d0))));
       _zAnchorMx=mx0; _zAnchorMy=my0;
       _zAnchorWx=(mx0-panX)/zoom; _zAnchorWy=(my0-panY)/zoom;
-      zoomTarget=newZoom; _wheelZoom=true;
+      zoomTarget=newZoom; _wheelZoom=true; _zoomLoopWake();
       touches=[...e.touches];e.preventDefault();
     }
   },{passive:false});
@@ -3830,6 +3826,7 @@ function toast(msg){
     panning=false;
     // 触屏卡片拖动结束: 持久化 + 碰撞收敛
     if(_touchDrag){
+      if(_touchDragRAF){cancelAnimationFrame(_touchDragRAF);_touchDragRAF=null;}
       const nd=_touchDrag.nodeId;
       manualPositions[nd]={x:displayPositions[nd].x,y:displayPositions[nd].y};
       collidePushCards(nd); renderNodes();renderEdges();miniLayout();
@@ -6901,35 +6898,41 @@ function headerDragStart2(e,nodeId){
   // 2026-08-17 修复: L2/L3 卡经 reflow 后位置在 displayPositions 覆盖层, 必须优先读; 与 _bubble.sync / dispPos 保持一致
   const pos=displayPositions[nodeId]||nodePositions[nodeId];if(!pos)return;
   const startX=e.clientX,startY=e.clientY,startPX=pos.x,startPY=pos.y;
-  let moved=false;
-  function onMove(ev){
-    ev.preventDefault();
-    const dx=(ev.clientX-startX)/zoom,dy=(ev.clientY-startY)/zoom;
-    const nx=startPX+dx,ny=startPY+dy;
-    displayPositions[nodeId]={x:nx,y:ny};
-    if(nodePositions[nodeId]){nodePositions[nodeId].x=nx;nodePositions[nodeId].y=ny;}
-    moved=true;
-    if(typeof markEdgesDirty==='function') markEdgesDirty();
-    collidePushCards(nodeId);
-    renderNodes();
-    // 强制同步重排: 确保 --nx/--ny 已布局, 再重建连线 (防首帧脱钩)
-    const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(nodeId)+'"]');
-    if(dragEl) void dragEl.offsetHeight;
-    renderEdges();miniLayout();bumpIdle();
-  }
-  function onUp(ev){
-    window.removeEventListener('mousemove',onMove);
-    window.removeEventListener('mouseup',onUp);
-    document.body.style.userSelect='';
-    document.body.classList.remove('dragging-node');
-    if(moved){
-      manualPositions[nodeId]={x:displayPositions[nodeId].x,y:displayPositions[nodeId].y};  // 持久化拖动结果
-      collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
-    }else if(nodeId&&_focusId()!==nodeId){
-      setFocusCard(nodeId);                                           // 点击上横条 = 焦点切换 (L2/L3 卡之间切换主卡; 焦点判定 _focusId)
+    let moved=false;
+    let _hdrRAF=null;   // rAF 节流: 事件只更新数据坐标, 渲染/碰撞/连线合并到帧
+    function onMove(ev){
+      ev.preventDefault();
+      const dx=(ev.clientX-startX)/zoom,dy=(ev.clientY-startY)/zoom;
+      const nx=startPX+dx,ny=startPY+dy;
+      displayPositions[nodeId]={x:nx,y:ny};
+      if(nodePositions[nodeId]){nodePositions[nodeId].x=nx;nodePositions[nodeId].y=ny;}
+      moved=true;
+      if(_hdrRAF)return;
+      _hdrRAF=requestAnimationFrame(()=>{
+        _hdrRAF=null;
+        if(typeof markEdgesDirty==='function') markEdgesDirty();
+        collidePushCards(nodeId);
+        renderNodes(true);
+        // 强制同步重排: 确保 --nx/--ny 已布局, 再重建连线 (防首帧脱钩)
+        const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(nodeId)+'"]');
+        if(dragEl) void dragEl.offsetHeight;
+        renderEdges();miniLayout();bumpIdle();
+      });
     }
-    bumpIdle();
-  }
+    function onUp(ev){
+      window.removeEventListener('mousemove',onMove);
+      window.removeEventListener('mouseup',onUp);
+      if(_hdrRAF){cancelAnimationFrame(_hdrRAF);_hdrRAF=null;}
+      document.body.style.userSelect='';
+      document.body.classList.remove('dragging-node');
+      if(moved){
+        manualPositions[nodeId]={x:displayPositions[nodeId].x,y:displayPositions[nodeId].y};  // 持久化拖动结果
+        collidePushCards(nodeId); renderNodes();renderEdges();miniLayout();  // 松手最终收敛
+      }else if(nodeId&&_focusId()!==nodeId){
+        setFocusCard(nodeId);                                           // 点击上横条 = 焦点切换 (L2/L3 卡之间切换主卡; 焦点判定 _focusId)
+      }
+      bumpIdle();
+    }
   document.body.style.userSelect='none';
   document.body.classList.add('dragging-node');
   window.addEventListener('mousemove',onMove);
@@ -7020,11 +7023,13 @@ const _bubble={
     this.alpha += (0 - this.alpha)*this.ALPHA_DECAY;
     if(this.alpha < this.alphaMin) this.alpha=0;
     const A=this.alpha;
+    const frame=(this._frame=(this._frame||0)+1);  // 帧计数 (隔帧测量用)
     // 0) 跟踪 CSS 尺寸过渡: 重新测量所有卡片当前尺寸, 更新 target (开卡 L1→L2 时尺寸渐变, 单次 sync 测到小值 → target 偏小 → 推挤不足; 拖动时每帧 re-sync 无此问题)
+    //    性能: 元素引用在 sync 时缓存 (n.el), 失效才重查; 测量隔帧 (30Hz, 0.6s 过渡内单调, 减半强制回流)
     for(const n of ns){
-      const el=document.querySelector('.node-card[data-id="'+CSS.escape(n.nid)+'"]');
-      if(el){
-        const st=cardSizeOf(el);
+      if(!n.el||!n.el.isConnected) n.el=document.querySelector('.node-card[data-id="'+CSS.escape(n.nid)+'"]');
+      if(n.el && (frame&1)===0){
+        const st=cardSizeOf(n.el);
         n.targetHw=st.w/2; n.targetHh=st.h/2;
       }
     }
@@ -7059,8 +7064,8 @@ const _bubble={
     }
     // 3.5) 碰撞视觉反馈: 碰撞中的卡添加光晕脉冲 (仅在状态变化时操作 DOM)
     for(const n of ns){
-      const el=document.querySelector('.node-card[data-id="'+CSS.escape(n.nid)+'"]');
-      if(!el)continue;
+      const el=n.el;
+      if(!el||!el.isConnected)continue;
       if(hit.has(n.nid)){if(!el.classList.contains('colliding'))el.classList.add('colliding');}
       else{if(el.classList.contains('colliding'))el.classList.remove('colliding');}
     }
@@ -7090,10 +7095,9 @@ const _bubble={
     // 否则 tick.commit 会在 sync 之前把 displayPositions 覆盖回旧 n.x, 与 onMove 时序竞争 → 拖不动/松手闪现
     if(n.fixed) return;
     displayPositions[n.nid]={x:n.x, y:n.y};
-    const el=document.querySelector('.node-card[data-id="'+CSS.escape(n.nid)+'"]');
-    if(el){
-      el.style.setProperty('--nx', n.x+'px');
-      el.style.setProperty('--ny', n.y+'px');
+    if(n.el&&n.el.isConnected){
+      n.el.style.setProperty('--nx', n.x+'px');
+      n.el.style.setProperty('--ny', n.y+'px');
     }
   },
   stop(){ this.running=false; if(this.raf){ cancelAnimationFrame(this.raf); this.raf=0; } if(this.onStop){ const f=this.onStop; this.onStop=null; f(); } },
@@ -7113,7 +7117,7 @@ const _bubble={
       const nid=el.getAttribute('data-id'); if(!nid)return;
       const st=cardSizeOf(el);                       // 真实渲染体积
       const p=displayPositions[nid]||nodePositions[nid];
-      items.push({nid, w:st.w, h:st.h, x:p?p.x:0, y:p?p.y:0});
+      items.push({nid, w:st.w, h:st.h, x:p?p.x:0, y:p?p.y:0, el});
     });
     if(!items.length){ this.clear(); return; }
     const fIdx=(fixedId!=null?items.findIndex(c=>c.nid===fixedId):-1);
@@ -7125,9 +7129,10 @@ const _bubble={
       if(!n){
         // 首次加入: 家 = 当前显示位置 (世界坐标)。此后不再因其他卡变化而重置家 → 推开后记住 (粘性)。
         const home=displayPositions[c.nid]||nodePositions[c.nid]||{x:c.x,y:c.y};
-        n={nid:c.nid, x:c.x, y:c.y, fx:home.x, fy:home.y, hw:chw, hh:chh, targetHw:chw, targetHh:chh, fixed:isFixed};
+        n={nid:c.nid, x:c.x, y:c.y, fx:home.x, fy:home.y, hw:chw, hh:chh, targetHw:chw, targetHh:chh, fixed:isFixed, el:c.el};
         this.nodes.set(c.nid,n);
       }
+      n.el=c.el;                                      // 每次 sync 刷新元素引用 (重渲染后可能被替换)
       n.targetHw=chw; n.targetHh=chh;                 // 尺寸目标 (放大/缩小边缘渐进)
       n.fixed=isFixed;                                // 每次 sync 重新判定焦点, 旧焦点必须解固定
       if(isFixed){
