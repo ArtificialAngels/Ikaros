@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import json
 import os
 import queue
@@ -1473,9 +1474,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_text("index.html not found", 404)
             return
         body = path.read_bytes()
+        # 6a: gzip 协商压缩 — index.html 为 2.7MB 内联单文件 (three.js 内嵌), 压缩后 ~1/8。
+        # ThreadingHTTPServer 每连接独立线程, 压缩不阻塞其他请求; 不缓存压缩结果
+        # (HTML no-cache 每请求刷新, 压缩 2.7MB ≈ 数十 ms, 远小于传输+解析收益)。
+        accept = self.headers.get("Accept-Encoding", "")
+        if "gzip" in accept.lower():
+            body = gzip.compress(body, compresslevel=6)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
+        if "gzip" in accept.lower():
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         # 必须带 Content-Length, 否则 HTTP/1.1 keep-alive 下客户端只能等连接
         # 关闭才能判定 HTML 结束 —— 浏览器标签页会因此一直转圈。
         self.send_header("Content-Length", str(len(body)))
