@@ -2609,69 +2609,11 @@ const H_GAP=100,V_GAP=90;
 let selectedNode=null;
 let connecting=null;         // {fromId, fromX, fromY, toX, toY}
 let ctxMenuNode=null;        // node id for context menu
-const collapsedIds=new Set();  // 折叠的节点 id (子树不参与布局, 折叠节点按叶计算)
 
 /* ===== Layout Algorithm ===== */
 function calcLayout(){
-  // 2026-08-15 (poker 对齐): 卡片视图布局走卡片树 (只布局卡片头节点)
-  // 2026-08-16 修复: card 路径必须返回 calcCardLayout() 的尺寸 (fitView 依赖 maxX/maxY)
-  if(viewMode==='card'){return calcCardLayout();}
-  // Creation-order index: earlier nodes (by insertion) sort to the left
-  const orderIdx={};let oi=0;tree.nodes.forEach((n,id)=>{orderIdx[id]=oi++});
-  const pos={};let leaf=0;
-  const subCount={};  // id -> 子树节点总数 (含自身), 供折叠徽标使用
-  (function dfs(id,depth){
-    const n=tree.nodes.get(id);if(!n)return;
-    // Sort children by creation order for a predictable, comprehensible spread
-    const kids=n.children.filter(c=>tree.nodes.has(c)).sort((a,b)=>orderIdx[a]-orderIdx[b]);
-    if(!kids.length){pos[id]={x:leaf++,depth};subCount[id]=1;return;}
-    if(collapsedIds.has(id)){
-      // 折叠: 按叶布局, 但徽标需要整棵子树节点数
-      pos[id]={x:leaf++,depth};
-      let cnt=0;
-      (function countSub(nid){cnt++;const nn=tree.nodes.get(nid);if(!nn)return;(nn.children||[]).forEach(c=>{if(tree.nodes.has(c))countSub(c)});})(id);
-      subCount[id]=cnt;
-      return;
-    }
-    kids.forEach(k=>dfs(k,depth+1));
-    const xs=kids.map(k=>pos[k].x);pos[id]={x:(Math.min(...xs)+Math.max(...xs))/2,depth};
-    subCount[id]=1+kids.reduce((a,k)=>a+(subCount[k]||0),0);
-  })(tree.rootId,0);
-  let maxX=0,maxD=0;
-  Object.keys(pos).forEach(id=>{maxX=Math.max(maxX,pos[id].x);maxD=Math.max(maxD,pos[id].depth)});
-  // Top-down tree: depth → vertical (y), leaf order → horizontal (x)
-  const w=maxX*(NODE_W+H_GAP)+NODE_W+60, h=maxD*V_GAP+NODE_H+60;
-  // Set canvas dimensions
-  const layer=document.getElementById('canvasLayer');
-  layer.style.width=w+'px';layer.style.height=h+'px';
-  const es=document.getElementById('edgesSvg'),ts=document.getElementById('tempSvg');
-  es.setAttribute('width',w);es.setAttribute('height',h);
-  es.setAttribute('viewBox','0 0 '+w+' '+h);
-  ts.setAttribute('width',w);ts.setAttribute('height',h);
-  ts.setAttribute('viewBox','0 0 '+w+' '+h);
-  // Node positions (absolute within layer)
-  // 先清空旧键 — 折叠/剪枝后消失的节点不能残留位置 (否则 renderNodes 仍会渲染它们)
-  Object.keys(nodePositions).forEach(k=>delete nodePositions[k]);
-  // x = leaf_x * (NODE_W + H_GAP) + offset (horizontal = sibling spread, left→right)
-  // y = depth * V_GAP + offset (vertical = depth, top→bottom)
-  Object.keys(pos).forEach(id=>{
-    const manual=manualPositions[id];
-    nodePositions[id]=manual
-      ? {x:manual.x,y:manual.y}
-      : {x:pos[id].x*(NODE_W+H_GAP)+NODE_W/2+30, y:pos[id].depth*V_GAP+NODE_H/2+30};
-  });
-  // 多父级调和: 某节点有多个父级(含 mergeTarget)时, 向各父级平均位置轻移, 体现"实时算法布局"
-  // (单父级数据下 parentsOf 仅 1 项 → 不触发, 与旧 tidy-tree 表现一致, 无回归)
-  tree.nodes.forEach((n,id)=>{
-    const ps=parentsOf(id);
-    if(ps.length>1){
-      let sx=0,sy=0,c=0;
-      ps.forEach(pid=>{ const pp=nodePositions[pid]; if(pp){sx+=pp.x;sy+=pp.y;c++;} });
-      if(c){ nodePositions[id].x += (sx/c - nodePositions[id].x)*0.35; nodePositions[id].y += (sy/c - nodePositions[id].y)*0.35; }
-    }
-  });
-  Object.assign(_subCounts, subCount);
-  return {maxX:w, maxY:h};
+  // 2026-08-16 起单一卡片视图: node/group 树布局已移除, 直接走卡片布局。
+  return calcCardLayout();
 }
 
 /* ===== 卡片视图布局 (2026-08-16 显式连接图重构): 每卡独立 + 自由摆放 =====
@@ -2679,7 +2621,14 @@ function calcLayout(){
    排列 (一行放不下换行), 用户自由拖动 (manualPositions 持久)。 */
 function calcCardLayout(){
   const cards=tree&&tree.cards?tree.cards:[];
-  if(!cards.length){calcLayout();return;}
+  if(!cards.length){
+    // 空树 (新会话无卡): 原 calcLayout() 兜底在 card-only 模式下会与 calcCardLayout 互递归 → RangeError。
+    // (2026-08-16 视图收敛为 card 后潜伏: calcLayout 首行恒转发回来, 无终止条件)
+    // 改为直接给最小画布尺寸。
+    const layer=document.getElementById('canvasLayer');
+    if(layer){layer.style.width='500px';layer.style.height='300px';}
+    return {maxX:500,maxY:300};
+  }
   const wrapW=(document.getElementById('canvasWrap')||{}).clientWidth||1200;
   const GAP=40;
     const perRow=Math.max(1,Math.floor((wrapW-60)/(CARD_W+GAP)));
@@ -3064,31 +3013,8 @@ function renderCardEdges(posOverride){
   svg.innerHTML=DEFS+paths;
 }
 function renderEdges(posOverride){
-  if(viewMode==='card'){renderCardEdges(posOverride);return;}
-  // 2026-08-16: node/group 连线视图已移除
-  const svg=document.getElementById('edgesSvg');
-  let paths='';
-  // 显示坐标: 优先动画插值覆盖 → reflow 位移覆盖 → 基础布局
-  const P=id=>{const o=posOverride&&posOverride.get(id);return o||dispPos(id);};
-  // 后渲染: 统一经标准卡端口接口 cardPorts (父底→子顶; 合并源底→目标顶)
-  const ep=(id,side)=>{ const pt=cardPorts(id); return pt?pt[side]:null; };
-  tree.nodes.forEach(n=>{
-    if(!n.parentId)return;
-    const sp=ep(n.parentId,'bottom'), tp=ep(n.id,'top');
-    if(!sp||!tp)return;
-    const d=smartBezier(sp,tp,'bottom','top');
-    const m={x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2};
-    paths+=edgeGroup(n.parentId,n.id,d,m,'parent',(tree.nodes.get(n.parentId)||{}).depth||0);
-  });
-  tree.nodes.forEach(n=>{
-    if(!n.mergeTarget)return;
-    const sp=ep(n.id,'bottom'), tp=ep(n.mergeTarget,'top');
-    if(!sp||!tp)return;
-    const d=smartBezier(sp,tp,'bottom','top');
-    const m={x:(sp.x+tp.x)/2,y:(sp.y+tp.y)/2};
-    paths+=edgeGroup(n.id,n.mergeTarget,d,m,'merge');
-  });
-  svg.innerHTML=paths;   // (defs/marker 箭头已删, 直接写路径)
+  // 2026-08-16 起单一卡片视图: node/group 连线已移除, 直接走卡片连线。
+  renderCardEdges(posOverride);
 }
 
 /* 连线跟随动画: 节点 reflow 位移用 CSS 1s 过渡, 线同步插值重画 (path d 不支持 CSS transition) */
@@ -4369,7 +4295,7 @@ function threadStatusBar(nodeId,nodes){
 function renderThread(){
   const area=_focusEl('messagesArea');
   if(!area)return;   // 面板尚未挂载到节点时跳过, renderAll 兜底 ensurePanel 后会重渲染
-  const sc=document.getElementById('messagesScroll')||area;
+  const sc=area;     // 滚动容器 = 面板消息区本体 (messagesArea 即 mini-body)
   const path=tree.getPath(_focusId()||undefined);   // 焦点面板渲染焦点节点 (currentId 可能被 installState 重置 ≠ 焦点)
   // poker 对齐: 焦点节点属于卡片 → 渲染卡片会话段 (卡内节点), 否则路径
   const card=tree?tree.cardOfNode(_focusId()||undefined):null;
@@ -6979,7 +6905,6 @@ function cardTargetSize(level){
    聚焦卡固定为锚点矩形; 其他卡片经多轮「推出聚焦矩形 + 两两互斥 + 结构弹簧」迭代收敛。
    结构边 = parentId + mergeTarget → 对图(含多父级 DAG)无树假设, 故位置须算法实时计算。
    位移写入 displayPositions 覆盖层, 在 doJump→renderAll 重渲染后依然存活。 */
-const _pushedNodes=new Map();   // 兼容保留 (旧引用)
 function clearReflow(){
   // 关闭卡回 L1: 停止模拟并清除覆盖层; 所有卡片 (含被推开的非卡片 L1 节点) 先复位到基础树布局。
   const remaining=document.querySelectorAll('.node-card.is-card');
@@ -6993,7 +6918,6 @@ function clearReflow(){
   });
   const dk=[...Object.keys(displayPositions||{})];
   dk.forEach(id=>{ delete displayPositions[id]; });
-  _pushedNodes.clear();
   // 若还有 mini 卡残留, 继续用肥皂泡解重叠 (无固定焦点, 所有卡自由互斥)。
   if(remaining.length>0){ _bubble.sync(null); _bubble.rearm(); }
 }
@@ -7285,38 +7209,7 @@ function _panelInnerHTML(id,title){
    sendMessage/renderThread/updateThreadPad 等旧函数经 getElementById 零改动生效。
    ═══════════════════════════════════════════════════════════════════════════ */
 const _FOCUS_IDS=['messagesArea','inputMain','inputField','attachRow','attachChips','btnRow','cmdChips','attachBtn','webSearchBtn','modelChip','mcLabel','sendBtn','chatHeader','breadcrumb','cardExpandBtn','cardCollapseBtn','cardTreeBtn','fileInput'];
-function _panelOf(id){   // 节点 → 面板元素 (含焦点面板; 未开卡返回 null)
-  if(!id)return null;
-  const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  if(!ne)return null;
-  return ne.querySelector('.mini-thread');
-}
-/* ═══ 统一面板组件定位 (重构): 每张卡完整独立 — 组件按 卡id + data-fid 定位,
-   不再依赖全局 id 转移 (全局 id 仅作兼容保留)。焦点卡 = .mini-thread.focus 标记 ═══ */
-function panelEl(id,fid){   // 指定卡的面板组件 (data-fid)
-  const p=_panelOf(id);
-  return p?p.querySelector('[data-fid="'+fid+'"]'):null;
-}
-function _focusEl(fid){     // 焦点卡的面板组件 (替代 getElementById 的向后兼容入口)
-  const p=document.querySelector('.mini-thread.focus');
-  return p?p.querySelector('[data-fid="'+fid+'"]'):null;
-}
-function _focusId(){   // 焦点面板宿主 id (焦点卡 ≠ currentId 时优先; 无焦点面板返回 null)
-  const f=document.querySelector('.mini-thread.focus');
-  if(!f)return null;
-  const ne=f.closest('.node-card');
-  return ne?ne.dataset.id:null;
-}
-function _focusLevel(){   // 主卡 (焦点卡) 等级权威读法 — 卡元素 class 为唯一真源, 全局 cardLevel 仅作瞬态 fallback
-  const fid=_focusId();
-  if(fid){
-    const el=document.querySelector('.node-card[data-id="'+CSS.escape(fid)+'"]');
-    if(el&&el.classList.contains('l3'))return 'l3';
-    if(el&&el.classList.contains('l2'))return 'l2';
-    return 'l1';
-  }
-  return cardLevel||'l1';
-}
+// (s1 顶部已定义 _panelOf/panelEl/_focusEl/_focusId/_focusLevel 等价版本, 此处不再重复)
 function applyModeClass(level){   // mode-l1/l2/l3 类收敛 (setCardLevel / miniUpgradeToL3 / closeMiniCard 共用)
   const app=document.getElementById('appRoot');
   if(app){app.classList.remove('mode-l1','mode-l2','mode-l3');app.classList.add('mode-'+level);}
