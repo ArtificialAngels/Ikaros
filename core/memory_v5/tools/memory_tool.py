@@ -20,7 +20,7 @@ def v5_memory_store(
     domain: str = None,
     category_path: str = None,
     key: str = None,
-    importance: float = 0.5,
+    importance: float = None,
     pad_p: float = 0.0,
     pad_a: float = 0.0,
     pad_d: float = 0.0,
@@ -46,6 +46,9 @@ def v5_memory_store(
     # (tag encoding, ChromaDB fallbacks, ...) are inherited automatically.
     from memory_v5.memory_api import V5MemoryAPI
 
+    # 2026-08-24 P2-14: importance (Ekko-style) 优先, 未提供时回退 weight (V5-native)。
+    # 之前 importance 参数被静默丢弃 (恒用 weight)。
+    effective = importance if importance is not None else weight
     api = V5MemoryAPI()
     mid = api.store(
         content=content,
@@ -54,7 +57,7 @@ def v5_memory_store(
         category_path=category_path,
         key=key,
         tags=tag_set,
-        importance=max(0.0, min(1.0, weight)),
+        importance=max(0.0, min(1.0, effective)),
         pad_p=float(pad_p),
         pad_a=float(pad_a),
         pad_d=float(pad_d),
@@ -89,7 +92,8 @@ def v5_memory_search(
     # 1. emotion-tag retrieval (kept on its own path — emotional_memory specific)
     if emotion_tag:
         from memory_v5.emotional_memory import search_by_emotion
-        return answer(f"根据情感标签找到 {len(search_by_emotion(emotion_tag, top_k=top_k))} 条记忆", search_by_emotion(emotion_tag, top_k=top_k))
+        hits = search_by_emotion(emotion_tag, top_k=top_k)
+        return answer(f"根据情感标签找到 {len(hits)} 条记忆", hits)
 
 # 内联说明见 docs/scripts/core/memory_v5/v5/tools/memory_tool.md（见“内联注释摘录”）
     from memory_v5.memory_api import V5MemoryAPI

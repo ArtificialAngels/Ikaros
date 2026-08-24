@@ -82,8 +82,9 @@ chromadb  httpx  mcp  numpy  psutil  pyyaml
 
 已在 `core/ikaros-dsh/` 落骨架，事件签名已对照 `packages/core/agent/src/runtime-types.ts`：
 
-- **召回**：`agent/pre-step`（waterfall，须 `next()`）→ `should_recall` 门控 → `agent.inject()`
-- **写回**：`agent/turn-stopping`（serial）→ 异步写 `v5_memory_store`
+- **召回**：`agent/pre-step`（waterfall，须 `next()`）→ `should_recall` 门控（线索词/寒暄/实质三级）→ `v5_call.py search`（daemon）→ `systemPrompt.context()` user-role 快照注入（每 turn 幂等，dispose/re-register）
+- **写回**：`agent/turn-stopping`（serial）→ `Q:/A:` 规则蒸馏 + subagent 提炼（hybrid mode）→ `v5_call.py store`（upsert）
+- **压缩沉淀**（2026-08-24 新增）：`session/event` → `compaction/summary` 事件捕获，复用 dsh 压缩摘要 API 成本，零额外 LLM 沉淀进 v5
 - **MCP**：`dsh-mcp-client` 挂 `ikaros-memory/mcp_server.py`，49 工具 → `mcp__ikaros-v5__v5_*`（已验证可启动可执行）
 
 ## 6. UI 一体集成方案（本文档重点，定义边界给 UI 窗口）

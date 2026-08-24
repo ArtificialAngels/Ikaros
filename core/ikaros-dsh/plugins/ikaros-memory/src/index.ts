@@ -5,6 +5,8 @@
 // 补齐 MCP 形态做不了的「主动」能力：
 //   写回（自动沉淀）: agent/turn-stopping -> 取本轮真实对话 -> 提炼 -> 落盘
 //   召回（自动注入）: agent/pre-step -> should_recall 门控 -> 检索 -> 记忆快照注入
+//   压缩沉淀（新增 2026-08-24）: session/event -> compaction/summary 捕获 -> 落盘
+//     (dsh 压缩会话已花 API 生成 checkpoint, 复用成本, 「压缩即沉淀」; 零额外 LLM)
 //
 // 与 cordis.patch.yml 里的 memory-ikaros-v5（mcp-client）互补：
 //   mcp-client 暴露 48 个 v5_* 工具给模型「主动」调用；
@@ -29,6 +31,11 @@
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+// 引用 dsh-agent / dsh-session 类型声明以加载它们的 Events module augmentation
+// （agent/pre-step、agent/turn-stopping、session/event 的事件类型）。仅类型侧,
+// 编译产物不引入运行时依赖。
+import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-session'
 
 export const name = 'ikaros-memory'
 
@@ -57,6 +64,16 @@ export interface Config {
   subagentDailyMax: number
   /** subagent 提炼冷却（分钟） */
   subagentCooldownMin: number
+  /** 是否捕获 dsh 自动压缩(checkpoint)沉淀进 v5（复用 dsh 已花的摘要 API 成本） */
+  compactionCaptureEnabled: boolean
+  /** 压缩摘要最短长度（字符）：低于此不写（空/无价值的压缩轮） */
+  compactionCaptureMinChars: number
+  /** 沉淀权重 */
+  compactionImportance: number
+  /** 是否周期驱动 memory_v5 记忆维护（生命周期 retention/归档 + 反思 op run_all） */
+  maintenanceTickEnabled: boolean
+  /** 维护触发间隔（毫秒）：默认 6h 对齐 retention/cleanup/promote 的 6h 周期 */
+  maintenanceTickMs: number
 }
 
 export const defaultConfig: Config = {
@@ -70,6 +87,11 @@ export const defaultConfig: Config = {
   writebackMode: 'hybrid',
   subagentDailyMax: 8,
   subagentCooldownMin: 60,
+  compactionCaptureEnabled: true,
+  compactionCaptureMinChars: 120,
+  compactionImportance: 0.6,
+  maintenanceTickEnabled: true,
+  maintenanceTickMs: 6 * 3600 * 1000,
 }
 
 // ── 常量 ───────────────────────────────────────────────────────────────
@@ -83,6 +105,42 @@ const PYTHON =
 
 /** 时钟/冷却 */
 let _lastWritebackAt = 0
+
+// ── pre-step 注入幂等性（2026-08-24 修复）────────────────────────────
+// dsh 的 NamedEntries.insert 对同名 context 重复注册会 throw（systemPrompt.context
+// duplicate name）。旧实现每次 pre-step 都 sp.context({name:'ikaros:memory-recall'})
+// 且从不 dispose → 第二轮用户消息后注入永远停留在第一次的旧快照；多 step 工具循环
+// 又重复触发检索。修复：
+//   1) 每 turn 只注入一次（按 lastRealUserText 指纹去重, 工具循环同 turn 内不重注）
+//   2) 注入前先 dispose 旧 context, 再注册新快照（内容变化只击穿快照自身）
+let _lastRecallTurnKey = ''
+let _recallContextDispose: (() => void) | null = null
+
+/** 生成 recall 注入的 turn 指纹：真实用户文本驻留的 turn 唯一键。 */
+function recallTurnKey(turn: number, query: string): string {
+  return `${turn}:${query.trim().slice(0, 40)}`
+}
+
+// ── compaction 捕获（2026-08-24 新增）────────────────────────────────
+// dsh 自动压缩会话时已花 API 让 LLM 生成结构化 checkpoint（compaction/summary
+// 事件携带). 本插件在 session/event 层捕获它沉淀进 v5 —— 零额外 LLM 调用,
+// 把"压缩即遗忘"变成"压缩即沉淀"。
+interface CompactionSummaryEvent {
+  type?: string
+  summary?: Array<{ type?: string; text?: string }>
+  compactionId?: string
+  shadowedTokenCount?: number
+}
+
+/** 从 compaction/summary 事件提取纯文本 checkpoint。 */
+function extractCompactionSnapshot(event: CompactionSummaryEvent): string {
+  const blocks = Array.isArray(event.summary) ? event.summary : []
+  return blocks
+    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+    .map((b) => (b as { text: string }).text)
+    .join('\n')
+    .trim()
+}
 
 // ── 召回决策（复刻 memory_v5.should_recall 三级门控）─────────────────
 const RECALL_CUE = /记得|上次|之前|回顾|关于|最近|remember|上次聊|聊过/
@@ -229,7 +287,7 @@ function ensureV5Daemon(ctx: Context): V5Daemon | null {
   }
 }
 
-function callV5(ctx: Context, op: 'search' | 'store', args: Record<string, unknown>): Promise<V5Result> {
+function callV5(ctx: Context, op: 'search' | 'store' | 'tick', args: Record<string, unknown>): Promise<V5Result> {
   return new Promise((resolve) => {
     const d = ensureV5Daemon(ctx)
     if (!d) {
@@ -272,7 +330,7 @@ async function drainV5Daemon(d: V5Daemon): Promise<void> {
 }
 
 /** 兜底: 一次性进程调用 (collect 模式, 无 daemon 时用) */
-function callV5Once(ctx: Context, op: 'search' | 'store', args: Record<string, unknown>): Promise<V5Result> {
+function callV5Once(ctx: Context, op: 'search' | 'store' | 'tick', args: Record<string, unknown>): Promise<V5Result> {
   return new Promise((resolve) => {
     const sub = ctx.get('subprocess')
     if (sub === undefined) return resolve({ ok: false, error: 'subprocess unavailable' })
@@ -329,16 +387,16 @@ function callV5Once(ctx: Context, op: 'search' | 'store', args: Record<string, u
 }
 
 // ── 渲染注入内容 ──────────────────────────────────────────────────────
-function renderMemorySnapshot(items: V5Result['items'] = []): string {
+function renderMemorySnapshot(items: V5Result['items'] = [], budget = 1200): string {
   if (!items || !items.length) return ''
   const lines = ['[Ikaros 相关记忆]']
-  let budget = 1200
+  let budgetLeft = budget
   for (const it of items) {
-    if (budget <= 0) break
+    if (budgetLeft <= 0) break
     const c = String(it.content || '').slice(0, 300)
     if (!c) continue
     lines.push(`- ${c}`)
-    budget -= c.length
+    budgetLeft -= c.length
   }
   return lines.join('\n')
 }
@@ -536,7 +594,7 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
   })
 
   // ── 2) 召回（waterfall, 必须 next()）───────────────────────────────
-  ctx.on('agent/pre-step', async ({ agent, messages, signal }, next) => {
+  ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     if (!config.recallEnabled || signal.aborted) return decision
@@ -544,22 +602,38 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
     const query = lastRealUserText(messages)
     if (!query || !shouldRecall(query) || query.length < config.minQueryChars) return decision
 
+    // ── 幂等：同一用户 turn（含多 step 工具循环）+ 同一 query 只注入一次 ──
+    // 2026-08-24 修复: 旧实现每个 pre-step 都 sp.context({name:'ikaros:memory-recall'})
+    // 且从不 dispose → NamedEntries 同名重复注册 throw（被吞）→ 第二轮用户消息后记忆
+    // 注入永远停在第一次的旧快照; 且同 turn 多 step 重复检索浪费。
+    const turnKey = recallTurnKey(turn, query)
+    if (turnKey === _lastRecallTurnKey) return decision
+    _lastRecallTurnKey = turnKey
+
     // 检索失败静默降级, 不阻断 step（召回是增强, 不是硬依赖）。
     const memory = await callV5(ctx, 'search', { query, top_k: config.topK }).catch(() => null)
     if (memory?.ok && memory.items?.length) {
-      const snapshot = renderMemorySnapshot(memory.items)
+      const snapshot = renderMemorySnapshot(memory.items, config.injectBudgetChars)
       if (!snapshot) return decision
       // 注入走 systemPrompt.context() —— user-role 快照, 前缀缓存友好
       try {
         const sp = ctx.get('systemPrompt')
         if (sp && typeof (sp as { context?: unknown }).context === 'function') {
+          // 先 dispose 旧 context 再注册新快照（同名重复注册会 throw; dispose 后内容
+          // 变化只击穿快照自身, 不重算整个 system prompt 前缀 → KV 复用不受损）
+          if (_recallContextDispose) {
+            try { _recallContextDispose() } catch { /* noop */ }
+            _recallContextDispose = null
+          }
           const dispose = (sp as { context(opts: unknown): () => void }).context({
             name: 'ikaros:memory-recall',
             order: 2_000_000,
             text: () => snapshot,
           } as never)
+          _recallContextDispose = dispose
           ctx.effect(() => () => {
-            try { dispose() } catch { /* noop */ }
+            try { _recallContextDispose?.() } catch { /* noop */ }
+            _recallContextDispose = null
           }, 'ikaros-memory: dispose recall context')
         } else {
           // 兜底: 无 systemPrompt.context 时退回 agent.inject
@@ -570,4 +644,46 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
     }
     return decision
   })
+
+  // ── 3) compaction 捕获（2026-08-24 新增）───────────────────────────
+  // dsh 压缩会话(compaction-basic)时已花 API 让 LLM 生成结构化 checkpoint
+  // (compaction/summary 事件携带)。本插件在 session/event 层捕获它沉淀进 v5:
+  //   - 零额外 LLM 调用 —— 复用 dsh 压缩摘要成本
+  //   - "压缩即遗忘" → "压缩即沉淀": 被替换掉的历史转为长期记忆, 不随 checkpoint 丢失
+  // 事件时序: compaction/start → compaction/summary → compaction/end(+user/message 替换)
+  ctx.on('session/event', (session, event) => {
+    if (!config.compactionCaptureEnabled) return
+    const ev = event as unknown as CompactionSummaryEvent | null
+    if (!ev || ev.type !== 'compaction/summary') return
+    try {
+      const snapshot = extractCompactionSnapshot(ev)
+      if (snapshot.length < config.compactionCaptureMinChars) return
+      // 静默失败, 不干扰 session 事件流（fire-and-forget）
+      void callV5(ctx, 'store', {
+        content: snapshot.slice(0, 3000),
+        memory_type: 'conversation',
+        tags: ['source:dsh', 'v5_kind:dsh-compaction'],
+        importance: config.compactionImportance,
+      }).catch(() => null)
+} catch { /* 捕获失败静默: 记忆是增强, 不硬依赖 */ }
+  })
+
+  // ── 4) 记忆维护定时器（2026-08-24 新增）────────────────────────────
+  // memory_v5 的 reflect scheduler 是纯触发式（仅 v5_reflect_run_op 工具能调），
+  // 2026-08-19 集中看门狗退役后无自动触发源 → 生命周期(retention/promote/archive)
+  // 静默停摆多日（实测 long_term=0, <AGENTS.md 期望 563）。本插件用 dsh 的 ctx.interval
+  // 周期驱动 —— 万物皆插件, 零 runtime 侵入。纯算法无 LLM 成本。
+  if (config.maintenanceTickEnabled) {
+    try {
+      const timer = ctx.get('timer') as { interval?(cb: () => void, ms: number): { dispose?(): void } | (() => void) } | undefined
+      if (timer && typeof timer.interval === 'function') {
+        const handle = timer.interval(() => {
+          // 静默: 维护失败不干扰会话
+          void callV5(ctx, 'tick', {}).catch(() => null)
+        }, config.maintenanceTickMs)
+        const dispose = typeof handle === 'function' ? handle : () => { try { handle.dispose?.() } catch { /* noop */ } }
+        ctx.effect(() => () => { try { dispose() } catch { /* noop */ } }, 'ikaros-memory: maintenance tick')
+      }
+    } catch { /* timer/interval 不可用则静默（维护是增强, 不硬依赖） */ }
+  }
 }

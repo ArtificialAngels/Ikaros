@@ -79,7 +79,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 
 agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**（0 源码侵入）：
 
-- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，49 个 `v5_*` 工具，7 组可按 `V5_MCP_TOOL_GROUPS` 过滤）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
+- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，49 个 `v5_*` 工具，7 组可按 `V5_MCP_TOOL_GROUPS` 过滤）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入（每 turn 幂等，dispose/re-register）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要成本，零额外 LLM 沉淀进 v5））+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
 - **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。**构建/装配链**：`npm run build`（tsc `src/`→`dist/`）→ `pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"` 装到 `~/.dsh/profiles/web/`。插件名 `@ikaros/dsh-ikaros-memory` 不走 `!!js` 表达式（`Entry.name` 不经过 interpolate），用裸包名从 profile 的 node_modules 解析。
 - **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。

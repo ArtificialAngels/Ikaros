@@ -312,8 +312,8 @@ def test_t8b_simulated_8587_down_real_socket(monkeypatch):
     _enable_breaker(monkeypatch, threshold=3)
     monkeypatch.setattr(search_mod, "EMBED_URL", "http://127.0.0.1:1/embedding")
     monkeypatch.setattr(search_mod, "EMBED_TIMEOUT", 10)
-    # 强制连接单例重建 (URL 改了)
-    monkeypatch.setattr(search_mod, "_embed_conn", None)
+    # 强制连接单例重建 (URL 改了) — 2026-08-24 P1-5: thread-local
+    search_mod._reset_embed_conn()
     # 关掉 LRU 缓存, 否则前几次失败会被后续命中遮蔽
     monkeypatch.setattr(search_mod, "_cache_enabled", lambda: False)
 

@@ -3,7 +3,11 @@
 把分散在 store.upsert (写时强化) / memory_retrieval._score_items (检索排序) /
 lifecycle.retention_pass (生命周期归档) 三处的"重要性"概念, 收敛到**单一 EI 公式**:
 
-    EI = weight × (1 + reinforcement×0.5) × log2(access_count+1) × 0.5^(days/30)
+    EI = weight × (1 + reinforcement×0.5) × bit_length(access_count+1) × 0.5^(days/30)
+
+    bit_length(n) = floor(log2(n)) + 1, 即 log2 的阶梯近似 (访问越多越重要,
+    单调; 小变化在跨越 2 的幂次边界才生效, 但 promote 路径另有 access_count
+    直接阈值补足粒度)。days 为距上次访问的天数, 30 天半衰。
 
   - 写侧: upsert 合并 +reinforcement → EI 上升 (被合并越多越重要)
   - 检索侧: EI 作为 signals.ei 透出, 供上层/LLM 解释重要性
@@ -32,7 +36,7 @@ def effective_importance(
 ) -> float:
     """有效重要性 EI (纯函数, 可单测; mnemon 借鉴 + Ikaros reinforcement)."""
     w = max(0.0, min(1.0, float(weight)))
-    # access_factor: 访问越多越重要 (log2(access+1)+1)
+    # access_factor: 访问越多越重要 (bit_length = floor(log2(access+1))+1, 阶梯近似)
     access_factor = max(1.0, (int(access_count) + 1).bit_length())
     # decay_factor: 30 天半衰期; 无访问史 (last_accessed<=0) 不衰减
     if last_accessed and float(last_accessed) > 0:

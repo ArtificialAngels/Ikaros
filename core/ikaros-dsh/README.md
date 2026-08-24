@@ -14,11 +14,11 @@ core/ikaros-dsh/
 
 | 项 | 状态 |
 |---|---|
-| memory_v5 MCP 48 工具可启动、可执行（stats/search 实测通过） | ✅ 已验证 |
+| memory_v5 MCP 49 工具可启动、可执行（stats/search 实测通过） | ✅ 已验证 |
 | `cordis.patch.yml` 里所有包名 / config 字段 | ✅ 已对照 dsh 源码确认 |
-| `dsh-mcp-client` 挂载 memory_v5（工具 → `mcp__ikaros-v5__v5_*`） | 待首次跑通 |
-| terminal / lsp 挂载 | 待首次跑通（lsp 需预装 language server） |
-| ikaros-memory 插件（召回/写回） | ✅ 已实现（2026-08-18，动态 cordis 插件实测通过） |
+| `dsh-mcp-client` 挂载 memory_v5（工具 → `mcp__ikaros-v5__v5_*`） | ✅ 已验证（2026-08-18） |
+| terminal / lsp 挂载 | ✅ 已验证（2026-08-18） |
+| ikaros-memory 插件（召回/写回/压缩沉淀） | ✅ 已实现（2026-08-18 初始；2026-08-24 新增 compaction 捕获 + pre-step 幂等性修复） |
 
 ## ikaros-memory 插件（2026-08-18 已实现）
 
@@ -31,6 +31,8 @@ core/ikaros-dsh/
 | 召回注入 | `agent/pre-step` → `should_recall` 门控（线索词/寒暄/实质三级）→ `v5_call.py search` → `systemPrompt.context()` user-role 快照注入 |
 | 前缀缓存友好 | 静态纪律 `systemPrompt.section()`（字节稳定锚）；动态快照 `systemPrompt.context()`（内容变化只击穿快照本身，不用 agent.inject 破坏 KV 复用） |
 | 冷却/防抖 | 写回 5min 冷却 + 最短轮长 60 字（寒暄/琐碎跳过） |
+| 压缩沉淀（2026-08-24 新增） | `session/event` → `compaction/summary` 事件捕获（dsh 压缩已花 API 生成 checkpoint，零额外成本）→ `v5_call.py store` 落盘（tags source:dsh, v5_kind:dsh-compaction） — 「压缩即沉淀」 |
+| pre-step 幂等性（2026-08-24 修复） | 每 turn 按 `turn + query` 指纹只注入一次（同名 `systemPrompt.context` 重复注册会 throw）；后续 turn 先 dispose 旧 context 再注册新快照，解决「第二轮用户消息后记忆注入永远停在第一次旧快照」bug |
 
 **文件**：
 - `src/index.ts` — 插件规范源（TypeScript，静态装配时构建）

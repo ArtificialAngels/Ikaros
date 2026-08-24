@@ -128,7 +128,9 @@ class ValidationRegistry:
     def apply(self, value: Any, context: dict[str, Any] | None = None) -> list[ValidationError]:
         errors: list[ValidationError] = []
         for name, rule in self._rules.items():
-            if name in self._disabled:
+            # 2026-08-24 P2-12: 之前只查 _disabled, rule.enabled 类属性是死代码;
+            # 子类置 enabled=False 仍会跑。现在 _disabled 与 enabled 双判。
+            if name in self._disabled or not rule.enabled:
                 continue
             try:
                 results = rule.validate(value, context)
@@ -163,7 +165,7 @@ class ValidationRegistry:
 class ValidationFailed(Exception):
     def __init__(self, errors: list[ValidationError]) -> None:
         self.errors = errors
-        codes = ", ".join(e.code.actual_value for e in errors)
+        codes = ", ".join(e.code.value for e in errors)
         messages = "; ".join(e.message for e in errors)
         super().__init__(f"Validation failed [{codes}]: {messages}")
 
@@ -397,7 +399,11 @@ def load_validation_config() -> dict[str, Any]:
 
 
 def apply_config() -> None:
-    """Apply validation config: enable/disable rules per registry."""
+    """Apply validation config: enable/disable rules per registry.
+
+    2026-08-24 P2-11: 之前只 disable 不 enable → 上次被禁的规则即使 config 改为
+    enabled:true 也不会重新启用 (无 enable 调用)。现在 enabled/disabled 双向生效。
+    """
     config = load_validation_config()
     for section, registry in [
         ("input", _input_registry),
@@ -409,9 +415,13 @@ def apply_config() -> None:
         for rule_name, rule_cfg in section_cfg.items():
             if isinstance(rule_cfg, dict):
                 enabled = rule_cfg.get("enabled", True)
-                if not enabled:
-                    registry.disable(rule_name)
-            elif isinstance(rule_cfg, bool) and not rule_cfg:
+            elif isinstance(rule_cfg, bool):
+                enabled = rule_cfg
+            else:
+                continue
+            if enabled:
+                registry.enable(rule_name)
+            else:
                 registry.disable(rule_name)
 
 
@@ -699,7 +709,7 @@ def validated(validator: Callable[..., list[ValidationError]],
             errors = validator(*args, **kwargs)
             for err in errors:
                 logger.warning(
-                    "validation [%s] %s: %s", func.__name__, err.code.actual_value, err.message
+                    "validation [%s] %s: %s", func.__name__, err.code.value, err.message
                 )
             critical = [e for e in errors if _severity_rank(e.severity) >= _severity_rank(raise_on)]
             if critical:

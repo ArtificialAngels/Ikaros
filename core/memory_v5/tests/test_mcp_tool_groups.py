@@ -1,10 +1,10 @@
 """MCP 工具分组 (docs/hermes-tools-scoping.md Option 2) 测试.
 
 覆盖:
-- S1: 分组表完整性 — 48 工具全覆盖、无遗漏无多余, 组名合法, 分组与文档规范一致
+- S1: 分组表完整性 — 49 工具全覆盖、无遗漏无多余, 组名合法, 分组与文档规范一致
 - S2: env 过滤正确性 — 指定组后注册列表 = 该组工具; 空/未设置 = 全量
 - S3: fail-open — 非法组名 / 大小写不符 → 回退全量注册, 不破坏现有行为
-- S4: 默认注册 — 未设置 env 时模块级注册全量 48 工具 (真实 FastMCP)
+- S4: 默认注册 — 未设置 env 时模块级注册全量 49 工具 (真实 FastMCP)
 """
 import sys
 from pathlib import Path
@@ -20,7 +20,7 @@ from memory_v5.mcp_server import (
 )
 
 
-# ── 规范: docs/hermes-tools-scoping.md 40-53 行分组表 (7 组 48 工具) ──
+# ── 规范: docs/hermes-tools-scoping.md 40-53 行分组表 (7 组 49 工具) ──
 _DOC_GROUPS: dict[str, list[str]] = {
     "memory": [
         "v5_memory_store", "v5_memory_search", "v5_memory_get",
@@ -39,6 +39,7 @@ _DOC_GROUPS: dict[str, list[str]] = {
         "v5_analyze_emotion", "v5_emotion_status", "v5_emotion_label",
         "v5_self_model", "v5_self_reflect", "v5_self_discover",
         "v5_latest_thought", "v5_curiosity_check", "v5_subconscious",
+        "v5_context_refresh",
         "v5_reflect_run_op", "v5_narrative_generate", "v5_proactive_check",
         "v5_activity_status",
     ],
@@ -52,7 +53,7 @@ _DOC_GROUPS: dict[str, list[str]] = {
     "project": ["v5_project_note", "v5_project_retrieve", "v5_project_stats"],
 }
 _DOC_COUNTS = {g: len(names) for g, names in _DOC_GROUPS.items()}
-assert sum(_DOC_COUNTS.values()) == 48
+assert sum(_DOC_COUNTS.values()) == 49
 
 
 class _RecordingMCP:
@@ -72,9 +73,9 @@ def test_table_covers_all_new_tools_no_extra():
     table_names = set(_TOOL_GROUPS)
     tool_names = {fn.__name__ for fn in _NEW_V5_TOOLS}
     assert table_names == tool_names
-    assert len(_TOOL_GROUPS) == 48
-    assert len(_NEW_V5_TOOLS) == 48
-    assert len(set(_TOOL_GROUPS)) == 48  # 无重复键
+    assert len(_TOOL_GROUPS) == 49
+    assert len(_NEW_V5_TOOLS) == 49
+    assert len(set(_TOOL_GROUPS)) == 49  # 无重复键
 
 
 def test_all_groups_valid_and_match_doc():
@@ -87,7 +88,7 @@ def test_all_groups_valid_and_match_doc():
 
 
 def test_group_counts_match_doc():
-    """各组数量与文档一致 (21/13/2/2/2/5/3)."""
+    """各组数量与文档一致 (21/14/2/2/2/5/3)."""
     from collections import Counter
     counts = Counter(_TOOL_GROUPS.values())
     assert dict(counts) == _DOC_COUNTS
@@ -122,14 +123,14 @@ def test_multi_group_and_whitespace():
     expected = [fn.__name__ for fn in _NEW_V5_TOOLS
                 if _TOOL_GROUPS.get(fn.__name__) in allowed]
     assert rec.added == expected  # 保持 _NEW_V5_TOOLS 顺序, 仅过滤
-    assert len(rec.added) == 21 + 13
+    assert len(rec.added) == 21 + 14
 
 
 def test_empty_or_unset_env_registers_all():
     for env in ("", None, "   ", ","):
         rec = _RecordingMCP()
         _register_tools(rec, env)
-        assert len(rec.added) == 48
+        assert len(rec.added) == 49
         assert rec.added == [fn.__name__ for fn in _NEW_V5_TOOLS]  # 顺序保持
 
 
@@ -139,7 +140,7 @@ def test_empty_or_unset_env_registers_all():
 def test_invalid_group_name_falls_back_to_all(env):
     rec = _RecordingMCP()
     _register_tools(rec, env)
-    assert len(rec.added) == 48
+    assert len(rec.added) == 49
 
 
 def test_parse_tool_groups_unit():
@@ -152,9 +153,9 @@ def test_parse_tool_groups_unit():
 
 # ── S4: 默认注册 (真实 FastMCP, 模块级 import 已全量注册) ──
 
-def test_default_module_registration_all_48():
-    """未设置 env 时 mcp_server 模块级注册全量 48 工具 (行为不变)."""
+def test_default_module_registration_all_49():
+    """未设置 env 时 mcp_server 模块级注册全量 49 工具 (行为不变)."""
     tools = mcp_server.mcp._tool_manager.list_tools()
     names = sorted(t.name for t in tools)
-    assert len(tools) == 48
+    assert len(tools) == 49
     assert names == sorted(_TOOL_GROUPS)

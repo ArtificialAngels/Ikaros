@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP server — 把 V5 记忆引擎以 MCP 协议暴露给外部 agent (dsh / pi 等).
 
-提供 48 个 v5_* 工具 (v5_memory_search/store/self_model/relationship 等),
+提供 49 个 v5_* 工具 (v5_memory_search/store/self_model/relationship 等),
 由 memory_v5.tools.* 注册; 经 stdio transport 与客户端通信。
 见 docs/scripts/core/memory_v5/v5/mcp_server.md
 """
@@ -91,36 +91,12 @@ mcp = FastMCP(
 
 
 # Inline docs: docs/scripts/core/memory_v5/v5/mcp_server.md
-from memory_v5.tools import (  # noqa: E402
-    v5_analyze_emotion, v5_emotion_status, v5_emotion_label,
-    v5_memory_store, v5_memory_search, v5_memory_get, v5_memory_delete,
-    v5_memory_stats,
-    v5_self_model, v5_self_reflect, v5_latest_thought,
-    v5_curiosity_check, v5_subconscious,
-    v5_care_check, v5_care_status,
-    v5_vitality, v5_vitality_tick,
-    v5_relationship, v5_relationship_tick,
-    v5_narrative_generate, v5_dissonance_check, v5_proactive_check,
-    v5_self_discover, v5_reflect_run_op,
-    # V5.2: neko migration tools
-    v5_reflection_synthesize, v5_reflection_read,
-    v5_reflection_apply_evidence, v5_reflection_promote,
-    v5_reflection_stats,
-    v5_anti_repeat_record, v5_anti_repeat_check,
-    v5_anti_repeat_penalty, v5_anti_repeat_clear, v5_anti_repeat_stats,
-    v5_directive_add, v5_directive_list, v5_directive_deactivate,
-    v5_directive_stats,
-    # V5.3: activity perception + context compression engine
-    v5_activity_status, v5_context_compression_stats,
-    # V5.4: project track
-    v5_project_note, v5_project_retrieve, v5_project_stats,
-    # V5.5: skill track
-    v5_skill_write, v5_skill_list, v5_skill_get,
-    v5_skill_search, v5_skill_remove,
-)
+# 2026-08-24 P3-25: 工具清单单一来源 — 从 tools.__all__ 派生, 消除 import 块与
+# _NEW_V5_TOOLS 显式列表双份维护的漂移风险 (加工具漏一边 → 静默不注册或 NameError)。
+from memory_v5 import tools as _tools_pkg  # noqa: E402
 
 # ── 工具分组元数据 (docs/hermes-tools-scoping.md Option 2) ─────────
-# 7 组 48 工具; emotion/narrative/proactive/activity 归入 self, 与 FastMCP
+# 7 组 49 工具; emotion/narrative/proactive/activity 归入 self, 与 FastMCP
 # instructions 的分组语义一致. 未分组的新工具默认全组可见 (不参与过滤),
 # 避免 "新工具静默不可见" (见 scoping 文档风险表).
 _VALID_GROUPS = ("memory", "self", "care", "vitality", "relationship", "skill", "project")
@@ -144,7 +120,8 @@ _TOOL_GROUPS: dict[str, str] = {
     "v5_emotion_label": "self", "v5_self_model": "self",
     "v5_self_reflect": "self", "v5_self_discover": "self",
     "v5_latest_thought": "self", "v5_curiosity_check": "self",
-    "v5_subconscious": "self", "v5_reflect_run_op": "self",
+    "v5_subconscious": "self", "v5_context_refresh": "self",
+    "v5_reflect_run_op": "self",
     "v5_narrative_generate": "self", "v5_proactive_check": "self",
     "v5_activity_status": "self",
     # care (2)
@@ -205,31 +182,7 @@ def _register_tools(mcp_obj, env_value: str | None = None) -> None:
 
 
 _NEW_V5_TOOLS = [
-    v5_analyze_emotion, v5_emotion_status, v5_emotion_label,
-    v5_memory_store, v5_memory_search, v5_memory_get, v5_memory_delete,
-    v5_memory_stats,
-    v5_self_model, v5_self_reflect, v5_latest_thought,
-    v5_curiosity_check, v5_subconscious,
-    v5_care_check, v5_care_status,
-    v5_vitality, v5_vitality_tick,
-    v5_relationship, v5_relationship_tick,
-    v5_narrative_generate, v5_dissonance_check, v5_proactive_check,
-    v5_self_discover, v5_reflect_run_op,
-    # V5.2: neko migration tools
-    v5_reflection_synthesize, v5_reflection_read,
-    v5_reflection_apply_evidence, v5_reflection_promote,
-    v5_reflection_stats,
-    v5_anti_repeat_record, v5_anti_repeat_check,
-    v5_anti_repeat_penalty, v5_anti_repeat_clear, v5_anti_repeat_stats,
-    v5_directive_add, v5_directive_list, v5_directive_deactivate,
-    v5_directive_stats,
-    # V5.3: activity perception + context compression engine
-    v5_activity_status, v5_context_compression_stats,
-    # V5.4: project track
-    v5_project_note, v5_project_retrieve, v5_project_stats,
-    # V5.5: skill track (agent-distilled reusable workflows, Markdown files)
-    v5_skill_write, v5_skill_list, v5_skill_get,
-    v5_skill_search, v5_skill_remove,
+    getattr(_tools_pkg, _n) for _n in _tools_pkg.__all__ if _n != "__all__"
 ]
 # V5_MCP_TOOL_GROUPS=memory,self,... 过滤注册; 未设置/空/非法 → 全量 (fail-open)
 _register_tools(mcp, os.environ.get("V5_MCP_TOOL_GROUPS"))

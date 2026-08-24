@@ -133,7 +133,11 @@ def next_run_time(state: ScheduleState, key: str, interval: int,
 # ─── 状态持久化 (复用 V3 路径, 但走 V4 子目录) ───────────────────
 
 # 内联说明见 docs/scripts/core/memory_v5/v5/reflect/scheduler.md（见“内联注释摘录”）
-_V5_DATA_DIR = Path(__file__).resolve().parent / "data" / "v5"
+# 2026-08-24 修复: 此前锚 scheduler.py 所在目录 (reflect/) → 状态写进
+# core/memory_v5/reflect/data/v5/ 孤儿路径 (tick 测试实锤); 统一锚 memory_v5 包根,
+# 与 store.py 的 MEM_ROOT/data/v5 同目录 (v5.db 旁边)。
+_MEM_ROOT = Path(__file__).resolve().parent.parent  # core/memory_v5/
+_V5_DATA_DIR = _MEM_ROOT / "data" / "v5"
 _STATE_FILE = _V5_DATA_DIR / "reflect_state.json"
 
 
@@ -160,14 +164,17 @@ def save_state(state: ScheduleState, path: Path | None = None) -> None:
 # ─── 调度器 (注册表模式) ────────────────────────────────────────
 
 def _run_profile_sync() -> int:
-    """包装 run_sync 返回 int (scheduler 要求 int)."""
+    """包装 run_sync 返回 int (scheduler 要求 int).
+
+    V4 契约 (2026-08-24 P2-19): 异常上抛, 不吞 —— 与其他 op 一致。之前 try/except +
+    return 0 把 profile_sync 失败静默成成功, 违反 run_one 的 "op.fn 异常上抛不 try/
+    except" 契约 (line 250), 让 run_all 的 continue_on_error 既捕获不到也标记不了 -1,
+    运维侧永远看不到 profile_sync 挂了。失败现由 run_all 统一 log + 决定继续/中止
+    (profile_sync 在默认调度器里是最后一个 op, 即便 abort 也只跳过它自己)。
+    """
     from memory_v5.profile import run_sync
-    try:
-        result = run_sync()
-        return result.get("traits", 0)
-    except Exception as e:
-        logger.error("profile_sync failed: %s", e)
-        return 0
+    result = run_sync()
+    return result.get("traits", 0)
 
 
 class ReflectScheduler:

@@ -40,8 +40,14 @@ def detect_dissonance(
     *,
     top_k: int = 5,
     min_similarity: float = _MIN_SIMILARITY,
+    max_nli: int = 5,
 ) -> dict:
     """检测新记忆是否与已有记忆矛盾。
+
+    Args:
+        max_nli: 最多对多少条候选做 NLI (云端调用, 有成本)。默认 5 = 与 top_k
+                 一致, 不再静默跳过 4-5 名候选 (GH audit P2-17)。检测在
+                 store._run_dissonance_detection 的异步线程里跑, 不阻塞写入。
 
     Returns:
         {"conflicts": [...], "checked": int, "elapsed_ms": float}
@@ -71,9 +77,9 @@ def detect_dissonance(
     if not candidates:
         return {"conflicts": [], "checked": len(similar), "elapsed_ms": (time.time() - t0) * 1000}
 
-    # 2) 对每个候选做 NLI
+    # 2) 对每个候选做 NLI (P2-17: 上限 max_nli, 默认覆盖全部 top_k 候选)
     conflicts = []
-    for cand in candidates[:3]:  # 最多检查 3 条
+    for cand in candidates[:max_nli]:
         old_text = cand.get("content", "")
         if not old_text:
             continue
@@ -160,7 +166,6 @@ def _record_dissonance(new_content: str, conflicts: list[dict]) -> None:
                         "UPDATE memory SET reinforcement = MAX(-2.0, reinforcement - 0.5) "
                         "WHERE id = ?", (oid_i,),
                     )
-                c.commit()
         except Exception as exc:
             logger.debug("dissonance: reinforcement demote failed (%s)", exc)
 

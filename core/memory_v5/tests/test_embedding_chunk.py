@@ -105,10 +105,10 @@ def _patch_http(monkeypatch):
             pass
 
     monkeypatch.setattr("http.client.HTTPConnection", Recorder)
-    # 2026-08-19 连接池: 清空模块级缓存连接, 避免跨测试复用 mock 实例串扰
-    search_mod._embed_conn = None
+    # 2026-08-24 P1-5: 连接改为 thread-local, 用 _reset_embed_conn 清缓存避免跨测试串扰
+    search_mod._reset_embed_conn()
     yield Recorder
-    search_mod._embed_conn = None
+    search_mod._reset_embed_conn()
 
 
 # ── E1: 短文本单次请求 ──
@@ -163,7 +163,7 @@ def test_e3_chunk_failure_fail_open(monkeypatch):
             pass
 
     monkeypatch.setattr("http.client.HTTPConnection", FailOnce)
-    search_mod._embed_conn = None  # 2026-08-19 连接池: 清缓存
+    search_mod._reset_embed_conn()  # 2026-08-24 P1-5: thread-local 清缓存
     long_text = "x" * 900
     assert search_mod._fetch_embedding(long_text, task="document") is None
 

@@ -98,31 +98,57 @@ def auto_link_project_note(memory_id: int, content: str, kind: str,
 
 def traverse(memory_id: int, depth: int = 1,
              relation: str | None = None) -> list[dict]:
-    """沿类型化项目边扩散 (1 跳 BFS), 返回邻居记忆 + 关系。
+    """沿类型化项目边 BFS (≤depth 跳), 返回邻居记忆 + 关系。
 
     返回 [{id, relation, direction(out/in), content, kind, weight}]。
-    direction: out = 本记忆是 source (如 decision→pitfall), in = 是 target。
+    direction: 相对于发现该邻居的父节点 — out = 父是 source (如 decision→pitfall),
+               in = 父是 target。depth=1 时父节点即根, 与历史语义一致。
+
+    2026-08-24 P2-15: 之前 depth>=2 被静默忽略 (只做 1 跳)。现在按 depth 真正 BFS,
+    带 visited 集合防环。P2-16: 邻居内容批量取 (store.get_batch), 消除 N+1。
     """
     from memory_v5 import store
 
     if depth < 1:
         return []
-    edges = store.get_project_edges(memory_id)
-    if relation:
-        edges = [e for e in edges if e["relation"] == relation]
+    root = int(memory_id)
+    visited: set[int] = {root}
+    frontier: list[int] = [root]
+    # (neighbor_id, edge, parent) — parent 用于算 direction 与多跳扩展
+    discovered: list[tuple[int, dict, int]] = []
+    for _hop in range(depth):
+        next_frontier: list[int] = []
+        for node in frontier:
+            try:
+                edges = store.get_project_edges(node)
+            except Exception:
+                edges = []
+            if relation:
+                edges = [e for e in edges if e["relation"] == relation]
+            for e in edges:
+                is_out = int(e["source_id"]) == node
+                nid = int(e["target_id"] if is_out else e["source_id"])
+                if nid in visited:
+                    continue
+                visited.add(nid)
+                discovered.append((nid, e, node))
+                next_frontier.append(nid)
+        frontier = next_frontier
+        if not frontier:
+            break
+    if not discovered:
+        return []
+
+    # 批量取邻居记忆 (P2-16: N+1 store.get → 单次 get_batch)
+    mems = store.get_batch([nid for nid, _, _ in discovered])
     out: list[dict] = []
-    for e in edges:
-        is_out = int(e["source_id"]) == int(memory_id)
-        neighbor_id = e["target_id"] if is_out else e["source_id"]
-        content, kind = "", ""
-        try:
-            m = store.get(neighbor_id)
-            content = getattr(m, "content", "") or ""
-            kind = _kind_from_tags(getattr(m, "tags", "") or "")
-        except Exception:
-            pass
+    for nid, e, parent in discovered:
+        m = mems.get(nid)
+        content = getattr(m, "content", "") or "" if m else ""
+        kind = _kind_from_tags(getattr(m, "tags", "") or "") if m else ""
+        is_out = int(e["source_id"]) == parent
         out.append({
-            "id": neighbor_id,
+            "id": nid,
             "relation": e["relation"],
             "direction": "out" if is_out else "in",
             "content": (content or "")[:200],

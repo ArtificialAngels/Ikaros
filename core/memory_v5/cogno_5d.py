@@ -233,9 +233,9 @@ def _get_activity_narrative() -> str:
     # 2. 关键词匹配
     activity = _match_activity(title) if title else None
 
-    # 3. LLM 推断 (失败不阻断)
-    if not activity and title:
-        activity = _llm_infer_activity(title)
+    # 3. LLM 推断 — 已停用 (2026-08-18 :8080 本地 LLM 退役, 无自动热载入).
+    #    本地 LLM 按需恢复后可重新启用此步 (调 _llm_infer_activity(title)); 当前
+    #    直接走时间推断, 避免每次前台窗口变化都打退役端口连 5s 超时 (GH audit P1-10).
 
     # 4. 回退时间推断
     if not activity:
@@ -268,6 +268,9 @@ def get_machine_id() -> str:
 
 def _fetch_geo_sync() -> Optional[str]:
     """轻量同步 IP 地理位置查询 (ip-api.com)."""
+    # 2026-08-24 P4-30: sock.close() 原只在成功路径, connect/sendall/recv 抛异常时泄漏。
+    # 改 try/finally 保证所有路径都关 socket。
+    sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
@@ -279,7 +282,6 @@ def _fetch_geo_sync() -> Optional[str]:
             if not data:
                 break
             response += data
-        sock.close()
         text = response.decode("utf-8", errors="replace")
         idx = text.find("{")
         if idx < 0:
@@ -293,6 +295,12 @@ def _fetch_geo_sync() -> Optional[str]:
         return None
     except Exception:
         return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def get_geo_location() -> str:

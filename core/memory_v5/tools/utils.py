@@ -20,7 +20,10 @@ if str(V5_ROOT.parent) not in sys.path:
 
 # Shared data dir for the v5 tool layer (latest_thought.json, subconscious.json, ...).
 # Centralized here so self_tool / __init__ / other submodules import one canonical path.
-V5_DATA = V5_ROOT / "data" / "v5"
+# NOTE: tools/ is a subpackage of memory_v5/, so the data dir is one level up —
+# this must match metacog._LATEST_PATH (V5_ROOT/data/v5/ where V5_ROOT=memory_v5/),
+# otherwise v5_latest_thought / v5_subconscious always miss (GH audit P0-2).
+V5_DATA = V5_ROOT.parent / "data" / "v5"
 
 # Local LLM listens on :8080.  Used only as a *best-effort*
 # availability indicator so tools can report which code path they took.

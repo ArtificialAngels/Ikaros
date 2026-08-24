@@ -137,7 +137,13 @@ class V5MemoryAPI:
                         f"ORDER BY weight DESC, id DESC LIMIT ?",
                         params + [int(top_k)],
                     ).fetchall()
-                return [_row_to_dict(r) for r in rows]
+                results = [_row_to_dict(r) for r in rows]
+                # 与 FTS5 fallback 一致: 外部执行器 (pi/herdr) 调用时 include_dsh_only=False
+                # 必须过滤掉 [dsh-only] 平台纪律/密钥内容 (GH audit P0-4).
+                if not include_dsh_only:
+                    from memory_v5.scope import is_dsh_only
+                    results = [r for r in results if not is_dsh_only(r.get("content"))]
+                return results
             except Exception:  # noqa: BLE001
                 return []
 

@@ -4,6 +4,8 @@
 用法:
     python v5_call.py search '{"query": "...", "top_k": 5}'
     python v5_call.py store  '{"content": "...", "memory_type": "conversation", "tags": [...]}'
+    python v5_call.py tick   '{}'                         # 记忆维护: 生命周期 + 反思 op
+    python v5_call.py --daemon                            # 常驻 JSON 行协议
 
 stdout 输出 JSON:
     search -> {"ok": true, "items": [{"id": 1, "content": "...", "score": 0.72, "type": "..."}, ...]}
@@ -60,7 +62,22 @@ def _call_store(args: dict) -> dict:
     return {"ok": True, "id": mid}
 
 
-_HANDLERS = {"search": _call_search, "store": _call_store}
+def _call_tick(args: dict) -> dict:
+    """跑一期记忆维护: 生命周期 retention/归档 + 反思 op run_all（按各自间隔到期）。
+
+    2026-08-24: watchdog 退役后 reflect scheduler 无自动触发源, long_term 一直为 0;
+    本 op 让 ikaros-memory 插件的定时器周期驱动它。纯算法, 无额外 LLM 成本
+    (reflect op 里的 LLM 生成类在 2026-08-14 决策 A 已停用)。
+    """
+    from memory_v5.reflect.registry import make_default_scheduler
+    from memory_v5.reflect.scheduler import load_state, save_state
+
+    sched = make_default_scheduler(load_state())
+    results = sched.run_all(force=False, continue_on_error=True)
+    return {"ok": True, "results": results}
+
+
+_HANDLERS = {"search": _call_search, "store": _call_store, "tick": _call_tick}
 
 
 def _handle_one(op: str, args_json: str) -> str:

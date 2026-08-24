@@ -6,7 +6,7 @@
 
 EI 公式 (mnemon, 适配 Ikaros 字段):
     EI = weight × (1 + reinforcement×0.5) × access_factor × decay_factor
-      access_factor = log2(access_count + 1) + 1   (访问越多越重要)
+      access_factor = bit_length(access_count + 1)   (访问越多越重要; bit_length = floor(log2)+1)
       decay_factor  = 0.5 ^ (days_since_access / 30)  (30 天半衰期; 无访问史不衰减)
 
 retention_pass 单事务做: demote(90 天冷记忆降级) → promote(高频/强化/老/EI 高
@@ -56,7 +56,9 @@ def retention_pass(now: float | None = None) -> dict:
                 "WHERE archived = 0"
             ).fetchall()
     except Exception as exc:
-        logger.debug("retention: scan failed (%s)", exc)
+        # 2026-08-24 P2-20: 之前 logger.debug 让 scan 失败(锁/schema/磁盘)完全不可见。
+        # warning: scan 可能因 busy_timeout 瞬时失败, 但 6h 频率下不噪。
+        logger.warning("retention: scan failed (%s)", exc)
         return {"promoted": 0, "demoted": 0, "archived": 0}
 
     for r in rows:
@@ -67,9 +69,13 @@ def retention_pass(now: float | None = None) -> dict:
         age_days = (now - float(r["created"])) / 86400.0 if r["created"] else 0.0
         days_acc = (now - float(r["last_accessed"])) / 86400.0 if r["last_accessed"] else None
 
-        # demote: long_term 且有访问史但 90 天未访问 → 降 short
-        if (r["long_term"] and r["access_count"] == 0
-                and days_acc is not None and days_acc > 90):
+        # demote: long_term 且有访问史(last_accessed>0)但 90 天未访问 → 降 short
+        # 2026-08-24 P0-3 (修正): 原条件含 access_count==0 —— 与"有访问史"注释
+        # 矛盾(此 codebase 的"访问史" = last_accessed>0, 见 registry.memory_promote),
+        # 且在真实数据下(access() 同时增 access_count 与 last_accessed)几乎不可达。
+        # 改为只看 last_accessed>0 + 90d 陈旧: 覆盖真实冷记忆(access_count>0),
+        # 不误伤刚晋升未访问行(last_accessed=0), 消除 promote/demote 打架。
+        if (r["long_term"] and days_acc is not None and days_acc > 90):
             demote_ids.append(r["id"])
         # promote: short → long (高频/强化/30 天老/EI 高)
         elif (r["short_term"] and (
@@ -105,9 +111,9 @@ def retention_pass(now: float | None = None) -> dict:
                 c.executemany(
                     "UPDATE memory SET archived = 1, archived_at = ? WHERE id = ?",
                     [(now, i) for i in archive_ids])
-            c.commit()
     except Exception as exc:
-        logger.debug("retention: write failed (%s)", exc)
+        # 2026-08-24 P2-20: 写失败 = 数据丢失风险 (promote/archive 没落库), 必须 error。
+        logger.error("retention: write failed (%s)", exc)
         return {"promoted": 0, "demoted": 0, "archived": 0}
 
     result = {"promoted": len(promote_ids), "demoted": len(demote_ids),

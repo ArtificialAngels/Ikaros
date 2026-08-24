@@ -246,9 +246,10 @@ CREATE INDEX IF NOT EXISTS idx_project_edges_target ON project_edges(target_id);
 # ─── Connection management (same approach as V3, simplified in V4) ───
 
 # Inline docs: docs/scripts/core/memory_v5/v5/store.md
-import threading
-
-_tls = threading.local()
+# 2026-08-24 P3-22: 移除 _tls (threading.local)。它是死代码 —— conn() 每次新开
+# 连接却从不写回 _tls.c, 顶部 getattr(_tls,"c") 永远 None, close dance 纯空转。
+# fresh-per-call 是设计选择 (见 conn() docstring: 避免 implicit read 事务挂起
+# 阻塞后续写导致 "database is locked")。close() 保留为 no-op 兜 API 兼容。
 
 
 @contextmanager
@@ -263,29 +264,20 @@ def conn() -> Iterator[sqlite3.Connection]:
       - Raises on error, does not swallow
       - Auto commits/rollbacks and closes the connection on context exit
     """
-    c = getattr(_tls, "c", None)
-    if c is not None:
-        try:
-            c.close()
-        except Exception:
-            pass
-        _tls.c = None
-
     V5_DATA_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(V5_DB_PATH))
     c.row_factory = sqlite3.Row
     # Multi-process concurrency: watchdog (reflection op) and cloud_chat (store)
     # may access v5.db concurrently. busy_timeout lets the writer wait instead of
     # immediately returning "database is locked"
-    try:
-        c.execute("PRAGMA busy_timeout=5000")
-    except Exception:
-        pass
+    #
+    # PRAGMA 失败直接 raise — 不静默降级 (与 entity_graph.eg_conn 2026-08-20 audit
+    # fix 保持一致): busy_timeout / journal_mode=WAL 是并发 + 持久性的基础,
+    # 失败时退回默认 (无 busy_timeout / rollback journal) 会立刻出现
+    # "database is locked" 连锁错误, 调试链变长。
+    c.execute("PRAGMA busy_timeout=5000")
     # WAL mode: write transactions don't block read transactions
-    try:
-        c.execute("PRAGMA journal_mode=WAL")
-    except Exception:
-        pass
+    c.execute("PRAGMA journal_mode=WAL")
     # Run all schemas
     c.executescript(SCHEMA)
     c.executescript(REFLECTION_SCHEMA)
@@ -386,7 +378,10 @@ def committed() -> Iterator[sqlite3.Connection]:
 
     Implementation: delegates to ``conn()`` (same per-call connection, same
     schema bootstrap) and commits in the ``else`` branch — i.e. only when the
-    ``with`` body returned normally. Any exception triggers rollback + re-raise.
+    ``with`` body returned normally. Any exception (incl. commit failure) is
+    logged and re-raised so write loss is never silent — the historical
+    footgun documented in AGENTS.md §9.1 (forgotten ``commit()`` AND silent
+    commit failures both produced "looks like it wrote but didn't" bugs).
     """
     with conn() as c:
         try:
@@ -398,21 +393,23 @@ def committed() -> Iterator[sqlite3.Connection]:
                 pass
             raise
         else:
+            # Commit failures MUST surface — caller thinks the write went
+            # through otherwise. Logged for diagnostics + re-raised.
             try:
                 c.commit()
-            except Exception:
-                pass
+            except Exception as _commit_err:
+                logger.error("store.committed: commit() failed: %s", _commit_err)
+                raise
 
 
 def close() -> None:
-    """Close the current thread's connection (for testing / db switching)."""
-    c = getattr(_tls, "c", None)
-    if c is not None:
-        try:
-            c.close()
-        except Exception:
-            pass
-        _tls.c = None
+    """No-op (kept for backward compat).
+
+    conn() opens a fresh per-call connection and closes it on exit, so there is
+    no thread-local connection to close. The V3-era _tls cache was removed
+    (2026-08-24 P3-22) — it was dead code (conn() never stored into _tls).
+    No in-repo callers remain; retained in case external code calls it.
+    """
 
 
 # ─── Core API (V3 compatible) ──────────────────────────────────
@@ -641,10 +638,9 @@ def _merge_into(memory_id: int, content: str, type: str, weight: float,
             "UPDATE memory SET content = ?, weight = ?, tags = ?, "
             "  access_count = access_count + 1, last_accessed = ?, "
             "  reinforcement = MIN(1.0, reinforcement + ?) WHERE id = ?",
-            (merged_content, merged_weight, merged_tags, _time.time(),
-             max(0.0, reinforcement) + _merge_inc, memory_id),
+             (merged_content, merged_weight, merged_tags, _time.time(),
+              max(0.0, reinforcement) + _merge_inc, memory_id),
         )
-        c.commit()
     _sync_vector_best_effort(memory_id, merged_content, type, merged_tags, merged_weight)
     _record_event_best_effort(memory_id, content[:100], type, "", "memory.updated")
     return memory_id
@@ -752,10 +748,9 @@ def _record_event_best_effort(entity_id: int | str, content: str, entity_type: s
                 c.execute(
                     "INSERT INTO events (character, event_type, entity_type, entity_id, payload) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (character, event_type, entity_type, str(entity_id),
-                     json.dumps({"content_preview": content[:100]})),
+                     (character, event_type, entity_type, str(entity_id),
+                      json.dumps({"content_preview": content[:100]})),
                 )
-                c.commit()
         except Exception as e:
             logger.warning("event log write failed (entity=%s %s): %s",
                            entity_type, entity_id, e)
@@ -936,7 +931,6 @@ def link_project_edge(source_id, target_id, relation: str = "RELATES_TO",
                 "DO UPDATE SET weight = excluded.weight",
                 (int(source_id), int(target_id), relation, float(weight)),
             )
-            c.commit()
         return True
     except Exception as exc:
         logger.warning("link_project_edge failed: %s", exc)

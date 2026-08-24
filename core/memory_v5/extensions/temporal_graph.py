@@ -88,30 +88,45 @@ def supersede_memory(old_id: str, now: Optional[float] = None) -> bool:
         ).fetchone()
         if cur and cur["valid_to"] is None:
             c.execute("UPDATE memory SET valid_to=? WHERE id=?", (now, old_id))
-            # store.conn() 退出时默认 rollback, 必须显式提交写事务
-            c.commit()
             ok = True
     if ok:
         logger.info("temporal_graph: superseded memory %s @ %.0f", old_id, now)
     return ok
 
 
-def supersede_entity_attribute(entity_id: str, now: Optional[float] = None) -> int:
+def supersede_entity_attribute(entity_id: str, now: Optional[float] = None,
+                               relation_type: Optional[str] = None) -> int:
     """(Graphiti 式时序图谱路径, 骨架) 当某实体的属性变更时, 把它的旧出边/实体失效。
 
-    注意: V5 当前 eg_edges 无关系类型(只有 weight), 无法精确区分"住在 X"与"喜欢 Y"
-    两条边哪条代表被推翻的属性。因此本函数仅作**粗粒度**失效(该实体全部旧出边),
-    生产化需要先在 eg_edges 加 relation_type 列 + 让 consolidate 填它。TODO。
+    注意: eg_edges.relation_type 列自 V5.7 (2026-08-14) 已存在
+    (TEXT, default 'co_occurrence'), 理论上可以按 relation_type 精细化区分
+    "住在 X"与"喜欢 Y"哪条边代表被推翻的属性。但当前 consolidate / episodic
+    写入仍只填 'co_occurrence' 单一值, 故默认仍走粗粒度失效(该实体全部旧出边)。
+
+    2026-08-24 P2-18: 新增 relation_type 可选参数 — 传入时仅失效该类型出边
+    (如 relation_type='lives_in' 只作废"住在"边, 不牵连"喜欢"边)。待边类型丰富后,
+    dissonance 可在已知属性类别时按 relation_type 精准 supersede。默认 None = 全部
+    (当前行为不变, 因写入侧统一 'co_occurrence')。
+
+    生产化路径: rule_entity_extract / episodic_consolidation 增加 relation_type
+    推断 (现状未实现)。
     """
     now = now or time.time()
     from memory_v5.entity_graph import eg_conn
     n = 0
     with eg_conn() as c:
-        r = c.execute(
-            "UPDATE eg_edges SET valid_to=? "
-            "WHERE source_entity_id=? AND valid_to IS NULL",
-            (now, entity_id),
-        )
+        if relation_type:
+            r = c.execute(
+                "UPDATE eg_edges SET valid_to=? "
+                "WHERE source_entity_id=? AND valid_to IS NULL AND relation_type=?",
+                (now, entity_id, relation_type),
+            )
+        else:
+            r = c.execute(
+                "UPDATE eg_edges SET valid_to=? "
+                "WHERE source_entity_id=? AND valid_to IS NULL",
+                (now, entity_id),
+            )
         n = getattr(r, "rowcount", 0) or 0
     if n:
         logger.info("temporal_graph: superseded %d edges of entity %s", n, entity_id)

@@ -20,11 +20,15 @@ def personalized_pagerank(
     *,
     damping: float = 0.85,
     iterations: int = 20,
+    tol: float = 1e-6,
 ) -> dict[str, float]:
     """个性化 PageRank (从 seeds 出发的稳态分布)。
 
     edges: [(source, target, weight)]。返回 {node: ppr_score}。
     纯 Python 幂迭代, 无 numpy 依赖 (便携环境)。悬空节点质量回注 seeds。
+
+    2026-08-24 P3-27: 加早停 — 单轮最大变化 < tol 即收敛跳出 (小图 3-4 轮即收敛,
+    原 20 轮固定跑满浪费)。与 label_propagation 的 `if not changed: break` 对齐。
     """
     out_edges: dict[str, list[tuple[str, float]]] = {}
     nodes: set[str] = set(seeds)
@@ -65,7 +69,11 @@ def personalized_pagerank(
         if dangling_mass > 0:
             for n in seeds:
                 new_p[n] += dangling_mass / n_seeds
+        # P3-27: 收敛早停 (小图 3-4 轮即收敛, 跑满 iterations 纯浪费)
+        delta = max((abs(new_p[n] - p.get(n, 0.0)) for n in nodes), default=0.0)
         p = new_p
+        if delta < tol:
+            break
     return p
 
 

@@ -261,7 +261,7 @@ border-radius:var(--radius-md);padding:8px 10px;width:180px;
 box-shadow:var(--shadow-card);cursor:pointer;pointer-events:auto;
 transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out),opacity .25s,transform .65s cubic-bezier(.22,1,.36,1);
 font-family:var(--font-mono);font-size:10.5px;line-height:1.4;user-select:none;
-transform:translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%) scale(var(--scale,1));will-change:transform,box-shadow}
+transform:translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%) scale(var(--scale,1))}
 /* 2026-08-15 (poker 对齐): 卡片视图元素 = 一张会话卡 (整链折叠) */
 .node-card.card-node{width:240px;height:104px;padding:9px 12px}
 @keyframes nodeIn{from{opacity:0;transform:translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%) scale(calc(var(--scale,1)*0.6))}}
@@ -329,6 +329,15 @@ color:var(--text-quaternary);background:rgba(128,128,128,.14);padding:0 5px;bord
 .node-card.is-card:hover .card-anchor{opacity:1}
 .node-card.card-node .card-anchor:hover,
 .node-card.is-card .card-anchor:hover{transform:scale(1.25);border-color:var(--brand)}
+/* 2026-08-23 (修复): hover 放大时保留基础位移居中 — 否则 scale 覆盖 translate, 缩放原点偏移 */
+.node-card.card-node .card-anchor.in-left:hover,
+.node-card.is-card .card-anchor.in-left:hover{transform:translateY(-50%) scale(1.25)}
+.node-card.card-node .card-anchor.in-top:hover,
+.node-card.is-card .card-anchor.in-top:hover{transform:translateX(-50%) scale(1.25)}
+.node-card.card-node .card-anchor.out-right:hover,
+.node-card.is-card .card-anchor.out-right:hover{transform:translateY(-50%) scale(1.25)}
+.node-card.card-node .card-anchor.out-bottom:hover,
+.node-card.is-card .card-anchor.out-bottom:hover{transform:translateX(-50%) scale(1.25)}
 .card-anchor.in{background:#22c55e;border-color:#22c55e}
 .card-anchor.in:hover{border-color:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.7)}
 .card-anchor.out{background:#f59e0b;border-color:#f59e0b}
@@ -372,7 +381,7 @@ cursor:pointer;z-index:7;transition:all .15s;font-family:var(--font-mono);opacit
 .node-fold.collapsed:hover{background:var(--brand);color:#000}
 .node-fold .fold-count{font-size:8px;margin-left:0;font-weight:700}
 
-/* Edge (bezier) — 实线 + 颜色沿线段流动 (无彩球, 无虚线) */
+/* Edge (bezier) — 静态渐变实线 (零动画, 最小 GPU 开销) */
 .edge-path{fill:none;stroke:url(#edgeGrad);stroke-width:2;opacity:.75;transition:stroke-width .2s,opacity .2s}
 .edge-hotzone{fill:none;stroke:transparent;stroke-width:18;cursor:pointer;pointer-events:stroke;vector-effect:non-scaling-stroke}
 .edge-path.parent-edge.col-0{opacity:.7}
@@ -485,7 +494,7 @@ transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),trans
 .header-btn:active{transform:translateY(0) scale(.94)}
 .messages-area{flex:1;overflow:hidden;position:relative;padding:0;display:flex;flex-direction:column}
 /* 无级滚动内容层: JS 引擎 (惯性+回弹+拖动) 控制 translateY */
-.messages-scroll{flex:1;display:flex;flex-direction:column;gap:14px;padding:0 2% 0;will-change:transform;transform:translateY(0)}
+.messages-scroll{flex:1;display:flex;flex-direction:column;gap:14px;padding:0 2% 0;transform:translateY(0)}
 /* 多卡 mini-thread: 每卡面板同构 (焦点 .focus = 主卡含输入区, 其余 = mini 浏览卡)
    背景 var(--bg-card); 渐变 96px 五段 + 40px 底; header z-40 焦点 absolute */
 .mini-thread{position:absolute;inset:0;display:flex;flex-direction:column;
@@ -544,7 +553,6 @@ position:absolute;inset:0;box-sizing:border-box}   /* 2026-08-16: 相对 .mini-t
   text-shadow:0 0 18px color-mix(in srgb,var(--brand) 55%,transparent),
               0 0 52px color-mix(in srgb,var(--brand) 30%,transparent),
               0 0 96px color-mix(in srgb,var(--brand) 16%,transparent);
-  animation:brandGlow 3.2s ease-in-out infinite;
   user-select:none;
 }
 @keyframes brandGlow{
@@ -583,7 +591,7 @@ border:1.5px solid var(--border-std);transition:box-shadow .2s var(--ease-out),b
 .bubble-user:hover{box-shadow:-2px 4px 12px rgba(0,0,0,.32)}
 .ai-card{background:linear-gradient(180deg,var(--bg-card-up),var(--bg-card-down));border:1.5px solid var(--border-std);
 border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.12);overflow:hidden;width:100%;
-position:relative;transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out),transform .25s var(--ease-out);will-change:transform,box-shadow}
+position:relative;transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out),transform .25s var(--ease-out)}
 .ai-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
 background:linear-gradient(90deg,var(--brand),transparent 70%);opacity:.6;pointer-events:none}
 .ai-card:hover{border-color:var(--border-turn);box-shadow:0 4px 16px rgba(0,0,0,.18),0 0 0 1px color-mix(in srgb,var(--brand) 6%,transparent),0 0 18px color-mix(in srgb,var(--brand) 6%,transparent);transform:translateY(-2px)}
@@ -843,7 +851,7 @@ animation:spin .8s linear infinite;display:inline-block;vertical-align:-1px;marg
 .deck-item-body{overflow-y:auto;padding:6px}
 .deck-item-body .widget-card,.deck-item-body .note-box{max-width:none;margin:0}
 /* active 调用态: 淡蓝→粉流光阴影 */
-.deck-item.active{border-color:transparent;animation:deckGlow 3.2s ease-in-out infinite}
+.deck-item.active{border-color:transparent}
 .deck-item.active .deck-item-head{background:linear-gradient(90deg,
   color-mix(in srgb,#6fb6ff 10%,transparent),color-mix(in srgb,#ff8ad8 10%,transparent))}
 @keyframes deckGlow{
@@ -875,7 +883,6 @@ body.deck-open .node-card.is-card.l3{width:max(340px,calc(85vw - var(--deck-w,40
   cursor:var(--cur-hand);
   transform:rotate(var(--a0,0deg)) translateY(var(--l0,0px));
   transition:transform .5s cubic-bezier(.22,1,.36,1),box-shadow .25s,border-color .25s;
-  will-change:transform;
 }
 .tool-card-l1 .tc-face{position:absolute;inset:0;background-image:url('/assets/wanneg-card.png');
   background-size:cover;background-position:center;filter:brightness(.9) saturate(1.06)}
@@ -1002,14 +1009,13 @@ body.tooldeck-open .node-card.is-card.l3{width:max(340px,calc(92vw - var(--toold
 }.input-main-theme{
   background:color-mix(in srgb,var(--bg) 88%,transparent);
   border:none;
-  animation:input-breathe 4s ease-in-out infinite;
 }
 /* 跑马灯: 浅蓝浅粉色带绕输入框一圈 (偶尔触发, JS 随机加 .marquee) */
 @property --mangle{syntax:'<angle>';initial-value:0deg;inherits:false}
 @keyframes marquee-rotate{to{--mangle:360deg}}
 .input-main-theme::before{content:'';position:absolute;inset:-2px;border-radius:30px;padding:2px;pointer-events:none;
   opacity:0;z-index:1;transition:opacity .6s;
-  background:conic-gradient(from var(--mangle),transparent 0deg,var(--logo-blue) 80deg,var(--logo-pink) 170deg,transparent 260deg,transparent 360deg);
+  background:conic-gradient(from var(--mangle),#93c5fd 0deg,#fde68a 90deg,#f9a8d4 180deg,#67e8f9 270deg,#93c5fd 360deg);
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude}
 .input-main-theme.marquee::before{opacity:.85;animation:marquee-rotate 3.2s linear infinite}
@@ -1200,9 +1206,16 @@ border:1.5px solid var(--border-std);border-radius:7px}
 .fx-swatch{width:26px;height:26px;border-radius:50%;border:2px solid var(--border-std);cursor:pointer;transition:transform .15s var(--ease-out),box-shadow .15s var(--ease-out)}
 .fx-swatch:hover{transform:scale(1.12)}
 .fx-swatch.active{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand)}
-.fx-sub{padding:6px 0 6px 14px;border-left:2px solid var(--border-divider);margin:6px 0 6px 6px}
-.fx-sub .fx-row{border-bottom:none;padding:6px 0}
 .fx-actions{display:flex;gap:8px;margin-top:14px}
+/* 可折叠分区 */
+.fx-group{border:1px solid var(--border-divider);border-radius:10px;margin:6px 0;overflow:hidden}
+.fx-group-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;background:var(--bg-input);transition:background .15s}
+.fx-group-head:hover{background:color-mix(in srgb,var(--brand) 8%,var(--bg-input))}
+.fx-group-title{font-size:13px;font-weight:600;color:var(--text-primary)}
+.fx-group-body{display:none;padding:4px 14px}
+.fx-group.open .fx-group-body{display:block}
+.fx-group-arrow{font-size:10px;color:var(--text-tertiary);transition:transform .2s;margin-left:8px}
+.fx-group.open .fx-group-arrow{transform:rotate(90deg)}
 
 
 /* ═══ 统一视图：L1/L2/L3 = 同一张卡片在画布上的三种形态 (2026-08-12 架构重构 A+B) ═══
@@ -1375,6 +1388,55 @@ border:1.5px solid var(--border-std);border-radius:7px}
 .node-card.colliding{box-shadow:0 0 0 1px color-mix(in srgb,var(--brand) 25%,transparent),0 10px 32px rgba(0,0,0,.35),0 0 18px color-mix(in srgb,var(--brand) 10%,transparent)!important}
 .node-card.is-card .mini-body{transition:opacity .3s var(--ease-out) .12s}
 .node-card.is-card .mini-thread{transition:opacity .25s var(--ease-out)}
+
+/* ═══════ 平板模式 (2026-08-23): 触屏全局适配 ═══════
+   触屏检测: pointer:coarse = 无精确指针的触摸设备 (平板/手机); 混合设备 (触屏笔记本)
+   同时具备精确指针 → 仍走桌面交互。 布局断点 768-1280px 覆盖常见平板横屏/竖屏。 */
+@media (pointer:coarse){
+  /* 1) 增大点击热区: 锚点 12→20px, 连接手柄/关闭按钮放大 */
+  .node-card .card-anchor{width:20px;height:20px}
+  .node-card.card-node .card-anchor.in-left{left:-12px}
+  .node-card.card-node .card-anchor.in-top{top:-12px}
+  .node-card.card-node .card-anchor.out-right{right:-12px}
+  .node-card.card-node .card-anchor.out-bottom{bottom:-12px}
+  .edge-add circle{stroke-width:2.4}
+  .edge-add text, .edge-add .edge-add-plus{font-size:16px;stroke-width:2.5}
+  .edge-close{width:22px;height:22px}
+  /* 2) 禁止悬停依赖: hover 效果改为 :active, 触屏没有悬停态 */
+  .node-card:not(.is-card):hover{transform:none}
+  .header-btn:hover{background:none}
+  .icon-btn:hover,.model-chip:hover,.tool-dock-btn:hover{transform:none}
+  .ctx-menu-item:hover{background:none}
+  .ctx-menu-item:active{background:var(--bg-item-hover)}
+  /* 3) 禁用触屏双击缩放 (iOS) 与文本选择干扰 */
+    *{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+    .canvas-layer *{-webkit-user-select:none;user-select:none}
+    /* 4) 滚动条加粗 便于触摸 */
+    ::-webkit-scrollbar{width:12px;height:12px}
+    /* 5) L1 卡触屏适配: 尺寸保持 240×104 (与 JS CARD_W/CARD_H 布局常量一致, 防碰撞/连线偏移),
+          仅放大内容字号与热区 (触屏无 hover, 悬停放大无效) */
+    .node-card.card-node{font-size:12px;line-height:1.5}
+    .node-card.card-node .node-card-info{font-size:13px}
+    .node-card.card-node .node-card-info .card-msgs{font-size:11px}
+    .node-card.card-node .node-tag{font-size:10px;padding:2px 7px}
+    .node-card.card-node .node-depth{font-size:10px;margin-bottom:3px}
+    .node-card.card-node .card-anchor{width:22px;height:22px}
+      .node-card.card-node .card-anchor.in-left{left:-13px;top:50%;transform:translateY(-50%)}
+      .node-card.card-node .card-anchor.in-top{top:-13px;left:50%;transform:translateX(-50%)}
+      .node-card.card-node .card-anchor.out-right{right:-13px;top:50%;transform:translateY(-50%)}
+      .node-card.card-node .card-anchor.out-bottom{bottom:-13px;left:50%;transform:translateX(-50%)}
+      .node-card.card-node .card-anchor:active{transform:scale(1.3);border-color:var(--brand)}
+    }
+@media (pointer:coarse) and (max-width:1280px){
+  .header-btn{width:40px;height:40px}
+  .deck-item-body{padding:4px}
+}
+@media (pointer:coarse) and (max-width:900px){
+  /* 标题区紧凑化, 设置/输入区全宽 */
+  .chat-topbar{padding:6px 10px}
+  [data-fid="inputMain"]{border-radius:18px}
+  .settings-dialog{width:88%;height:82%}
+}
 </style>
 <!-- poker 原版输入栏样式 (Tailwind 类 + color 变量) -->
 <link rel="stylesheet" href="assets/fonts/noto-sans-sc/noto-sans-sc.css">
@@ -2611,8 +2673,8 @@ function calcCardLayout(){
   if(!cards.length){calcLayout();return;}
   const wrapW=(document.getElementById('canvasWrap')||{}).clientWidth||1200;
   const GAP=40;
-  const perRow=Math.max(1,Math.floor((wrapW-60)/(CARD_W+GAP)));
-  const rowH=160;
+    const perRow=Math.max(1,Math.floor((wrapW-60)/(CARD_W+GAP)));
+    const rowH=CARD_H+GAP;  // 2026-08-23: 上下间距与左右间距统一为 GAP (原 160 导致垂直间距 56 ≠ 40)
   // 只写头节点位置 (卡片锚); 清空旧键, 防剪枝/建卡残留
   Object.keys(nodePositions).forEach(k=>delete nodePositions[k]);
   const sorted=cards.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
@@ -2664,6 +2726,7 @@ function applyTransform(){
   document.querySelectorAll('.mini-thread .chat-topbar').forEach(t=>{
     t.style.fontSize=(12/zoom)+'px';
   });
+  if(typeof renderEdges==='function') renderEdges();   // 缩放/平移: 直接重建连线
   const zi=document.getElementById('zoomInfo');if(zi)zi.textContent=Math.round(zoom*100)+'%';
   miniUpdateViewport();
   // 卡片已是聚焦节点子元素 (canvasLayer 内), 随画布缩放/平移天然同步, 无需手动跟随
@@ -2906,10 +2969,18 @@ function execWrap(n){
    renderAll 的"后渲染阶段"统一绘制 (renderEdges), 节点渲染时零耦合。 */
 function cardPorts(id){
   const p=dispPos(id); if(!p)return null;
-  const el=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
-  // 2026-08-17: 用实际 DOM 尺寸 (offsetWidth 含 border), 确保连线端点对齐卡片视觉边缘; L1/L2/L3 统一, 不再用 cardTargetSize 理论值
+  // 纯数据层: 不读 DOM, 避免 CSS 变量重排延迟导致拖拽时脱钩
   let hw=NODE_W/2, hh=NODE_H/2;
-  if(el){ hw=(el.offsetWidth||NODE_W)/2; hh=(el.offsetHeight||NODE_H)/2; }
+  const isCard = _cards && _cards.has(id);
+  if(isCard){
+    const lv=_focusLevel(), cardId=_focusId();
+    if(id===cardId && (lv==='l2'||lv==='l3')){
+      const ts=cardTargetSize(lv);
+      hw=ts.w/2; hh=ts.h/2;
+    } else {
+      hw=CARD_W/2; hh=CARD_H/2;
+    }
+  }
   return { top:{x:p.x,y:p.y-hh}, bottom:{x:p.x,y:p.y+hh},
            left:{x:p.x-hw,y:p.y}, right:{x:p.x+hw,y:p.y} };
 }
@@ -2931,26 +3002,59 @@ function smartBezier(sp,tp,fromPort,toPort){
   else{c2x=tp.x+off;c2y=tp.y;}
   return `M${sp.x},${sp.y} C${c1x},${c1y} ${c2x},${c2y} ${tp.x},${tp.y}`;
 }
+/* ═══ 渲染脏标记: 卡片移动/缩放时标记, renderCardEdges 检查后清除 ═══ */
+let _edgesDirty = true;   // 首次必须渲染
+let _edgeFrameCache = null;  // 帧级 getBoundingClientRect 缓存 {frameId, map:{id:{w,h}}}
+
+function markEdgesDirty(){ _edgesDirty = true; }
+
 function renderCardEdges(posOverride){
+  // 优化 2: 脏标记 — 静止时跳过
+  if(!_edgesDirty && !posOverride) return;
+  _edgesDirty = false;
   const svg=document.getElementById('edgesSvg');
   if(!svg)return;
-  let paths='';
   const cards=tree&&tree.cards?tree.cards:[];
-  if(!cards.length){svg.innerHTML=svg.querySelector('defs')?svg.querySelector('defs').outerHTML:'';return;}
+  const DEFS='<defs><linearGradient id="edgeGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#60a5fa" stop-opacity="0.8"/><stop offset="50%" stop-color="#a78bfa" stop-opacity="0.7"/><stop offset="100%" stop-color="#f9a8d4" stop-opacity="0.8"/></linearGradient></defs>';
+  if(!cards.length){svg.innerHTML=DEFS;return;}
   const byId=new Map(cards.map(c=>[c.id,c]));
-  // 2026-08-16 (显式连接图重构): 连线数据源 = 显式 links (多对多, 可断开)。
-  // 端点 = 锚点位置: from 卡出锚点(右/下) → to 卡入锚点(左/上); 卡片尺寸自适应 (L1/L2/L3)。
+  // 优化 1: 帧级缓存 — 同一帧内每张卡只测一次尺寸
+  const frameId = posOverride ? -1 : (window.__edgeFrameId = (window.__edgeFrameId||0) + 1);
+  if(!_edgeFrameCache || _edgeFrameCache.frameId !== frameId){
+    _edgeFrameCache = { frameId, map: new Map() };
+  }
+  const cache = _edgeFrameCache.map;
+  function getCardSize(headId){
+    if(cache.has(headId)) return cache.get(headId);
+    // 纯数据层: 用理论尺寸, 不读 DOM (避免 CSS 变量重排延迟导致脱钩)
+    const isCard = _cards && _cards.has(headId);
+    let hw, hh;
+    if(isCard){
+      const lv = _focusLevel();
+      const cardId = _focusId();
+      if(headId === cardId && (lv === 'l2' || lv === 'l3')){
+        const ts = cardTargetSize(lv);
+        hw = ts.w/2; hh = ts.h/2;
+      } else {
+        hw = CARD_W/2; hh = CARD_H/2;
+      }
+    } else {
+      hw = CARD_W/2; hh = CARD_H/2;
+    }
+    const size={hw, hh};
+    cache.set(headId, size);
+    return size;
+  }
   const portOf=(headId,port)=>{
     const p=posOverride&&posOverride.get(headId)||dispPos(headId); if(!p)return null;
-    const el=document.querySelector('.node-card[data-id="'+CSS.escape(headId)+'"]');
-    // 2026-08-17: 用实际 DOM 尺寸 (offsetWidth 含 border), 确保连线端点对齐卡片视觉边缘; L1/L2/L3 统一
-    let hw=CARD_W/2,hh=CARD_H/2;
-    if(el){ hw=(el.offsetWidth||CARD_W)/2; hh=(el.offsetHeight||CARD_H)/2; }
-    if(port==='left')return {x:p.x-hw,y:p.y};
-    if(port==='right')return {x:p.x+hw,y:p.y};
-    if(port==='top')return {x:p.x,y:p.y-hh};
-    return {x:p.x,y:p.y+hh};
+    const s=getCardSize(headId);
+    if(port==='left')return {x:p.x-s.hw,y:p.y};
+    if(port==='right')return {x:p.x+s.hw,y:p.y};
+    if(port==='top')return {x:p.x,y:p.y-s.hh};
+    return {x:p.x,y:p.y+s.hh};
   };
+  const fid=_focusId();
+  let paths='';
   (tree.links||[]).forEach(lk=>{
     const fc=byId.get(lk.from_card),tc=byId.get(lk.to_card);
     if(!fc||!tc)return;
@@ -2962,15 +3066,13 @@ function renderCardEdges(posOverride){
     if(!sp||!tpp)return;
     const d=smartBezier(sp,tpp,fp,tp);
     const cls=(lk.kind==='branching'||lk.kind==='parallel')?'edge-path source-line':'edge-path parent-edge';
-    const fid=_focusId();
     const isFocus=(fh===fid||th===fid)?' is-focus-edge':'';
     paths+=`<g class="edge-group${isFocus}" data-from="${fh}" data-to="${th}" data-from-card="${lk.from_card}" data-to-card="${lk.to_card}" oncontextmenu="event.preventDefault();event.stopPropagation();onEdgeContextMenu(event,'${fh}','${th}','${lk.from_card}','${lk.to_card}')">
       <path class="edge-hotzone" d="${d}"/>
-      <path class="${cls}" data-from="${fh}" data-to="${th}" d="${d}"/>
+      <path class="${cls} edge-flow" data-from="${fh}" data-to="${th}" d="${d}"/>
     </g>`;
   });
-  const defs='<defs><linearGradient id="edgeGrad" x1="0%" y1="0%" x2="100%" y2="100%" spreadMethod="repeat"><stop offset="0%" stop-color="#60a5fa" stop-opacity="0.8"/><stop offset="25%" stop-color="#a78bfa" stop-opacity="0.7"/><stop offset="50%" stop-color="#f9a8d4" stop-opacity="0.8"/><stop offset="75%" stop-color="#a78bfa" stop-opacity="0.7"/><stop offset="100%" stop-color="#60a5fa" stop-opacity="0.8"/><animate attributeName="x1" from="0%" to="100%" dur="3s" repeatCount="indefinite"/><animate attributeName="x2" from="100%" to="200%" dur="3s" repeatCount="indefinite"/></linearGradient></defs>';
-  svg.innerHTML=defs+paths;
+  svg.innerHTML=DEFS+paths;
 }
 function renderEdges(posOverride){
   if(viewMode==='card'){renderCardEdges(posOverride);return;}
@@ -3106,11 +3208,12 @@ function onNodeMouseDown(e,nodeId){
     const dx=(ev.clientX-startX)/zoom,dy=(ev.clientY-startY)/zoom;
     p.x=startPX+dx;p.y=startPY+dy;
     if(displayPositions[nodeId])displayPositions[nodeId]={x:p.x,y:p.y};  // 拖动卡同步覆盖层
-    // 2026-08-16: 连接经锚点拖线 (显式 links), 拖卡 = 移动位置 — 旧"拖卡挂接高亮"已移除
-    if(_nodeRAF)return;                              // rAF 节流: 每帧最多一次碰撞/渲染
+    // 拖动时每帧标脏 + 渲染连线 (脏标记静止时已 false, 不标脏则 renderEdges 直接 return → 连线只在碰撞时刷新)
+    if(_nodeRAF)return;
     _nodeRAF=requestAnimationFrame(()=>{
       _nodeRAF=null;
-      collidePushCards(nodeId);       // 拖动碰撞: 与展开卡重叠时推挤 (仅体积碰撞才自适应调整)
+      collidePushCards(nodeId);
+      if(typeof markEdgesDirty==='function') markEdgesDirty();
       renderNodes();renderEdges();
       miniLayout();bumpIdle();
     });
@@ -3632,35 +3735,118 @@ function toast(msg){
     _wheelZoom=true;
     bumpIdle();
   },{passive:false});
-  // Touch support
-  let touches=[];
+  // Touch support (2026-08-23: +惯性滚动 fling + 松手时速度采样 + 触屏卡片直接拖动)
+  let touches=[],
+      _t0=0,_tLast=0,_tX=0,_tY=0,_flingVX=0,_flingVY=0,_flingRAF=null,
+      _touchDrag=null;  // {nodeId, startX, startY, startPX, startPY}
+  function _stopFling(){ if(_flingRAF){cancelAnimationFrame(_flingRAF);_flingRAF=null;} _flingVX=0;_flingVY=0; }
+  function _flingLoop(){
+    if(Math.abs(_flingVX)<0.3&&Math.abs(_flingVY)<0.3){_flingRAF=null;return;}
+    panX+=_flingVX; panY+=_flingVY;
+    _flingVX*=0.92; _flingVY*=0.92;
+    const layer=document.getElementById('canvasLayer');
+    const wrap=document.getElementById('canvasWrap');
+    if(layer&&wrap){
+      const lw=parseFloat(layer.style.width)||0, lh=parseFloat(layer.style.height)||0;
+      const vw=wrap.clientWidth, vh=wrap.clientHeight;
+      const minPanX=Math.min(0, vw-lw*zoom), minPanY=Math.min(0, vh-lh*zoom);
+      if(panX>0){panX=0;_flingVX=0;}
+      else if(panX<minPanX){panX=minPanX;_flingVX=0;}
+      if(panY>0){panY=0;_flingVY=0;}
+      else if(panY<minPanY){panY=minPanY;_flingVY=0;}
+    }
+    applyTransform(); bumpIdle();
+    _flingRAF=requestAnimationFrame(_flingLoop);
+  }
   wrap.addEventListener('touchstart',e=>{
-    cancelAutoAnim();
-    // 触控分流: 按在可交互元素上 (树节点/组卡/连接手柄/边中点; mini 卡/卡片正文在其内) →
-    // 不接管手势、不 preventDefault: 保留兼容鼠标事件 (点按选中/双击展开/拖拽节点) 与
-    // 原生滚动 (mini-body) 及长按菜单; 画布空白 → 单指平移 / 双指捏合缩放 (原逻辑)。
-    // (touch-action:none 已保证这些区域不会触发浏览器原生滚动/双指缩放)
+    cancelAutoAnim(); _stopFling();
     const t=e.target;
-    if(t&&t.closest&&t.closest('.node-card,.group-card,.node-handle,.edge-add')){
+    // 优先检测锚点/连接手柄 (防同时判为卡片拖拽)
+    if(t&&t.closest&&t.closest('.card-anchor,.edge-add,.edge-close')){
+      return;  // 不接管, 让浏览器合成鼠标事件交给 onAnchorDown / onEdgeAddClick
+    }
+    // 触屏卡片直接拖动: 检测卡片 → 记录起始位置, preventDefault 绕过 300ms 合成延迟
+    const cardEl=t&&t.closest&&t.closest('.node-card');
+    if(cardEl && e.touches.length===1){
+      const nodeId=cardEl.getAttribute('data-id');
+      if(nodeId){
+        const pos=displayPositions[nodeId]||nodePositions[nodeId];
+        if(pos){
+          _touchDrag={nodeId, startX:e.touches[0].clientX, startY:e.touches[0].clientY, startPX:pos.x, startPY:pos.y};
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+    // 组卡/连接手柄 → 不接管
+    if(t&&t.closest&&t.closest('.group-card,.node-handle')){
       if(e.touches.length===2)touches=[...e.touches];
       return;
     }
-    if(e.touches.length===1){panning=true;px=e.touches[0].clientX-panX;py=e.touches[0].clientY-panY}
-    else if(e.touches.length===2){touches=[...e.touches]}
+    if(e.touches.length===1){
+      panning=true;px=e.touches[0].clientX-panX;py=e.touches[0].clientY-panY;
+      _t0=_tLast=performance.now();_tX=e.touches[0].clientX;_tY=e.touches[0].clientY;_flingVX=0;_flingVY=0;
+    }
+    else if(e.touches.length===2){touches=[...e.touches];_flingVX=0;_flingVY=0;}
     e.preventDefault();
   },{passive:false});
   wrap.addEventListener('touchmove',e=>{
-    // 仅在真正平移/捏合时 preventDefault; 节点/卡片拖拽期间让兼容鼠标事件 (mousemove) 畅通
-    if(panning&&e.touches.length===1){panX=e.touches[0].clientX-px;panY=e.touches[0].clientY-py;applyTransform();bumpIdle();e.preventDefault()}
+  // 触屏卡片拖动: 数据层同步更新, 渲染每帧 rAF 节流 (防 60Hz touchmove 触发过多 renderNodes 导致卡顿脱钩)
+    if(_touchDrag && e.touches.length===1){
+      const d={nodeId:_touchDrag.nodeId, x:_touchDrag.startPX+(e.touches[0].clientX-_touchDrag.startX)/zoom, y:_touchDrag.startPY+(e.touches[0].clientY-_touchDrag.startY)/zoom};
+      displayPositions[d.nodeId]={x:d.x,y:d.y};
+      if(nodePositions[d.nodeId]){nodePositions[d.nodeId].x=d.x;nodePositions[d.nodeId].y=d.y;}
+      const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(d.nodeId)+'"]');
+      if(dragEl){dragEl.style.setProperty('--nx',d.x+'px');dragEl.style.setProperty('--ny',d.y+'px');}
+      // 走桌面等同路径: 同步 collidePushCards + renderNodes + 强制重排 + renderEdges (确保连线锚点与卡片位置同时)
+      if(typeof markEdgesDirty==='function') markEdgesDirty();
+      collidePushCards(d.nodeId);
+      renderNodes();
+      if(dragEl) void dragEl.offsetHeight;
+      if(typeof renderEdges==='function') renderEdges();
+      e.preventDefault();
+      return;
+    }
+    // 画布平移
+    if(panning&&e.touches.length===1){
+      panX=e.touches[0].clientX-px;panY=e.touches[0].clientY-py;
+      const now=performance.now();
+      if(now-_tLast>=60){ _flingVX=(e.touches[0].clientX-_tX)/(now-_tLast); _flingVY=(e.touches[0].clientY-_tY)/(now-_tLast); _tLast=now;_tX=e.touches[0].clientX;_tY=e.touches[0].clientY; }
+      applyTransform();bumpIdle();e.preventDefault()
+    }
     else if(e.touches.length===2){
+      const rect=wrap.getBoundingClientRect();
       const d0=Math.hypot(touches[0].clientX-touches[1].clientX,touches[0].clientY-touches[1].clientY);
       const d1=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
-      zoom=Math.min(3,Math.max(0.15,zoom*(d1/d0)));applyTransform();bumpIdle();touches=[...e.touches];e.preventDefault();
+      const mx0=(touches[0].clientX+touches[1].clientX)/2-rect.left, my0=(touches[0].clientY+touches[1].clientY)/2-rect.top;
+      const newZoom=Math.min(3,Math.max(0.15,zoomTarget*(d1/Math.max(1,d0))));
+      _zAnchorMx=mx0; _zAnchorMy=my0;
+      _zAnchorWx=(mx0-panX)/zoom; _zAnchorWy=(my0-panY)/zoom;
+      zoomTarget=newZoom; _wheelZoom=true;
+      touches=[...e.touches];e.preventDefault();
     }
   },{passive:false});
-  wrap.addEventListener('touchend',()=>{panning=false});
-
-  // 2026-08-16 (poker 对齐): 分支来源链高亮 —— 鼠标进入一张有 branchingSourceId 的卡,
+  wrap.addEventListener('touchend',e=>{
+    panning=false;
+    // 触屏卡片拖动结束: 持久化 + 碰撞收敛
+    if(_touchDrag){
+      const nd=_touchDrag.nodeId;
+      manualPositions[nd]={x:displayPositions[nd].x,y:displayPositions[nd].y};
+      collidePushCards(nd); renderNodes();renderEdges();miniLayout();
+      _touchDrag=null;
+      return;
+    }
+    // 惯性 fling
+    if(e.touches.length===0 && (Math.abs(_flingVX)>0.6 || Math.abs(_flingVY)>0.6)){
+      const t0=_t0; _t0=0;
+      const dt=Math.max(16, Math.min(200, performance.now()-Math.max(t0,_tLast)));
+      const spd=Math.min(30, Math.max(5, Math.hypot(_flingVX,_flingVY)*dt*0.9));
+      const ang=Math.atan2(_flingVY,_flingVX);
+      _flingVX=Math.cos(ang)*spd; _flingVY=Math.sin(ang)*spd;
+      _flingRAF=requestAnimationFrame(_flingLoop);
+    }else{ _flingVX=0;_flingVY=0; }
+  });
+// 2026-08-16 (poker 对齐): 分支来源链高亮 —— 鼠标进入一张有 branchingSourceId 的卡,
   // 沿 lineage 回溯标记所有祖先卡 (自身 + 来源链) 发光; 移出后清除。
   const _lineageClear=()=>{
     wrap.querySelectorAll('.node-card.lineage-ancestor,.node-card.lineage-self').forEach(el=>el.classList.remove('lineage-ancestor','lineage-self'));
@@ -5345,6 +5531,8 @@ var __fxConfig={
   bgGradient:true, bgStrength:0.12,
   cardAlpha:1,
   gwShape:'ring', gwHue:270, gwBright:88,
+  gravStrength:0.1,
+  electronRadius:1, electronCount:6, electronSpeed:1.0, electronColor:'rainbow',
   enableParticles:true, enableLines:true,
   enableElectrons:true, enableGravityWaves:true, enableBgGradient:true,
   fxCur:1, fxVel:0, lastRebuildFx:1,
@@ -5432,30 +5620,36 @@ var FX_THEMES={
   var lastSpawnTime = 0;
 
   /* ── 电子云拖尾: 多个电子在不同倾角椭圆轨道绕鼠标运行, 各自带发光拖尾 ── */
-  var ELECTRON_COUNT = 12;
-  var electrons = [];
-  for (var ei = 0; ei < ELECTRON_COUNT; ei++){
-    electrons.push({
-      phase: Math.random() * Math.PI * 2,           /* 轨道起始相位 */
-      speed: 1.2 + Math.random() * 1.5,             /* 角速度 (各不同) */
-      speedDir: Math.random() < 0.5 ? 1 : -1,       /* 顺/逆时针 */
-      rx: 11 + Math.random() * 18,                  /* 轨道 X 半轴 (缩小 1/2) */
-      ry: 6 + Math.random() * 12,                   /* 轨道 Y 半轴 (缩小 1/2) */
-      tilt: Math.random() * Math.PI,                /* 轨道倾角 (3D 感) */
-      hue: randHue(),                               /* 电子色相 */
-      size: 1.5 + Math.random() * 1.5,             /* 电子大小 */
-      trail: []                                     /* 拖尾 [{x,y,hue}] */
-    });
+  function rebuildElectrons(){
+    var cnt = __fxConfig.electronCount || 6;
+    var spdBase = __fxConfig.electronSpeed || 1.0;
+    var radMul = __fxConfig.electronRadius || 1;
+    electrons.length = 0;
+    for (var ei = 0; ei < cnt; ei++){
+      electrons.push({
+        phase: Math.random() * Math.PI * 2,
+        speed: spdBase + Math.random() * (spdBase * 0.8),
+        speedDir: Math.random() < 0.5 ? 1 : -1,
+        rx: (11 + Math.random() * 18) * radMul,
+        ry: (6 + Math.random() * 12) * radMul,
+        tilt: Math.random() * Math.PI,
+        hue: randHue(),
+        size: 1.5 + Math.random() * 1.5,
+        trail: []
+      });
+    }
   }
+  var electrons = [];
+  rebuildElectrons();
   var eMouseX = 0, eMouseY = 0, eInited = false, eTime = 0;
 
   function updateElectrons(mw, mh, dt){
     eTime += dt;
     if (mw !== null){
       if (!eInited){ eMouseX = mw; eMouseY = mh; eInited = true; }
-      /* 即时跟随鼠标, 不做平滑延迟 */
-      eMouseX = mw;
-      eMouseY = mh;
+      /* 优雅平滑跟随, 不做即时 */
+      eMouseX += (mw - eMouseX) * 0.06;
+      eMouseY += (mh - eMouseY) * 0.06;
     }
     for (var i = 0; i < electrons.length; i++){
       var e = electrons[i];
@@ -5498,7 +5692,14 @@ var FX_THEMES={
       var dep = head.depth;
       var alpha = 0.3 + dep * 0.4;
       var w = e.size * 0.7 * (0.5 + dep * 0.5);
-      ctx.strokeStyle = 'hsla(' + e.hue + ',70%,80%,' + alpha + ')';
+      /* 电子颜色模式: rainbow=色相渐变, white=白色, blue=蓝色, pink=粉色 */
+      var eColor = __fxConfig.electronColor || 'rainbow';
+      var strokeHue;
+      if (eColor === 'white') strokeHue = null;
+      else if (eColor === 'blue') strokeHue = 210;
+      else if (eColor === 'pink') strokeHue = 330;
+      else strokeHue = e.hue;
+      ctx.strokeStyle = strokeHue !== null ? 'hsla(' + strokeHue + ',70%,80%,' + alpha + ')' : 'rgba(255,255,255,' + alpha + ')';
       ctx.lineWidth = w;
       ctx.beginPath();
       ctx.moveTo(tr[0].x, tr[0].y);
@@ -5509,13 +5710,16 @@ var FX_THEMES={
       }
       ctx.lineTo(tr[tr.length-1].x, tr[tr.length-1].y);
       ctx.stroke();
-      /* 电子核: 最亮的小球 (浅色) */
+      /* 电子核 */
       ctx.shadowBlur = 0;
       var head = tr[tr.length - 1];
       var hAlpha = 0.4 + head.depth * 0.5;
       var hR = e.size * (0.5 + head.depth * 0.5);
-      var headHue = (e.hue + 360) % 360;
-      ctx.fillStyle = 'hsla(' + headHue + ',70%,92%,' + hAlpha + ')';
+      if (strokeHue !== null){
+        ctx.fillStyle = 'hsla(' + strokeHue + ',70%,92%,' + hAlpha + ')';
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,' + hAlpha + ')';
+      }
       ctx.beginPath();
       ctx.arc(head.x, head.y, hR, 0, Math.PI * 2);
       ctx.fill();
@@ -5531,21 +5735,51 @@ var FX_THEMES={
     this.size = (Math.random()*3 + 1) * (__fxConfig.size/3);
     this.hue = randHue();
     this.alpha = 1;
+    this.fadeAlpha = 1;
     this.sizeDir = Math.random() < 0.5 ? -1 : 1;
     this.trail = [];
     this.lastVisible = performance.now();
+    /* 绕鼠标最少圈数计数 */
+    this.lastAngle = null;    /* 上一帧相对鼠标的角度 */
+    this.orbitAccum = 0;      /* 累积角度 (弧度) */
+    this.minLaps = 3;         /* 最少绕 3 圈才允许消失 */
   }
-  Particle.prototype.update = function(mw, mh, R2){
-    /* 粒子不再被鼠标吸引/排斥, 仅自由飘动 */
-    if (autoDrift){
+  Particle.prototype.update = function(mw, mh, R2, z2){
+    var dist = mw !== null ? ((mw-this.x)*(mw-this.x) + (mh-this.y)*(mh-this.y)) * z2 : 0;
+    var force = (dist && dist < R2) ? (R2-dist)/R2 : 0;
+    if (mw === null && autoDrift){
       this.vx += (Math.random()-0.5)*0.03;
       this.vy += (Math.random()-0.5)*0.03;
     }
-    this.vx *= 0.998;
-    this.vy *= 0.998;
-    /* speed 实时生效: 作为位移倍率 */
+    if (dist && __fxConfig.interaction !== 'none'){
+      var sd = Math.sqrt(dist);
+      var dir = __fxConfig.interaction === 'repel' ? -1 : 1;
+      var gs = __fxConfig.gravStrength !== undefined ? __fxConfig.gravStrength : 0.1;
+      if (sd < 15){
+        this.vx += ((mw-this.x)/sd) * gs * 0.5 * dir;
+        this.vy += ((mh-this.y)/sd) * gs * 0.5 * dir;
+      } else {
+        this.vx += ((mw-this.x)/sd) * force * gs * dir;
+        this.vy += ((mh-this.y)/sd) * force * gs * dir;
+      }
+    }
+    /* 阻尼: 近距离时减弱, 让粒子能到达中心 */
+    var damp = (dist && dist < 225) ? 0.999 : (mw !== null ? 0.99 : 0.998);
+    this.vx *= damp;
+    this.vy *= damp;
     var spd = __fxConfig.speed;
     this.x += this.vx * spd; this.y += this.vy * spd;
+    /* 累积绕行角度 */
+    if (mw !== null && dist > 0){
+      var ang = Math.atan2(this.y - mh, this.x - mw);
+      if (this.lastAngle !== null){
+        var d = ang - this.lastAngle;
+        if (d > Math.PI) d -= Math.PI*2;
+        else if (d < -Math.PI) d += Math.PI*2;
+        this.orbitAccum += Math.abs(d);
+      }
+      this.lastAngle = ang;
+    }
     this.size += this.sizeDir * 0.1;
     if (this.size > 4 || this.size < 1) this.sizeDir *= -1;
     this.hue = hueShift(this.hue, 0.3);
@@ -5556,26 +5790,24 @@ var FX_THEMES={
   };
   Particle.prototype.draw = function(ctx){
     var r = Math.max(0.5, this.size);
-    var g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
-    g.addColorStop(0, 'hsla(' + this.hue + ',80%,88%,' + (Math.max(this.alpha,0) * __fxConfig.alpha) + ')');
-    g.addColorStop(1, 'hsla(' + hueShift(this.hue, 30) + ',80%,70%,' + (Math.max(this.alpha,0) * __fxConfig.alpha) + ')');
-    ctx.fillStyle = g;
-    ctx.shadowBlur = W > 900 ? 10 : 0;
-    ctx.shadowColor = 'hsl(' + this.hue + ',80%,88%)';
+    var fa = this.fadeAlpha;
+    var a = Math.max(this.alpha,0) * fa * __fxConfig.alpha;
+    /* 简单填充代替 createRadialGradient + shadowBlur */
+    ctx.fillStyle = 'hsla(' + this.hue + ',80%,85%,' + a + ')';
     ctx.beginPath();
     ctx.arc(this.x, this.y, r, 0, Math.PI*2);
     ctx.fill();
-    ctx.shadowBlur = 0;
+    /* 拖尾: 整条一条 path 一次 stroke */
     if (this.trail.length > 1){
-      ctx.lineWidth = 1.5;
-      for (var i = 0; i < this.trail.length - 1; i++){
-        var t1 = this.trail[i];
-        ctx.strokeStyle = 'hsla(' + t1.hue + ',80%,88%,' + (Math.max(t1.alpha,0) * __fxConfig.alpha) + ')';
-        ctx.beginPath();
-        ctx.moveTo(t1.x, t1.y);
-        ctx.lineTo(this.trail[i+1].x, this.trail[i+1].y);
-        ctx.stroke();
+      ctx.strokeStyle = 'hsla(' + this.hue + ',80%,88%,' + (a * 0.4) + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(this.trail[0].x, this.trail[0].y);
+      for (var i = 1; i < this.trail.length; i++){
+        ctx.lineTo(this.trail[i].x, this.trail[i].y);
       }
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
     }
   };
 
@@ -5667,17 +5899,34 @@ var FX_THEMES={
     var t = frameCount * 0.016 * __fxConfig.speed;
     var mw = (mouse.x !== null) ? (mouse.x - panX)*invZ : null;
     var mh = (mouse.y !== null) ? (mouse.y - panY)*invZ : null;
-    var R = __fxConfig.interactRange*invZ, R2 = R*R;
+    var R = __fxConfig.interactRange, R2 = R*R;  /* 屏幕像素半径, 不随缩放变化 */
+    var z2 = zoom * zoom;  /* 世界距离→屏幕距离的转换系数 */
     var LD = __fxConfig.lineDist*invZ, LD2 = LD*LD, LA = __fxConfig.lineAlpha;
     /* 视口剔除余量: 粒子在视口外不参与连线/渲染, 但位置仍正常更新 */
     var margin = LD * 0.5;
     var now = performance.now();
     var vis = [];
-    /* 有状态粒子: update + 视口内收集/渲染 + 视窗外 6 秒删除 + 缩小太小剔除 */
-    var minScreenR = 1.0 / zoom; /* 粒子世界半径小于此值时屏幕上看不见 → 删除 */
+    /* 有状态粒子: update + 视口内收集/渲染 + 视窗外 6 秒删除 + 鼠标中心渐隐 (绕够圈数后) */
+    var minScreenR = 0.3;  /* 固定最小可见半径, 不随缩放变化 */
+    var fadeR2 = 400;   /* 旋转半径 < ~20px 时开始渐隐 */
+    var killR2 = 9;     /* 旋转半径 < ~3px 时完全消失 */
     for (var i = particles.length-1; i >= 0; i--){
       var p = particles[i];
-      if (__fxConfig.enableParticles) p.update(mw, mh, R2);
+      if (__fxConfig.enableParticles) p.update(mw, mh, R2, z2);
+      /* 粒子绕鼠标旋转到中心时渐隐消失 (必须绕够 minLaps 圈) */
+      if (mw !== null){
+        var md = ((mw-p.x)*(mw-p.x) + (mh-p.y)*(mh-p.y)) * z2;
+        var minOrbitRad = p.minLaps * Math.PI * 2;
+        if (md < fadeR2 && p.orbitAccum >= minOrbitRad){
+          var fadeRatio = Math.max(0, (md - killR2) / (fadeR2 - killR2));
+          p.fadeAlpha = Math.min(p.fadeAlpha, fadeRatio);
+          if (md < killR2){
+            p.fadeAlpha = 0;
+            particles.splice(i, 1);
+            continue;
+          }
+        }
+      }
       /* 缩小太多时小粒子直接删除 */
       if (p.size < minScreenR){
         particles.splice(i, 1);
@@ -5691,20 +5940,20 @@ var FX_THEMES={
         particles.splice(i, 1);
       }
     }
-    /* 动态生成: 视口内粒子不足, 每 500ms 逐步补充到 count ±10% */
+    /* 动态生成: 视口内粒子不足时, 每 200ms 逐步补充到 count */
     var target = adjustParticleCount();
-    var lo = Math.round(target * 0.9), hi = Math.round(target * 1.1);
-    if (vis.length < lo && now - lastSpawnTime > SPAWN_INTERVAL){
-      var need = Math.min(8, target - vis.length);
+    var hi = Math.round(target * 1.1);
+    if (vis.length < target && now - lastSpawnTime > 200){
+      var need = Math.min(10, target - vis.length);
       var vw = maxX - minX, vh = maxY - minY;
       for (var si = 0; si < need; si++){
         particles.push(new Particle(minX + Math.random()*vw, minY + Math.random()*vh));
       }
       lastSpawnTime = now;
     }
-    /* 超多时逐步删除多余粒子 (超过 hi) */
-    if (vis.length > hi && now - lastSpawnTime > SPAWN_INTERVAL){
-      var excess = vis.length - hi;
+    /* 过多时逐步删除多余粒子 (超过 hi) */
+    if (vis.length > hi && now - lastSpawnTime > 200){
+      var excess = Math.min(10, vis.length - hi);
       for (var ei = 0; ei < excess; ei++){
         particles.splice(particles.indexOf(vis[vis.length-1-ei]), 1);
       }
@@ -5714,8 +5963,18 @@ var FX_THEMES={
       ctx.lineWidth = 1.5;
       for (var i=0;i<vis.length;i++){
         var a = vis[i];
+        /* 被鼠标引力捕获的粒子断开所有连线 */
+        if (mw !== null){
+          var aMd = ((mw-a.x)*(mw-a.x) + (mh-a.y)*(mh-a.y)) * z2;
+          if (aMd < R2 * 0.5) continue;
+        }
         for (var j=i+1;j<vis.length;j++){
           var b = vis[j];
+          /* b 也检查 */
+          if (mw !== null){
+            var bMd = ((mw-b.x)*(mw-b.x) + (mh-b.y)*(mh-b.y)) * z2;
+            if (bMd < R2 * 0.5) continue;
+          }
           var dx=a.x-b.x, dy=a.y-b.y; var dd=dx*dx+dy*dy;
           if (dd < LD2){
             ctx.strokeStyle='hsla('+((a.hue+b.hue)/2)+',80%,88%,'+((1-Math.sqrt(dd)/LD)*LA*__fxConfig.alpha)+')';
@@ -5747,8 +6006,8 @@ var FX_THEMES={
   });
   start();
 
-  function fxWX(cx){ var fxC=Math.pow(Math.max(0.01,zoom),0.6); return (cx - panX)/fxC; }
-  function fxWY(cy){ var fxC=Math.pow(Math.max(0.01,zoom),0.6); return (cy - panY)/fxC; }
+  function fxWX(cx){ return (cx - panX)/zoom; }
+  function fxWY(cy){ return (cy - panY)/zoom; }
 
   /* 鼠标移动: 更新 mouse 位置 (视口, frame 内转世界) */
   addEventListener('pointermove', function(e){
@@ -6359,7 +6618,7 @@ body,.tree-panel,.main,.ai-card,.bubble-user,.input-wrapper{transition:backgroun
   transform:translate(var(--nx,0),var(--ny,0)) translate(-50%,-50%) scale(var(--scale,1));
   transition:border-color .15s var(--ease-out),border-width .15s var(--ease-out),
     box-shadow .25s var(--ease-out),transform .3s cubic-bezier(.22,.9,.28,1),opacity .25s;
-  will-change:transform,box-shadow}
+}
 .group-card:hover{border-color:var(--stroke-tree-node-active);
   transform:translate(var(--nx,0),calc(var(--ny,0) - 2px)) translate(-50%,-50%) scale(var(--scale,1));
   box-shadow:0 0 6px color-mix(in srgb,var(--brand) 75%,transparent),var(--glow-hover);z-index:5}
@@ -6515,9 +6774,9 @@ function setCardLevel(level,nodeId,originEl){
       ne.style.removeProperty('--scale');
       ne.style.removeProperty('width'); ne.style.removeProperty('height');
       const lw=ne.offsetWidth, lh=ne.offsetHeight;         // Last: L1 实际尺寸 (card-node 240×auto)
-      // Invert: 视觉倒回 L2/L3 起点 (scale = First视觉 / Last视觉), opacity 从 0 淡入
+      // Invert: 视觉倒回 L2/L3 起点 (scale = First视觉 / Last视觉), opacity 从 0.3 渐变到 1
       ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';
-      ne.style.opacity='0';
+      ne.style.opacity='0.3';
       void ne.offsetWidth;
       // Play: 双 rAF 确保 Invert 帧已渲染后再过渡
       requestAnimationFrame(()=>requestAnimationFrame(play));
@@ -6538,7 +6797,7 @@ function setCardLevel(level,nodeId,originEl){
         ne.style.opacity='1'; ne.addEventListener('transitionend',clearInline); };
       clearInline._t=setTimeout(clearInline,650);
       ne.style.transition='none';                          // 类切换瞬间禁用一切过渡 (防声明式 scale 抢先)
-      ne.style.opacity='0';                            // 内容初始透明, Play 时淡入
+      ne.style.opacity='0.3';                            // 内容初始半透明, Play 时渐变到 1 (不再从 0 开始, 避免割裂)
       ne.classList.add('is-card');
       ne.classList.toggle('l2', level==='l2');
       ne.classList.toggle('l3', level==='l3');
@@ -6550,8 +6809,8 @@ function setCardLevel(level,nodeId,originEl){
       void ne.offsetWidth;
       // Play (双 rAF)
       requestAnimationFrame(()=>requestAnimationFrame(play));
-      // L3 展开后: 立即触发归正居中 (autoCenterCurrent 缩放+居中适配); 清 displayPositions 防 L1 闪烁
-      if(level==='l3' && ne && ne.isConnected){
+      // L2/L3 展开后: 立即触发归正居中 (autoCenterCurrent 缩放+居中适配); 清 displayPositions 防 L1 闪烁
+      if((level==='l2'||level==='l3') && ne && ne.isConnected){
         for(var k in displayPositions) delete displayPositions[k];
         autoCenterCurrent();
       }
@@ -6640,29 +6899,25 @@ function headerDragStart2(e,nodeId){
   // 2026-08-17 修复: L2/L3 卡经 reflow 后位置在 displayPositions 覆盖层, 必须优先读; 与 _bubble.sync / dispPos 保持一致
   const pos=displayPositions[nodeId]||nodePositions[nodeId];if(!pos)return;
   const startX=e.clientX,startY=e.clientY,startPX=pos.x,startPY=pos.y;
-  let moved=false, _dragRAF=null;
+  let moved=false;
   function onMove(ev){
     ev.preventDefault();
     const dx=(ev.clientX-startX)/zoom,dy=(ev.clientY-startY)/zoom;
     const nx=startPX+dx,ny=startPY+dy;
-    // 始终写入 displayPositions (碰撞系统优先读), 同时同步 nodePositions; 不依赖对象引用避免被 commit 覆盖断开
     displayPositions[nodeId]={x:nx,y:ny};
     if(nodePositions[nodeId]){nodePositions[nodeId].x=nx;nodePositions[nodeId].y=ny;}
-    // 直接更新拖动卡 DOM 位置, 确保跟手 (renderNodes 在 rAF 中最多延迟一帧)
-    const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(nodeId)+'"]');
-    if(dragEl){dragEl.style.setProperty('--nx',nx+'px');dragEl.style.setProperty('--ny',ny+'px');}
     moved=true;
-    if(_dragRAF)return;                                  // rAF 节流: 每帧最多一次碰撞/渲染 (防多卡重复触发刷新)
-    _dragRAF=requestAnimationFrame(()=>{
-      _dragRAF=null;
-      collidePushCards(nodeId);
-      renderNodes();renderEdges();miniLayout();bumpIdle();
-    });
+    if(typeof markEdgesDirty==='function') markEdgesDirty();
+    collidePushCards(nodeId);
+    renderNodes();
+    // 强制同步重排: 确保 --nx/--ny 已布局, 再重建连线 (防首帧脱钩)
+    const dragEl=document.querySelector('.node-card[data-id="'+CSS.escape(nodeId)+'"]');
+    if(dragEl) void dragEl.offsetHeight;
+    renderEdges();miniLayout();bumpIdle();
   }
   function onUp(ev){
     window.removeEventListener('mousemove',onMove);
     window.removeEventListener('mouseup',onUp);
-    if(_dragRAF){cancelAnimationFrame(_dragRAF);_dragRAF=null;}
     document.body.style.userSelect='';
     document.body.classList.remove('dragging-node');
     if(moved){
@@ -6727,14 +6982,15 @@ function clearReflow(){
 function cardSizeOf(el){
   if(!el)return {w:NODE_W,h:NODE_H};
   // 真实渲染体积: offsetWidth/Height 不含 transform scale, = 世界坐标尺寸 (卡片展开时 zoom 恒 1)。
-  // 关键: L1 小节点 / L2 / L3 卡一律测量真实 DOM, 避免常量体积偏差导致碰撞误判"未重叠"而实际压住。
+  // 关键: L1 小节点 / L2 / L3 卡一律测量真实 DOM, 避免常量体积偏差导致碰撞误判“未重叠”而实际压住。
   const w=el.offsetWidth||NODE_W, h=el.offsetHeight||NODE_H;
   // 2026-08-17: L2/L3 卡片选中态有额外放大/光晕/边框加粗效果, 加安全边界避免视觉重叠
   if(el.classList.contains('is-card')){
-    return {w:w+28, h:h+28};  // 每边 +14px 安全边界 (补偿选中态 scale + box-shadow + border)
+    return {w:w+14, h:h+14};  // 每边 +7px 安全边界, 冗余已收窄
   }
   return {w,h};
 }
+
 /* ═══════════════════════════════════════════════════════════════════════
    泡泡物理布局 (2026-08-16 起, d3-force 风格; 2026-08-17 重写为肥皂泡模型):
    每个可见卡片 (L1 小节点 / L2 / L3 都是同一种卡片的三种大小形态) 都是一个带体积的泡泡。
@@ -6746,7 +7002,7 @@ function cardSizeOf(el){
    ═══════════════════════════════════════════════════════════════════════ */
 const _bubble={
   nodes:new Map(), running:false, raf:0, alpha:0, alphaMin:0.001,
-  GAP:24, ALPHA_DECAY:0.0228, ANCHOR_K:0.15, COLLIDE_K:1.0, MAXV:40,
+  GAP:5, ALPHA_DECAY:0.0228, COLLIDE_K:1.0, MAXV:40,
   rearm(){
     if(this.raf) return;
     this.running=true;
@@ -6771,29 +7027,12 @@ const _bubble={
       }
     }
     // 1) 真实矩形半宽半高向目标平滑过渡 (放大/缩小边缘渐进)
-    for(const n of ns){
-      n.hw += (n.targetHw - n.hw)*0.25;
-      n.hh += (n.targetHh - n.hh)*0.25;
-    }
-    // 2) 向心力 (弱): 仅向各自"家"轻微拉回; 焦点卡不动。
-    //    关键: 正与固定焦点卡重叠的卡禁用向心力, 否则会把卡拉回重叠区与碰撞力对抗, 导致解不开。
-    const fixedHit=new Set();
-    for(const n of ns){
-      if(n.fixed) continue;
-      for(const f of ns){
-        if(!f.fixed) continue;
-        const dx=f.x-n.x, dy=f.y-n.y;
-        const ox=(n.hw+f.hw)+this.GAP-Math.abs(dx);
-        const oy=(n.hh+f.hh)+this.GAP-Math.abs(dy);
-        if(ox>0 && oy>0){ fixedHit.add(n.nid); break; }
-      }
-    }
-    for(const n of ns){
-      if(n.fixed || fixedHit.has(n.nid)) continue;
-      n.x += (n.fx - n.x)*this.ANCHOR_K*A;
-      n.y += (n.fy - n.y)*this.ANCHOR_K*A;
-    }
-    // 3) 碰撞力 (泡泡互斥): 任意两卡 AABB 重叠即沿最小平移轴推开 —— 全层级统一, 不做 L1/L2/L3 区分
+        for(const n of ns){
+          n.hw += (n.targetHw - n.hw)*0.25;
+          n.hh += (n.targetHh - n.hh)*0.25;
+        }
+        // 2) 无向心力: 只有斥力, 没有引力 (卡被推开后不拉回"家")
+        // 3) 碰撞力 (泡泡互斥): 任意两卡 AABB 重叠即沿最小平移轴推开 —— 全层级统一, 不做 L1/L2/L3 区分
     const hit=new Set();
     for(let i=0;i<ns.length;i++){
       for(let j=i+1;j<ns.length;j++){
@@ -6823,9 +7062,8 @@ const _bubble={
       if(hit.has(n.nid)){if(!el.classList.contains('colliding'))el.classList.add('colliding');}
       else{if(el.classList.contains('colliding'))el.classList.remove('colliding');}
     }
-    // 4) 粘性记忆: 未参与任何碰撞的非焦点卡, 把当前位置采纳为新"家" —— 推开后记住, 缩小不回拉
-    for(const n of ns){ if(!n.fixed && !hit.has(n.nid)){ n.fx=n.x; n.fy=n.y; } }
-    // 5) 写回 + 收敛
+    // 4) 无粘性记忆: 只有斥力, 卡不吸附"家" (去掉 fx/fy 拉回)
+        // 5) 写回 + 收敛
     let maxD=0;
     for(const n of ns){
       if(!n.fixed){
@@ -6836,8 +7074,14 @@ const _bubble={
     }
     // 收敛条件: 运动极小 且 本帧没有任何重叠对 (避免弹簧/碰撞平衡后仍留下少量穿插)。
     if(this.alpha<=0 && maxD<0.05 && hit.size===0){ this.stop(); }
-    // 连线端点锚在卡片真实边缘, 气泡推挤每帧改变位置 → 同步重绘连线
-    if(typeof renderEdges==='function'){ try{ renderEdges(); }catch(e){} }
+    // 连线: 只在卡片移动/碰撞时标脏 + 调度渲染, 收敛后停止 (不动不刷新)
+    if(maxD>0.05 || hit.size>0){
+      if(typeof markEdgesDirty==='function') markEdgesDirty();
+      if(typeof renderEdges==='function' && !this._edgeScheduled){
+        this._edgeScheduled=true;
+        requestAnimationFrame(()=>{this._edgeScheduled=false;try{renderEdges()}catch(e){}});
+      }
+    }
   },
   commit(n){
     // 2026-08-17 修复: fixed 卡(正在拖动/新开的焦点卡)位置由外部控制, 物理模拟不回写;
@@ -7297,9 +7541,9 @@ function closeMiniCard(id){   // 关闭卡 (含焦点卡): FLIP 缩小动画 →
     ne.style.removeProperty('--scale');
     ne.style.removeProperty('width'); ne.style.removeProperty('height');
     const lw=ne.offsetWidth, lh=ne.offsetHeight;
-    // Invert: 视觉倒回 L2/L3 起点 + 透明
+    // Invert: 视觉倒回 L2/L3 起点 + 半透明
     ne.style.transform=base+' scale('+((fw*sf)/lw)+','+((fh*sf)/lh)+')';
-    ne.style.opacity='0';
+    ne.style.opacity='0.3';
     void ne.offsetWidth;
     // Play: 缩小到 L1 + 淡入
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -7679,32 +7923,87 @@ window.addEventListener('resize',()=>{
         <div class="settings-section" data-section="particles">
           <h3>粒子特效</h3>
           <p class="settings-desc">鼠标粒子网络的视觉参数。实时预览,偏好保存在本地。蓝粉为默认主题。</p>
-          <div class="fx-row"><div><div class="fx-row-label">粒子数量</div><div class="fx-row-desc">背景漂浮节点数</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCount" min="20" max="220" step="5"><span class="fx-val" id="fxCountVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">粒子大小</div><div class="fx-row-desc">节点半径基准</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSize" min="1" max="8" step="0.5"><span class="fx-val" id="fxSizeVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">移动速度</div><div class="fx-row-desc">漂移速度倍率</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSpeed" min="0.2" max="3" step="0.1"><span class="fx-val" id="fxSpeedVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">透明度</div><div class="fx-row-desc">节点不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxAlphaVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">颜色主题</div><div class="fx-row-desc">蓝粉 / 纯蓝 / 纯粉 / 紫幻 / 全彩</div></div><div class="fx-swatches" id="fxThemes"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">粒子连线</div><div class="fx-row-desc">近距节点连线成网</div></div><div class="settings-toggle" id="fxLines" onclick="toggleFx('lines')"></div></div>
-          <div class="fx-sub" id="fxLinesSub">
-            <div class="fx-row"><div class="fx-row-label">连线距离</div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineDist" min="40" max="220" step="5"><span class="fx-val" id="fxLineDistVal">—</span></div></div>
-            <div class="fx-row"><div class="fx-row-label">连线透明度</div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineAlpha" min="0.05" max="0.8" step="0.05"><span class="fx-val" id="fxLineAlphaVal">—</span></div></div>
+
+          <!-- 基础参数 -->
+          <div class="fx-group open" id="fxGrpBasic">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">基础参数</span>
+              <span style="display:flex;align-items:center"><div class="settings-toggle on" id="fxEnParticles" onclick="event.stopPropagation();toggleFx('enableParticles')"></div><span class="fx-group-arrow">▶</span></span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">粒子数量</div><div class="fx-row-desc">背景漂浮节点数</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCount" min="20" max="220" step="5"><span class="fx-val" id="fxCountVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">粒子大小</div><div class="fx-row-desc">节点半径基准</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSize" min="1" max="8" step="0.5"><span class="fx-val" id="fxSizeVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">移动速度</div><div class="fx-row-desc">漂移速度倍率</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxSpeed" min="0.2" max="3" step="0.1"><span class="fx-val" id="fxSpeedVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">透明度</div><div class="fx-row-desc">节点不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxAlphaVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">颜色主题</div><div class="fx-row-desc">蓝粉 / 纯蓝 / 纯粉 / 紫幻 / 全彩</div></div><div class="fx-swatches" id="fxThemes"></div></div>
+            </div>
           </div>
-          <div class="fx-row"><div><div class="fx-row-label">鼠标交互</div><div class="fx-row-desc">节点对鼠标的响应</div></div><select class="fx-select" id="fxInteraction"><option value="attract">吸引</option><option value="repel">排斥</option><option value="none">无交互</option></select></div>
-          <div class="fx-row"><div><div class="fx-row-label">影响范围</div><div class="fx-row-desc">鼠标作用半径</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxRange" min="50" max="300" step="10"><span class="fx-val" id="fxRangeVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">渐变背景</div><div class="fx-row-desc">蓝粉色相循环底色 (半透明, 不遮挡 UI)</div></div><div class="settings-toggle" id="fxBg" onclick="toggleFx('bgGradient')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">背景强度</div><div class="fx-row-desc">底色不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxBgStr" min="0" max="0.4" step="0.02"><span class="fx-val" id="fxBgStrVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">卡片透明度</div><div class="fx-row-desc">节点卡片不透明度 (调低让下层粒子透出)</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCardAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxCardAlphaVal">—</span></div></div>
-          <div class="fx-row" style="border-top:2px solid var(--border-divider);margin-top:8px;padding-top:12px"><div><div class="fx-row-label" style="font-weight:600">引力波</div><div class="fx-row-desc">点击/拖拽时触发的扩散波纹</div></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">波纹形状</div><div class="fx-row-desc">圆环 / 星形 / 多边形</div></div><select class="fx-select" id="fxGwShape"><option value="ring">圆环</option><option value="star">星形</option><option value="polygon">多边形</option></select></div>
-          <div class="fx-row"><div><div class="fx-row-label">波纹颜色</div><div class="fx-row-desc">色相 (0-360)</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwHue" min="0" max="360" step="5"><span class="fx-val" id="fxGwHueVal">—</span></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">波纹亮度</div><div class="fx-row-desc">亮度百分比</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwBright" min="30" max="100" step="2"><span class="fx-val" id="fxGwBrightVal">—</span></div></div>
-          <div class="fx-row" style="border-top:2px solid var(--border-divider);margin-top:8px;padding-top:12px"><div><div class="fx-row-label" style="font-weight:600">特效开关</div><div class="fx-row-desc">逐项开关, 便于排查性能开销</div></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">背景渐变</div><div class="fx-row-desc">蓝粉色相循环底色</div></div><div class="settings-toggle" id="fxEnBg" onclick="toggleFx('enableBgGradient')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">粒子</div><div class="fx-row-desc">背景漂浮节点</div></div><div class="settings-toggle" id="fxEnParticles" onclick="toggleFx('enableParticles')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">灰尘</div><div class="fx-row-desc">背景氛围微粒</div></div><div class="settings-toggle" id="fxEnDust" onclick="toggleFx('enableDust')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">粒子连线</div><div class="fx-row-desc">近距节点连线</div></div><div class="settings-toggle" id="fxEnLines" onclick="toggleFx('enableLines')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">鼠标电子云</div><div class="fx-row-desc">电子绕鼠标轨道运行</div></div><div class="settings-toggle" id="fxEnElectrons" onclick="toggleFx('enableElectrons')"></div></div>
-          <div class="fx-row"><div><div class="fx-row-label">引力波</div><div class="fx-row-desc">点击触发扩散波纹</div></div><div class="settings-toggle" id="fxEnGW" onclick="toggleFx('enableGravityWaves')"></div></div>
+
+          <!-- 粒子连线 -->
+          <div class="fx-group open" id="fxGrpLines">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">粒子连线</span>
+              <span style="display:flex;align-items:center"><div class="settings-toggle on" id="fxEnLines" onclick="event.stopPropagation();toggleFx('enableLines')"></div><span class="fx-group-arrow">▶</span></span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">连线距离</div><div class="fx-row-desc">近距节点连线距离</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineDist" min="40" max="220" step="5"><span class="fx-val" id="fxLineDistVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">连线透明度</div><div class="fx-row-desc">连线不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxLineAlpha" min="0.05" max="0.8" step="0.05"><span class="fx-val" id="fxLineAlphaVal">—</span></div></div>
+            </div>
+          </div>
+
+          <!-- 鼠标交互 -->
+          <div class="fx-group" id="fxGrpMouse">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">鼠标交互</span>
+              <span class="fx-group-arrow">▶</span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">交互模式</div><div class="fx-row-desc">吸引/排斥/无</div></div><select class="fx-select" id="fxInteraction"><option value="attract">吸引</option><option value="repel">排斥</option><option value="none">无交互</option></select></div>
+              <div class="fx-row"><div><div class="fx-row-label">影响范围</div><div class="fx-row-desc">鼠标作用半径</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxRange" min="50" max="300" step="10"><span class="fx-val" id="fxRangeVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">引力强度</div><div class="fx-row-desc">鼠标对粒子的引力大小</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGravStr" min="0.01" max="0.5" step="0.01"><span class="fx-val" id="fxGravStrVal">—</span></div></div>
+            </div>
+          </div>
+
+          <!-- 鼠标电子云 -->
+          <div class="fx-group" id="fxGrpElectrons">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">鼠标电子云</span>
+              <span style="display:flex;align-items:center"><div class="settings-toggle on" id="fxEnElectrons" onclick="event.stopPropagation();toggleFx('enableElectrons')"></div><span class="fx-group-arrow">▶</span></span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">轨道半径</div><div class="fx-row-desc">电子绕行半径倍率</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxEleR" min="0.3" max="3" step="0.1"><span class="fx-val" id="fxEleRVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">电子数量</div><div class="fx-row-desc">绕行电子个数</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxEleCount" min="2" max="16" step="1"><span class="fx-val" id="fxEleCountVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">电子速度</div><div class="fx-row-desc">绕行角速度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxEleSpeed" min="0.3" max="3" step="0.1"><span class="fx-val" id="fxEleSpeedVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">电子颜色</div><div class="fx-row-desc">拖尾颜色模式</div></div><select class="fx-select" id="fxEleColor"><option value="rainbow">渐变彩虹</option><option value="white">白色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></div>
+            </div>
+          </div>
+
+          <!-- 背景与卡片 -->
+          <div class="fx-group" id="fxGrpBg">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">背景与卡片</span>
+              <span style="display:flex;align-items:center"><div class="settings-toggle on" id="fxEnBg" onclick="event.stopPropagation();toggleFx('enableBgGradient')"></div><span class="fx-group-arrow">▶</span></span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">渐变背景</div><div class="fx-row-desc">蓝粉色相循环底色</div></div><div class="settings-toggle" id="fxBg" onclick="toggleFx('bgGradient')"></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">背景强度</div><div class="fx-row-desc">底色不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxBgStr" min="0" max="0.4" step="0.02"><span class="fx-val" id="fxBgStrVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">卡片透明度</div><div class="fx-row-desc">节点卡片不透明度</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxCardAlpha" min="0.2" max="1" step="0.05"><span class="fx-val" id="fxCardAlphaVal">—</span></div></div>
+            </div>
+          </div>
+
+          <!-- 引力波 -->
+          <div class="fx-group" id="fxGrpGW">
+            <div class="fx-group-head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="fx-group-title">引力波</span>
+              <span style="display:flex;align-items:center"><div class="settings-toggle on" id="fxEnGW" onclick="event.stopPropagation();toggleFx('enableGravityWaves')"></div><span class="fx-group-arrow">▶</span></span>
+            </div>
+            <div class="fx-group-body">
+              <div class="fx-row"><div><div class="fx-row-label">波纹形状</div><div class="fx-row-desc">圆环 / 星形 / 多边形</div></div><select class="fx-select" id="fxGwShape"><option value="ring">圆环</option><option value="star">星形</option><option value="polygon">多边形</option></select></div>
+              <div class="fx-row"><div><div class="fx-row-label">波纹颜色</div><div class="fx-row-desc">色相 (0-360)</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwHue" min="0" max="360" step="5"><span class="fx-val" id="fxGwHueVal">—</span></div></div>
+              <div class="fx-row"><div><div class="fx-row-label">波纹亮度</div><div class="fx-row-desc">亮度百分比</div></div><div style="display:flex;align-items:center;gap:8px"><input type="range" class="fx-range" id="fxGwBright" min="30" max="100" step="2"><span class="fx-val" id="fxGwBrightVal">—</span></div></div>
+            </div>
+          </div>
+
           <div class="fx-actions"><button class="settings-btn" onclick="resetFx()">重置默认</button></div>
         </div>
       </div>
@@ -7735,14 +8034,13 @@ window.addEventListener('resize',()=>{
     });
   }
   function renderFxVals(){
-    var map=[['fxCount','count',0],['fxSize','size',1],['fxSpeed','speed',1],['fxAlpha','alpha',2],['fxLineDist','lineDist',0],['fxLineAlpha','lineAlpha',2],['fxRange','interactRange',0],['fxBgStr','bgStrength',2],['fxCardAlpha','cardAlpha',2],['fxGwHue','gwHue',0],['fxGwBright','gwBright',0]];
+    var map=[['fxCount','count',0],['fxSize','size',1],['fxSpeed','speed',1],['fxAlpha','alpha',2],['fxLineDist','lineDist',0],['fxLineAlpha','lineAlpha',2],['fxRange','interactRange',0],['fxGravStr','gravStrength',2],['fxBgStr','bgStrength',2],['fxCardAlpha','cardAlpha',2],['fxGwHue','gwHue',0],['fxGwBright','gwBright',0],['fxEleR','electronRadius',1],['fxEleCount','electronCount',0],['fxEleSpeed','electronSpeed',1]];
     map.forEach(function(m){var el=$(m[0]),val=$(m[0]+'Val'); if(el)el.value=__fxConfig[m[1]]; if(val)val.textContent=(+__fxConfig[m[1]]).toFixed(m[2]);});
     document.documentElement.style.setProperty('--card-alpha', __fxConfig.cardAlpha);
     var il=$('fxInteraction'); if(il)il.value=__fxConfig.interaction;
     var gs=$('fxGwShape'); if(gs)gs.value=__fxConfig.gwShape||'ring';
-    var lt=$('fxLines'); if(lt)lt.classList.toggle('on',__fxConfig.lines);
+    var ec=$('fxEleColor'); if(ec)ec.value=__fxConfig.electronColor||'rainbow';
     var bt=$('fxBg'); if(bt)bt.classList.toggle('on',__fxConfig.bgGradient);
-    var sub=$('fxLinesSub'); if(sub)sub.style.opacity=__fxConfig.lines?'1':'0.45';
     var enBg=$('fxEnBg'); if(enBg)enBg.classList.toggle('on',__fxConfig.enableBgGradient!==false);
     var enP=$('fxEnParticles'); if(enP)enP.classList.toggle('on',__fxConfig.enableParticles!==false);
     var enL=$('fxEnLines'); if(enL)enL.classList.toggle('on',__fxConfig.enableLines!==false);
@@ -7751,11 +8049,12 @@ window.addEventListener('resize',()=>{
   }
   window.renderFxParticlesSettings=function(){renderThemes();renderFxVals();};
   window.toggleFx=function(key){__fxConfig[key]=!__fxConfig[key];__fxConfig.__rebuild=true;__fxSave();renderFxVals();};
-  window.resetFx=function(){Object.assign(__fxConfig,{count:90,size:3,speed:1,alpha:0.85,lines:true,lineDist:100,lineAlpha:0.32,interaction:'attract',interactRange:150,theme:'bluepink',hueBlue:210,huePink:330,bgGradient:true,bgStrength:0.12,cardAlpha:1,gwShape:'ring',gwHue:270,gwBright:88,enableParticles:true,enableLines:true,enableElectrons:true,enableGravityWaves:true,enableBgGradient:true,__rebuild:true});__fxSave();renderFxVals();renderThemes();};
-  function bindRange(id,key){var el=$(id); if(!el) return; el.addEventListener('input',function(){__fxConfig[key]=parseFloat(el.value); if(key==='count')__fxConfig.__rebuild=true; __fxSave(); renderFxVals();});}
-  [['fxCount','count'],['fxSize','size'],['fxSpeed','speed'],['fxAlpha','alpha'],['fxLineDist','lineDist'],['fxLineAlpha','lineAlpha'],['fxRange','interactRange'],['fxBgStr','bgStrength'],['fxCardAlpha','cardAlpha'],['fxGwHue','gwHue'],['fxGwBright','gwBright']].forEach(function(m){bindRange(m[0],m[1]);});
+  window.resetFx=function(){Object.assign(__fxConfig,{count:90,size:3,speed:1,alpha:0.85,lines:true,lineDist:100,lineAlpha:0.32,interaction:'attract',interactRange:150,gravStrength:0.1,theme:'bluepink',hueBlue:210,huePink:330,bgGradient:true,bgStrength:0.12,cardAlpha:1,gwShape:'ring',gwHue:270,gwBright:88,electronRadius:1,electronCount:6,electronSpeed:1.0,electronColor:'rainbow',enableParticles:true,enableLines:true,enableElectrons:true,enableGravityWaves:true,enableBgGradient:true,__rebuild:true});__fxSave();renderFxVals();renderThemes();};
+  function bindRange(id,key){var el=$(id); if(!el) return; el.addEventListener('input',function(){__fxConfig[key]=parseFloat(el.value); if(key==='count'||key==='electronCount')__fxConfig.__rebuild=true; __fxSave(); renderFxVals();});}
+  [['fxCount','count'],['fxSize','size'],['fxSpeed','speed'],['fxAlpha','alpha'],['fxLineDist','lineDist'],['fxLineAlpha','lineAlpha'],['fxRange','interactRange'],['fxGravStr','gravStrength'],['fxBgStr','bgStrength'],['fxCardAlpha','cardAlpha'],['fxGwHue','gwHue'],['fxGwBright','gwBright'],['fxEleR','electronRadius'],['fxEleCount','electronCount'],['fxEleSpeed','electronSpeed']].forEach(function(m){bindRange(m[0],m[1]);});
   var ii=$('fxInteraction'); if(ii) ii.addEventListener('change',function(){__fxConfig.interaction=ii.value;__fxSave();});
   var gs=$('fxGwShape'); if(gs) gs.addEventListener('change',function(){__fxConfig.gwShape=gs.value;__fxSave();});
+  var ec=$('fxEleColor'); if(ec) ec.addEventListener('change',function(){__fxConfig.electronColor=ec.value;__fxSave();});
   renderThemes(); renderFxVals();
 })();
 </script>

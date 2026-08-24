@@ -225,9 +225,38 @@ EMBED_MODEL = os.environ.get("IKAROS_EMBED_MODEL", "bge-m3")
 EMBED_TIMEOUT = 10
 USER_AGENT = "ikaros-vector-search-v4/1.0 (curl-compatible)"
 
-# 嵌入连接池 (2026-08-19): 模块级单连接复用 (HTTP/1.1 keep-alive),
+# 嵌入连接 (2026-08-19): 模块级单连接复用 (HTTP/1.1 keep-alive),
 # 取代 _fetch_embedding 里每 chunk 新建 HTTPConnection (~1.6s → ~30ms 热调)。
-_embed_conn = None  # http.client.HTTPConnection | None
+#
+# 线程安全 (GH audit P1-5, 2026-08-24): http.client.HTTPConnection 不可并发使用,
+# dsh web 是多线程 → 模块级单例会在并发检索时竞态损坏 HTTP 响应流。改为
+# thread-local: 每线程各自持有一条 keep-alive 连接, 无竞争、保住热调性能。
+_embed_conn_tls = threading.local()
+
+
+def _get_embed_conn(u) -> http.client.HTTPConnection:
+    """Return this thread's keep-alive embedding connection (create if needed).
+
+    http.client.HTTPConnection is not safe for concurrent use; a module-level
+    singleton raced across threads and corrupted the HTTP response stream. Each
+    thread now owns its own persistent connection (keep-alive perf preserved).
+    """
+    conn = getattr(_embed_conn_tls, "c", None)
+    if conn is None or conn.sock is None:
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
+        _embed_conn_tls.c = conn
+    return conn
+
+
+def _reset_embed_conn() -> None:
+    """Close + drop this thread's embedding connection (on error / 5xx)."""
+    conn = getattr(_embed_conn_tls, "c", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _embed_conn_tls.c = None
 
 
 def _fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]:
@@ -304,28 +333,22 @@ def _do_fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]
         if len(text) > _MAX_CHUNK else [text]
 
     vectors: list[list[float]] = []
-    global _embed_conn
     u = urlparse(EMBED_URL)
-    # 连接失效判定: sock 为空 = 已关闭 (HTTPConnection 无 _closed 方法)
-    if _embed_conn is None or _embed_conn.sock is None:
-        _embed_conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=EMBED_TIMEOUT)
+    # thread-local keep-alive 连接 (GH audit P1-5: 并发安全)
+    conn = _get_embed_conn(u)
     for chunk in chunks:
         payload = (prefix + chunk)[:2000]
         body = json.dumps({"content": payload}).encode("utf-8")
         try:
-            _embed_conn.request("POST", u.path or "/", body=body, headers={
+            conn.request("POST", u.path or "/", body=body, headers={
                 "Content-Type": "application/json",
                 "Host": u.netloc,
                 "User-Agent": USER_AGENT,
             })
-            resp = _embed_conn.getresponse()
+            resp = conn.getresponse()
             if resp.status != 200:
                 logger.warning("embed HTTP %d for '%s...'", resp.status, chunk[:30])
-                try:
-                    _embed_conn.close()
-                except Exception:
-                    pass
-                _embed_conn = None
+                _reset_embed_conn()
                 return None
             data = json.loads(resp.read().decode("utf-8"))
             # :8587 observed response: list: [{"index":0, "embedding":[[...]]}]
@@ -337,11 +360,7 @@ def _do_fetch_embedding(text: str, task: str = "query") -> Optional[list[float]]
         except Exception as e:
             # 连接可能已断 (服务重启/超时) → 关闭置空, 下次调用重建
             logger.warning("embedding failed: %s", e)
-            try:
-                _embed_conn.close()
-            except Exception:
-                pass
-            _embed_conn = None
+            _reset_embed_conn()
             raise  # 抛给 _fetch_embedding 的 except 触发 _circuit_record_failure
 
     if len(vectors) == 1:

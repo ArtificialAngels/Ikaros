@@ -1,10 +1,11 @@
 """V5 向量补同步脚本 — 把缺向量的记忆补进 Chroma.
 
-用法: PYTHONPATH=core python bin/ikaros-v5-reindex.py [--dry-run]
+用法: PYTHONPATH=core python core/memory_v5/scripts/ikaros-v5-reindex.py [--dry-run]
 扫描 SQLite 全部记忆, 对比 Chroma 现有向量, 缺的重新 embed + add.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import time

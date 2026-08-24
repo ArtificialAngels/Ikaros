@@ -118,19 +118,29 @@ def eg_conn() -> Iterator[sqlite3.Connection]:
     c.execute("PRAGMA busy_timeout=5000")
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(ENTITY_GRAPH_SCHEMA)
-    # V5.7: eg_edges 补 relation_type 列 (幂等; 旧库迁移)
+    # V5.7: eg_edges 补 relation_type 列 (幂等; 旧库迁移).
+    # 2026-08-24 P1-7: 该列已存在于 schema (line 73), 旧 throw-and-swallow 在每次
+    # eg_conn() 都跑一次 ALTER → 失败被吞, 纯死开销。gate 在 table_info 后, 仅缺列才迁移。
     try:
-        c.execute("ALTER TABLE eg_edges ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'co_occurrence'")
-    except Exception:
-        pass
+        _eg_cols = {r[1] for r in c.execute("PRAGMA table_info(eg_edges)").fetchall()}
+        if "relation_type" not in _eg_cols:
+            c.execute("ALTER TABLE eg_edges ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'co_occurrence'")
+    except Exception as exc:
+        logger.debug("eg_conn: relation_type migration failed: %s", exc)
     c.commit()
+    # 2026-08-24 P1-8: 区分读写。写操作 total_changes 会变 → commit 落库;
+    # 纯读路径 → rollback 结束隐式读事务, 避免每次 entity-graph 读都拿写锁。
+    _changes_before = c.total_changes
     try:
         yield c
     finally:
         try:
-            c.commit()
+            if c.total_changes != _changes_before:
+                c.commit()
+            else:
+                c.rollback()
         except Exception as e:
-            logger.warning("eg_conn commit on exit failed: %s", e)
+            logger.warning("eg_conn finalize failed: %s", e)
         try:
             c.close()
         except Exception as e:
@@ -496,15 +506,23 @@ def spreading_activation_search(
         memory_scores[mid] = (mem, current_score + contrib)
 
     # Final scoring with importance bonus and entity diversity bonus
+    # 2026-08-24 P1-6: N+1 连接 → 单次 GROUP BY 批量取每条记忆的实体数。
+    all_mids = [mem.id for mem, _ in memory_scores.values()]
+    entity_counts: dict[str, int] = {}
+    if all_mids:
+        with eg_conn() as c2:
+            _ph = ",".join("?" * len(all_mids))
+            _cnt_rows = c2.execute(
+                f"SELECT memory_id, COUNT(DISTINCT entity_id) AS cnt "
+                f"FROM eg_episodic_entities WHERE memory_id IN ({_ph}) "
+                f"GROUP BY memory_id",
+                all_mids
+            ).fetchall()
+        entity_counts = {r["memory_id"]: int(r["cnt"]) for r in _cnt_rows}
+
     results: list[EpisodicMemory] = []
     for mem, raw_score in memory_scores.values():
-        # Count unique entities linked to this memory
-        with eg_conn() as c2:
-            entity_count = c2.execute(
-                "SELECT COUNT(DISTINCT entity_id) FROM eg_episodic_entities WHERE memory_id = ?",
-                (mem.id,)
-            ).fetchone()[0]
-
+        entity_count = entity_counts.get(mem.id, 0)
         mem.graph_score = raw_score
         mem.text_score = 0.0
         # Score = graph contribution + importance factor + entity diversity bonus
