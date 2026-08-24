@@ -6956,8 +6956,8 @@ function cardSizeOf(el){
    全程 rAF 平滑动画, 收敛后自动停下。
    ═══════════════════════════════════════════════════════════════════════ */
 const _bubble={
-  nodes:new Map(), running:false, raf:0, alpha:0, alphaMin:0.001,
-  GAP:5, ALPHA_DECAY:0.0228, COLLIDE_K:1.0, MAXV:40,
+  nodes:new Map(), running:false, raf:0,
+  GAP:5, COLLIDE_K:1.0, MAXV:40,
   rearm(){
     if(this.raf) return;
     this.running=true;
@@ -6970,9 +6970,6 @@ const _bubble={
   tick(){
     const ns=[...this.nodes.values()];
     if(!ns.length){ this.stop(); return; }
-    this.alpha += (0 - this.alpha)*this.ALPHA_DECAY;
-    if(this.alpha < this.alphaMin) this.alpha=0;
-    const A=this.alpha;
     const frame=(this._frame=(this._frame||0)+1);  // 帧计数 (隔帧测量用)
     // 0) 跟踪 CSS 尺寸过渡: 重新测量所有卡片当前尺寸, 更新 target (开卡 L1→L2 时尺寸渐变, 单次 sync 测到小值 → target 偏小 → 推挤不足; 拖动时每帧 re-sync 无此问题)
     //    性能: 元素引用在 sync 时缓存 (n.el), 失效才重查; 测量隔帧 (30Hz, 0.6s 过渡内单调, 减半强制回流)
@@ -7030,7 +7027,12 @@ const _bubble={
       this.commit(n);
     }
     // 收敛条件: 运动极小 且 本帧没有任何重叠对 (避免弹簧/碰撞平衡后仍留下少量穿插)。
-    if(this.alpha<=0 && maxD<0.05 && hit.size===0){ this.stop(); }
+    // 2026-08-24 修复: 原条件含 alpha<=0 (指数衰减需 ~300 帧/5s 才归零) → reflow 的
+    // onStop (ensureCardsInViewport) 延迟 5 秒甚至永不触发 (持续碰撞对时 hit 恒非空) =
+    // L2/L3 放大超出视口不归正。alpha 不参与任何物理计算, 收敛只应由物理静止决定:
+    // 帧下限 8 (~133ms, 保留推挤动画起步帧) + 物理静止即停; 480 帧 (~8s) 绝对保险防锁死。
+    if(frame>8 && maxD<0.05 && hit.size===0){ this.stop(); }
+    else if(frame>480){ this.stop(); }
     // 连线: 只在卡片移动/碰撞时标脏 + 调度渲染, 收敛后停止 (不动不刷新)
     if(maxD>0.05 || hit.size>0){
       if(typeof markEdgesDirty==='function') markEdgesDirty();
@@ -7055,7 +7057,6 @@ const _bubble={
     this.stop();
     document.querySelectorAll('.node-card.is-card').forEach(el=>{ el.style.transition=''; });
     this.nodes.clear();
-    this.alpha=0;
   },
   sync(fixedId){
     // 肥皂泡模型: 所有可见卡片 (L1 小节点 / L2 / L3, 卡片视图下均为 .node-card) 都是带体积的泡泡,
@@ -7095,7 +7096,7 @@ const _bubble={
     }
     const keep=new Set(items.map(c=>c.nid));
     for(const nid of [...this.nodes.keys()]) if(!keep.has(nid)) this.nodes.delete(nid);
-    this.alpha=1;
+    this._frame=0;   // 2026-08-24: 帧计数随模拟重置 (收敛门槛 frame>8 / 480 保险按本次模拟计, 否则久开页面即时瞬断)
   }
 };
 
@@ -7104,12 +7105,14 @@ function collidePushCards(dragId){
   // 拖拽: 每次都重新 sync (拖动的卡位置已更新到 displayPositions),
   // 拖动卡 fixed=true 锚定, 其他卡围绕它泡泡让位。
   _bubble.onStop=null;   // 拖拽不消费 reflow 的收束回调 (否则松手瞬间 ensureCardsInViewport 会拉回视口)
+  if(_reflowCenterT){ clearTimeout(_reflowCenterT); _reflowCenterT=null; }   // 2026-08-24: 拖拽为主动摆放, 取消 reflow 视口守卫 (防止拖拽中归正拉回)
   _bubble.sync(dragId);
   _bubble.rearm();
 }
 
 /* reflow 批处理: 开卡/升降级 → 同步模拟目标半径与锚点 → 泡泡推挤 + 张力回位 */
 let _reflowP=null;
+let _reflowCenterT=null;   // 2026-08-24: 视口收束守卫定时器 (独立于泡泡收敛, 见 scheduleReflow 尾部)
 function scheduleReflow(id, level){
   if(_reflowP){ _reflowP.id=id;_reflowP.level=level; return; }
   _reflowP={id,level};
@@ -7117,6 +7120,19 @@ function scheduleReflow(id, level){
     const p=_reflowP;_reflowP=null;
     if(p){ reflowAroundCard(p.id,p.level); }
   });
+  // 2026-08-24 修复: 归正不能依赖泡泡收敛 —— 泡泡的 onStop 仅在全部碰撞对清零
+  // (hit.size===0) 时触发, 空间不足/卡数多时碰撞可能长时间解不完 → 展开/升级的卡
+  // 超出视口永不归正。此处加独立守卫: 泡泡停或最迟 3s 强制收束一次;
+  // onStop 保留作收敛后精收 (幂等: 已在视口内则不动)。
+  clearTimeout(_reflowCenterT);
+  const fid=_focusId()||tree.currentId||id;
+  const t0=Date.now();
+  const guard=()=>{
+    if(_bubble.running && Date.now()-t0<3000){ _reflowCenterT=setTimeout(guard,250); return; }
+    _reflowCenterT=null;
+    if(typeof ensureCardsInViewport==='function') ensureCardsInViewport(fid);
+  };
+  _reflowCenterT=setTimeout(guard,750);
 }
 function reflowAroundCard(id, level){
   // 开卡/升降级: 焦点卡固定, 所有卡片统一两两泡泡互斥; 焦点卡体积变大自然推开邻居, 缩小不拉回。
