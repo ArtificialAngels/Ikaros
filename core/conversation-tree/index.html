@@ -4506,10 +4506,16 @@ function usageLineHtml(node){
 }
 function aiCardHtml(content,isCur,n,mi){
   // marked 渲染 markdown (代码块/列表/标题/加粗全支持), 再叠加概念高亮
-  // 性能: markdown→HTML 结果按 content 缓存 (重渲染/多轮对话重复内容复用, 避免重复 marked 解析)
-  let h=_mdCache.get(content);
-  if(h===undefined){h=mdRender(content);if(_mdCache.size>500)_mdCache.clear();_mdCache.set(content,h);}
-  h=highlightConcepts(h,isCur);
+  // 性能: markdown→HTML + 概念高亮一起按 content 缓存 (重渲染/多轮对话重复内容复用,
+  //       避免重复 marked 解析 + 整段 HTML 正则替换); 高亮类依赖 isCur → 双态缓存
+  let e=_mdCache.get(content);
+  if(e===undefined){
+    const md=mdRender(content);
+    e={cur:highlightConcepts(md,true), norm:highlightConcepts(md,false)};
+    if(_mdCache.size>250)_mdCache.clear();   // 每条缓存两份内容, 容量减半保持内存量级
+    _mdCache.set(content,e);
+  }
+  const h=isCur?e.cur:e.norm;
   const sbCls=isCur?'streaming-border-effect':'';
   const fav=isFavNode(n&&n.id)?'★':'☆';
   const nid=n&&n.id?n.id:'';
@@ -5178,8 +5184,17 @@ async function pollHealth(){
     if(b){b.className='usage-badge bad';b.textContent='服务异常';}
   }
 }
-setInterval(pollHealth,30000);
+let _healthTimer=setInterval(pollHealth,30000);
 pollHealth();
+// 页面隐藏时暂停 30s 轮询 (省电), 恢复可见立即刷一次并重启
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    if(_healthTimer){clearInterval(_healthTimer);_healthTimer=null;}
+  }else if(!_healthTimer){
+    pollHealth();
+    _healthTimer=setInterval(pollHealth,30000);
+  }
+});
 
 /* ===== 模型切换 (2026-08-03): 自定义圆角下拉, 弹层风格 ===== */
 let CT_MODELS=[];        // 最近拉取的模型列表
@@ -7395,7 +7410,7 @@ function openMiniCard(id){
 }
 const _miniSc=new Map();   // nodeId -> {o,v,ra} mini 卡滚动引擎实例 (拖动惯性用)
 function miniScTick(id,body,sc){
-  if(!body||!body.isConnected){sc.ra=null;return;}
+  if(!body||!body.isConnected){sc.ra=null;_miniSc.delete(id);return;}   // 面板已移除: 清理条目, 防 Map 泄漏
   const max=Math.max(0,body.scrollHeight-body.clientHeight);
   // 边界回弹 (与主卡同): 顶部/底部弹簧衰减收敛
   if(sc.o<0){sc.o*=0.82;sc.v=0;if(sc.o>-1)sc.o=0;}
