@@ -4810,8 +4810,8 @@ async function sendMessage(){
   turn.innerHTML=`<div class="turn-head"><span class="turn-badge">#${depth} ${branchLabel||'main'}</span></div>
     <div class="bubble-wrap">
       <div class="bubble-actions">
-        <button class="bubble-act" data-i18n-title="btn.copy" title="复制原文" onclick="copyText(${JSON.stringify(fullText)})">⧉</button>
-        <button class="bubble-act" data-i18n-title="btn.editResend2" title="编辑重发" onclick="editResendDraft(${JSON.stringify(fullText)})">✎</button>
+        <button class="bubble-act" data-i18n-title="btn.copy" title="复制原文" onclick="copyText(${escapeHtml(JSON.stringify(fullText))})">⧉</button>
+        <button class="bubble-act" data-i18n-title="btn.editResend2" title="编辑重发" onclick="editResendDraft(${escapeHtml(JSON.stringify(fullText))})">✎</button>
       </div>
       <div class="bubble bubble-user">${userBubbleHtml}</div></div>
     <div class="ai-card answer-live"><div class="card-header"><img class="card-avatar" src="/assets/Artificialangel.ico" alt=""><span class="card-label"><b>Ikaros</b></span></div>
@@ -4966,7 +4966,7 @@ function toggleWebSearch(){
     btn.title=webSearchEnabled?t('btn.websearch.off'):t('btn.websearch');
   }
 }
-function escapeHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function escapeHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function copyCard(e){const b=e.currentTarget;b.innerHTML='✓ Copied';setTimeout(()=>b.innerHTML='⧉ Copy',1600)}
 function favoriteCard(btn){const card=btn.closest('.ai-card');
   if(card){card.classList.add('streaming-border-effect','favorite')}
@@ -4995,8 +4995,10 @@ function navHist(dir){
 function stopGenerating(){
   abortActiveChat();
   const sb=_focusEl('sendBtn');
-  sb.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
-  sb.style.background='var(--brand)';
+  if(sb){
+    sb.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+    sb.style.background='var(--brand)';
+  }
   toast('已停止生成');
 }
 function handleKey(e){
@@ -7146,6 +7148,7 @@ const _bubble={
 function collidePushCards(dragId){
   // 拖拽: 每次都重新 sync (拖动的卡位置已更新到 displayPositions),
   // 拖动卡 fixed=true 锚定, 其他卡围绕它泡泡让位。
+  _bubble.onStop=null;   // 拖拽不消费 reflow 的收束回调 (否则松手瞬间 ensureCardsInViewport 会拉回视口)
   _bubble.sync(dragId);
   _bubble.rearm();
 }
@@ -7518,6 +7521,8 @@ function miniUpgradeToL3(id){   // mini 卡 L2↔L3 切换: FLIP 形变动画 + 
   updateLogoBatch();updateThreadPad();
 }
 function closeMiniCard(id){   // 关闭卡 (含焦点卡): FLIP 缩小动画 → 移除面板 + 节点还原 L1
+  abortActiveChat();          // 关闭卡即断在飞 chat (防止 stopGenerating 在面板移除后访问空 sendBtn)
+  _miniDc.delete(id);         // 清理卡内容区双击判定记录 (防 Map 残留)
   const wasFocus=_focusId()===id;              // 提前记录 (卸焦点后 _focusId 失效)
   const mini=_cards.get(id);
   const ne=document.querySelector('.node-card[data-id="'+CSS.escape(id)+'"]');
