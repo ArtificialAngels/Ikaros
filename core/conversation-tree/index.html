@@ -3080,7 +3080,8 @@ function edgeGroup(fromId,toId,d,m,kind,depth){
 function onHandleMouseDown(e,nodeId,side){
   e.stopPropagation();e.preventDefault();
   if(side!=='source')return;
-  const p=nodePositions[nodeId];if(!p)return;
+  // 2026-08-24: 起点优先读 displayPositions 覆盖层 (与 onNodeMouseDown/headerDragStart2 同一基准)
+  const p=displayPositions[nodeId]||nodePositions[nodeId];if(!p)return;
   connecting={fromId:nodeId, fromX:p.x, fromY:p.y+NODE_H/2, toX:p.x, toY:p.y+NODE_H/2};
   updateTempLine();
   document.getElementById('tempLine').style.display='';
@@ -3109,7 +3110,10 @@ function onNodeMouseDown(e,nodeId){
   e.preventDefault(); // prevent text selection / browser drag
   selectedNode=nodeId;
   renderNodes();renderEdges();
-  const p=nodePositions[nodeId];if(!p)return;
+  // 2026-08-24 修复: 拖动起点必须优先读 displayPositions (reflow 推挤后显示位置在覆盖层,
+  // 与 headerDragStart2/touch 路径 2026-08-17 的同类修复对齐; 此路径当时漏改)。
+  // 旧代码恒读 nodePositions → 被推挤过的卡在首次拖动瞬间跳回基础位 (瞬移) 且整段拖动与鼠标错位。
+  const p=displayPositions[nodeId]||nodePositions[nodeId];if(!p)return;
   const startX=e.clientX,startY=e.clientY,startPX=p.x,startPY=p.y;
   // 2026-08-16 (显式连接图重构·修复): 卡片是独立整体, 拖动 = 移动卡容器位置, 与 L2/L3 状态无关。
   // 删除旧规则 "if(_focusLevel()!=='l1')return" —— 它让存在 L2/L3 焦点卡时 L1 卡无法拖动。
