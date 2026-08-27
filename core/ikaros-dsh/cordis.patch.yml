@@ -3,7 +3,7 @@
 # 叠加在 dsh-headless 或 dsh-web 之上（dsh-base 已含 llm/session/tools/fs/
 # sandbox/subagent/compaction/skill/goal/workflow/ralph 等全部基础能力）。
 # 本 overlay 补上 dsh-base 默认没挂、但 Ikaros 工作引擎需要的三块能力：
-#   1) memory_v5 记忆（MCP 直连，已验证 49 工具）
+#   1) memory_v5 记忆（MCP 直连，已验证 50 工具，含 v5_recall 预算感知召回）
 #   2) 持久 PTY 终端（terminal + terminal-bash + tool-terminal）
 #   3) LSP 精确代码导航（lsp + lsp-stdio + tool-lsp）
 # 并覆盖 system-prompt 的 persona 为 Ikaros 工作引擎人格。
@@ -18,7 +18,7 @@
 
 - insert:
     # ── 1) memory_v5 长期记忆（MCP 直连） ─────────────────────────────
-    # 49 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
+    # 50 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
     # 与 pi 的 data/omp/agent/mcp.json 同源；路径经 IKAROS_ROOT 推导。
     - id: memory-ikaros-v5
       name: '@deepseek-ai/dsh-mcp-client'
@@ -46,6 +46,21 @@
     - id: ikaros-memory
       name: '@ikaros/dsh-ikaros-memory'
       config: {}
+
+    # ── 1c) ikaros-conversation-tree 对话树面板（2026-08-24 新增） ─────────
+    # 对话树保持独立服务（:48920, 零第三方依赖 Python）; 本插件双面:
+    #   Node 侧: 探活 + 未启动时用便携 Python 拉起 server.py (看门狗, 每 3s);
+    #            提供 ctx.conversationTree {healthy,url,lastChecked}
+    #   client 侧: sidebar.footer.action 入口按钮 + shell.overlay iframe 面板
+    # 构建: cd core/ikaros-dsh/plugins/ikaros-conversation-tree && node scripts/build.mjs
+    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-conversation-tree"
+    - id: ikaros-conversation-tree
+      name: '@ikaros/dsh-conversation-tree'
+      config:
+        port: 48920
+        python: !!js 'process.env.IKAROS_ROOT + "/runtime/portable-python/python.exe"'
+        serverPath: !!js 'process.env.IKAROS_ROOT + "/core/conversation-tree/server.py"'
+        probeTimeoutMs: 3000
 
     # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
@@ -98,6 +113,13 @@
       project notes, or lessons may be relevant, search with
       mcp__ikaros-v5__v5_memory_search (or v5_project_retrieve for project-scoped
       decisions/pitfalls/conventions) and use the results.
+
+      For token-bounded recall that auto-dedupes against recently-injected
+      memories (so the same fact isn't re-served every turn), call
+      mcp__ikaros-v5__v5_recall(query, max_tokens=1600) — it returns a budgeted
+      context block plus retrieval-trajectory stats. Prefer it over
+      v5_memory_search when you want a ready-to-inject context block within a
+      token budget.
 
       Verify your work by running the code or tests in a terminal session. Keep
       answers brief and factual.
