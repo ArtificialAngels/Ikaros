@@ -1,0 +1,32 @@
+{
+  "name": "@ikaros/dsh-conversation-tree",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "description": "Ikaros 对话树面板 dsh 插件：探活/拉起 :48920 服务 + dsh UI 一键打开 (sidebar 入口 + shell.overlay iframe 面板)",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["slots"]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "license": "BSD-3-Clause"
+}
