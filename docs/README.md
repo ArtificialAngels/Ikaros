@@ -9,13 +9,21 @@
 
 | 文档 | 日期 | 内容 | 规模 |
 |------|------|------|------|
+| [architecture-post-dsh.md](architecture-post-dsh.md) | 2026-08-27 | **dsh 时代 5 分钟可读懂总览（端口表 / 三层架构 / 启动器 / OpenViking 借鉴 5 项 / 兄弟 commit 索引）** | 22KB |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-08-19 | Ikaros 全栈架构（分层/端口/路径/数据流/规则，dsh 底座） | 40KB |
 | [naming.md](naming.md) | — | 命名规则（目录/包/端口/变量） | — |
-| [herdr-integration-design.md](herdr-integration-design.md) | 2026-08-10 | herdr coding-agent 多路复用器接入设计（含 omp/pi agent §omp） | — |
+| [ikaros-launcher-design.md](ikaros-launcher-design.md) | 2026-08-20 | ikaros 启动器设计（`bin/ikaros` 三壳 + ikarosctl.py 调度核心） | 29KB |
+| [COMPONENT-PLUGIN-SPEC.md](COMPONENT-PLUGIN-SPEC.md) | 2026-08-20 | 组件插件接口规范（components.yaml + registry.py schema） | 24KB |
+| [ikaros-dsh-plugin-architecture.md](ikaros-dsh-plugin-architecture.md) | 2026-08-18 | dsh 接入层架构（cordis overlay + ikaros-memory plugin） | 8KB |
 | [SECURITY.md](SECURITY.md) | — | 安全说明 | — |
 | [observability.md](observability.md) | — | 可观测性 / 日志 | — |
 | [module-dependency-map.html](module-dependency-map.html) | 2026-07-27 | 模块依赖关系图（交互式 SVG） | — |
 | [thirdspace-integration.md](thirdspace-integration.md) | 2026-07-20 | ThirdSpace Vault 集成指南 | 4KB |
+
+> **新 AI Agent onboarding 路径**（2026-08-27 兄弟 commit `3145f7e` + 本文档）：
+> 1. 先读 [architecture-post-dsh.md](architecture-post-dsh.md) — 5 分钟建立全景
+> 2. 再按主题跳读 ARCHITECTURE.md / ikaros-launcher-design.md / COMPONENT-PLUGIN-SPEC.md
+> 3. 最后看 `AGENTS.md` 顶部 Handoff Card 收口
 
 > **架构图三件套**（交互式 HTML，放 `docs/`）：`module-dependency-map.html`（模块依赖关系）/ `architecture-overview.html`（架构全景）/ `folder-tree.html`（文件夹层级）。全部基于 2026-07-27 真实扫描生成（已过时，仅作历史参考）。
 >
