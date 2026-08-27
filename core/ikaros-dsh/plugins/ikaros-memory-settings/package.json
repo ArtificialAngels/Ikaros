@@ -1,0 +1,40 @@
+{
+  "name": "@ikaros/dsh-ikaros-memory-settings",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "description": "Ikaros 记忆控制面板 dsh 插件：dsh 设置页新增 '记忆' tab，可拉起/停止 llama-server embedding 服务、下载 HF 模型、选择当前模型、重建 Chroma 向量索引",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "BSD-3-Clause"
+}

@@ -91,6 +91,7 @@ Ikaros 是**装在 U 盘里的自包含 AI 数字管家**——V5 灵魂核心�
 | `memory-ikaros-v5` | MCP stdio → `runtime/portable-python/python.exe` 起 `core/memory_v5/mcp_server.py`，env `V5_MCP_TOOL_GROUPS=memory,self,care,vitality,relationship,skill,project` | **50 个 `v5_*` 工具**（2026-08-24 新增 `v5_recall` 预算感知召回，兄弟 commit `b62bd16`+`e09b3a7`） |
 | `ikaros-memory` | `@ikaros/dsh-ikaros-memory`（裸包名，**Entry.name 不走 `!!js` interpolate**，仅 config 字段走） | turn-stopping 自动沉淀 + pre-step `should_recall` 注入 + compaction 捕获 + **maintenance tick（6h `reflect.scheduler.run_all`，2026-08-24 补上 watchdog 退役后生命周期调度器的触发空缺）** |
 | `ikaros-conversation-tree` | `@ikaros/dsh-conversation-tree`（**2026-08-24 新增**），Node 侧看门狗 + client 侧 sidebar 按钮 + `shell.overlay` iframe 全屏 | 兄弟 commit `717c763` 入仓；详见 §5 |
+| `ikarosMemory` | `@ikaros/dsh-ikaros-memory-settings`（**2026-08-27 新增**），Node 侧 `class IkarosMemorySettingsService extends Service` + client 侧 `ctx.slots.inject("settings.section", ...)` React 卡 | 仿 dsh-base `dsh-client-ui-settings-models` 的 settings 卡；id=entry id 决定 host-bridge 命名空间 → `connection.api.ikarosMemory`；详见 §5.4 |
 | `terminal / terminal-bash / tool-terminal` | 持久 PTY 终端 | enableRunInBackground: true |
 | `lsp / lsp-stdio / tool-lsp` | typescript LSP（python 默认不挂：pyright 缺失会中止启动） | |
 | `system-prompt` | Ikaros persona 覆盖 + 推荐优先用 `v5_recall` token 预算召回 | 兄弟 commit `17b110f` |
@@ -159,6 +160,35 @@ pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"
 ```
 
 harmless when page opened standalone (no parent listener → no-op；wrap in try/catch)。
+
+### 5.4 dsh 记忆控制面板（`ikaros-memory-settings`，**2026-08-27 新增**）
+
+仿 `dsh-client-ui-settings-models`（`order=10`）新增"记忆系统"卡（`order=50`，沿用 `settings.section` slot），让 dsh 浏览器端点开设置即可拉起 llama-server embedding / 切模型 / 下 HF 模型 / 重建 Chroma 向量，**绕开命令行 / 集中 watchdog 退役后零控制平面**。
+
+**Node 侧**（`core/ikaros-dsh/plugins/ikaros-memory-settings/src/index.ts`）：
+- `export class IkarosMemorySettingsService extends Service` + `static Config = z.object({})`（**dsh-agent-default-model 同模式**，cordis 4 `resolveConfig` 强制 schema 校验，**`static Config = {}` 会 throw**——必须用 zod 空 schema）
+- 6 项 RPC 端点：`listModels` / `getStatus` / `startEmbedding` / `stopEmbedding` / `switchModel` / `downloadModel` / `rebuildVectors`
+- 通过 `ctx.get('subprocess')` 调 dsh-bash-local 的 subprocess service 起 llama-server，HF 下载用 `gopeed`/`aria2c`/`curl` 探测，向量重建调 `core/ikaros-dsh/plugins/ikaros-memory/bin/v5_call.py rebuild --batch-size`
+- cordis Service base class 把 `this.ctx` 注入到 instance；host-bridge 把 instance 暴露为 `connection.api.ikarosMemory`（命名空间 = patch.yml `id: ikarosMemory`）
+
+**Client 侧**（`src/client.tsx`）：
+- `ctx.slots.inject("settings.section", ...)` 注册 React 卡，**id 故意是 `ikaros-memory-settings`（UI 标识），与 host entry id `ikarosMemory` 独立**——dsh 设计本就两套命名
+- `const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'settingsSchema']` ——**缺任一报 "cannot get property X without inject"**（典型坑：只 declare `slots` 但用 `ctx.locale`）
+- i18n `NS='ikaros-memory-settings'` + `ctx.locale.register({zh, en})`；React 卡含状态栏/模型列表/启停按钮/HF 下载/重建 5 个 section
+- 调 host RPC 走 `inject: ({ api }: { api: { ikarosMemory?: HostApi } }) => ({ api, t })`，settings.section slot 把 connection.api 注入卡片 props
+
+**构建/装配**：
+```
+cd core/ikaros-dsh/plugins/ikaros-memory-settings && node scripts/build.mjs
+cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory-settings && \
+  pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory-settings"
+```
+
+**踩坑笔记**：
+- ⚠️ `class extends Service` 必须 `import { Service } from '@deepseek-ai/cordis'` + `import { z } from 'zod'`；`static Config = z.object({})` 是 cordis 4 唯一能接受的"无字段" schema
+- ⚠️ `tsc` 不能 import dsh-base 链上的 zod（不在 sibling `ikaros-memory/node_modules`）——`tsconfig.build.json` 加 `"zod": ["../../../../runtime/dsh/node_modules/.pnpm/zod@4.4.3/node_modules/zod"]` 走 paths 解析
+- ⚠️ 客户端 `inject` 列表要全（slots/locale/connection/remote/settingsScope/settingsSchema）——`locale` / `connection` 不 declare 立即 throw
+- ⚠️ patch.yml 启动走 `ikarosctl dsh restart`（web 模式，user layer only）——**不要用 `bin/restart-dsh-ikaros.ps1`**（ps1 走 `--patch` + user layer 双 source，在 dsh 0.1.1-rc.2 + 当前 dsh-base 默认 patch 组合下会 `duplicate loader entry id: memory-ikaros-v5`，与本插件无关，是 dsh 自己的兼容 bug）
 
 ---
 
@@ -310,6 +340,9 @@ config/components.yaml ← 3 组件元数据 (dsh / conversation-tree / embeddin
 | `e09b3a7` | feat(memory_v5): v5_recall 第 50 工具接入 MCP + reflect 调度器 + config 同步 |
 | `d33ec60` | feat(ct): 双击 I 徽标通知 dsh 弹关闭确认框 + applyTheme 广播主题色 |
 | `3145f7e` | docs(AGENTS): 2026-08-24 审计修复 + OpenViking 借鉴章节 |
+| `36d036d` | refactor(dsh-plugin): _ctUrl → IkarosURL + 删除 sidebar IKAROS 按钮悬浮提示 |
+| `b80957a` | docs: architecture-post-dsh.md 5 分钟总览 + docs/README 索引同步 |
+| (待提交) | feat(dsh-plugin): ikaros-memory-settings 记忆控制面板 + docs: architecture-post-dsh.md §5.4 同步 |
 
 **未跟随本批入库**（哥哥 2026-08-27 指令）：所有 `tests/` + `tests/test_*` + `core/conversation-tree/tests/test_*` +
 `core/memory_v5/tests/test_*` 测试文件改动；`.cache/` `projects/` `tmp_start.*` `.hermes/` 临时目录；
