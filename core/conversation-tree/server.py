@@ -1633,6 +1633,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"chain": chain, "context": ctx, "count": len(ctx)})
             elif path == "/api/sessions":
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            elif path == "/api/sessions/groups":
+                # C6: 分组列表 (active / archived / pinned), GET 形式
+                active = [s for s in _sessions if not s.get("archived")]
+                archived = [s for s in _sessions if s.get("archived")]
+                pinned = [s for s in _sessions if s.get("pinned")]
+                self._send_json({
+                    "active": active, "archived": archived, "pinned": pinned,
+                    "active_id": _active_session_id,
+                })
+            elif path.startswith("/api/sessions/get/") and path.count("/") == 4:
+                # C6: 单会话详情 (轻量, 排除 tree 重算)
+                sid = urllib.parse.unquote(path[len("/api/sessions/get/"):])
+                sess = next((s for s in _sessions if s["id"] == sid), None)
+                if not sess:
+                    self._send_json({"error": "session not found"}, 404)
+                else:
+                    self._send_json({"session": sess})
             elif path == "/api/sessions/tree":
                 # 融合桥 (8099 poker UI): 读指定会话完整树 (拓扑 + messages, V5 回读)
                 qs = {}
@@ -2238,76 +2255,76 @@ class Handler(BaseHTTPRequestHandler):
                                  "version": payload["v"], "node_count": len(nodes),
                                  "migrated": migrated})
             elif path == "/api/sessions/create":
-                sid = _new_session_id()
-                per = f"ui_conversation_tree_{sid}"
                 with _lock:
+                    sid = _new_session_id()
+                    per = f"ui_conversation_tree_{sid}"
                     t = _make_tree_for(per)
                     t.init([{"role": "system", "content": "新会话已开始。"}])
                     _bind_active_tree(t)
-                sess = {"id": sid, "title": "新会话", "persist_key": per,
-                        "created_at": time.time(), "updated_at": time.time(), "archived": False}
-                _sessions.append(sess)
-                _active_session_id = sid
-                _save_sessions(_sessions)
+                    sess = {"id": sid, "title": "新会话", "persist_key": per,
+                            "created_at": time.time(), "updated_at": time.time(), "archived": False}
+                    _sessions.append(sess)
+                    _active_session_id = sid
+                    _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": sid, "state": state_dict()})
             elif path == "/api/sessions/switch":
                 sid = data.get("id")
-                sess = next((s for s in _sessions if s["id"] == sid), None)
-                if not sess:
-                    self._send_json({"error": "session not found"}, 404)
-                    return
                 with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
                     t = _load_tree_for(sess["persist_key"])
                     if t is None:
                         t = _make_tree_for(sess["persist_key"])
                         t.init([{"role": "system", "content": "会话已恢复。"}])
                     _bind_active_tree(t)
                     _migrate_if_needed()
-                _active_session_id = sid
-                _touch_active_session()
+                    _active_session_id = sid
+                    _touch_active_session()
                 self._send_json({"active_id": sid, "state": state_dict()})
             elif path == "/api/sessions/delete":
                 sid = data.get("id")
-                sess = next((s for s in _sessions if s["id"] == sid), None)
-                if not sess:
-                    self._send_json({"error": "session not found"}, 404)
-                    return
-                if len(_sessions) <= 1:
-                    self._send_json({"error": "至少保留一个会话，无法删除"}, 400)
-                    return
-                per = sess["persist_key"]
-                # 1) 删除拓扑 JSON
-                topo = V5_DATA_DIR / f"{per}.json"
-                try:
-                    if topo.exists():
-                        topo.unlink()
-                except Exception:
-                    pass
-                # 2) 尽力清理该会话占用的 V5 记忆行 (避免孤儿行堆积)
-                try:
-                    old = _load_tree_for(per)
-                    if old is not None:
-                        for n in old.nodes.values():
-                            if n.v5_memory_id:
-                                try:
-                                    v5s.delete(n.v5_memory_id)
-                                except Exception:
-                                    pass
-                            # 一并清理 MemoryRetriever 写入的 fact 记忆 (共享 store, 否则成孤儿行)
-                            for mid in getattr(n, "memory_ids", []) or []:
-                                try:
-                                    v5s.delete(mid)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-                _sessions = [s for s in _sessions if s["id"] != sid]
-                _save_sessions(_sessions)
-                # 若删除的是活动会话, 自动切到下一个未归档会话
-                if _active_session_id == sid:
-                    nxt = next((s for s in _sessions if not s["archived"]), _sessions[0])
-                    _active_session_id = nxt["id"]
-                    with _lock:
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    if len(_sessions) <= 1:
+                        self._send_json({"error": "至少保留一个会话，无法删除"}, 400)
+                        return
+                    per = sess["persist_key"]
+                    # 1) 删除拓扑 JSON
+                    topo = V5_DATA_DIR / f"{per}.json"
+                    try:
+                        if topo.exists():
+                            topo.unlink()
+                    except Exception:
+                        pass
+                    # 2) 尽力清理该会话占用的 V5 记忆行 (避免孤儿行堆积)
+                    try:
+                        old = _load_tree_for(per)
+                        if old is not None:
+                            for n in old.nodes.values():
+                                if n.v5_memory_id:
+                                    try:
+                                        v5s.delete(n.v5_memory_id)
+                                    except Exception:
+                                        pass
+                                # 一并清理 MemoryRetriever 写入的 fact 记忆 (共享 store, 否则成孤儿行)
+                                for mid in getattr(n, "memory_ids", []) or []:
+                                    try:
+                                        v5s.delete(mid)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                    _sessions = [s for s in _sessions if s["id"] != sid]
+                    _save_sessions(_sessions)
+                    # 若删除的是活动会话, 自动切到下一个未归档会话
+                    if _active_session_id == sid:
+                        nxt = next((s for s in _sessions if not s["archived"]), _sessions[0])
+                        _active_session_id = nxt["id"]
                         t = _load_tree_for(nxt["persist_key"])
                         if t is None:
                             t = _make_tree_for(nxt["persist_key"])
@@ -2318,36 +2335,166 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/sessions/archive":
                 # 显式归档: 传 archived=true/false 直接设置; 省略则切换 (前端兼容).
                 sid = data.get("id")
-                sess = next((s for s in _sessions if s["id"] == sid), None)
-                if not sess:
-                    self._send_json({"error": "session not found"}, 404)
-                    return
-                if "archived" in data:
-                    sess["archived"] = bool(data["archived"])
-                else:
-                    sess["archived"] = not sess.get("archived", False)
-                _save_sessions(_sessions)
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    if "archived" in data:
+                        sess["archived"] = bool(data["archived"])
+                    else:
+                        sess["archived"] = not sess.get("archived", False)
+                    _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             elif path == "/api/sessions/unarchive":
                 # 显式取消归档 (C5): 无论当前状态, 强制 archived=False.
                 sid = data.get("id")
-                sess = next((s for s in _sessions if s["id"] == sid), None)
-                if not sess:
-                    self._send_json({"error": "session not found"}, 404)
-                    return
-                sess["archived"] = False
-                _save_sessions(_sessions)
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    sess["archived"] = False
+                    _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
             elif path == "/api/sessions/rename":
                 sid = data.get("id")
                 title = (data.get("title") or "").strip() or "未命名会话"
-                sess = next((s for s in _sessions if s["id"] == sid), None)
-                if not sess:
-                    self._send_json({"error": "session not found"}, 404)
-                    return
-                sess["title"] = title[:60]
-                _save_sessions(_sessions)
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    sess["title"] = title[:60]
+                    _save_sessions(_sessions)
                 self._send_json({"sessions": _sessions, "active_id": _active_session_id})
+            # ── C6: 复制会话 (fork) ──
+            elif path == "/api/sessions/duplicate":
+                src_sid = data.get("source_id") or data.get("id")
+                with _lock:
+                    src = next((s for s in _sessions if s["id"] == src_sid), None)
+                    if not src:
+                        self._send_json({"error": "source session not found"}, 404)
+                        return
+                    new_sid = _new_session_id()
+                    new_per = f"ui_conversation_tree_{new_sid}"
+                    # 复制拓扑 JSON (从 V5_DATA_DIR 读, 写新键)
+                    src_topo = V5_DATA_DIR / f"{src['persist_key']}.json"
+                    if src_topo.exists():
+                        try:
+                            payload = json.loads(src_topo.read_text(encoding="utf-8"))
+                            # 重写 root/current id 保持引用一致, 但树内所有节点 id 保留以维持结构
+                            # 仅改持久化键
+                            (V5_DATA_DIR / f"{new_per}.json").write_text(
+                                json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                        except Exception as exc:
+                            self._send_json({"error": f"failed to copy topology: {exc}"}, 500)
+                            return
+                    new_sess = {
+                        "id": new_sid, "title": (src.get("title", "") or "未命名") + " (副本)",
+                        "persist_key": new_per,
+                        "created_at": time.time(), "updated_at": time.time(),
+                        "archived": False, "pinned": False,
+                    }
+                    _sessions.append(new_sess)
+                    _save_sessions(_sessions)
+                self._send_json({"ok": True, "id": new_sid, "session": new_sess,
+                                 "sessions": _sessions, "active_id": _active_session_id})
+            # ── C6: 批量归档 / 取消归档 ──
+            elif path == "/api/sessions/batch_archive":
+                ids = data.get("ids") or []
+                archived = bool(data.get("archived", True))
+                if not isinstance(ids, list) or not ids:
+                    self._send_json({"error": "ids (list) required"}, 400)
+                    return
+                with _lock:
+                    changed = 0
+                    for sid in ids:
+                        sess = next((s for s in _sessions if s["id"] == sid), None)
+                        if sess is None:
+                            continue
+                        if sess.get("archived") != archived:
+                            sess["archived"] = archived
+                            changed += 1
+                    if changed:
+                        _save_sessions(_sessions)
+                self._send_json({"ok": True, "changed": changed,
+                                 "sessions": _sessions, "active_id": _active_session_id})
+            # ── C6: 从归档恢复 (语义同 unarchive 但保持命名一致, 可批量) ──
+            elif path == "/api/sessions/restore":
+                ids = data.get("ids") or []
+                if not isinstance(ids, list) or not ids:
+                    self._send_json({"error": "ids (list) required"}, 400)
+                    return
+                with _lock:
+                    changed = 0
+                    for sid in ids:
+                        sess = next((s for s in _sessions if s["id"] == sid), None)
+                        if sess is None or not sess.get("archived"):
+                            continue
+                        sess["archived"] = False
+                        changed += 1
+                    if changed:
+                        _save_sessions(_sessions)
+                self._send_json({"ok": True, "changed": changed,
+                                 "sessions": _sessions, "active_id": _active_session_id})
+            # ── C6: 拖拽排序 (order 字段, 整数; 缺失时按列表顺序自动赋 0..N-1) ──
+            elif path == "/api/sessions/reorder":
+                order = data.get("order") or []  # list of session ids in new order
+                if not isinstance(order, list):
+                    self._send_json({"error": "order (list of ids) required"}, 400)
+                    return
+                with _lock:
+                    for idx, sid in enumerate(order):
+                        sess = next((s for s in _sessions if s["id"] == sid), None)
+                        if sess is not None:
+                            sess["order"] = idx
+                    # 缺失 order 的会话按原顺序补到末尾
+                    have = set(order)
+                    tail = [s for s in _sessions if s["id"] not in have]
+                    for k, s in enumerate(tail):
+                        s["order"] = len(order) + k
+                    _save_sessions(_sessions)
+                self._send_json({"ok": True, "sessions": _sessions, "active_id": _active_session_id})
+            # ── C6: 置顶 / 取消置顶 ──
+            elif path == "/api/sessions/pin":
+                sid = data.get("id")
+                pinned = bool(data.get("pinned", True))
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    sess["pinned"] = pinned
+                    _save_sessions(_sessions)
+                self._send_json({"ok": True, "session": sess, "sessions": _sessions})
+            # ── C6: 元数据 (color/tags/model/system_prompt/last_node_id) ──
+            elif path == "/api/sessions/set_meta":
+                sid = data.get("id")
+                if not sid:
+                    self._send_json({"error": "id required"}, 400)
+                    return
+                # 允许的字段白名单
+                meta_keys = {"color", "tags", "model", "system_prompt", "last_node_id"}
+                updates = {k: v for k, v in data.items() if k in meta_keys}
+                if "tags" in updates and updates["tags"] is not None and not isinstance(updates["tags"], list):
+                    self._send_json({"error": "tags must be list"}, 400)
+                    return
+                if "color" in updates and updates["color"] is not None:
+                    # 简单 hex 校验
+                    c = str(updates["color"])
+                    if not (c.startswith("#") and len(c) in (4, 7) and all(ch in "0123456789abcdefABCDEF" for ch in c[1:])):
+                        self._send_json({"error": "color must be #RGB or #RRGGBB"}, 400)
+                        return
+                with _lock:
+                    sess = next((s for s in _sessions if s["id"] == sid), None)
+                    if not sess:
+                        self._send_json({"error": "session not found"}, 404)
+                        return
+                    for k, v in updates.items():
+                        sess[k] = v
+                    _save_sessions(_sessions)
+                self._send_json({"ok": True, "session": sess, "sessions": _sessions})
             else:
                 self._send_json({"error": "not found", "path": path}, 404)
         except Exception as exc:
@@ -2357,7 +2504,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description="Conversation Tree panel server")
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=48920)
+    ap.add_argument("--port", type=int, default=0)
     args = ap.parse_args()
 
     ensure_tree()
@@ -2380,8 +2527,28 @@ def main():
             import socket as _socket
             self.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_EXCLUSIVEADDRUSE, 1)
             super().server_bind()
-    httpd = ExclusiveThreadingHTTPServer((args.host, args.port), Handler)
-    sys.stderr.write(f"[ct] serving on http://{args.host}:{args.port}\n")
+    # 先用指定端口，失败则用 0（OS 分配）
+    port = args.port
+    while True:
+        try:
+            httpd = ExclusiveThreadingHTTPServer((args.host, port), Handler)
+            break
+        except OSError:
+            if port == 0: raise
+            port = 0  # 重试：OS 分配
+    actual_port = httpd.server_address[1]
+    # 实际端口上报（双通道）:
+    #   stdout PORT=<n>  → dsh 插件 Node 侧捕获
+    #   tmp/ct-port.json → ikarosctl (stdout 是 DEVNULL) / 其他调用方轮询读取
+    sys.stdout.write(f"PORT={actual_port}\n")
+    sys.stdout.flush()
+    try:
+        _port_file = _HERE.parent.parent / "tmp" / "ct-port.json"
+        _port_file.parent.mkdir(parents=True, exist_ok=True)
+        _port_file.write_text(json.dumps({"port": actual_port}), encoding="utf-8")
+    except OSError:
+        pass  # 端口文件写失败不致命, 调用方仍可从 stdout 捕获
+    sys.stderr.write(f"[ct] serving on http://{args.host}:{actual_port}\n")
     sys.stderr.flush()
     try:
         httpd.serve_forever()

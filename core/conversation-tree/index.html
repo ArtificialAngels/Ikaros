@@ -1445,7 +1445,7 @@ border:1.5px solid var(--border-std);border-radius:7px}
 <body>
   <div id="ctTooltip" style="left:-9999px;top:-9999px"></div>
   <!-- 左上角 Ikaros LOGO (液态玻璃, 点击打开设置面板); k/r 一键缩小批处理按钮 (多卡时出现, 独立于 logo 避免 overflow 裁剪) -->
-  <div id="ikarosLogo" data-i18n-title="btn.settings" title="设置" onclick="openSettings()">
+  <div id="ikarosLogo" data-i18n-title="btn.settings" title="设置">
     <span id="logoLetter">I</span>
   </div>
   <span id="logoBatch" style="display:none" title=""></span>
@@ -6075,6 +6075,14 @@ function applyTheme(pref){
   document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active',b.dataset.theme===pref));
   // 设置页 Color Theme swatch 高亮同步
   document.querySelectorAll('.theme-swatch').forEach(s=>s.classList.toggle('active',s.dataset.theme===pref));
+  broadcastTheme();  // 把当前主题色发给宿主 (dsh), 对话框按钮跟随变色
+}
+/* 广播当前 --brand 主题色给宿主 (dsh) */
+function broadcastTheme(){
+  try{
+    var c=getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
+    if(c) window.parent.postMessage({type:'ikaros-ct-theme',color:c},'*');
+  }catch(e){}
 }
 function renderThemeSwitcher(){
   const el=document.getElementById('themeSwitcher');
@@ -6239,6 +6247,26 @@ document.addEventListener('mousemove',e=>{
 },{passive:true});
 /* ═══ Settings Modal (真实功能: 模型/代理/provider 状态/权限/网格) ═══ */
 let _currentSettingsSection='models';
+/* 双击左上角 I 徽标: 通知宿主 (dsh) 弹出关闭确认框 (若要返回 dsh UI) */
+function notifyHostCloseDialog(e){
+  if(e&&e.stopPropagation)e.stopPropagation();
+  try{ window.parent.postMessage({type:'ikaros-ct-close-dialog'},'*'); }
+  catch(_err){}
+}
+/* 单击延迟 200ms 判断双击: 双击只通知宿主弹确认框, 不再额外触发 openSettings */
+(function(){
+  var logo=document.getElementById('ikarosLogo');
+  if(!logo)return;
+  var t=null;
+  logo.addEventListener('click',function(){
+    if(t){clearTimeout(t);t=null;return;}
+    t=setTimeout(function(){t=null;openSettings();},200);
+  });
+  logo.addEventListener('dblclick',function(e){
+    if(t){clearTimeout(t);t=null;}
+    notifyHostCloseDialog(e);
+  });
+})();
 function openSettings(){
   renderSettingsThemeGrid();
   renderSettingsModels();
