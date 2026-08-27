@@ -183,9 +183,12 @@ def start_component(
             # --patch is NOT passed here (the old start-dsh-ikaros.bat only
             # used --patch for headless mode).  The patch is synced by
             # bin/sync-dsh-profile-patch.bat.
+            # --no-open 防止 dsh 自动开系统默认浏览器（用户偏好：自己用 ikaros dsh open 开 Chrome --app，
+            # 避免 Edge/Chrome 重复窗口）。
             argv = [
                 str(node), str(dsh_bin), "web",
                 "--port", web_port,
+                "--no-open",
             ]
         else:
             # headless mode: --patch is required for the Ikaros overlay.
@@ -266,7 +269,35 @@ def start_component(
     import time as _time
 
     start_wait_timeout = float(os.environ.get("IKAROS_START_WAIT_TIMEOUT", "10"))
-    if component.port is not None and start_wait_timeout > 0:
+
+    # 动态端口组件: healthcheck.type == "port_file" — 从端口文件读实际端口再探测。
+    # server.py (--port 0) 绑定后把 OS 分配的端口写进 tmp/ct-port.json。
+    hc = component.healthcheck or {}
+    if hc.get("type") == "port_file" and start_wait_timeout > 0:
+        port_file = root / hc.get("endpoint", "tmp/ct-port.json")
+        deadline = _time.monotonic() + start_wait_timeout
+        actual_port: int | None = None
+        while _time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise LauncherError(
+                    f"{component_id!r} exited immediately after start "
+                    f"(rc={process.returncode}, argv={argv!r})"
+                )
+            try:
+                import json as _json
+                actual_port = _json.loads(port_file.read_text(encoding="utf-8")).get("port")
+            except (OSError, ValueError):
+                actual_port = None
+            if actual_port and _port_is_open(actual_port):
+                break
+            _time.sleep(0.5)
+        if not (actual_port and _port_is_open(actual_port)):
+            raise LauncherError(
+                f"{component_id!r} did not report a working port via {port_file} "
+                f"within {start_wait_timeout:.0f}s after start (argv={argv!r})"
+            )
+        print(f"[ikaros] {component.id} listening on dynamic port {actual_port}")
+    elif component.port is not None and start_wait_timeout > 0:
         deadline = _time.monotonic() + start_wait_timeout
         interval = 0.5
         port_up = False
@@ -624,6 +655,175 @@ def _resolve_log_path(root: Path, component_id: str) -> Path | None:
     return max(existing, key=lambda path: path.stat().st_mtime)
 
 
+def _cmd_dsh(root: Path, args: tuple[str, ...]) -> int:
+    """`ikaros dsh <status|open|sync|restart|stop>` — dsh web 配套管理.
+
+    status: 3080 + CT 端口 + node 进程 + client.js URL 同步状态
+    open:   自动开 Chrome --app 窗口（探测已有窗口则前置）
+    sync:   cordis.patch.yml → ~/.dsh/profiles/web/cordis.patch.yml
+    restart: stop + start_component('dsh', ('web',))  (与 `ikaros restart dsh` 等价)
+    stop:   杀 dsh web 进程
+    """
+    sub = (args[0].lower() if args else "status")
+    if sub in ("-h", "--help", "help"):
+        print("ikaros dsh <status|open|sync|restart|stop>")
+        return 0
+    if sub == "status":
+        return _dsh_status(root)
+    if sub == "open":
+        return _dsh_open(root)
+    if sub == "sync":
+        return _dsh_sync(root)
+    if sub == "restart":
+        stop_component(root, "dsh")
+        return start_component(root, "dsh", ("web",))
+    if sub == "stop":
+        return stop_component(root, "dsh")
+    return _usage_error("ikaros dsh <status|open|sync|restart|stop>")
+
+
+def _dsh_status(root: Path) -> int:
+    """一屏看清 dsh 状态: 3080 监听、CT 端口、node 进程、client.js URL 同步."""
+    import json
+    web_port = int(os.environ.get("IKAROS_DSH_WEB_PORT") or 3080)
+    # 1) 3080 监听
+    listening = _port_listening(web_port)
+    print(f"[1] :{web_port} dsh web  -> {'OK' if listening else 'down'}")
+    # 2) CT 端口文件
+    port_file = root / "tmp" / "ct-port.json"
+    ct_port = None
+    if port_file.is_file():
+        try:
+            ct_port = json.loads(port_file.read_text(encoding="utf-8")).get("port")
+        except Exception:  # noqa: BLE001
+            pass
+    print(f"[2] CT port file     -> {ct_port or 'N/A'}  ({port_file})")
+    # 3) node 进程
+    pids = _dsh_pids()
+    if pids:
+        print(f"[3] dsh node pids   -> {', '.join(str(p) for p in pids)}")
+    else:
+        print("[3] dsh node pids   -> none")
+    # 4) client.js URL 同步
+    client_js = (
+        Path.home() / ".dsh" / "profiles" / "web" / "node_modules"
+        / "@ikaros" / "dsh-conversation-tree" / "dist" / "client.js"
+    )
+    url_in_client = None
+    if client_js.is_file():
+        m = re.search(r"http://127\.0\.0\.1:(\d+)/", client_js.read_text(encoding="utf-8", errors="ignore"))
+        if m:
+            url_in_client = int(m.group(1))
+    sync_ok = url_in_client == ct_port
+    print(f"[4] client.js URL   -> {url_in_client}  (sync={'OK' if sync_ok else 'MISMATCH'})")
+    # 5) CT HTTP
+    if ct_port:
+        code = _http_code(ct_port)
+        print(f"[5] :{ct_port} CT      -> HTTP {code}")
+    return 0 if (listening and sync_ok) else 1
+
+
+def _dsh_open(root: Path) -> int:
+    """开 Chrome --app=http://localhost:3080/ 窗口; 3080 未监听则自动拉起 dsh."""
+    import json
+    web_port = int(os.environ.get("IKAROS_DSH_WEB_PORT") or 3080)
+    if not _port_listening(web_port):
+        print(f"[dsh-open] :{web_port} 未监听, 自动拉起 dsh web ...")
+        rc = start_component(root, "dsh", ("web",))
+        if rc != 0:
+            print(f"[dsh-open] 自动拉起失败 (rc={rc}), 放弃开窗")
+            return rc
+        # 等待端口起来 (最多 30s)
+        for _ in range(30):
+            if _port_listening(web_port):
+                break
+            import time as _t; _t.sleep(1)
+        else:
+            print(f"[dsh-open] :{web_port} 仍未监听, 放弃开窗")
+            return 1
+        print(f"[dsh-open] :{web_port} 已起来")
+    # 探测 Chrome 路径
+    candidates = [
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        Path.home() / "AppData/Local/Google/Chrome/Application/chrome.exe",
+    ]
+    chrome = next((p for p in candidates if p.is_file()), None)
+    if not chrome:
+        print("[dsh-open] Chrome 未找到, 请手动打开 http://localhost:3080/")
+        return 1
+    url = f"http://localhost:{web_port}/"
+    # 查 dsh 实际端口（CT 同步用，但浏览器只看 dsh）
+    port_file = root / "tmp" / "ct-port.json"
+    if port_file.is_file():
+        try:
+            json.loads(port_file.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+    # 优先前置已有窗口, 否则新建
+    if os.name == "nt":
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"Start-Process -FilePath '{chrome}' -ArgumentList '--app={url}','--window-size=1400,900'"],
+            check=False,
+        )
+    else:
+        subprocess.Popen([str(chrome), f"--app={url}", "--window-size=1400,900"])
+    print(f"[dsh-open] opened {url}")
+    return 0
+
+
+def _dsh_sync(root: Path) -> int:
+    """cordis.patch.yml → ~/.dsh/profiles/web/cordis.patch.yml (与 sync-dsh-profile-patch.bat 等价)."""
+    src = root / "core" / "ikaros-dsh" / "cordis.patch.yml"
+    dst_dir = Path.home() / ".dsh" / "profiles" / "web"
+    dst = dst_dir / "cordis.patch.yml"
+    if not src.is_file():
+        print(f"[dsh-sync] source not found: {src}")
+        return 1
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    # shutil.copy2 保留 mtime, 便于 debug
+    import shutil
+    shutil.copy2(src, dst)
+    print(f"[dsh-sync] OK -> {dst}")
+    return 0
+
+
+def _port_listening(port: int) -> bool:
+    """跨平台探测端口是否在 listen."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        try:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+        except OSError:
+            return False
+
+
+def _dsh_pids() -> list[int]:
+    """返回正在运行 dsh web 的 node 进程 PID 列表 (仅 Windows)."""
+    if os.name != "nt":
+        return []
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'dsh.*bin\\.js.*web' } | Select-Object -ExpandProperty ProcessId"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        return [int(line.strip()) for line in out.splitlines() if line.strip().isdigit()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _http_code(port: int) -> int:
+    """HTTP GET 拿状态码, 失败返回 0."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as r:
+            return r.status
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _cmd_logs(root: Path, component_id: str, follow: bool, rotate: bool, lines: int) -> int:
     """Show the latest log for a component, optionally tailing or rotating.
 
@@ -853,6 +1053,8 @@ def dispatch(argv: Sequence[str]) -> int:
         return status(root)
     if command == "ps":
         return _cmd_ps(root)
+    if command == "dsh":
+        return _cmd_dsh(root, args)
     if command == "logs":
         if not args:
             return _usage_error("ikaros logs <component> [--follow] [--rotate] [--lines N]")
@@ -921,6 +1123,7 @@ def _usage_error(message: str | None = None) -> int:
             "logs",
             "stop",
             "restart",
+            "dsh",
         ),
     )
     parser.add_argument("component", nargs="?")

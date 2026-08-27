@@ -47,15 +47,15 @@ components:
   - id: conversation-tree
     name: Conversation Tree Panel
     category: ui
-    port: 48920
+    port: null          # 动态端口: --port 0 由 OS 分配, 实际端口写 tmp/ct-port.json
     process_marker: conversation_tree
     dependencies: [memory_v5]
     config_schema: {}
     healthcheck:
-      type: port
-      endpoint: 48920
+      type: port_file   # 从 tmp/ct-port.json 读实际端口再探测
+      endpoint: tmp/ct-port.json
     lifecycle:
-      start_script: python core/conversation-tree/server.py --port 48920
+      start_script: python core/conversation-tree/server.py --port 0
       stop_script: null
       restart_script: null
       watchdog: self     # server.py 内嵌端口拉起 (未来扩展)
