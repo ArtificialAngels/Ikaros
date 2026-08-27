@@ -102,7 +102,7 @@ from memory_v5 import tools as _tools_pkg  # noqa: E402
 _VALID_GROUPS = ("memory", "self", "care", "vitality", "relationship", "skill", "project")
 
 _TOOL_GROUPS: dict[str, str] = {
-    # memory (21)
+    # memory (22) — +1: v5_recall (F1+F2+F4 预算感知召回)
     "v5_memory_store": "memory", "v5_memory_search": "memory",
     "v5_memory_get": "memory", "v5_memory_delete": "memory",
     "v5_memory_stats": "memory", "v5_dissonance_check": "memory",
@@ -115,6 +115,7 @@ _TOOL_GROUPS: dict[str, str] = {
     "v5_reflection_synthesize": "memory", "v5_reflection_read": "memory",
     "v5_reflection_apply_evidence": "memory", "v5_reflection_promote": "memory",
     "v5_reflection_stats": "memory",
+    "v5_recall": "memory",
     # self (13)
     "v5_analyze_emotion": "self", "v5_emotion_status": "self",
     "v5_emotion_label": "self", "v5_self_model": "self",

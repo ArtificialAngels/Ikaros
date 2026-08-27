@@ -112,6 +112,17 @@ _DEFAULTS: dict = {
         "circuit_breaker_threshold": 3,
         "circuit_breaker_reset_seconds": 30,
     },
+    # F1+F2+F4: 预算感知召回 (v5_recall 工具)
+    "recall": {
+        "max_tokens": 1600,      # 单次召回注入预算上限
+        "dedup_turns": 5,        # 跨轮去重窗口 (近 N 轮展示过正文的记忆跳过)
+        "top_k": 20,             # over-fetch 候选数 (给预算装配留头)
+    },
+    # F5: 集群新鲜度 (incremental refresh watermarks)
+    "freshness": {
+        "refresh_ratio": 0.10,   # pending/total >= 此值才 due (OpenViking 默认 0.10)
+        "min_pending": 5,        # 或 pending 绝对值 >= 此值 (小桶也能触发一次)
+    },
 }
 
 

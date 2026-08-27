@@ -443,6 +443,30 @@ def make_retention_op() -> ReflectOp:
     )
 
 
+def make_refresh_freshness_op() -> ReflectOp:
+    """集群新鲜度对账 (F5, OpenViking freshness 借鉴): 6h.
+
+    不真处理 (那是 vector_sync/rule_entity_extract 的事), 只按 type 重建 total/pending
+    计数 + 标 due, 供水印增量扫描用。纯算法无 LLM。
+    """
+    FRESHNESS_INTERVAL = 6 * 3600  # 6h
+
+    def _fn() -> int:
+        from memory_v5.freshness import reconcile_totals
+        stats = reconcile_totals() or {}
+        due = [b for b, s in stats.items() if s.get("due")]
+        if due:
+            logger.info("refresh_freshness: %d bucket(s) due: %s", len(due), due)
+        return len(due)
+
+    return ReflectOp(
+        name="refresh_freshness",
+        fn=_fn,
+        interval_sec=FRESHNESS_INTERVAL,
+        last_run_key="last_refresh_freshness",
+    )
+
+
 def make_rule_entity_op() -> ReflectOp:
     """规则实体图抽取: 6h, 纯算法建实体/边 (无 LLM, 决策 A 安全).
 
@@ -496,6 +520,11 @@ def make_default_scheduler(state: ScheduleState | None = None) -> ReflectSchedul
     s.register(make_expire_directives_op())
     # 阶段 5 新增: 时间戳抽取
     s.register(make_temporal_extract_op())
+    # F3 (2026-08-24): 结构化经验抽取 (OpenViking extract_loop 借鉴; 走 upsert 合并, 不堆积雷同)
+    from memory_v5.reflect.extract_experiences import make_extract_experiences_op
+    s.register(make_extract_experiences_op())
+    # F5 (2026-08-24): 集群新鲜度对账 (OpenViking freshness 借鉴; 供水印增量扫描)
+    s.register(make_refresh_freshness_op())
     return s
 
 

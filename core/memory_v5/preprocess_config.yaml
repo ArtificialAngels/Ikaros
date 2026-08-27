@@ -120,6 +120,17 @@ cache:
   circuit_breaker_threshold:      3      # 连续失败次数触发 closed → open
   circuit_breaker_reset_seconds:  30     # open → half_open 探针冷却期
 
+# F1+F2+F4: 预算感知召回 (v5_recall 工具; OpenViking context_assembler 借鉴)
+recall:
+  max_tokens: 1600      # 单次召回注入预算上限
+  dedup_turns: 5        # 跨轮去重窗口 (近 N 轮展示过正文的记忆跳过)
+  top_k: 20             # over-fetch 候选数 (给预算装配留头)
+
+# F5: 集群新鲜度 (incremental refresh watermarks; OpenViking freshness_policy 借鉴)
+freshness:
+  refresh_ratio: 0.10   # pending/total >= 此值才 due
+  min_pending: 5        # 或 pending 绝对值 >= 此值 (小桶也能触发一次)
+
 # Validation rules (v5.validation module)
 # Each rule can be individually enabled/disabled.
 # Rules check input format, type, range, and consistency.

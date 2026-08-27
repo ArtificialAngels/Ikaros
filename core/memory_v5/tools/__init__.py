@@ -25,6 +25,8 @@ from memory_v5.tools import directive_tool
 from memory_v5.tools import project_tool
 # V5.5: skill track (agent-distilled reusable workflows, Markdown files)
 from memory_v5.tools import skill_tool
+# F1+F2+F4: 预算感知召回 (OpenViking context_assembler 借鉴)
+from memory_v5.tools import recall_tool
 
 # Collect every v5_* callable from the submodules into __all__.
 __all__: list[str] = []
@@ -33,7 +35,7 @@ for _mod in (
     emotion_tool, memory_tool, self_tool,
     care_tool, vitality_tool, relationship_tool, extra_tool,
     reflection_tool, repeat_tool, directive_tool, project_tool,
-    skill_tool,
+    skill_tool, recall_tool,
 ):
     for _name in dir(_mod):
         if _name.startswith("v5_") and _name not in _SEEN:
