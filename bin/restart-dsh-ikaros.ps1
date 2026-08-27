@@ -30,7 +30,7 @@ if (-not (Test-Path $node)) { Log "ERROR: node not found: $node"; exit 1 }
 if (-not (Test-Path $dshBin)) { Log "ERROR: dsh not found: $dshBin"; exit 1 }
 
 Log "starting dsh web --patch $patch (cwd $root)"
-$p = Start-Process -FilePath $node -ArgumentList @($dshBin,'web','--patch',$patch) -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir "ikaros-dsh-web.out.log") -RedirectStandardError (Join-Path $logDir "ikaros-dsh-web.err.log")
+$p = Start-Process -FilePath $node -ArgumentList @($dshBin,'web','--patch',$patch,'--no-open') -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir "ikaros-dsh-web.out.log") -RedirectStandardError (Join-Path $logDir "ikaros-dsh-web.err.log")
 Log "started dsh PID $($p.Id)"
 
 # 3. 验证 3080 监听 + mcp_server spawn
