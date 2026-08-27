@@ -2,19 +2,29 @@
 //
 // 注册 dsh 设置页 'settings.section' slot, id='ikaros-memory-settings', 渲染
 // 记忆控制面板 React 卡。仿造 @deepseek-ai/dsh-client-ui-settings-models 的
-// settings.section 注册模式: t() 做 i18n, settingsStyle css class, 调
-// connection.api.ikarosMemory.* 与 host-bridge 通信 (见 src/index.ts)。
+// settings.section 注册模式。
+//
+// host-bridge: Node 侧独立 HTTP server (127.0.0.1:IKAROS_MEMORY_API_PORT, 默认 19001)
+// 暴露 RPC 端点 /listModels /getStatus /startEmbedding /stopEmbedding
+// /switchModel /downloadModel /rebuildVectors (POST JSON). client 端 fetch
+// 调这些端点。URL 在 build 时 placeholder, Node 侧启动时 patch (仿
+// ikaros-conversation-tree 同模式). 不走 dsh connection.api 模式 (dsh 0.1.1-rc.2
+// host-bridge 只硬编码 5 个 namespace, 不会自动桥接自定义 service).
 //
 // 面板功能:
 //   - 状态: 端口 / PID / 模型 / 向量数 / 模型存在
-//   - 启停 embedding: 调 api.ikarosMemory.{startEmbedding,stopEmbedding}
-//   - 模型列表 (扫描 core/memory_v5/models/*.gguf) + 切换 (switchModel)
-//   - 下载: HF repo + filename, 调 api.ikarosMemory.downloadModel
-//   - 重建向量: rebuildVectors (长任务, 显示进度文本)
+//   - 启停 embedding: POST /startEmbedding, /stopEmbedding
+//   - 模型列表 + 切换: POST /listModels, /switchModel
+//   - 下载: HF repo + filename, POST /downloadModel
+//   - 重建向量: POST /rebuildVectors
 //
-// i18n: NS='ikaros-memory-settings' 注册到 ctx.locale (zh + en)。
+// i18n: NS='ikaros-memory-settings' 注册到 ctx.locale (zh + en).
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+
+// 启动时由 Node 侧 patch; 若未 patch, fallback 占位 URL — fetch 失败时
+// noApi 兜底. 端口可由 IKAROS_MEMORY_API_PORT 环境变量覆盖.
+const IkarosMemoryAPI = 'http://127.0.0.1:19001'
 
 const NS = 'ikaros-memory-settings'
 
@@ -123,6 +133,29 @@ const en = {
   embStopped: 'llama-server is stopped',
 }
 
+// RPC 调 Node 侧 host-bridge (独立 HTTP server 暴露)
+/** POST ${IkarosMemoryAPI}${path}, 返 { ok, result } or { ok:false, error }. */
+async function rpc<T = unknown>(path: string, body: Record<string, unknown> = {}): Promise<{ ok: boolean; result?: T; error?: string }> {
+  let resp: Response
+  try {
+    resp = await fetch(`${IkarosMemoryAPI}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (e) {
+    return { ok: false, error: `fetch failed: ${String((e as Error)?.message || e)}` }
+  }
+  if (!resp.ok) {
+    return { ok: false, error: `HTTP ${String(resp.status)}` }
+  }
+  try {
+    return (await resp.json()) as { ok: boolean; result?: T; error?: string }
+  } catch (e) {
+    return { ok: false, error: `bad JSON: ${String((e as Error)?.message || e)}` }
+  }
+}
+
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -130,81 +163,95 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-function MemorySettingsCard(props: { api: unknown; t: (k: string) => string }) {
-  const api = props.api as { ikarosMemory?: HostApi } | null
+// MemorySettingsCard 接受 dsh renderSlot 注入的 props ({ close } + inject 返的 { t })
+// 不依赖 owner 解构 api — host-bridge 通过 fetch 直调 IkarosMemoryAPI 走 URL
+function MemorySettingsCard(props: { t: (k: string) => string }) {
   const t = props.t
-  const host = api?.ikarosMemory
-
-  // 没 host-bridge (e.g. host 端 class Service 还没 mount 时) — 用本地兜底空数据
+  // 探测 host-bridge 联通性: 首次 listModels 成功即视为通
   const [status, setStatus] = useState<Status | null>(null)
   const [models, setModels] = useState<ModelEntry[] | null>(null)
+  const [apiOk, setApiOk] = useState<boolean | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<string>('')
   const [downloadRepo, setDownloadRepo] = useState<string>('BAAI/bge-m3')
   const [downloadFile, setDownloadFile] = useState<string>('bge-m3-q8_0.gguf')
 
   const refresh = useCallback(async () => {
-    if (!host) return
     setBusy('refresh')
     setMsg('')
     try {
-      const [s, m] = await Promise.all([host.getStatus(), host.listModels()])
-      setStatus(s); setModels(m.models)
+      const [s, m] = await Promise.all([
+        rpc<Status>('/getStatus'),
+        rpc<{ models: ModelEntry[]; activeModel: string; modelsDir: string }>('/listModels'),
+      ])
+      if (!s.ok) { setMsg(`状态: ${s.error || 'unknown'}`); return }
+      if (!m.ok) { setMsg(`模型: ${m.error || 'unknown'}`); return }
+      setApiOk(true)
+      setStatus(s.result ?? null)
+      setModels(m.result?.models ?? null)
     } catch (e) {
       setMsg(`刷新失败: ${(e as Error)?.message || e}`)
-    } finally { setBusy(null) }
-  }, [host])
+    } finally {
+      setApiOk(prev => prev === true ? true : (prev === null ? false : prev))
+      setBusy(null)
+    }
+  }, [])
 
   useEffect(() => { void refresh() }, [refresh])
 
   const handleStart = async () => {
-    if (!host) return; setBusy('start'); setMsg('')
+    setBusy('start'); setMsg('')
     try {
-      const r = await host.startEmbedding(); setMsg(r.message)
+      const r = await rpc<{ ok: boolean; message: string }>('/startEmbedding')
+      setMsg(r.result?.message || r.error || 'unknown')
       await refresh()
     } catch (e) { setMsg(`启动失败: ${(e as Error)?.message || e}`) }
     finally { setBusy(null) }
   }
 
   const handleStop = async () => {
-    if (!host) return; setBusy('stop'); setMsg('')
+    setBusy('stop'); setMsg('')
     try {
-      const r = await host.stopEmbedding(); setMsg(r.message)
+      const r = await rpc<{ ok: boolean; message: string }>('/stopEmbedding')
+      setMsg(r.result?.message || r.error || 'unknown')
       await refresh()
     } catch (e) { setMsg(`停止失败: ${(e as Error)?.message || e}`) }
     finally { setBusy(null) }
   }
 
-  const handleSwitch = async (filename: string) => {
-    if (!host) return; setBusy('switch:' + filename); setMsg('')
+  const handleSwitch = (filename: string) => async () => {
+    setBusy('switch:' + filename); setMsg('')
     if (!confirm(t('switchConfirm'))) { setBusy(null); return }
     try {
-      const r = await host.switchModel(filename); setMsg(r.message)
+      const r = await rpc<{ ok: boolean; message: string }>('/switchModel', { filename })
+      setMsg(r.result?.message || r.error || 'unknown')
       await refresh()
     } catch (e) { setMsg(`切换失败: ${(e as Error)?.message || e}`) }
     finally { setBusy(null) }
   }
 
   const handleDownload = async () => {
-    if (!host) return; setBusy('download'); setMsg('')
-    if (!downloadRepo || !downloadFile) { setMsg('请填 repo 与 filename'); setBusy(null); return }
+    if (!downloadRepo || !downloadFile) { setMsg('请填 repo 与 filename'); return }
+    setBusy('download'); setMsg('')
     try {
-      const r = await host.downloadModel({ repo: downloadRepo, filename: downloadFile })
-      setMsg(r.message); await refresh()
+      const r = await rpc<{ ok: boolean; message: string }>('/downloadModel', { repo: downloadRepo, filename: downloadFile })
+      setMsg(r.result?.message || r.error || 'unknown')
+      await refresh()
     } catch (e) { setMsg(`下载失败: ${(e as Error)?.message || e}`) }
     finally { setBusy(null) }
   }
 
   const handleRebuild = async () => {
-    if (!host) return; setBusy('rebuild'); setMsg(t('rebuilding'))
+    setBusy('rebuild'); setMsg(t('rebuilding'))
     try {
-      const r = await host.rebuildVectors(); setMsg(r.message)
+      const r = await rpc<{ ok: boolean; message: string }>('/rebuildVectors')
+      setMsg(r.result?.message || r.error || 'unknown')
     } catch (e) { setMsg(`重建失败: ${(e as Error)?.message || e}`) }
     finally { setBusy(null) }
   }
 
-  if (!host) {
-    return <div className="ikarosMemSettings__section"><p className="ikarosMemSettings__noApi">{t('noApi')}</p></div>
+  if (apiOk === false) {
+    return <div className="ikarosMemSettings__section"><p className="ikarosMemSettings__noApi">{t('noApi')} (host-bridge :19001 unreachable)</p></div>
   }
 
   return (
@@ -283,7 +330,7 @@ function MemorySettingsCard(props: { api: unknown; t: (k: string) => string }) {
                 </div>
               </div>
               {!m.isActive && (
-                <button className="ikarosMemSettings__btn ikarosMemSettings__btn--secondary" onClick={() => handleSwitch(m)} disabled={busy !== null}>
+                <button className="ikarosMemSettings__btn ikarosMemSettings__btn--secondary" onClick={handleSwitch(m.filename)} disabled={busy !== null}>
                   {t('switch')}
                 </button>
               )}
@@ -335,16 +382,16 @@ function apply(ctx: any) {
   const t = ctx.locale.bind(NS)
 
   // settings.section 的 owner props 只有 { close } (dsh-client-ui-settings-general 渲染层决定),
-  // 不携带 api。host-bridge 通过 ctx.get('connection').api.ikarosMemory 获取 (仿 settings-models
-  // 调 api.llm.providers 模式)。
-  const connection = ctx.get('connection') as { api: { ikarosMemory?: HostApi } } | undefined
-  const api = connection?.api
+  // 不携带 api。host-bridge 通过独立 HTTP server (127.0.0.1:19001) 暴露 RPC,
+  // client 端 fetch 直调 (仿 ikaros-conversation-tree 模式, 不走 connection.api).
+  // settings-models 的 inject 返回 { controller, useSnapshot, api, schema, t } —
+  // 我们只需要 t, 因为 api 走 URL fetch 而不是 props 注入.
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'ikaros-memory-settings',
-    order: 50, // settings-models 在 10; 我们在它之后 (同 nav 内的独立 tab, 还是独立 entry 由 settings shell 决定)
+    order: 50, // settings-models 在 10; 我们在它之后
     label: () => t('title'),
-    inject: () => ({ api, t }),
+    inject: () => ({ t }),
   }, MemorySettingsCard))
 }
 

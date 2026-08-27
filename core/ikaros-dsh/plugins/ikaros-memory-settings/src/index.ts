@@ -27,9 +27,9 @@
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { Service } from '@deepseek-ai/cordis'
-import { z } from 'zod'
+import { existsSync, readdirSync, statSync, writeFileSync, readFileSync, mkdirSync, unlinkSync } from 'node:fs'
+import { createServer, IncomingMessage, ServerResponse } from 'node:http'
+import { AddressInfo } from 'node:net'
 
 export interface Config {
   /** HF 仓库镜像 (默认直连, 国内用户可换 hf-mirror.com) */
@@ -392,34 +392,103 @@ async function rebuildVectors(ctx: Context, cfg: Config): Promise<{ ok: boolean;
   }
 }
 
-/* ── apply: 暴露服务 ── */
-// dsh 0.1.1-rc.2 标准: class extends Service —— 静态 Config 定义 schema,
-// constructor 用 ctx.inject(...) 拉取依赖 + 注册 host-bridge 端点.
-// 客户端通过 ctx.get('connection').api.ikarosMemory 调到本类实例.
+/* ── apply: 暴露 HTTP API + port 文件 ── */
+// dsh 0.1.1-rc.2 host-bridge (dsh-host-apiproxy) 只硬编码 5 个 namespace
+// (llm/settings/events/host/credentials) — class extends Service + super(ctx, 'xxx')
+// 注册的 service 不会被自动序列化为 connection.api.xxx, 除非 patch 它的硬编码
+// 仿兄弟 commit d33ec60 (ikaros-conversation-tree) 模式: Node 侧独立
+// HTTP server 暴露 RPC 端点, client 侧 fetch 调用 (URL 通过 patch client.js 注入).
 
-export class IkarosMemorySettingsService extends Service {
-  // Service base class 注入 ctx (cascaded loader 加载时构造调 super(ctx, name))
-  // host 端方法通过 cordis service 反射暴露到 client.connection.api.ikarosMemory
-  // dsh-agent-default-model 的 class Service 走 `super(ctx, 'agentDefaultModel')` 同样模式.
-  static Config = z.object({})  // cordis 4 强制 schema 校验, 空 object schema 接受任何 config
+const IKAROS_MEMORY_API_PORT = parseInt(process.env.IKAROS_MEMORY_API_PORT || '19001', 10)
+const IKAROS_MEMORY_API_HOST = '127.0.0.1'
+const API_PORT_FILE = path.join(IKAROS_ROOT, 'tmp', 'ikaros-memory-api-port.json')
+const API_CLIENT_JS = path.join(
+  IKAROS_ROOT, 'core', 'ikaros-dsh', 'plugins', 'ikaros-memory-settings', 'dist', 'client.js'
+)
 
-  // service 命名空间 = patch.yml `id: ikarosMemory` (= client.connection.api.ikarosMemory)
-  // 不依赖 entry id (entry id 是 plugin 加载锚; service namespace 是 host-bridge 序列化键)
-  constructor(ctx: any, _config: Config = defaultConfig) {
-    super(ctx, 'ikarosMemory')
-  }
-
-  // 客户端 RPC 端点 (通过 host-bridge 序列化暴露)
-  listModels = () => listModels()
-  getStatus = () => getStatus()
-  startEmbedding = () => startEmbedding((this as any).ctx as unknown as Context)
-  stopEmbedding = () => stopEmbedding((this as any).ctx as unknown as Context)
-  switchModel = (filename: string) => switchModel((this as any).ctx as unknown as Context, filename)
-  downloadModel = (args: { repo: string; filename: string }) => downloadModel((this as any).ctx as unknown as Context, (this as any).ctx?.config as unknown as Config, args)
-  rebuildVectors = () => rebuildVectors((this as any).ctx as unknown as Context, (this as any).ctx?.config as unknown as Config)
+function patchClientJs(port: number): void {
+  try {
+    if (!existsSync(API_CLIENT_JS)) return
+    const src = readFileSync(API_CLIENT_JS, 'utf-8')
+    // 替换 client.tsx 里的 IkarosMemoryAPI 占位字符串
+    const patched = src.replace(
+      /const\s+IkarosMemoryAPI\s*=\s*[`'"][^`'"]*[`'"]/,
+      `const IkarosMemoryAPI = 'http://${IKAROS_MEMORY_API_HOST}:${String(port)}'`,
+    )
+    if (patched !== src) writeFileSync(API_CLIENT_JS, patched, 'utf-8')
+  } catch { /* patch 失败不影响 server, client fallback 用占位 URL */ }
 }
 
-// 客户端卡通过 'name: name' (d33ec60 同模式) 解析 — 这里 dsh-loader 拿 npm 包
-// 'name: name' 作 dsh-cordis-client-runner 解析锚; service 命名空间来自 patch.yml 的
-// `id: ikarosMemory`, 所以 host-bridge 暴露为 connection.api.ikarosMemory.
-export default IkarosMemorySettingsService
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  if (chunks.length === 0) return {}
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf-8')) } catch { return {} }
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+function apply(ctx: Context, config: Config = defaultConfig) {
+  // 1) 起 HTTP server (127.0.0.1:IKAROS_MEMORY_API_PORT) 暴露 RPC
+  const server = createServer(async (req, res) => {
+    try {
+      const pathname = new URL(req.url ?? '/', `http://${IKAROS_MEMORY_API_HOST}`).pathname
+      const method = req.method ?? 'GET'
+      // CORS for browser localhost dsh (defensive — same origin anyway)
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      if (method === 'OPTIONS') {
+        res.writeHead(204, { 'Access-Control-Allow-Methods': 'POST,GET,OPTIONS' })
+        res.end()
+        return
+      }
+      if (method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
+
+      const body = await readJsonBody(req)
+      const args = (body && typeof body === 'object' ? (body as Record<string, unknown>) : {}) as Record<string, unknown>
+
+      let result: unknown
+      switch (pathname) {
+        case '/listModels':    result = await listModels(); break
+        case '/getStatus':     result = await getStatus(); break
+        case '/startEmbedding': result = await startEmbedding(ctx); break
+        case '/stopEmbedding':  result = await stopEmbedding(ctx); break
+        case '/switchModel':    result = await switchModel(ctx, String(args.filename || '')); break
+        case '/downloadModel':  result = await downloadModel(ctx, config, { repo: String(args.repo || ''), filename: String(args.filename || '') }); break
+        case '/rebuildVectors': result = await rebuildVectors(ctx, config); break
+        default:               sendJson(res, 404, { error: 'not found' }); return
+      }
+      sendJson(res, 200, { ok: true, result })
+    } catch (e: unknown) {
+      sendJson(res, 500, { ok: false, error: String((e as Error)?.message || e) })
+    }
+  })
+
+  server.listen(IKAROS_MEMORY_API_PORT, IKAROS_MEMORY_API_HOST, () => {
+    const addr = server.address() as AddressInfo | null
+    const port = addr?.port ?? IKAROS_MEMORY_API_PORT
+    // 写 port 文件 (跟 ct-port.json 同样模式)
+    try {
+      if (!existsSync(path.dirname(API_PORT_FILE))) mkdirSync(path.dirname(API_PORT_FILE), { recursive: true })
+      writeFileSync(API_PORT_FILE, JSON.stringify({ port, host: IKAROS_MEMORY_API_HOST, pid: process.pid, startedAt: Date.now() }), 'utf-8')
+    } catch { /* 不影响主流程 */ }
+    // patch 客户端 dist 里的 IkarosMemoryAPI URL
+    patchClientJs(port)
+    // eslint-disable-next-line no-console
+    console.log(`[ikaros-memory-settings] host-bridge HTTP :${String(port)} ready (pid ${String(process.pid)})`)
+  })
+
+  // 2) 资源清理: 卸载插件时关 server, 删 port 文件
+  ctx.effect(() => () => {
+    try { server.close() } catch { /* noop */ }
+    try { if (existsSync(API_PORT_FILE)) unlinkSync(API_PORT_FILE) } catch { /* noop */ }
+  }, 'ikaros-memory-settings: HTTP server cleanup')
+}
+
+// 客户端卡通过 'name: name' (d33ec60 同模式) 解析 — dsh-loader 拿 npm 包作
+// dsh-cordis-client-runner 解析锚; Node 侧不通过 connection.api 暴露服务,
+// 而是独立 HTTP server 暴露 RPC (仿 ikaros-conversation-tree 模式).
+export default apply
+export { apply }

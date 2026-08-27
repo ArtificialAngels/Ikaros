@@ -63,15 +63,18 @@
         probeTimeoutMs: 3000
 
     # ── 1d) ikaros-memory-settings 记忆控制面板 (2026-08-27 新增) ─────────
-    # dsh 设置页 'settings.section' slot 注册 React 卡.
-    # 仿造 @deepseek-ai/dsh-client-ui-settings-models 的 settings.section 模式.
-    # Node 侧: class extends Service, 客户端通过 connection.api.ikarosMemory 调 RPC.
-    # Client 侧 React 卡: 端口状态 / 启停 llama / 模型切换 / HF 下载 / Chroma 重嵌.
+    # dsh 设置页 'settings.section' slot 注册 React 卡 (id=ikarosMemory, order=50).
+    # 仿 @deepseek-ai/dsh-client-ui-settings-models 的 settings.section 模式.
+    # Node 侧 apply() 起独立 HTTP server (127.0.0.1:19001) 暴露 7 个 RPC
+    # (listModels/getStatus/startEmbedding/stopEmbedding/switchModel/
+    # downloadModel/rebuildVectors). Client 端 fetch 调 (URL Node 侧启动时
+    # patch 进 dist/client.js, 仿 ikaros-conversation-tree 模式).
+    # 不走 dsh connection.api.ikarosMemory —— dsh 0.1.1-rc.2 host-bridge
+    # 只硬编码 5 个 namespace, 自定义 service 不会自动序列化.
     # 构建: cd core/ikaros-dsh/plugins/ikaros-memory-settings && node scripts/build.mjs
     # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory-settings"
     - id: ikarosMemory
       name: '@ikaros/dsh-ikaros-memory-settings'
-      config: {}
 
     # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
