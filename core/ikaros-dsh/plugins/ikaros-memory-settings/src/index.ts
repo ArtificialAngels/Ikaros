@@ -401,7 +401,13 @@ export class IkarosMemorySettingsService extends Service {
   // Service base class 注入 ctx (cascaded loader 加载时构造调 super(ctx, name))
   // host 端方法通过 cordis service 反射暴露到 client.connection.api.ikarosMemory
   // dsh-agent-default-model 的 class Service 走 `super(ctx, 'agentDefaultModel')` 同样模式.
-  static Config = z.object({})  // cordis 4 强制 Config schema 校验 (resolveConfig: runtime.Config["~standard"].validate), 空 object schema 接受任何 config
+  static Config = z.object({})  // cordis 4 强制 schema 校验, 空 object schema 接受任何 config
+
+  // service 命名空间 = patch.yml `id: ikarosMemory` (= client.connection.api.ikarosMemory)
+  // 不依赖 entry id (entry id 是 plugin 加载锚; service namespace 是 host-bridge 序列化键)
+  constructor(ctx: any, _config: Config = defaultConfig) {
+    super(ctx, 'ikarosMemory')
+  }
 
   // 客户端 RPC 端点 (通过 host-bridge 序列化暴露)
   listModels = () => listModels()
