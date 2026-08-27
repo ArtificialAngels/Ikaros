@@ -130,13 +130,14 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-function MemorySettingsCard(props: { injected: { api: unknown; hooks: { status: Status | null; models: ModelEntry[] | null }; t: (k: string) => string } }) {
-  const api = props.injected.api as { ikarosMemory?: HostApi } | null
-  const t = props.injected.t
+function MemorySettingsCard(props: { api: unknown; t: (k: string) => string }) {
+  const api = props.api as { ikarosMemory?: HostApi } | null
+  const t = props.t
   const host = api?.ikarosMemory
 
-  const [status, setStatus] = useState<Status | null>(props.injected.hooks.status)
-  const [models, setModels] = useState<ModelEntry[] | null>(props.injected.hooks.models)
+  // 没 host-bridge (e.g. host 端 class Service 还没 mount 时) — 用本地兜底空数据
+  const [status, setStatus] = useState<Status | null>(null)
+  const [models, setModels] = useState<ModelEntry[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<string>('')
   const [downloadRepo, setDownloadRepo] = useState<string>('BAAI/bge-m3')
@@ -333,15 +334,17 @@ function apply(ctx: any) {
 
   const t = ctx.locale.bind(NS)
 
-  // host-bridge: client 侧拿不到 ctx.get('ikaros-memory-settings:host') (那是 host-side),
-  // 但我们可以通过 ctx.get('connection').api.ikarosMemory 拿到. 仿照 settings-models 的
-  // inject: { api: connection.api, ... } 模式.
+  // settings.section 的 owner props 只有 { close } (dsh-client-ui-settings-general 渲染层决定),
+  // 不携带 api。host-bridge 通过 ctx.get('connection').api.ikarosMemory 获取 (仿 settings-models
+  // 调 api.llm.providers 模式)。
+  const connection = ctx.get('connection') as { api: { ikarosMemory?: HostApi } } | undefined
+  const api = connection?.api
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'ikaros-memory-settings',
-    order: 50, // settings-models 在 10; 我们在它之后 (同 tab 但独立卡片, 实际是同一个 'memory' nav)
+    order: 50, // settings-models 在 10; 我们在它之后 (同 nav 内的独立 tab, 还是独立 entry 由 settings shell 决定)
     label: () => t('title'),
-    inject: ({ api }: { api: { ikarosMemory?: HostApi } }) => ({ api, t }),
+    inject: () => ({ api, t }),
   }, MemorySettingsCard))
 }
 
