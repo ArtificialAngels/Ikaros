@@ -10,15 +10,15 @@ const FAVICON_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYA
 
 /* ── 模块级共享状态 ── */
 let _pluginCtx: any = null
-let _ctUrl = 'http://127.0.0.1:48920/'  // fallback，Node 侧启动时 patch 为实际端口
+let IkarosURL = 'http://127.0.0.1:48920/'  // fallback，Node 侧启动时 patch 为实际端口
 
-// 等待 _ctUrl 可达（探测 GET /，≤timeoutMs）。返回可达 URL，失败 null
+// 等待 IkarosURL 可达（探测 GET /，≤timeoutMs）。返回可达 URL，失败 null
 async function waitCtReady(timeoutMs = 10000): Promise<string | null> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      await fetch(_ctUrl, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(1500) })
-      return _ctUrl
+      await fetch(IkarosURL, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(1500) })
+      return IkarosURL
     } catch {}
     await new Promise((r) => setTimeout(r, 300))
   }
@@ -39,7 +39,7 @@ const store = {
     if (store.panelOpen) { store.panelOpen = false; store.notify(); return }
     // 打开前先等 CT 可达（避免 iframe 加载白屏）
     const ready = await waitCtReady(8000)
-    if (!ready) console.warn('[ikaros-ct] CT not reachable at', _ctUrl, '- opening panel anyway')
+    if (!ready) console.warn('[ikaros-ct] CT not reachable at', IkarosURL, '- opening panel anyway')
     store.panelOpen = true
     store.notify()
   },
@@ -82,7 +82,7 @@ function TreeView() {
     >
       <iframe
         style={{ border: 'none', width: '100%', height: '100%' }}
-        src={_ctUrl}
+        src={IkarosURL}
         title="Ikaros 对话树"
       />
     </div>
@@ -262,7 +262,6 @@ function SidebarButton({ wide }: { wide?: boolean }) {
         type="button"
         onClick={onClick}
         onDoubleClick={onDoubleClick}
-        title="单击切换对话树 | 双击弹出关闭确认"
         style={{
           cursor: 'pointer', border: '1px solid var(--dsw-alias-border-l2, #30363d)',
           background: 'var(--dsw-alias-button-elevated-fill, #21262d)',
@@ -318,7 +317,6 @@ function SidebarButton({ wide }: { wide?: boolean }) {
         className="ct-sidebar-btn"
         onClick={onClick}
         onDoubleClick={onDoubleClick}
-        title="单击切换对话树 | 双击弹出关闭确认"
       >
         <img
           src={FAVICON_DATA}
