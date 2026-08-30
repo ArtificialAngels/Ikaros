@@ -70,6 +70,40 @@ def _noop_semantic(query, **kw):
     return []
 
 
+def _never_called(query, **kw):
+    """语义路探针: 被调用即说明 scope 契约被破坏。"""
+    _never_called.hits.append(query)
+    return []
+_never_called.hits = []
+
+
+# ── U2b: lexical 必须是"仅词法" (2026-08-30 契约回归) ──────────────────
+def test_u2b_lexical_does_not_leak_semantic(monkeypatch):
+    """scope="lexical" 命中后不得再跑语义/图路 —— docstring 承诺"仅 FTS5"。
+
+    修复前: lexical 分支拿到结果后没有 return, 控制流掉进 auto/semantic 块,
+    实测会把 semantic 结果并进来 (调用方选 lexical 就是为了**不受 embedding
+    服务状态影响**的可复现词法结果, 混入语义会破坏这个前提)。
+    """
+    fake_store = type("S", (), {"search": staticmethod(
+        lambda q, top_k=5, **kw: [FakeMem("lx1", "词法命中记忆")])})
+    monkeypatch.setattr(memory_v5, "store", fake_store)
+    # 语义路装探针 (而非空函数): 只要被调用就说明契约破了
+    _never_called.hits.clear()
+    monkeypatch.setattr(mr, "retrieve", _never_called)
+    monkeypatch.setattr("memory_v5.search.entity_graph_search", _noop_graph)
+    monkeypatch.setattr("memory_v5.project_edges.project_graph_search",
+                        lambda q, top_k=5, **kw: [])
+
+    out = mr.unified_retrieve("词", scope="lexical")
+    assert _never_called.hits == [], (
+        f"lexical 命中后仍调用了语义路 (查询: {_never_called.hits}) —— "
+        f"scope='lexical' 应仅走 FTS5")
+    assert [r["id"] for r in out] == ["lx1"]
+    assert all(r["source"] == "lexical" for r in out), (
+        f"结果里混入了非词法来源: {[r['source'] for r in out]}")
+
+
 # ── U1: 基本守卫 ──
 def test_u1_guard_and_bad_scope(monkeypatch):
     assert mr.unified_retrieve("   ") == []

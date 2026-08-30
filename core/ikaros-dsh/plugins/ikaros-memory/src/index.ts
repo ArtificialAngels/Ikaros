@@ -1,15 +1,22 @@
 // ikaros-memory —— memory_v5 自动记忆插件（借鉴 dsh-auto-memory 的工程层设计）
 //
-// 分层：memory_v5 (Python, SQLite+chroma 存储/检索) 保持 MCP server 形态（48 个
-// v5_* 工具给模型主动调用、被 dsh + pi 复用）；本插件 = harness 进程内的「工程层」,
+// 分层：memory_v5 (Python, SQLite+chroma 存储/检索) 保持 MCP server 形态（v5_*
+// 工具给模型主动调用、被 dsh 复用）；本插件 = harness 进程内的「工程层」,
 // 补齐 MCP 形态做不了的「主动」能力：
 //   写回（自动沉淀）: agent/turn-stopping -> 取本轮真实对话 -> 提炼 -> 落盘
 //   召回（自动注入）: agent/pre-step -> should_recall 门控 -> 检索 -> 记忆快照注入
 //   压缩沉淀（新增 2026-08-24）: session/event -> compaction/summary 捕获 -> 落盘
 //     (dsh 压缩会话已花 API 生成 checkpoint, 复用成本, 「压缩即沉淀」; 零额外 LLM)
 //
+// 标准记忆循环（新增 2026-08-30, 见 memory_v5/loop.py + docs/v5-mcp-consolidation.md）:
+//   原本散在本文件三处的记忆动作收敛成「一个 phase 一次调用」:
+//     agent/pre-step      -> v5_call loop(phase=pre)          身份 + 召回 + 项目经验
+//     agent/turn-stopping -> v5_call loop(phase=post)         精力/关系推进 + 反重复语料
+//     6h 定时器           -> v5_call loop(phase=maintenance)  反思管线
+//   loopEnabled=false 可整体退回旧路径（search / tick 直调）。
+//
 // 与 cordis.patch.yml 里的 memory-ikaros-v5（mcp-client）互补：
-//   mcp-client 暴露 48 个 v5_* 工具给模型「主动」调用；
+//   mcp-client 暴露 v5_* 工具给模型「主动」调用；
 //   本插件做「自动」注入/写回（对应 hermes 的 prefetch / sync_turn）。
 //
 // 前缀缓存友好注入（dsh-auto-memory 的核心工程思想）:
@@ -74,6 +81,13 @@ export interface Config {
   maintenanceTickEnabled: boolean
   /** 维护触发间隔（毫秒）：默认 6h 对齐 retention/cleanup/promote 的 6h 周期 */
   maintenanceTickMs: number
+  /**
+   * 是否用标准记忆循环 (memory_v5/loop.py) 驱动每轮的 pre / post / maintenance。
+   * false = 退回 2026-08-30 之前的旧路径（pre-step 直调 search、定时器直调 tick）。
+   */
+  loopEnabled: boolean
+  /** loop pre 阶段召回项目记忆时用的项目名 */
+  loopProject: string
 }
 
 export const defaultConfig: Config = {
@@ -92,6 +106,8 @@ export const defaultConfig: Config = {
   compactionImportance: 0.6,
   maintenanceTickEnabled: true,
   maintenanceTickMs: 6 * 3600 * 1000,
+  loopEnabled: true,
+  loopProject: 'ikaros',
 }
 
 // ── 常量 ───────────────────────────────────────────────────────────────
@@ -212,11 +228,22 @@ function extractTurnPair(messages: unknown[]): { user: string; assistant: string
 // subprocess Service 确认: {stdin:'pipe'} → handle.stdin (Writable 写);
 // {stdout:'pipe'} → handle.stdout (Readable, on('data') 实时读)。
 // 热调用 ~30ms (实测), 比一次性快 ~50x。进程崩溃自动重启。
+//
+// op 全集（v5_call.py 的 _HANDLERS）:
+//   search / store / loop = 现役; tick = 已 deprecated (被 loop(phase=maintenance)
+//   取代, 保留仅为兼容未重建的旧插件 dist)。
+type V5Op = 'search' | 'store' | 'tick' | 'loop'
+
 interface V5Result {
   ok: boolean
   error?: string
   items?: Array<{ id?: number; content?: string; score?: number; type?: string }>
   id?: number
+  /** loop op 返回：{phase, ran, skipped, errors, results{step:payload}, elapsed_ms} */
+  results?: Record<string, unknown>
+  ran?: string[]
+  skipped?: string[]
+  elapsed_ms?: number
 }
 
 interface V5Daemon {
@@ -287,7 +314,7 @@ function ensureV5Daemon(ctx: Context): V5Daemon | null {
   }
 }
 
-function callV5(ctx: Context, op: 'search' | 'store' | 'tick', args: Record<string, unknown>): Promise<V5Result> {
+function callV5(ctx: Context, op: V5Op, args: Record<string, unknown>): Promise<V5Result> {
   return new Promise((resolve) => {
     const d = ensureV5Daemon(ctx)
     if (!d) {
@@ -330,7 +357,7 @@ async function drainV5Daemon(d: V5Daemon): Promise<void> {
 }
 
 /** 兜底: 一次性进程调用 (collect 模式, 无 daemon 时用) */
-function callV5Once(ctx: Context, op: 'search' | 'store' | 'tick', args: Record<string, unknown>): Promise<V5Result> {
+function callV5Once(ctx: Context, op: V5Op, args: Record<string, unknown>): Promise<V5Result> {
   return new Promise((resolve) => {
     const sub = ctx.get('subprocess')
     if (sub === undefined) return resolve({ ok: false, error: 'subprocess unavailable' })
@@ -399,6 +426,39 @@ function renderMemorySnapshot(items: V5Result['items'] = [], budget = 1200): str
     budgetLeft -= c.length
   }
   return lines.join('\n')
+}
+
+/**
+ * 渲染标准记忆循环 pre 阶段的产出去注入 system prompt。
+ *
+ * loop(phase=pre) 的 results 形状（见 memory_v5/loop.py）:
+ *   { recall: {context, hits, budget_tokens, ...}, project: {count, items:[{kind,content}]},
+ *     identity: {...} }
+ * identity 是给模型「我是谁」的姿态锚，不进快照（静态纪律段已覆盖，且它每轮内容相同 ——
+ * 变化会击穿前缀缓存）。这里只取会随 query 变化的 recall / project 两段做动态快照。
+ *
+ * 无命中时返回 ''（不注册 context）—— 空快照注入会白占 context 窗口并击穿缓存。
+ */
+function renderLoopPreSnapshot(results: unknown, budget = 1200): string {
+  const r = (results ?? {}) as {
+    recall?: { context?: unknown }
+    project?: { count?: number; items?: Array<{ kind?: unknown; content?: unknown }> }
+  }
+  const parts: string[] = []
+  // v5_recall 无命中时的占位串, 别把"(无相关记忆)"这类噪声注入进去
+  const ctxText = typeof r.recall?.context === 'string' ? r.recall.context.trim() : ''
+  if (ctxText && ctxText !== '(无相关记忆)') parts.push(`[Ikaros 相关记忆]\n${ctxText}`)
+  const items = Array.isArray(r.project?.items) ? (r.project?.items ?? []) : []
+  if (items.length) {
+    const lines = items
+      .map((it) => `- [${String(it.kind ?? '?')}] ${String(it.content ?? '').slice(0, 160)}`)
+      .filter((l) => l.length > 6)
+    if (lines.length) {
+      parts.push(`[项目经验 · ${String(r.project?.count ?? lines.length)} 条]\n${lines.join('\n')}`)
+    }
+  }
+  if (!parts.length) return ''
+  return parts.join('\n\n').slice(0, budget)
 }
 
 /** 静态纪律（不随状态变化）→ system prompt 的字节稳定锚。 */
@@ -593,6 +653,31 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
     })()
   })
 
+  // ── 1b) 标准记忆循环 · post 阶段（2026-08-30 新增）─────────────────
+  // 与上面的自动沉淀 (1) **分开注册**, 因为两者的触发条件不同:
+  //   写回有 5 分钟冷却 + 最短轮长闸 (防连续短轮反复写库);
+  //   post 阶段的精力/关系推进 + 反重复语料记录是**每轮**的状态推进,
+  //   被写回的防抖连带跳过就会出现"聊了 50 轮但关系一次都没推进"的欠账。
+  // 失败静默, 不干扰 turn 释放。
+  ctx.on('agent/turn-stopping', ({ agent, signal }) => {
+    if (!config.loopEnabled || signal.aborted) return
+    void (async () => {
+      try {
+        const session = (agent as { session?: { deriveMessages(): unknown[] } } | null)?.session
+        if (!session || typeof session.deriveMessages !== 'function') return
+        const pair = extractTurnPair(session.deriveMessages())
+        if (!pair.assistant) return
+        await callV5(ctx, 'loop', {
+          phase: 'post',
+          query: pair.user ?? '',
+          response: pair.assistant,
+          session_id: 'dsh',
+          character: 'ikaros',
+        })
+      } catch { /* 循环失败静默, 不干扰会话 */ }
+    })()
+  })
+
   // ── 2) 召回（waterfall, 必须 next()）───────────────────────────────
   ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
     const decision = await next()
@@ -610,11 +695,28 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
     if (turnKey === _lastRecallTurnKey) return decision
     _lastRecallTurnKey = turnKey
 
-    // 检索失败静默降级, 不阻断 step（召回是增强, 不是硬依赖）。
-    const memory = await callV5(ctx, 'search', { query, top_k: config.topK }).catch(() => null)
-    if (memory?.ok && memory.items?.length) {
-      const snapshot = renderMemorySnapshot(memory.items, config.injectBudgetChars)
-      if (!snapshot) return decision
+    // 2026-08-30: 默认走标准记忆循环的 pre 阶段 —— 一次调用跑完
+    // 身份锚定 + 预算感知召回 + 项目经验召回 (memory_v5/loop.py)。
+    // 相比旧 callV5('search'): 召回带 token 预算与跨轮去重 (recall_ledger),
+    // 且顺带带回项目轨的 decision/pitfall/convention。
+    // 检索/循环失败静默降级, 不阻断 step（召回是增强, 不是硬依赖）。
+    let snapshot = ''
+    if (config.loopEnabled) {
+      const loop = await callV5(ctx, 'loop', {
+        phase: 'pre',
+        query,
+        session_id: 'dsh',
+        project: config.loopProject,
+        include_dsh_only: true,
+      }).catch(() => null)
+      if (loop?.ok) snapshot = renderLoopPreSnapshot(loop.results, config.injectBudgetChars)
+    } else {
+      const memory = await callV5(ctx, 'search', { query, top_k: config.topK }).catch(() => null)
+      if (memory?.ok && memory.items?.length) {
+        snapshot = renderMemorySnapshot(memory.items, config.injectBudgetChars)
+      }
+    }
+    if (snapshot) {
       // 注入走 systemPrompt.context() —— user-role 快照, 前缀缓存友好
       try {
         const sp = ctx.get('systemPrompt')
@@ -665,7 +767,7 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
         tags: ['source:dsh', 'v5_kind:dsh-compaction'],
         importance: config.compactionImportance,
       }).catch(() => null)
-} catch { /* 捕获失败静默: 记忆是增强, 不硬依赖 */ }
+    } catch { /* 捕获失败静默: 记忆是增强, 不硬依赖 */ }
   })
 
   // ── 4) 记忆维护定时器（2026-08-24 新增）────────────────────────────
@@ -679,7 +781,14 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
       if (timer && typeof timer.interval === 'function') {
         const handle = timer.interval(() => {
           // 静默: 维护失败不干扰会话
-          void callV5(ctx, 'tick', {}).catch(() => null)
+          // 2026-08-30: 统一走标准记忆循环的 maintenance 阶段（tick op 已 deprecated）。
+          // 维护步自身带 6h 冷却（loop.py maintenance.reflect interval_sec=21600）,
+          // 定时器重复触发或重启后连跑都不会空转。
+          if (config.loopEnabled) {
+            void callV5(ctx, 'loop', { phase: 'maintenance' }).catch(() => null)
+          } else {
+            void callV5(ctx, 'tick', {}).catch(() => null)
+          }
         }, config.maintenanceTickMs)
         const dispose = typeof handle === 'function' ? handle : () => { try { handle.dispose?.() } catch { /* noop */ } }
         ctx.effect(() => () => { try { dispose() } catch { /* noop */ } }, 'ikaros-memory: maintenance tick')

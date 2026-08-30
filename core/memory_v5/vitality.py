@@ -65,12 +65,30 @@ class Vitality:
         )
 
     def tick(self, *, now: float | None = None,
-             conversation: bool = False) -> "Vitality":
+             conversation: bool = False,
+             conversation_minutes: float | None = None) -> "Vitality":
         """更新精力值。
 
         Args:
             now: 当前时间戳
-            conversation: True 表示这是一次对话 tick (消耗更大)
+            conversation: True = 这是一次对话 tick, 额外收一次性对话成本
+            conversation_minutes: 这段**经过时间**里有几分钟是在对话中的。
+                未传时按 0 计 —— 一次对话 tick 的自身耗时相对 tick 间隔可忽略,
+                所以默认把整段经过时间都算作空闲 (计恢复)。
+                若确实有一段持续对话要统一结算 (如长会话结束时补一次 tick),
+                显式传分钟数, 那段就不计恢复。
+
+        ⚠️ 2026-08-30 语义修正 (原先是 bug):
+            conversation 一个标志曾同时管两件**正交**的事:
+              (a) 收 _CONVERSATION_COST 一次性成本 + 计数      <- 合理, 保留
+              (b) 抑制**整段经过时间**的空闲恢复                <- bug, 已拆出
+            (b) 的后果: 任何每轮调 tick(conversation=True) 的路径都只减不增,
+            精力单调抽干到 0, persona 永远显示「精疲力竭」。
+            —— 受害的不只是 Loop: vitality_prompt() 走 cloud_chat 主链路,
+               同样是这条路径 (它 tick(conversation=True) 后 save)。
+
+            恢复与否应取决于「这段经过时间里有多少是真空闲」, 而不是
+            「本次调用是不是对话 tick」, 故拆出 conversation_minutes。
         """
         if now is None:
             now = time.time()
@@ -88,12 +106,14 @@ class Vitality:
         # 1) 基础消耗 (即使空闲也缓慢耗)
         decay = _BASE_DECAY_PER_MIN * dt_min
 
-        # 2) 对话消耗
+        # 2) 对话消耗 (一次性成本, 与时间无关) + 空闲/对话时长记账
         if conversation:
             decay += _CONVERSATION_COST
             self.conversation_count += 1
-        else:
-            self.idle_minutes += dt_min
+        conv_min = 0.0 if conversation_minutes is None else max(0.0, float(conversation_minutes))
+        conv_min = min(conv_min, dt_min)          # 不能超过实际经过时间
+        idle_min = dt_min - conv_min
+        self.idle_minutes += idle_min
 
         # 3) 系统压力消耗
         try:
@@ -114,12 +134,10 @@ class Vitality:
             decay += _CIRCADIAN_DIP_STRENGTH * (dt_min / 60.0)  # 按小时摊
 
         # 5) 恢复: logistic 增长 (S-curve 恢复, 不是线性)
-        # 空闲期恢复, 但接近满值时变慢
-        if not conversation:
-            recovery = _RECOVERY_RATE * dt_min * (1.0 - self.vitality)
-            self.vitality = self.vitality - decay + recovery
-        else:
-            self.vitality = self.vitality - decay
+        #    只按**真空闲**的那部分时间恢复 (conversation_minutes 占掉的不算),
+        #    接近满值时变慢。
+        recovery = _RECOVERY_RATE * idle_min * (1.0 - self.vitality)
+        self.vitality = self.vitality - decay + recovery
 
         self.last_tick = now
         return self._clamped()

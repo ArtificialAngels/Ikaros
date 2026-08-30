@@ -129,14 +129,31 @@ class V5MemoryAPI:
             if time_range:
                 clauses.append("created >= ? AND created <= ?")
                 params.extend(time_range)
+            # archived=1 是 V5 的软删语义（retention/dedup 产物），lifecycle、
+            # freshness、project_edges、reflect/* 每条读路径都过滤它，唯独本
+            # 结构化检索路径漏了 —— 导致 v5_project_retrieve / 按 type 筛选
+            # 会把已归档记忆当活记忆返回。2026-08-30 补上。
+            # 列不存在（老迁移未跑）时的兼容见下方 except → 退回不带该条件。
+            clauses.append("archived = 0")
             where = " AND ".join(clauses) if clauses else "1=1"
             try:
                 with _store.conn() as c:
-                    rows = c.execute(
-                        f"SELECT * FROM memory WHERE {where} "
-                        f"ORDER BY weight DESC, id DESC LIMIT ?",
-                        params + [int(top_k)],
-                    ).fetchall()
+                    try:
+                        rows = c.execute(
+                            f"SELECT * FROM memory WHERE {where} "
+                            f"ORDER BY weight DESC, id DESC LIMIT ?",
+                            params + [int(top_k)],
+                        ).fetchall()
+                    except Exception:  # noqa: BLE001
+                        # 极老库没有 archived 列（store 迁移未跑）→ 去掉该条件重试，
+                        # 保证检索不因一次迁移缺失而整体失灵（fail-open）。
+                        where2 = " AND ".join(
+                            cl for cl in clauses if cl != "archived = 0") or "1=1"
+                        rows = c.execute(
+                            f"SELECT * FROM memory WHERE {where2} "
+                            f"ORDER BY weight DESC, id DESC LIMIT ?",
+                            params + [int(top_k)],
+                        ).fetchall()
                 results = [_row_to_dict(r) for r in rows]
                 # 与 FTS5 fallback 一致: 外部执行器 (pi/herdr) 调用时 include_dsh_only=False
                 # 必须过滤掉 [dsh-only] 平台纪律/密钥内容 (GH audit P0-4).

@@ -33,12 +33,19 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - 注册表 IKAROS_* 已清零（勿再 setx IKAROS_*，改 .env / ikaros-env.*）
 - 权威源链：`bin/ikaros-env.sh|bat|ps1`（单一权威源, 自锚定 IKAROS_ROOT）; 根 `.env` 只放密钥；`model_config.json` 决定本地 LLM 模型
 - Renamed: the V5 soul-core dir is now `core/memory_v5/` (the old `v5` subdir under `core` is gone). Python package `v5` → **`memory_v5`** (`import memory_v5`); `sys.path` must include `E:/Ikaros/core`.
-- Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. The 48 MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix).
+- Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix). Count is now mode-dependent: 58 in `legacy` / 17 in `slim` (2026-08-30, see `docs/v5-mcp-consolidation.md`).
 - **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；⚠️ `rules_retriever` 已于 2026-08-14 删除（孤儿, 无代码调用; 规则数据 `docs/agent-rules.yaml` 暂未消费）。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
 
 ## dsh 底座 overlay（2026-08-18，替代 hermes 插件外置）
-- **工作引擎底座 = dsh (DeepSeek Harness)**；Ikaros 定制经 overlay `core/ikaros-dsh/cordis.patch.yml` 注入（memory_v5 MCP stdio 48 个 `v5_*` 工具 + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
-- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（**已实现 2026-08-18**，**2026-08-24 增强 v0.1.2**：turn-stopping 自动沉淀写回 + pre-step 召回注入（每 turn 幂等，dispose/re-register 解决同名 context 重复注册 throw 问题）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要 API 成本，零额外 LLM 调用沉淀进 v5）+ **maintenance tick（2026-08-24）**：`ctx.interval` 周期驱动 `v5_call.py tick` → `reflect.scheduler.run_all`（补齐 watchdog 退役后生命周期调度器的触发空缺，默认 6h 对齐 retention/promote）+ systemPrompt 前缀缓存友好注入；npm 包 `@ikaros/dsh-ikaros-memory` 经 pnpm file: 链接装入 `~/.dsh/profiles/web`，patch 里以裸包名装配。重建/迁移步骤：`npm run build`（tsc→dist/，dist 被 gitignore）+ `cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory`（**pnpm file: 是复制非符号链接，必须 remove/add 才会带新 dist**）。⚠️ Entry.name **不支持** `!!js` 表达式（只有 config 字段走 interpolate），Windows 绝对路径 name 也不支持（走 bare module 解析报 e: scheme）——必须裸包名。
+- **工作引擎底座 = dsh (DeepSeek Harness)**；Ikaros 定制经 overlay `core/ikaros-dsh/cordis.patch.yml` 注入（memory_v5 MCP stdio `v5_*` 工具 + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
+- **MCP 工具双模（2026-08-30）**：`V5_MCP_TOOL_MODE=legacy`（默认，58 工具，全兼容）| `slim`（17 工具 = 9 热路径 + 8 门面）。清单真相源**唯一** = `core/memory_v5/tools/registry.py`，漏登记/幽灵登记**启动即 `RuntimeError`**（不再有第二份手抄表）。⚠️ `V5_MCP_TOOL_GROUPS` 必须含 `loop`，否则 slim 下只剩 16 个工具且无 Loop 入口。⚠️ **切 slim 前必须跑闸门**：`python core/memory_v5/tools/slim_check.py`（退出码 0 才能切；**必须以脚本方式跑，`-m` 起不来**）—— slim 下另外 41 个工具不再注册，persona / 插件 / AGENTS.md / SOUL.md 里的旧工具名会变成指向不存在的工具，而这类问题**测试永远抓不到**（测试直接 import Python 函数，不走 MCP 注册）。详见 `docs/v5-mcp-consolidation.md` §7.1。
+- **标准记忆循环（2026-08-30）**：`core/memory_v5/loop.py` 三阶段声明式引擎 —— `pre`（身份+召回+项目经验）/ `post`（精力+关系推进+反重复语料）/ `maintenance`（反思管线，6h 冷却）。ikaros-memory 插件 3 个 hook 各调一次 `v5_call loop`：`agent/pre-step`→pre、`agent/turn-stopping`→post、`ctx.interval 6h`→maintenance（原 `tick` op 已 deprecated）。4 个机器态旧工具（vitality_tick / relationship_tick / anti_repeat_record / reflect_run_op）已内化 —— 实测它们**从未被模型调用过**，状态只进不出。⚠️ post 阶段与自动沉淀**必须分开注册**（沉淀有 5min 冷却 + 最短轮长闸，挂一起会出现「聊 50 轮关系一次没推进」的欠账）。
+- **检索已过滤 archived（2026-08-30）**：`memory_retrieval._live_ids()` 在三路融合 `_add` **入口**拦掉 archived / 孤儿 id（chroma 1200 条向量里 753 条属于 archived 记忆 + 110 条孤儿，向量路原先完全不看 `archived`，归档机制形同虚设）。查库失败 → 返回 None = **fail-open 不过滤**。只拦 fts/vec/time（memory 表主键空间），graph(`eg_*`)/vault 的 id 不在 memory 表，动它会误杀。⚠️ chroma 里那 753+110 条向量**尚未物理清理**，待哥哥拍板。
+- **两个顺带根治的旧 bug（2026-08-30，见 `docs/v5-mcp-consolidation.md` §6）**：
+  ① **`vitality.tick()` 的 `conversation` 标志语义不对称** —— 它曾同时管「收一次性对话成本」（合理）和「抑制整段经过时间的空闲恢复」（bug），导致任何每轮 `tick(conversation=True)` 的路径**只减不增、精力单调抽干到 0**。受害面**不止 Loop**：`vitality_prompt()` 走 cloud_chat 主链路同样是这条路径。已拆出 `conversation_minutes` 参数，恢复改按真空闲分钟计算（连打 60 轮不再归零）。
+  ② **`unified_retrieve(scope="lexical")` 契约违背** —— lexical 分支拿到结果后不 return，会继续跑 semantic 再进 graph fallback，实际是三路叠加；同层 `tree`/`temporal` 都有 return，唯独它漏了。已补 return（已核实生产代码无 `scope="lexical"` 调用方，零风险）。
+  ③ **`v5_recall` 候选被冷却一空就交空纸条** —— `recall_ledger` 落盘持久化 + `turn` 永不清零 + 插件 `session_id` 硬编码 `'dsh'`（所有会话共用一本账），三者叠加导致同话题连问几轮时 top-k 候选整批冷却 → 装配 0 条 → 返回「(无相关记忆)」（而 `stats.retrieved` 明明是 14）。已加兜底：`fresh` 为空且 `results` 非空时放宽去重，stats 置 `dedup_relaxed: true`。**设计裁定：去重是优化，返回空上下文是功能性失败 —— 宁可重复，不可失忆。** 实测不同 query 的 cooled 仅 0~2 条，兜底极少触发。⚠️ 根治要改插件 `session_id` 为真实 dsh 会话 id，但需重启 dsh 才能验证（会中断 :3080 会话），暂缓。
+- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（**已实现 2026-08-18**，**2026-08-24 增强 v0.1.2**：turn-stopping 自动沉淀写回 + pre-step 召回注入（每 turn 幂等，dispose/re-register 解决同名 context 重复注册 throw 问题）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要 API 成本，零额外 LLM 调用沉淀进 v5）+ **maintenance tick（2026-08-24）**：`ctx.interval` 周期驱动 `v5_call.py tick` → `reflect.scheduler.run_all`（补齐 watchdog 退役后生命周期调度器的触发空缺，默认 6h 对齐 retention/promote）+ systemPrompt 前缀缓存友好注入；npm 包 `@ikaros/dsh-ikaros-memory` 经 pnpm file: 链接装入 `~/.dsh/profiles/web`，patch 里以裸包名装配。重建/迁移步骤：`npm run build`（tsc→dist/，dist 被 gitignore）+ `cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory`（**pnpm file: 是复制非符号链接，必须 remove/add 才会带新 dist**）。⚠️ **漏了重装这步全程无报错** —— 代码看着改了、测试从源码目录跑也通，但 dsh 加载的是 `~/.dsh/profiles/web/node_modules/` 里的旧副本，新功能像不存在一样（2026-08-30 实测：Loop 三阶段改完 6 天都没生效，冒烟测试还全绿，因为它跑的是源码目录）。**改完插件必跑 `python core/ikaros-dsh/tools/plugin_sync_check.py`**（按内容 sha256 比对源码与已装副本，exit 1 = 不同步，`--fix-cmd` 打印修复命令）。⚠️ 装完还需**重启 dsh** 才会加载新代码（`bin/restart-dsh-ikaros.ps1`，会中断 :3080 会话）。⚠️ Entry.name **不支持** `!!js` 表达式（只有 config 字段走 interpolate），Windows 绝对路径 name 也不支持（走 bare module 解析报 e: scheme）——必须裸包名。
 - 启动: `bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - 架构参考: `docs/ikaros-dsh-plugin-architecture.md`；退役历史: `docs/hermes-retirement-inventory.md`。
 
@@ -50,6 +57,12 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
 - ✅ hermes / N.E.K.O / 9100 控制面板均已退役（2026-08-18），勿再启动或恢复相关服务；历史见 `docs/hermes-retirement-inventory.md`。
 
 ## 2026-08-14 接手审计修复记录（记忆恢复资料）
+
+<!-- v5-history: 本节是**历史变更日志**。里面出现的 v5_* 工具名是事实陈述
+     （记录「过去修了什么」），不是给 agent 的运行期契约 —— 其中不少工具
+     已在 2026-08-30 的 MCP 合并里被门面吸收或内化进 Loop，slim 模式下不再注册。
+     切 slim 前跑 `python core/memory_v5/tools/slim_check.py`，它会跳过本节。
+     新增历史条目请保持在这对哨兵之间。 -->
 
 - **2026-08-24 记忆系统指标测试 + 生命周期停摆修复（重要）**：
   - **指标**：全量 pytest **333+61 passed**；检索基准（真实 bge-m3，:8587）**composite 84.8**（hit@1=0.8 / hit@3=0.9 / MRR=0.833；剩余 MISS「本地 LLM 用的是什么模型」因 :8080 已退役记忆归档，符合预期）；memory_api 1095 条（conversation 523/fact 291/lesson 53/decision 8/identity 1…）；v5_call search ✓、MCP server ✓、embedding :8587 ✓。
@@ -128,6 +141,8 @@ Removed (do not re-add): voice bridge (ports 7870 / 7871).
     - **配置**：`preprocess_config.yaml` + `_DEFAULTS` 同步加 `recall`（max_tokens/dedup_turns/top_k）+ `freshness`（refresh_ratio/min_pending）节（防漂移测试 `test_config_alignment.py` 通过）。
     - **反思调度器**：`make_default_scheduler` 注册 `extract_experiences` + `refresh_freshness` 两个新 op（lazy import 防循环依赖）。
     - **测试**：新增 31 项（test_recall_budget 9 / test_recall_ledger 9 / test_freshness 7 / test_extract_experiences 6）；全量 **364 passed**（:8587 离线 333 基准+31 新 / 在线 364 全绿）。顺手修了 `test_search_roundtrip` 历史偶发 flake（原用 live DB 无隔离 + 按 :8587 离线设计，:8587 在线时向量命中挤掉弱 FTS5 标记）→ 改 autouse fixture 切独立 temp DB + temp chroma dir，与 live 库/:8587 状态完全解耦，现在线上线下均 364 全绿。
+
+<!-- /v5-history -->
 
 ## 文件搜索优先级 (2026-08-03)
 - **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。

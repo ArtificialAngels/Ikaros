@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""MCP server — 把 V5 记忆引擎以 MCP 协议暴露给外部 agent (dsh / pi 等).
+"""MCP server — 把 V5 记忆引擎以 MCP 协议暴露给外部 agent (dsh 等).
 
-提供 49 个 v5_* 工具 (v5_memory_search/store/self_model/relationship 等),
-由 memory_v5.tools.* 注册; 经 stdio transport 与客户端通信。
-见 docs/scripts/core/memory_v5/v5/mcp_server.md
+两种注册模式 (V5_MCP_TOOL_MODE):
+    legacy  全量 58 个 v5_* 工具 (默认, 兼容外部契约)
+    slim    精简 17 个 —— 9 个热路径独立工具 + 8 个冷路径门面
+            (一个资源一个工具 + action 分发)
+
+工具清单 / 分组 / 层级的唯一真相源是 ``memory_v5/tools/registry.py``;
+本模块只做派生与注册, 不再维护第二份表。
+
+经 stdio transport 与客户端通信。见 docs/v5-mcp-consolidation.md
 """
 
 from __future__ import annotations
@@ -28,6 +34,30 @@ logger = logging.getLogger("ikaros.v5.mcp")
 
 # ── MCP Server ─────────────────────────────────────────────────
 from mcp.server.fastmcp import FastMCP
+
+# 精简模式下的工具说明 (legacy 模式追加在公共说明之后)
+_SLIM_INSTRUCTIONS = (
+    "\n"
+    "TOOL SURFACE (consolidated): 9 hot-path tools are standalone — "
+    "memory_store / memory_search / memory_get / memory_delete / memory_stats / "
+    "recall / project_note / project_retrieve / project_stats. "
+    "Everything else is a facade with an `action` parameter:\n"
+    "  v5_self(action=model|reflect|thought|curiosity|subconscious|anchor|discover)\n"
+    "  v5_state(action=emotion|emotion_update|emotion_label|care|care_check|"
+    "vitality|relationship|activity|compression)\n"
+    "  v5_content(action=narrative|dissonance|proactive)\n"
+    "  v5_skill(action=list|search|get|write|remove)\n"
+    "  v5_reflection(action=stats|read|synthesize|apply|promote)\n"
+    "  v5_directive(action=list|add|off|stats)\n"
+    "  v5_repeat(action=stats|check|penalty|clear)\n"
+    "  v5_loop(action=status|run, phase=pre|post|maintenance)\n"
+    "Passing an unknown action returns the valid list — no guessing needed.\n"
+    "\n"
+    "Maintenance actions (vitality/relationship tick, anti-repeat recording, "
+    "reflection pipeline) are driven automatically by the Standard Memory Loop "
+    "at pre / post / maintenance phases of each turn. Do NOT call them manually; "
+    "use v5_loop(action=status) to inspect their last-run times."
+)
 
 mcp = FastMCP(
     "Ikaros V5 Memory",
@@ -86,59 +116,52 @@ mcp = FastMCP(
         "behavior rule) with configurable TTL. directive_list returns active directives for a "
         "character. directive_deactivate disables a directive by ID. directive_stats returns "
         "total/active directive counts."
-    ),
+    )
+    # 精简模式追加门面说明 (在文件头读取 env, 见 _TOOL_MODE)
+    + (_SLIM_INSTRUCTIONS if os.environ.get("V5_MCP_TOOL_MODE", "").strip().lower() == "slim" else ""),
 )
 
 
 # Inline docs: docs/scripts/core/memory_v5/v5/mcp_server.md
 # 2026-08-24 P3-25: 工具清单单一来源 — 从 tools.__all__ 派生, 消除 import 块与
 # _NEW_V5_TOOLS 显式列表双份维护的漂移风险 (加工具漏一边 → 静默不注册或 NameError)。
+#
+# 2026-08-30: P3-25 只统一了「工具清单」一边, 分组表 _TOOL_GROUPS 仍是手写第二份,
+# 于是 2026-08-24 新增的 v5_recall 进了清单(50) 却不在分组表(49) →
+# tests/test_mcp_tool_groups.py 12 个测试全红。现在分组/层级也收进
+# memory_v5/tools/registry.py, 本模块全部派生: 漏登记 = 启动即 RuntimeError,
+# 不会再有「注册了但分组表没有」的静默漂移。
 from memory_v5 import tools as _tools_pkg  # noqa: E402
+from memory_v5.tools import registry as _registry  # noqa: E402
 
-# ── 工具分组元数据 (docs/hermes-tools-scoping.md Option 2) ─────────
-# 7 组 49 工具; emotion/narrative/proactive/activity 归入 self, 与 FastMCP
-# instructions 的分组语义一致. 未分组的新工具默认全组可见 (不参与过滤),
-# 避免 "新工具静默不可见" (见 scoping 文档风险表).
-_VALID_GROUPS = ("memory", "self", "care", "vitality", "relationship", "skill", "project")
+# ── 工具分组 / 层级: 全部由 registry 派生, 本模块零手写 ──────────────
+_VALID_GROUPS = _registry.VALID_GROUPS          # 8 组 (含 loop)
+_TOOL_GROUPS: dict[str, str] = _registry.TOOL_GROUPS
+_TOOL_TIERS: dict[str, str] = _registry.TOOL_TIERS
 
-_TOOL_GROUPS: dict[str, str] = {
-    # memory (22) — +1: v5_recall (F1+F2+F4 预算感知召回)
-    "v5_memory_store": "memory", "v5_memory_search": "memory",
-    "v5_memory_get": "memory", "v5_memory_delete": "memory",
-    "v5_memory_stats": "memory", "v5_dissonance_check": "memory",
-    "v5_context_compression_stats": "memory",
-    "v5_directive_add": "memory", "v5_directive_list": "memory",
-    "v5_directive_deactivate": "memory", "v5_directive_stats": "memory",
-    "v5_anti_repeat_record": "memory", "v5_anti_repeat_check": "memory",
-    "v5_anti_repeat_penalty": "memory", "v5_anti_repeat_clear": "memory",
-    "v5_anti_repeat_stats": "memory",
-    "v5_reflection_synthesize": "memory", "v5_reflection_read": "memory",
-    "v5_reflection_apply_evidence": "memory", "v5_reflection_promote": "memory",
-    "v5_reflection_stats": "memory",
-    "v5_recall": "memory",
-    # self (13)
-    "v5_analyze_emotion": "self", "v5_emotion_status": "self",
-    "v5_emotion_label": "self", "v5_self_model": "self",
-    "v5_self_reflect": "self", "v5_self_discover": "self",
-    "v5_latest_thought": "self", "v5_curiosity_check": "self",
-    "v5_subconscious": "self", "v5_context_refresh": "self",
-    "v5_reflect_run_op": "self",
-    "v5_narrative_generate": "self", "v5_proactive_check": "self",
-    "v5_activity_status": "self",
-    # care (2)
-    "v5_care_check": "care", "v5_care_status": "care",
-    # vitality (2)
-    "v5_vitality": "vitality", "v5_vitality_tick": "vitality",
-    # relationship (2)
-    "v5_relationship": "relationship", "v5_relationship_tick": "relationship",
-    # skill (5)
-    "v5_skill_write": "skill", "v5_skill_list": "skill",
-    "v5_skill_get": "skill", "v5_skill_search": "skill",
-    "v5_skill_remove": "skill",
-    # project (3)
-    "v5_project_note": "project", "v5_project_retrieve": "project",
-    "v5_project_stats": "project",
-}
+# ── 注册模式 ─────────────────────────────────────────────────────────
+# legacy: core + facade + legacy (全量 58, 兼容外部契约)
+# slim  : core + facade (17)
+_VALID_MODES = ("legacy", "slim")
+_DEFAULT_MODE = "legacy"
+
+
+def _parse_tool_mode(env_value: str | None) -> str:
+    """解析 V5_MCP_TOOL_MODE。未设置 / 空 / 非法 → legacy (fail-safe 全量)。
+
+    与分组过滤同款 fail-open 约定: 宁可多注册, 不可静默少注册。
+    """
+    mode = (env_value or "").strip().lower()
+    if mode in _VALID_MODES:
+        return mode
+    if mode:
+        logger.warning(
+            "V5_MCP_TOOL_MODE=%r 非法 (可选 %s); 回退 legacy 全量注册 (fail-open)",
+            env_value, list(_VALID_MODES))
+    return _DEFAULT_MODE
+
+
+_TOOL_MODE = _parse_tool_mode(os.environ.get("V5_MCP_TOOL_MODE"))
 
 
 def _parse_tool_groups(env_value: str | None) -> set[str] | None:
@@ -161,14 +184,16 @@ def _parse_tool_groups(env_value: str | None) -> set[str] | None:
     return set(names)
 
 
-def _register_tools(mcp_obj, env_value: str | None = None) -> None:
-    """按 V5_MCP_TOOL_GROUPS 过滤 _NEW_V5_TOOLS 并注册到 mcp_obj.
+def _register_tools(mcp_obj, env_value: str | None = None,
+                    mode: str = _DEFAULT_MODE) -> None:
+    """按 V5_MCP_TOOL_MODE 选工具集、按 V5_MCP_TOOL_GROUPS 过滤, 注册到 mcp_obj.
 
-    env_value=None/空/非法组 → 全量注册 (行为与旧循环一致).
+    env_value=None/空/非法组 → 该模式下全量注册 (行为与旧循环一致).
+    mode 非法 → 由 tools_for_mode 内部 fail-open 到全量.
     被过滤的工具跳过 add_tool, 记 debug 日志.
     """
     groups = _parse_tool_groups(env_value)
-    for _tool_fn in _NEW_V5_TOOLS:
+    for _tool_fn in _registry.tools_for_mode(mode):
         _name = getattr(_tool_fn, "__name__", str(_tool_fn))
         _group = _TOOL_GROUPS.get(_name)
         # 未分组的工具视为全组可见, 不参与过滤 (与文档约定一致)
@@ -182,11 +207,21 @@ def _register_tools(mcp_obj, env_value: str | None = None) -> None:
             logger.warning("failed to register tool %s: %s", _name, _e)
 
 
+# legacy 全量 (向后兼容: 旧代码 / 测试按 _NEW_V5_TOOLS 取全集)
 _NEW_V5_TOOLS = [
     getattr(_tools_pkg, _n) for _n in _tools_pkg.__all__ if _n != "__all__"
 ]
-# V5_MCP_TOOL_GROUPS=memory,self,... 过滤注册; 未设置/空/非法 → 全量 (fail-open)
-_register_tools(mcp, os.environ.get("V5_MCP_TOOL_GROUPS"))
+# slim 精简集 (core 热路径 + facade 门面)
+_SLIM_V5_TOOLS = [
+    getattr(_tools_pkg, _n) for _n in _tools_pkg.__all_slim__
+]
+
+# V5_MCP_TOOL_MODE=legacy|slim; V5_MCP_TOOL_GROUPS=memory,self,... 过滤注册
+# 两者未设置/空/非法 → 全量 (fail-open)
+_register_tools(mcp, os.environ.get("V5_MCP_TOOL_GROUPS"), _TOOL_MODE)
+logger.info("v5 MCP tools registered: mode=%s groups=%s count=%d",
+            _TOOL_MODE, os.environ.get("V5_MCP_TOOL_GROUPS") or "*",
+            len(mcp._tool_manager.list_tools()))
 
 
 # ── Entry point ────────────────────────────────────────────────────

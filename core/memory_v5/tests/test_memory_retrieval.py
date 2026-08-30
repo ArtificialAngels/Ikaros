@@ -13,6 +13,21 @@ import memory_v5.store as store_mod  # noqa: E402
 import memory_v5.search as search_mod  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_archive_filter(monkeypatch):
+    """本文件用合成 id 测排序/类型 boost/路由，不测归档过滤。
+
+    retrieve() 默认会去真实 v5.db 取「存活记忆 id 集合」拦截 archived/孤儿向量
+    (2026-08-30 修复: chroma 1200 条向量里 753 条属于 archived 记忆), 合成 id
+    ("1"/"2"/"99") 不在真实存活集里会被整条拦掉。这里显式把它设为 fail-open
+    (None = 不过滤), 让本文件回归到原本的测试意图。
+
+    ⚠️ 归档过滤本身由 tests/test_retrieval_archived_filter.py 单独守,
+       新增归档相关断言请去那边, 不要在本文件里绕过。
+    """
+    monkeypatch.setattr(mr, "_live_ids", lambda: None)
+
+
 class _M:
     def __init__(self, id, content, type="fact", weight=0.8, created=0.0):
         self.id = id

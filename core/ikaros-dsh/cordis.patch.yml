@@ -3,7 +3,7 @@
 # 叠加在 dsh-headless 或 dsh-web 之上（dsh-base 已含 llm/session/tools/fs/
 # sandbox/subagent/compaction/skill/goal/workflow/ralph 等全部基础能力）。
 # 本 overlay 补上 dsh-base 默认没挂、但 Ikaros 工作引擎需要的三块能力：
-#   1) memory_v5 记忆（MCP 直连，已验证 50 工具，含 v5_recall 预算感知召回）
+#   1) memory_v5 记忆（MCP 直连；58 工具 legacy / 17 工具 slim，见 V5_MCP_TOOL_MODE）
 #   2) 持久 PTY 终端（terminal + terminal-bash + tool-terminal）
 #   3) LSP 精确代码导航（lsp + lsp-stdio + tool-lsp）
 # 并覆盖 system-prompt 的 persona 为 Ikaros 工作引擎人格。
@@ -18,8 +18,18 @@
 
 - insert:
     # ── 1) memory_v5 长期记忆（MCP 直连） ─────────────────────────────
-    # 50 个 v5_* 工具 → 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。
-    # 与 pi 的 data/omp/agent/mcp.json 同源；路径经 IKAROS_ROOT 推导。
+    # 模型侧工具名 mcp__ikaros-v5__v5_memory_search 等。路径经 IKAROS_ROOT 推导。
+    #
+    # V5_MCP_TOOL_MODE (2026-08-30 新增, 见 docs/v5-mcp-consolidation.md):
+    #   legacy  58 个工具 (默认, 兼容旧 persona / SOUL 引用)
+    #   slim    17 个 = 9 热路径独立工具 + 8 冷路径门面 (action 分发)
+    # 切 slim 前须跑闸门 (确认 persona / SOUL / 插件里没有 legacy-only 工具名引用):
+    #   python core/memory_v5/tools/slim_check.py        # exit 0 才可切
+    # ⚠️ 这类引用**测试抓不到** (测试直接 import Python 函数, 不走 MCP 注册),
+    #    只在真实会话里发作 —— persona 里的旧名每轮 tool-not-found, 插件 TS 里的静默失败。
+    #
+    # ⚠️ V5_MCP_TOOL_GROUPS 必须含 loop —— v5_loop 属 loop 组, 组名不在列表里
+    #    会被静默过滤 (实测: 缺 loop 时 slim 只剩 16 个工具且无 Loop 入口)。
     - id: memory-ikaros-v5
       name: '@deepseek-ai/dsh-mcp-client'
       config:
@@ -30,12 +40,18 @@
           - !!js 'process.env.IKAROS_ROOT + "\\core\\memory_v5\\mcp_server.py"'
         env:
           IKAROS_ROOT: !!js 'process.env.IKAROS_ROOT'
-          V5_MCP_TOOL_GROUPS: 'memory,self,care,vitality,relationship,skill,project'
+          V5_MCP_TOOL_GROUPS: 'memory,self,care,vitality,relationship,skill,project,loop'
+          V5_MCP_TOOL_MODE: 'slim'
         failOnStartupError: false
         toolCallTimeoutMs: 60000
 
     # ── 1b) ikaros-memory 自动记忆工程层（2026-08-18 新增） ─────────────
-    # mcp-client 暴露 49 个 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
+    # mcp-client 暴露 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
+    #   - 标准记忆循环 (2026-08-30): 三个 hook 各调一次 v5_call.py loop ——
+    #       agent/pre-step     -> loop(phase=pre)          身份 + 召回 + 项目经验
+    #       agent/turn-stopping-> loop(phase=post)         精力/关系推进 + 反重复语料
+    #       6h 定时器          -> loop(phase=maintenance)  反思管线
+    #     引擎见 memory_v5/loop.py, step 表在 _default_steps()。
     #   - turn-stopping 自动沉淀: 每轮结束把真实对话提炼写回 v5 (source:dsh, upsert)
     #   - pre-step 召回注入: should_recall 门控 + 检索 + systemPrompt.context() 快照
     #     (user-role 快照, 前缀缓存友好; 静态纪律走 section 字节稳定锚)
@@ -43,6 +59,9 @@
     #    用裸包名从 profile 的 node_modules 解析（pnpm file: 链接, 源在 E 盘不复制）。
     # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build (tsc -> dist/)
     # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"
+    # ⚠️ pnpm file: 是**复制**不是符号链接 —— 改了 src/ 或 bin/ 不做这三步, dsh 跑的
+    #    仍是旧副本, **全程无报错**。装完还必须重启 dsh 才加载新代码。
+    #    检查是否漏装: python core/ikaros-dsh/tools/plugin_sync_check.py (exit 1 = 不同步)
     - id: ikaros-memory
       name: '@ikaros/dsh-ikaros-memory'
       config: {}

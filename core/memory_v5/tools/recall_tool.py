@@ -66,6 +66,23 @@ def v5_recall(
     fresh = [r for r in results if str(r.get("id")) not in cooled_set]
     cooled_n = retrieved - len(fresh)
 
+    # 2b. 兜底: 候选被冷却一空时放宽去重, 重新用全量候选。
+    #
+    # ⚠️ 为什么要这一步 (2026-08-30 实测):
+    #     recall_ledger 的冷却窗口是「近 dedup_turns 轮」, 而 ledger **落盘持久化**
+    #     (data/v5/recall_log_<sid>.json) 且 turn 单调递增、永不清零。插件侧
+    #     session_id 又硬编码成 'dsh' (所有会话共用一本账)。
+    #     于是「同一话题连着问几轮」或「重启后紧接着复问上一个话题」时,
+    #     top-k 候选会**整批**处于冷却中 → fresh 为空 → 装配 0 条 →
+    #     返回 "(无相关记忆)"。
+    #     去重只是省 token、减少"又讲一遍"的噪声, 是**优化**; 交一张空纸条
+    #     则是**功能性失败** —— 宁可重复, 不可失忆。
+    #     实测不同 query 的 cooled 仅 0~2 条, 兜底极少触发, 不会抵消去重收益。
+    dedup_relaxed = False
+    if not fresh and results:
+        fresh = list(results)
+        dedup_relaxed = True
+
     # 3. 预算装配 (广度后深度 + 降级不截断)
     cands = [
         Candidate(
@@ -88,6 +105,7 @@ def v5_recall(
     stats = {
         "retrieved": retrieved,
         "cooled": cooled_n,
+        "dedup_relaxed": dedup_relaxed,  # True = 候选被冷却一空, 本次放宽了去重
         "turn": cur_turn,
         **plan.stats,
     }

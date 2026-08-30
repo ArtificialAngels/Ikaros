@@ -79,7 +79,8 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 
 agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**（0 源码侵入）：
 
-- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，49 个 `v5_*` 工具，7 组可按 `V5_MCP_TOOL_GROUPS` 过滤）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入（每 turn 幂等，dispose/re-register）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要成本，零额外 LLM 沉淀进 v5））+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
+- **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，`v5_*` 工具；**2026-08-30 起双模**：`V5_MCP_TOOL_MODE=legacy` 58 个 / `slim` 17 个 = 9 热路径 + 8 门面；8 组可按 `V5_MCP_TOOL_GROUPS` 过滤，⚠️ 必须含 `loop`）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入（每 turn 幂等，dispose/re-register）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要成本，零额外 LLM 沉淀进 v5）+ **标准记忆循环（2026-08-30）**）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
+- **标准记忆循环（2026-08-30）**：`core/memory_v5/loop.py` 三阶段声明式引擎，把散落各处的记忆仪式收敛成「一个 phase 一次调用」：`pre`（身份锚定 + 预算感知召回 + 项目经验）→ `post`（精力/关系推进 + 反重复语料）→ `maintenance`（反思管线，6h 冷却）。插件 3 个 hook 各调一次 `v5_call loop`：`agent/pre-step`→pre、`agent/turn-stopping`→post（与自动沉淀**分开注册**，沉淀有 5min 冷却）、`ctx.interval 6h`→maintenance。4 个机器态旧工具（vitality_tick / relationship_tick / anti_repeat_record / reflect_run_op）已内化，slim 模式下不再暴露。设计文档：`docs/v5-mcp-consolidation.md`。
 - **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。**构建/装配链**：`npm run build`（tsc `src/`→`dist/`）→ `pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"` 装到 `~/.dsh/profiles/web/`。插件名 `@ikaros/dsh-ikaros-memory` 不走 `!!js` 表达式（`Entry.name` 不经过 interpolate），用裸包名从 profile 的 node_modules 解析。
 - **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
@@ -332,7 +333,9 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 ### 4.1 core/memory_v5/ — V5 灵魂核心
 
-> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，49 个 MCP 工具仍以前缀 **`v5_*`** 暴露（2026-08-10 实测，含 V5.3 activity/compression、V5.4 project、V5.5 skill 各系列）。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
+> **命名与保留契约**：目录 `core/memory_v5/` 内的 Python 包已重命名为 **`memory_v5`**（`import memory_v5`），`sys.path` 须包含 `E:/Ikaros/core`。但以下属于**对外契约、保持不变**：数据库文件仍叫 **`v5.db`**，MCP 工具仍以前缀 **`v5_*`** 暴露（含 V5.3 activity/compression、V5.4 project、V5.5 skill 各系列）。**请勿重命名 `v5.db` 或 `v5_*` 工具前缀。**
+>
+> **工具数量随模式变化（2026-08-30 起）**：`legacy` 58 个（全兼容）/`slim` 17 个（9 热路径 + 8 门面），由 `V5_MCP_TOOL_MODE` 切换。**清单唯一真相源 = `core/memory_v5/tools/registry.py`**（旧的手写分组表已删，避免 2026-08-24 那种「全集 50 / 分组表 49」的漂移）。加工具只改该文件；漏登记/幽灵登记**启动即 `RuntimeError`**。设计文档：`docs/v5-mcp-consolidation.md`。
 >
 > **依赖环警示（gitnexus `check --cycles` 2026-08-12 发现，2026-08-14 部分化解）**：`core/memory_v5/extensions/temporal_graph.py ↔ core/memory_v5/memory_retrieval.py` 曾存在循环依赖。2026-08-14 已将 `retrieve_temporal` 从 `temporal_graph.py` 迁至 `memory_retrieval.py` 以断一路；但 `temporal_graph` 仍调 `unified_retrieve` 挂接、`memory_retrieval` 仍引 `temporal_graph` 的 `supersede_memory` 闭环，**环仍在**。当前靠 Python 模块级延迟引用未炸，重构时优先解开（把 supersede 挂接改由 `store.py`/`dissonance.py` 侧回调注入）。
 
@@ -360,7 +363,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 
 2026-08-18 起为 dsh (DeepSeek Harness) 的 Ikaros 集成层:
 
-- `cordis.patch.yml` — 规范源 overlay: memory_v5 MCP (49 个 v5_* 工具, stdio 挂 `runtime/portable-python/python.exe`)、terminal、typescript LSP、persona。
+- `cordis.patch.yml` — 规范源 overlay: memory_v5 MCP (v5_* 工具, legacy 58 / slim 17, stdio 挂 `runtime/portable-python/python.exe`)、terminal、typescript LSP、persona。含 `V5_MCP_TOOL_MODE` 与 `V5_MCP_TOOL_GROUPS`(须含 `loop`)。
 - 路径全部经 `!!js process.env.IKAROS_ROOT + ...` 推导, 0 盘符硬编码, 可整体移动。
 - 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 为自动加载副本, 与规范源保持同步 (启动脚本不传 `--patch`, 避免 duplicate loader)。
 - 启动: `bin/start-dsh-ikaros.bat web` (web :3080) / `headless <task>`; 面板 dsh 组件可启停 (kill 精确匹配 dsh CLI 进程, 不误伤 DSH Desktop)。

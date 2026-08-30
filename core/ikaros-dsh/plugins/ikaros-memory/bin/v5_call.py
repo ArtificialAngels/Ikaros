@@ -4,12 +4,15 @@
 用法:
     python v5_call.py search '{"query": "...", "top_k": 5}'
     python v5_call.py store  '{"content": "...", "memory_type": "conversation", "tags": [...]}'
-    python v5_call.py tick   '{}'                         # 记忆维护: 生命周期 + 反思 op
+    python v5_call.py tick   '{}'                         # [deprecated] 见 loop
+    python v5_call.py loop   '{"phase": "post", "response": "..."}'   # 标准记忆循环
     python v5_call.py --daemon                            # 常驻 JSON 行协议
 
 stdout 输出 JSON:
     search -> {"ok": true, "items": [{"id": 1, "content": "...", "score": 0.72, "type": "..."}, ...]}
     store  -> {"ok": true, "id": 123}
+    loop   -> {"ok": true, "phase": "post", "ran": [...], "skipped": {...},
+               "errors": {...}, "results": {...}, "elapsed_ms": 12}
 
 设计:
     - 不经过 MCP 协议 —— 直接 import memory_v5.memory_api（sys.path 加 core/），
@@ -63,21 +66,65 @@ def _call_store(args: dict) -> dict:
 
 
 def _call_tick(args: dict) -> dict:
-    """跑一期记忆维护: 生命周期 retention/归档 + 反思 op run_all（按各自间隔到期）。
+    """[deprecated 2026-08-30] 旧维护入口, 保留仅为兼容未重建的插件 dist。
 
-    2026-08-24: watchdog 退役后 reflect scheduler 无自动触发源, long_term 一直为 0;
-    本 op 让 ikaros-memory 插件的定时器周期驱动它。纯算法, 无额外 LLM 成本
-    (reflect op 里的 LLM 生成类在 2026-08-14 决策 A 已停用)。
+    新代码请用 loop op 的 maintenance 阶段 —— 它除了反思管线, 还覆盖
+    post 阶段的精力/关系推进与反重复语料记录, 且带统一的状态落盘与观测。
     """
     from memory_v5.reflect.registry import make_default_scheduler
     from memory_v5.reflect.scheduler import load_state, save_state
 
     sched = make_default_scheduler(load_state())
     results = sched.run_all(force=False, continue_on_error=True)
-    return {"ok": True, "results": results}
+    return {"ok": True, "results": results, "deprecated": "use loop(op=maintenance)"}
 
 
-_HANDLERS = {"search": _call_search, "store": _call_store, "tick": _call_tick}
+def _call_loop(args: dict) -> dict:
+    """标准记忆循环 (memory_v5/loop.py) —— 一个 phase 跑完所有到期 step。
+
+    args:
+        phase   pre | post | maintenance  (必填)
+        query       pre 阶段: 本轮用户消息 (召回用)
+        response    post 阶段: 本轮助手回复 (反重复语料用)
+        session_id  召回去重 ledger 的会话键 (默认 default)
+        character   角色名 (反重复语料按角色隔离)
+        project     pre 阶段: 项目名 (默认 ikaros)
+        force       true 忽略冷却全跑 (手动补账用)
+
+    2026-08-30: 插件三个 hook (agent/pre-step、agent/turn-stopping、
+    ctx.interval 定时器) 各自拼装的记忆动作, 统一收敛成调这一个 op。
+    """
+    from memory_v5 import loop as loop_mod
+
+    phase = str(args.get("phase") or "").strip()
+    if phase not in loop_mod.PHASES:
+        return {"ok": False, "error": f"unknown phase: {phase!r}",
+                "valid_phases": list(loop_mod.PHASES)}
+
+    extra = {}
+    if args.get("project") is not None:
+        extra["project"] = args.get("project")
+    for key in ("include_dsh_only", "project_top_k", "intensity"):
+        if args.get(key) is not None:
+            extra[key] = args.get(key)
+
+    return loop_mod.run_phase(
+        phase,
+        query=str(args.get("query") or ""),
+        response=str(args.get("response") or ""),
+        session_id=str(args.get("session_id") or "default"),
+        character=str(args.get("character") or ""),
+        extra=extra,
+        force=bool(args.get("force")),
+    )
+
+
+_HANDLERS = {
+    "search": _call_search,
+    "store": _call_store,
+    "tick": _call_tick,          # deprecated
+    "loop": _call_loop,
+}
 
 
 def _handle_one(op: str, args_json: str) -> str:

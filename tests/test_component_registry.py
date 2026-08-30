@@ -165,8 +165,9 @@ def test_required_fields_field_types(specs: list[ComponentSpec]) -> None:
     "component_id,expected_port",
     [
         ("dsh", 3080),
-        ("conversation-tree", 48920),
         ("embedding", 8587),
+        # conversation-tree 改为动态端口 (见下方 test_conversation_tree_dynamic_port),
+        # 不再参与固定端口比对。
         # herdr has no TCP port (named pipe) -- handled separately below.
     ],
 )
@@ -177,6 +178,30 @@ def test_port_matches_architecture(
 ) -> None:
     spec = next(s for s in specs if s.id == component_id)
     assert spec.port == expected_port
+
+
+def test_conversation_tree_dynamic_port(specs: list[ComponentSpec]) -> None:
+    """conversation-tree 无固定端口 —— 2026-08-23 起改用动态端口。
+
+    ⚠️ 为什么要单独断言而不是塞进上面的固定端口表:
+        `server.py --port 0` 由 OS 分配端口, 实际值写 `tmp/ct-port.json`,
+        探测侧走 `healthcheck.type: port_file`。把 48920 硬编码进注册表
+        会让「注册表 / 启动脚本 / 探测方式」三处互相矛盾 —— 注册表说 48920,
+        启动脚本开的是随机端口, 探测却去读文件。
+        三者必须一致地描述「动态」这件事, 所以这里断言的是**动态这一约定本身**:
+        port 为空 + 探测走端口文件 + 启动脚本带 --port 0。
+    """
+    spec = next(s for s in specs if s.id == "conversation-tree")
+    assert spec.port is None, (
+        "conversation-tree 应为动态端口 (port: null); "
+        "若已改回固定端口, 请同步 healthcheck 与 lifecycle.start_script 并移回固定端口表"
+    )
+    assert spec.healthcheck["type"] == "port_file", (
+        f"动态端口必须走端口文件探测, 实际: {spec.healthcheck.get('type')}"
+    )
+    assert "--port 0" in (spec.lifecycle.get("start_script") or ""), (
+        f"启动脚本应带 --port 0, 实际: {spec.lifecycle.get('start_script')}"
+    )
 
 
 # 2026-08-23: herdr (named-pipe) 组件已随 pi 底座退役, 相关断言移除

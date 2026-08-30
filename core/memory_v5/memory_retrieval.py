@@ -32,6 +32,56 @@ def _retrieve_ttl() -> float:
         return 20.0
 
 
+# ─── 存活记忆 id 集合 (2026-08-30 新增) ───────────────────────────────
+# 为什么需要这层过滤 —— 实测证据:
+#   chroma 向量库 1200 条向量里，**753 条属于 archived=1 的记忆**（占 63%），
+#   另有 110 条是 v5.db 里已不存在的孤儿向量。
+#   三路融合里 FTS5 走 store.search（自带 `archived = 0`），但**向量路直接查
+#   chroma，从头到尾不看 archived 标志**。后果：
+#     - retention / dedup 每天把低权重、重复、过期记忆标 archived=1，
+#       语义检索照样把它们捞回候选池并顶进 top_k —— 归档机制在语义路面前
+#       完全失效，"清理了但没真清理"，库越大检索越脏。
+#     - 孤儿向量更糟：召回的 id 在 v5.db 里根本没有，v5_memory_get 直接空，
+#       模型拿到一条查不到出处的"记忆"。
+# 这是 store.py 建 idx_memory_archived 索引时就埋下的口子（别的读路径
+# lifecycle/freshness/project_edges/reflect 全都过滤，唯独检索没接）。
+_LIVE_CACHE: dict = {"ts": 0.0, "ids": None}
+_LIVE_CACHE_LOCK = threading.Lock()
+_LIVE_TTL = 30.0
+
+
+def _live_ids() -> Optional[set]:
+    """存活记忆 id 集合 (str)。查询失败返回 None = **fail-open 不过滤**。
+
+    只在 id 空间确定是 memory 表主键的路径上用（三路融合的 fts/vec/time）。
+    graph / vault 的结果 id 来自 eg_* 表和 Vault，不在 memory 表里，
+    绝不能拿这个集合去过滤它们。
+    """
+    now = time.time()
+    with _LIVE_CACHE_LOCK:
+        if _LIVE_CACHE["ids"] is not None and (now - _LIVE_CACHE["ts"]) < _LIVE_TTL:
+            return _LIVE_CACHE["ids"]
+    try:
+        from memory_v5 import store
+        with store.conn() as c:
+            rows = c.execute("SELECT id, archived FROM memory").fetchall()
+        live = {str(r[0]) for r in rows if not r[1]}
+    except Exception as e:          # fail-open: 拿不到就不拦, 别把检索搞挂
+        logger.debug("live-id lookup failed (fail-open): %s", e)
+        return None
+    with _LIVE_CACHE_LOCK:
+        _LIVE_CACHE["ts"] = now
+        _LIVE_CACHE["ids"] = live
+    return live
+
+
+def invalidate_live_ids() -> None:
+    """写入归档/删除后调用，让存活集合立刻失效（否则最多脏 30s）。"""
+    with _LIVE_CACHE_LOCK:
+        _LIVE_CACHE["ts"] = 0.0
+        _LIVE_CACHE["ids"] = None
+
+
 def _defaults() -> dict:
     return {
         "vector_weight": 0.7, "fts_weight": 0.3,
@@ -303,8 +353,18 @@ def retrieve(
     # ── 去重合并 (按 id) ──
     merged: dict[str, dict] = {}
 
+    # 存活过滤：三路候选统一在入口拦掉 archived / 孤儿 id。
+    # 放在 _add 而不是结果截断处 —— 死记忆若只被截断，仍会占掉 top_k 名额
+    # 并稀释融合排序；在入口剔除才能让后面的活记忆顶上来。
+    # live 为 None（查库失败）→ 不过滤，fail-open。
+    live = _live_ids()
+
     def _add(mid, content, mtype, weight, created, pad_p, pad_a, source, raw, **extra):
         key = str(mid)
+        if live is not None and key not in live:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("retrieve: drop dead id %s (source=%s)", key, source)
+            return
         if key in merged:
             # 同一记忆多路命中 → 累加分量 (0.7 向量分量 + 0.3 FTS5 分量 = 融合分)
             merged[key]["raw"] += raw
@@ -618,6 +678,15 @@ def unified_retrieve(
                                     character=character, time_range=time_range,
                                     exclude=exclude, min_weight=min_weight,
                                     include_dsh_only=include_dsh_only)
+        # 命中即返回 —— 与下面的 tree / temporal 分支一致。
+        # ⚠️ 2026-08-30 修复: 原先这里缺 return, 控制流会掉到下面的
+        #    "auto / semantic" 块继续跑语义融合, 再进 graph fallback,
+        #    实际变成 lexical + semantic + graph 三路叠加, 与 docstring
+        #    承诺的 "lexical: 仅 FTS5 关键词" 不符。
+        #    调用方显式选 lexical 就是为了**只要**词法结果 (可控、可复现、
+        #    不受 embedding 服务状态影响), 悄悄混入语义结果会破坏这个前提。
+        #    影响面已核实: 生产代码无 scope="lexical" 调用方, 仅测试使用。
+        return _finish(merged, tk, include_dsh_only=include_dsh_only)
 
     elif scope == "graph":
         # P3 图收敛: 统一图检索 (实体图 + 项目知识图)
