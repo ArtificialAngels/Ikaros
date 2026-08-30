@@ -250,6 +250,33 @@ def _check_groups() -> list[dict]:
     }]
 
 
+def _check_identity_absent() -> list[dict]:
+    """身份文件读不到 → 必须说出来, 不能静默跳过。
+
+    这是本闸门自己踩的坑: `_scan()` 对读不到的文件返回 `{}`, 于是
+    **缺文件 == 零命中 == 干净**, 闸门照样打印「✅ 可以切 slim」。
+
+    为什么必须警告: `data/soul/SOUL.md` 被 `.gitignore:40` 的 `data/**`
+    排除, **从不进 git**(项目约定: 用户状态不入库)。新克隆/换机器时它
+    根本不存在, 而它恰恰是 slim 下最容易翻车的地方 —— 里面写的旧工具名
+    会指向没注册的工具, 模型调用时才发现, 且**这类问题测试永远抓不到**
+    (测试直接 import Python 函数, 不走 MCP 注册)。
+
+    severity 用 warn 不是 block: 文件可能确实不需要存在, 不该硬卡住。
+    但「可以切 slim」这句必须带上「有 N 项没验证过」的注脚。
+    """
+    out: list[dict] = []
+    for rel in IDENTITY_FILES:
+        if _read(rel) is None:
+            out.append({
+                "kind": "identity_absent",
+                "severity": "warn",
+                "file": rel,
+                "detail": "文件不存在或读不到 —— 无法验证里面有没有 legacy 工具名",
+            })
+    return out
+
+
 def run(*, include_all: bool = False) -> dict:
     slim = set(R.SLIM_TOOL_NAMES)
     legacy_only = set(R.LEGACY_ONLY_NAMES)
@@ -292,6 +319,7 @@ def run(*, include_all: bool = False) -> dict:
                 })
 
     blocks.extend(_check_groups())
+    warns.extend(_check_identity_absent())
 
     docs: list[dict] = []
     if include_all:
@@ -345,11 +373,21 @@ def _render(res: dict, *, show_docs: bool) -> None:
         print()
 
     if res["warn"]:
-        print(f"⚠️  可疑引用 {len(res['warn'])} 个 (工具名不在注册表, 可能拼错):")
-        for w in res["warn"]:
-            loc = ",".join(f"L{n}" for n in w["lines"][:4])
-            print(f"   {w['file']}:{loc}  {w['tool']}")
-        print()
+        unknown = [w for w in res["warn"] if w["kind"] == "unknown_ref"]
+        absent = [w for w in res["warn"] if w["kind"] == "identity_absent"]
+        if unknown:
+            print(f"⚠️  可疑引用 {len(unknown)} 个 (工具名不在注册表, 可能拼错):")
+            for w in unknown:
+                loc = ",".join(f"L{n}" for n in w["lines"][:4])
+                print(f"   {w['file']}:{loc}  {w['tool']}")
+            print()
+        if absent:
+            print(f"⚠️  身份文件缺失 {len(absent)} 个 —— 这些文件没被验证过:")
+            for w in absent:
+                print(f"   {w['file']}  ({w['detail']})")
+            print("   提示: data/soul/SOUL.md 被 .gitignore 排除, 不进 git ——")
+            print("         换机器/新克隆时它不存在, 需先恢复再跑本闸门。")
+            print()
 
     if res["identity"]:
         print(f"ℹ️  身份文件 {len(res['identity'])} 处 (不影响运行, 但切 slim 时应同步):")
@@ -368,10 +406,18 @@ def _render(res: dict, *, show_docs: bool) -> None:
             print(f"   {t} × {n}")
         print()
 
-    if res["ok"]:
-        print("✅ 可以切 slim")
-    else:
+    if not res["ok"]:
         print(f"❌ 有 {len(res['block'])} 个阻塞项, 还不能切 slim")
+        return
+
+    # ⚠️ 别无条件说 OK: 缺文件 = 没验证过 = 「没发现阻塞」不等于「确认安全」。
+    #    静默放行一个未验证的身份文件, 比多打两行警告危险得多。
+    absent = [w for w in res["warn"] if w["kind"] == "identity_absent"]
+    if absent:
+        print(f"✅ 未发现阻塞项, 但有 {len(absent)} 个身份文件没验证过 —— "
+              f"补上后再跑一次才算真的绿")
+    else:
+        print("✅ 可以切 slim")
 
 
 def main(argv: list[str] | None = None) -> int:

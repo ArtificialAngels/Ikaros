@@ -137,3 +137,40 @@ def test_non_tool_identifiers_are_allowlisted():
         assert not SC._is_tool_like(name), f"{name} 应被白名单排除"
     assert SC._is_tool_like("v5_memory_search")
     assert SC._is_tool_like("v5_typo_tool")
+
+
+# ── 7) 身份文件缺失不许静默通过 ──────────────────────────────────────
+def test_missing_identity_file_is_reported_not_silently_skipped(monkeypatch, capsys):
+    """2026-08-30 修掉的**闸门自身** bug: 缺文件 → `_scan()` 返回 {} →
+    零命中 → 照样打印「✅ 可以切 slim」。
+
+    为什么这条必须守: `data/soul/SOUL.md` 被 `.gitignore:40` 的 `data/**`
+    排除, 从不进 git (项目约定: 用户状态不入库)。换机器/新克隆时它必然不
+    存在, 而它恰恰是 slim 下最容易翻车的文件 —— 里面写的旧工具名会指向
+    没注册的工具, 要等模型真调用时才发现, 测试永远抓不到。
+    静默放行 = 闸门在这类环境下形同虚设。
+    """
+    monkeypatch.setattr(SC, "IDENTITY_FILES", ("data/soul/__no_such_file__.md",))
+    res = SC.run()
+
+    # 缺文件不阻塞 (文件可能确实不需要存在), 但**必须**被报告
+    assert res["ok"] is True
+    absent = [w for w in res["warn"] if w["kind"] == "identity_absent"]
+    assert len(absent) == 1, (
+        f"缺失的身份文件没被报告 —— 静默放行又回来了: {res['warn']}"
+    )
+    assert absent[0]["file"] == "data/soul/__no_such_file__.md"
+
+    # 结论句不许再说无条件 OK
+    SC._render(res, show_docs=False)
+    out = capsys.readouterr().out
+    assert "没验证过" in out, f"结论句没提示有文件未验证过:\n{out}"
+    assert "✅ 可以切 slim" not in out
+
+
+def test_identity_files_present_yield_no_absent_warning():
+    """当前环境两个身份文件都在, 不该报 identity_absent。"""
+    res = SC.run()
+    assert not [w for w in res["warn"] if w["kind"] == "identity_absent"], (
+        f"身份文件明明在却报缺失: {res['warn']}"
+    )

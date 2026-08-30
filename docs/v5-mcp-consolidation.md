@@ -409,6 +409,41 @@ python core/memory_v5/tools/slim_check.py --json   # 机器可读
 被 Loop 内化的工具在 slim 下根本不注册，告诉模型「改用 `v5_repeat(action=...)`」
 是错的，正确说法是「由 `v5_loop` 的 post 阶段自动推进，不用手动调」。
 
+### 7.2 闸门自己身上的同一个病：缺文件 = 零命中 = 报绿
+
+§7.1 的闸门写完后又踩了同一个坑，而且这次踩在闸门**内部**：
+
+```python
+def _scan(rel):
+    text = _read(rel)
+    if text is None:
+        return {}          # ← 读不到就返回空
+```
+
+`_read()` 对「文件不存在」和「文件里确实没有工具名」返回**同一种结果**（空字典），
+于是缺文件被当成了干净文件：
+
+| 场景 | 闸门输出 | 真相 |
+|---|---|---|
+| SOUL.md 存在且干净 | ✅ 可以切 slim | 真的干净 |
+| **SOUL.md 不存在** | ✅ 可以切 slim | **根本没验证过** |
+
+为什么这条重要：`data/soul/SOUL.md` 被 `.gitignore:40` 的 `data/**` 排除、
+**从不进 git**（项目约定：用户状态不入库，见 §10 第 1 条）。换机器/新克隆时它
+必然不存在 —— 也就是说闸门在**最需要它的场景**（新环境首次切 slim）形同虚设。
+
+修法（2026-08-30）：
+
+1. 新增 `_check_identity_absent()`：身份文件读不到时产出 `identity_absent` 警告
+2. severity 用 **warn 而非 block** —— 文件可能确实不需要存在，不该硬卡住
+3. 但结论句**不许再无条件说 OK**：存在未验证文件时改为
+   「未发现阻塞项，但有 N 个身份文件没验证过 —— 补上后再跑一次才算真的绿」
+4. `tests/test_slim_check.py` 加 2 条守门用例（7 → 9）
+
+> **通用教训**：扫描类工具必须区分「没查到」和「查过没有」。输入缺失要显式报，
+> 不能退化成空结果 —— 否则工具会在最该报警的那一刻报绿。
+> 这和 §5 的 fail-open、§7.1 的 `re.MULTILINE` 是同一类病：**静默**。
+
 ---
 
 ## 8. 文件清单
@@ -445,7 +480,7 @@ python core/memory_v5/tools/slim_check.py --json   # 机器可读
 | `tests/test_vitality_recovery.py` | 9 | 空闲恢复语义：连打 60 轮不归零、`conversation_minutes` 抑制与封顶 |
 | `tests/test_unified_retrieve.py` | +1 | lexical 命中后不得再跑语义/图路（探针断言） |
 | `tests/test_recall_dedup_fallback.py` | 6 | 去重兜底：全冷却放宽 / 部分冷却**不**放宽 / 检索空不放宽 |
-| `tests/test_slim_check.py` | 7 | 闸门自身：当前必须绿 / 每个 legacy 工具都有替代方案 / 内化工具指向 Loop / **门面 action 表覆盖率 ≥37**（守 §7.1 那个静默失效 bug）/ 缺 group 阻塞 / 注释与哨兵不误报 |
+| `tests/test_slim_check.py` | 9 | 闸门自身：当前必须绿 / 每个 legacy 工具都有替代方案 / 内化工具指向 Loop / **门面 action 表覆盖率 ≥37**（守 §7.1 那个静默失效 bug）/ 缺 group 阻塞 / 注释与哨兵不误报 / **身份文件缺失不许静默通过**（守 §7.2，闸门自己身上的同一个病） |
 
 ---
 
@@ -530,17 +565,31 @@ profile 里那份 `cordis.patch.yml` **已经**包含 `memory-ikaros-v5`，再�
 
 ## 10. 已知遗留
 
-0. **⚠️ dsh 尚未重启**（§9）—— 插件 dist / `v5_call.py` 已在 2026-08-30 重装到
-   `~/.dsh/profiles/web/node_modules/`，但 :3080 上跑着的 dsh 进程加载的是**启动时
-   读进内存**的旧代码，**Loop 三阶段此刻仍是死的**。要让新代码生效必须重启
-   （`powershell -File bin/restart-dsh-ikaros.ps1`），而重启会中断当前 Web 会话。
-   验证是否生效：重启后在 :3080 开一轮，看 `data/logs/` 里插件日志有无 `loop` 调用。
-1. **chroma 里的 753 条 archived 向量 + 110 条孤儿未物理清理**（§5，需拍板）。
+0. **slim 已在运行时生效，但尚未在真实会话里验证过**（待哥哥开一轮）。
+   时间线证据（2026-08-30）：patch 里 `V5_MCP_TOOL_MODE: 'slim'` 最后改于 16:01；
+   当前 dsh 实例起于 21:15（PID 37668），3 秒后 spawn 了 `mcp_server.py`
+   （PID 37416，PPID=37668，路径无 `undefined` 拼接）—— 说明配置读进去了、
+   MCP server 正常起来了。离线侧也验过：三种模式实注册 legacy 58 / slim 17 /
+   bogus → 58（fail-open），9 个门面 action 冒烟全通。
+   **差的只是最后一环**：在 :3080 开一轮真实对话，确认 Loop 三阶段真被调用、
+   工具面板里只有 17 个。
+
+   > 插曲：16:08 那次重启起的实例（PID 30988）后来没了 —— 大概率是旧实例仍占着
+   > 3080 导致新进程退出。所以**判断 slim 是否生效要看 `dsh` 进程的创建时间是否
+   > 晚于 patch 修改时间**，不能只看「重启脚本返回 RC=0」。
+
+1. **`data/soul/SOUL.md` 不进 git 是项目约定，不是 bug**（§7.2，已澄清性质）。
+   `.gitignore:40` 的 `data/**` 注释明写「All per-user state lives under data/ …
+   EXCLUDED from future tracking」，该文件从未被 git 跟踪过。
+   所以**不要**用 `git add -f` 去「修」它 —— 那等于把用户状态推上仓库。
+   已经改成：闸门在它缺失时明确 warn（不再静默放行），换机器/新克隆时先恢复
+   SOUL.md 再跑闸门。
+2. **chroma 里的 753 条 archived 向量 + 110 条孤儿未物理清理**（§5，需拍板）。
    现在只是运行时拦掉了，彻底清理要删 chroma 记录（破坏性数据操作），
    建议做成一次性脚本 + 备份后执行。
-2. **项目轨 top-k by weight 会浮出已退役组件的笔记**（omp/pi 已于 2026-08-23 退役，
+3. **项目轨 top-k by weight 会浮出已退役组件的笔记**（omp/pi 已于 2026-08-23 退役，
    但对应 project 笔记 weight 仍是 0.9/0.8）。要么降权，要么标 `archived=1`
    （V5 既定的退役语义，且现在归档真的会被检索过滤掉了 —— 见 §5）。
-3. **§4.4 记录的回归 + §6 的三个旧 bug 均已根治**，不再是遗留项。
-4. **插件 `session_id` 仍是硬编码 `'dsh'`**（§6.3），兜底已消除功能性影响，
+4. **§4.4 记录的回归 + §6 的三个旧 bug 均已根治**，不再是遗留项。
+5. **插件 `session_id` 仍是硬编码 `'dsh'`**（§6.3），兜底已消除功能性影响，
    彻底改要重启 dsh 才能验证，待哥哥拍板。
