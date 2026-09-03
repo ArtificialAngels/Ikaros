@@ -1,18 +1,52 @@
 // ikaros-memory-settings —— Node 侧 host-bridge
 //
-// dsh 设置面板 'settings.section' slot 的 host 端：暴露一组 RPC 让浏览器面板
-// 控制 embedding 服务 (llama-server bge-m3 @ :8587) + 模型下载 + 模型切换 +
-// 向量重建。仿造 @deepseek-ai/dsh-client-ui-settings-models 的 settings.section
-// 注册模式，host 侧配合 client 侧 React 卡使用。
+// ikaros 记忆控制面板 (dsh 设置面板 'settings.section' slot 的 host 端)。
 //
-// 服务列表 (供 client inject() 调):
-//   listModels()               -> 扫描 IKAROS_MEMORY_MODELS/*.gguf
-//   getStatus()                -> {port, pid, model, vectorsCount, chromaPath}
-//   startEmbedding()           -> spawn llama-server (类似 ikaros embed)
-//   stopEmbedding()            -> 按端口/PID 杀 llama-server
-//   switchModel(filename)      -> 改 IKAROS_MODEL_EMBEDDING env + 重启 llama
-//   downloadModel({repo,file}) -> HF resolve URL + aria2c|gopeed|curl 下载
-//   rebuildVectors()           -> 调 v5_call.py rebuild 重嵌 Chroma
+// -----------------------------------------------------------------------------
+// 符合 DeepSeek Harness (dsh) 插件规范
+// -----------------------------------------------------------------------------
+// 本插件是按 dsh 0.1.1-rc.2 的官方插件扩展点实现的, 与 dsh 自带的
+// `@deepseek-ai/dsh-client-ui-settings-models` 同构:
+//
+//   - Client 侧: ctx.slots.inject("settings.section", ...) 注册一张 React 卡,
+//     id="ikaros-memory-settings"; 与 dsh 原生 settings.models 卡并列显示.
+//   - Host 侧:  独立 Node.js http.createServer 暴露 RPC (默认 :19001,
+//     见 IKAROS_MEMORY_API_PORT), 仿 dsh 0.1.1-rc.2 的 dsh-host-apiproxy
+//     模式. 不用 class extends Service + connection.api 模式, 因为 dsh
+//     host-apiproxy 只硬编码 5 个 namespace (llm/settings/events/host/
+//     credentials), 自定义 service 不会被自动桥接 (commit 19c36bd 决策).
+//   - Cordis 兼容: apply(ctx, config) 形参与 dsh 其它插件一致; 资源清理
+//     走 ctx.effect(() => () => ...), dsh 卸载插件时自动释放端口 + port 文件.
+//   - 配置注入: cordis.patch.yml 里 id=ikarosMemory + config.IKAROS_*
+//     环境变量由 dsh launcher 注入, 0 硬编码盘符.
+//
+// 客户端 -> 服务端调用约定:
+//   Client 端 fetch(${IkarosMemoryAPI}${path}, {method: POST, headers:
+//     {"Content-Type": "application/json"}}). URL 在 build 时由 patchClientJs()
+//     把 dist/client.js 里的占位符替换为真实 host:port.
+//   CORS 预检 OPTIONS 必须回 Allow-Headers=Content-Type 否则浏览器拒掉.
+//
+// 实现的 RPC (10 项, 全部 POST JSON, 返 {ok: true, result} 或 {ok: false, error}):
+//   /listModels           扫描 IKAROS_MEMORY_MODELS/*.gguf, 启发式识别维度 + 类型
+//   /getStatus            端口/PID/模型/向量数/chroma 路径 + ikaros python/llama
+//   /startEmbedding       spawnDetachedNoWindow 起 llama-server, 轮询端口
+//   /stopEmbedding        killByPort 杀进程树 (含 CUDA helper), 等端口释放
+//   /switchModel          写 .env.embedding_active + kill+restart llama
+//   /downloadModel        HF resolve URL + 探测 gopeed/aria2c/curl 首个可用下载
+//   /downloadDefaultModel 硬编码 BAAI/bge-m3 + bge-m3-q8_0.gguf 一键下默认模型
+//   /rebuildVectors       调 rebuild_chroma_v5.py --no-wait 全量重嵌 Chroma
+//   /getDependencies      返回 python/llama 路径 + 来源 (override/env/default)
+//   /setDependencies      校验路径 + 写 .runtime.json + in-process 立刻生效
+//
+// 工具函数 (Windows 友好, 绕开 dsh subprocess Service 在 win32 的缺陷):
+//   spawnDetachedNoWindow  child_process.spawn + detached + windowsHide + unref
+//   execFileCapture        child_process.execFile + windowsHide, ENOENT 不 throw
+//   killByPort             powershell Get-NetTCPConnection + taskkill /T /F
+//
+// 依赖路径优先级 (initDependencyPaths):
+//   1. <pluginDir>/.runtime.json (runtime-override, 前端"覆盖依赖"写入)
+//   2. IKAROS_PYTHON / IKAROS_LLAMA 环境变量 (dsh launcher 注入)
+//   3. <IKAROS_ROOT>/runtime/{portable-python/python.exe, llama/b10000-cuda/llama-server.exe}
 //
 // 路径链:
 //   IKAROS_ROOT (env, by dsh launcher) -> IKAROS_RUNTIME (runtime/)
@@ -20,10 +54,10 @@
 //   -> IKAROS_MEMORY_MODELS (core/memory_v5/models/) -> *.gguf
 //   -> IKAROS_PORT_EMBEDDING (default 8587)
 //   -> IKAROS_PYTHON (runtime/portable-python/python.exe)
-//   -> v5_call.py (core/memory_v5/bin/v5_call.py, 同 ikaros-memory)
+//   -> rebuild_chroma_v5.py (core/memory_v5/scripts/rebuild_chroma_v5.py)
 //
 // 与 ikaros-memory (自动记忆工程层) 互补: 那一个做 turn-stopping/pre-step
-// 自动化，这一个做用户可见的"手动控制面板"。两者共享 v5_call.py 入口。
+// 自动化，这一个做用户可见的"手动控制面板"。两者共用 IKAROS_PYTHON + 8587。
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
