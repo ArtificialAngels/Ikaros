@@ -211,6 +211,8 @@ const DEFAULT_MODEL_PATH = path.join(IKAROS_MEMORY_MODELS, DEFAULT_MODEL_FILE)
 let IKAROS_MODEL_EMBEDDING = process.env.IKAROS_MODEL_EMBEDDING
   || (existsSync(DEFAULT_MODEL_PATH) ? DEFAULT_MODEL_PATH : DEFAULT_MODEL_PATH)
 const V5_CALL = path.join(IKAROS_ROOT, 'core', 'ikaros-dsh', 'plugins', 'ikaros-memory', 'bin', 'v5_call.py')
+// Note: v5_call.py does NOT accept a 'rebuild' subcommand (only search/store/--daemon).
+// rebuildVectors() below delegates to the real rebuild script instead.
 
 /* ── subprocess helper (仿 ikaros-memory) ── */
 
@@ -516,14 +518,27 @@ async function downloadModel(
 }
 
 async function rebuildVectors(_ctx: Context, cfg: Config): Promise<{ ok: boolean; message: string; stdout: string }> {
-  if (!existsSync(V5_CALL)) {
-    return { ok: false, message: `v5_call.py 不存在: ${V5_CALL}`, stdout: '' }
+  // The real rebuild script lives at core/memory_v5/scripts/rebuild_chroma_v5.py
+  // (NOT v5_call.py -- v5_call only supports search/store/--daemon).
+  // rebuild_chroma_v5.py:
+  //   - Polls :8587 /embedding until ready (--no-wait skips that; we already know it's up)
+  //   - Drops the existing chroma collection (clears orphan vectors + dimension drift)
+  //   - Re-embeds every row of v5.db.memory via bge-m3 at :8587
+  //   - Verifies chroma count == v5.db row count before exit
+  // Note: rebuild_chroma_v5.py does NOT yet accept --batch-size, so cfg.rebuildBatchSize
+  // is held in config but not forwarded. Add the flag here once the script supports it.
+  const rebuildScript = path.join(IKAROS_ROOT, 'core', 'memory_v5', 'scripts', 'rebuild_chroma_v5.py')
+  if (!existsSync(rebuildScript)) {
+    return { ok: false, message: `rebuild script not found: ${rebuildScript}`, stdout: '' }
   }
-  const r = await execFileCapture(IKAROS_PYTHON, [V5_CALL, 'rebuild', '--batch-size', String(cfg.rebuildBatchSize)], { timeoutMs: 60 * 60_000 })
+  const r = await execFileCapture(IKAROS_PYTHON, [rebuildScript, '--no-wait'], { timeoutMs: 60 * 60_000 })
+  // rebuild_chroma_v5.py uses logging (goes to stderr by default), so combine both
+  // streams so the UI can surface progress / errors. Last 2000 chars to keep payload small.
+  const combined = (r.stdout + (r.stderr ? '\n[stderr]\n' + r.stderr : '')).slice(-2000)
   return {
     ok: r.exitCode === 0,
-    message: r.exitCode === 0 ? '向量重建成功' : `重建失败 (rc=${r.exitCode})`,
-    stdout: r.stdout.slice(-2000),
+    message: r.exitCode === 0 ? '向量重建成功' : `重建失败 (rc=${r.exitCode}): ${r.stderr.slice(0, 300)}`,
+    stdout: combined,
   }
 }
 
