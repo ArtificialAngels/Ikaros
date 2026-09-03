@@ -161,21 +161,49 @@ pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"
 
 harmless when page opened standalone (no parent listener → no-op；wrap in try/catch)。
 
-### 5.4 dsh 记忆控制面板（`ikaros-memory-settings`，**2026-08-27 新增**）
+### 5.4 dsh 记忆控制面板（`ikaros-memory-settings`，**2026-08-27 新增 → 2026-09-03 改独立 HTTP server**）
 
-仿 `dsh-client-ui-settings-models`（`order=10`）新增"记忆系统"卡（`order=50`，沿用 `settings.section` slot），让 dsh 浏览器端点开设置即可拉起 llama-server embedding / 切模型 / 下 HF 模型 / 重建 Chroma 向量，**绕开命令行 / 集中 watchdog 退役后零控制平面**。
+仿 `dsh-client-ui-settings-models`（`order=10`）新增"记忆系统"卡（`order=50`，沿用 `settings.section` slot），让 dsh 浏览器端点开设置即可拉起 llama-server embedding / 切模型 / 下 HF 模型 / 重建 Chroma 向量 / 覆盖便携 Python/llama-server 路径，**绕开命令行 / 集中 watchdog 退役后零控制平面**。
+
+**架构演化**（v0.1.0 → v0.1.2，兄弟 commit 链 `e1ba9dc → 5a58c6c → 19c36bd → c691bd7`）：
+- **v0.1.0**：`class IkarosMemorySettingsService extends Service` + `connection.api.ikarosMemory` host-bridge
+- **v0.1.2**（当前）：**改用 Node 侧独立 HTTP server**（`127.0.0.1:IKAROS_MEMORY_API_PORT`，默认 19001），client 侧 `fetch()` 直调。**原因**：dsh 0.1.1-rc.2 的 dsh-host-apiproxy 只硬编码 5 个 namespace（llm/settings/events/host/credentials），自定义 Service 不被自动桥接。仿 `ikaros-conversation-tree` 同模式。
 
 **Node 侧**（`core/ikaros-dsh/plugins/ikaros-memory-settings/src/index.ts`）：
-- `export class IkarosMemorySettingsService extends Service` + `static Config = z.object({})`（**dsh-agent-default-model 同模式**，cordis 4 `resolveConfig` 强制 schema 校验，**`static Config = {}` 会 throw**——必须用 zod 空 schema）
-- 6 项 RPC 端点：`listModels` / `getStatus` / `startEmbedding` / `stopEmbedding` / `switchModel` / `downloadModel` / `rebuildVectors`
-- 通过 `ctx.get('subprocess')` 调 dsh-bash-local 的 subprocess service 起 llama-server，HF 下载用 `gopeed`/`aria2c`/`curl` 探测，向量重建调 `core/ikaros-dsh/plugins/ikaros-memory/bin/v5_call.py rebuild --batch-size`
-- cordis Service base class 把 `this.ctx` 注入到 instance；host-bridge 把 instance 暴露为 `connection.api.ikarosMemory`（命名空间 = patch.yml `id: ikarosMemory`）
+- `apply(ctx, config)` 起 `node:http.createServer` 监听 `IKAROS_MEMORY_API_PORT`，写 port 到 `tmp/ikaros-memory-api-port.json`（与 `ct-port.json` 同模式），启动时 `patchClientJs(port)` 把 dist/client.js 里的 `IkarosMemoryAPI` 占位符替换成实际 URL
+- **10 项 RPC**（POST JSON，CORS 预检 Allow-Headers=Content-Type）：
+
+| RPC | 行为 |
+|-----|------|
+| `/listModels` | 扫描 `core/memory_v5/models/*.gguf`，启发式识别 bge-m3(1024)/nomic(768)/e5(1024)/MiniLM(384)/LLM，标 active |
+| `/getStatus` | 端口/PID/模型/向量数/chroma 路径 + ikaros python + ikaros llama 路径 |
+| `/startEmbedding` | 用 `spawnDetachedNoWindow` 起 llama-server（detached + windowsHide + stdio ignore），轮询端口 |
+| `/stopEmbedding` | `killByPort` — powershell 查 PID → taskkill /T /F → 等端口释放 |
+| `/switchModel` | 写 `.env.embedding_active` + kill+restart llama-server |
+| `/downloadModel` | HF resolve URL + 探测 `gopeed`/`aria2c`/`curl` 首个可用工具下载 |
+| `/downloadDefaultModel` | 硬编码 `BAAI/bge-m3` + `bge-m3-q8_0.gguf` 一键下默认模型（已有则跳过） |
+| `/rebuildVectors` | 调 `v5_call.py rebuild --batch-size N` 全量重嵌 Chroma |
+| `/getDependencies` | 返回当前 python/llama 路径 + exists + 来源 (`runtime-override` / `env` / `default`) + `.runtime.json` 存在性 |
+| `/setDependencies` | 校验路径存在 → 写 `<pluginDir>/.runtime.json` → in-process `initDependencyPaths()` 立刻生效 |
+
+- **3 个 Windows 友好的工具函数**（绕开 dsh subprocess Service 在 win32 的 windowsHide/detached 缺陷）：
+  - `spawnDetachedNoWindow(cmd, args, opts)` — `child_process.spawn` + `detached:true` + `windowsHide:true` + `stdio:'ignore'` + `child.unref()`，弹 cmd 窗口治本
+  - `execFileCapture(cmd, args, opts)` — `child_process.execFile` + `windowsHide:true`，返 `{exitCode, stdout, stderr}` Promise；ENOENT 不 throw，返 `exitCode: -1`
+  - `killByPort(ctx, port)` — powershell `Get-NetTCPConnection -LocalPort` 查 PID → taskkill /T /F → 轮询端口释放
+
+- **依赖路径优先级**（`initDependencyPaths()` 启动加载一次，`/setDependencies` 后 in-process 重算）：
+  1. `<pluginDir>/.runtime.json`（runtime-override，前端"覆盖依赖"写入）
+  2. `IKAROS_PYTHON` / `IKAROS_LLAMA` 环境变量（dsh launcher 注入）
+  3. 默认 `<IKAROS_ROOT>/runtime/{portable-python/python.exe,llama/b10000-cuda/llama-server.exe}`
+
+- **资源清理**：`ctx.effect(() => () => server.close() + unlink(API_PORT_FILE), '...')` 卸载插件时关 server 删 port 文件
 
 **Client 侧**（`src/client.tsx`）：
-- `ctx.slots.inject("settings.section", ...)` 注册 React 卡，**id 故意是 `ikaros-memory-settings`（UI 标识），与 host entry id `ikarosMemory` 独立**——dsh 设计本就两套命名
+- `ctx.slots.inject("settings.section", ...)` 注册 React 卡，`id='ikaros-memory-settings'`（UI 标识，与 host 命名空间解耦）
 - `const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'settingsSchema']` ——**缺任一报 "cannot get property X without inject"**（典型坑：只 declare `slots` 但用 `ctx.locale`）
-- i18n `NS='ikaros-memory-settings'` + `ctx.locale.register({zh, en})`；React 卡含状态栏/模型列表/启停按钮/HF 下载/重建 5 个 section
-- 调 host RPC 走 `inject: ({ api }: { api: { ikarosMemory?: HostApi } }) => ({ api, t })`，settings.section slot 把 connection.api 注入卡片 props
+- i18n `NS='ikaros-memory-settings'` + `ctx.locale.register({zh, en})`；React 卡含状态栏/模型列表/启停按钮/默认模型下载/HF 下载/依赖覆盖/重建 7 个 section
+- **调 host RPC 走 `fetch`**：`const IkarosMemoryAPI = 'http://127.0.0.1:19001'` 占位符在 build 时替换为实际端口；`rpc<T>(path, body?)` 泛型 Promise，返 `{ok, result}` or `{ok:false, error}`
+- **不再依赖** `connection.api.ikarosMemory`（已删改）
 
 **构建/装配**：
 ```
@@ -185,9 +213,12 @@ cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory-settings && \
 ```
 
 **踩坑笔记**：
-- ⚠️ `class extends Service` 必须 `import { Service } from '@deepseek-ai/cordis'` + `import { z } from 'zod'`；`static Config = z.object({})` 是 cordis 4 唯一能接受的"无字段" schema
+- ⚠️ **dsh 0.1.1-rc.2 host-bridge 只硬编码 5 个 namespace**（llm/settings/events/host/credentials），自定义 Service 不被自动桥接到 `connection.api`——必须用独立 HTTP server 模式（仿 `ikaros-conversation-tree`）
 - ⚠️ `tsc` 不能 import dsh-base 链上的 zod（不在 sibling `ikaros-memory/node_modules`）——`tsconfig.build.json` 加 `"zod": ["../../../../runtime/dsh/node_modules/.pnpm/zod@4.4.3/node_modules/zod"]` 走 paths 解析
 - ⚠️ 客户端 `inject` 列表要全（slots/locale/connection/remote/settingsScope/settingsSchema）——`locale` / `connection` 不 declare 立即 throw
+- ⚠️ **CORS 预检 OPTIONS 必须 `Allow-Headers: Content-Type`**——浏览器 fetch POST + `Content-Type: application/json` 看不到这条直接拒，报"host-bridge unreachable"
+- ⚠️ **dsh subprocess Service 在 win32 不设 `windowsHide`**——起 llama-server 会弹 cmd 窗口驻留桌面，必须 `spawnDetachedNoWindow` 走 `child_process.spawn` 原生
+- ⚠️ **依赖覆盖文件路径**：`<pluginDir>/.runtime.json` 是**绝对路径**（用 `IKAROS_ROOT` + `path.join` 推导），**不是** cwd 相对；用户填路径时也要绝对
 - ⚠️ patch.yml 启动走 `ikarosctl dsh restart`（web 模式，user layer only）——**不要用 `bin/restart-dsh-ikaros.ps1`**（ps1 走 `--patch` + user layer 双 source，在 dsh 0.1.1-rc.2 + 当前 dsh-base 默认 patch 组合下会 `duplicate loader entry id: memory-ikaros-v5`，与本插件无关，是 dsh 自己的兼容 bug）
 
 ---
