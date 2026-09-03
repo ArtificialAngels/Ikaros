@@ -618,14 +618,63 @@ def unified_retrieve(
 ) -> list[dict]:
     """统一检索入口 (对应 cognee recall). scope 自动路由, 空则回退语义.
 
-    scope:
-      - "auto"     (默认): 语义三路融合 → 结果 <3 时补图扩散路 → 仍不足走 Vault (retrieve 内置)
-      - "semantic": 等价现有 retrieve() (三路融合 + Vault fallback)
-      - "lexical" : 仅 FTS5 关键词, 空则回退 semantic
-      - "graph"   : 仅实体图扩散激活, 空则回退 semantic
-      - "tree"    : 树域加权检索 (需 node_id + tree 对象; tree 缺失自动降级 auto)
-      - "temporal": 时间过滤检索 (阶段 5 接线后可用; 当前降级 semantic)
-    返回: 按 score 降序的统一归一化 list[dict], source ∈ semantic/lexical/graph/tree/vault.
+    -----------------------------------------------------------------------------
+    V5 向量检索式记忆架构 (vector-retrieval memory) 的核心特征
+    -----------------------------------------------------------------------------
+    V5 不是 RAG 也不是经典 KB, 而是一套"以向量相似度为入口、以多路融合为
+    增强、以生命周期为收敛"的记忆架构. 关键设计取舍:
+
+    1. 三路融合 (semantic scope 默认走这条)
+       - FTS5 BM25 (lexical)  -> 精确关键词命中
+       - Chroma cosine (vector) -> 语义近似命中 (bge-m3-q8_0, 1024 维,
+         cls pooling, query 加 "为这个句子生成表示以用于检索相关文章:" 前缀)
+       - 时间加权 (time decay) -> per_type 半衰期, conversation 快衰减,
+         user_trait/identity/decision/lesson 保值
+       三路分数在 _score_items 纯函数里做加权融合, 每条结果带 signals
+       (fts/vec/time/base_weight/type_decay/type_boost/frequency/
+       situational), 供上层或 LLM 自主重排.
+
+    2. 单写双索引 (write once, two indexes)
+       - 主真相源: v5.db (SQLite + WAL + FTS5 + temporal_graph)
+       - 派生: chroma/ikaros_v5 集合 (可删重建, 不影响 v5.db)
+       store.upsert() 是唯一写入口, 写时合并强化 (同类相似合并, 不堆
+       雷同). chroma 异步同步, chroma 挂了不影响检索 (fallback FTS5).
+
+    3. 召回预算 (VikingMem 借鉴 F1+F2)
+       - recall_ledger: 每会话 JSON 记录近 5 轮已展示正文, 跨轮去重;
+         bare-URI 不冷却 (否则 token=URI 也会被冷, 召回立刻空)
+       - recall_budget.plan_entries(candidates, max_tokens): 广度后深度 +
+         超限降级 (full -> abstract -> uri) + body-hash dedup
+       - freshness: cluster_freshness 表按 type 维护 watermark, 治反思欠账
+
+    4. 时间锚定 (temporal_graph)
+       - memory.valid_to < now 的事实视为失效 (supersede 旧事实时落库)
+       - unified_retrieve 默认排除已失效事实 (与"检索永远取当前值"对齐)
+       - 列不存在/未迁移 -> fail-open 不过滤 (鲁棒性)
+
+    5. 实体图扩散 (graph scope)
+       - eg_entities + eg_edges + project_edges 三表联合
+       - spreading_activation_search: 从语义命中出发, 沿关系边多跳扩散
+       - 1 跳失败回退, graph_rank 用 personalized_pagerank 取代单跳传播
+
+    6. 树域加权 (tree scope, 需对话树)
+       - 仅当 caller 提供 node_id + tree 时启用
+       - 树节点附近记忆加权, 不强依赖 tree (缺失自动降级 auto)
+
+    7. archived/孤儿过滤 (入口拦截)
+       - memory_retrieval._live_ids() 在三路融合 _add 入口拦掉 archived
+         和孤儿 id (2026-08-30 治根治; chroma 里 753+110 孤儿向量仍待
+         物理清理 -- 哥哥拍板)
+
+    8. 唯一对外入口 (P1 收敛, 2026-08-14)
+       - search.fused_search / rules_retriever / gated_retrieval / mr.retrieve
+         全部删除, 外部只走 unified_retrieve(scope=...)
+       - scope 自动路由 (auto) 优先三路融合, 不足时补图扩散路, 仍不足
+         走 Vault (retrieve 内置)
+
+    返回: 按 score 降序的统一归一化 list[dict], source ∈
+    semantic/lexical/graph/tree/vault. 每条带 signals + intent 供
+    上层/LLM 自主重排.
     """
     if not query or not query.strip():
         return []
