@@ -6,7 +6,7 @@ REM  Ikaros work engine -- DeepSeek Harness (DSH) launcher
 REM
 REM  Thin wrapper: forwards to `ikaros web` / `ikaros headless`.
 REM  Real implementation: core/ikarosctl.py
-REM  (2026-08-20: 收敛为 ikaros 启动器的薄壳, see docs/ikaros-launcher-design.md)
+REM  (2026-08-20: collapsed to a thin wrapper around ikaros launcher, see docs/ikaros-launcher-design.md)
 REM  ASCII only -- cmd parses bat in ANSI/GBK, UTF-8 comments break it.
 REM ============================================================
 

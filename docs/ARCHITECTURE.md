@@ -377,7 +377,6 @@ setlocal 不可用（被 call 的子批中会丢失）
 | `ikaros-env.sh` / `ikaros-env.bat` / `ikaros-env.ps1` | **环境权威源三件套**（自锚定 `IKAROS_ROOT`，设置全部 `IKAROS_*` 变量，锚点原则学 ComfyUI-aki） |
 | `start-dsh-ikaros.bat` | dsh 启动器薄壳 → `ikaros web` / `ikaros dsh headless <任务>` |
 | `restart-dsh-ikaros.ps1` | dsh 重启器（杀旧 dsh web 进程 + `--patch` 重启 + 日志，`$port` 兜底 3080） |
-| `sync-dsh-profile-patch.bat` | 规范源 `core/ikaros-dsh/cordis.patch.yml` → 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 同步 |
 | `proc.py` | 进程管理（`ps` 列出 python/node 进程、`kill <port|name>` 按端口/关键词强杀） |
 | `secret-scan.py` | 仓库密钥泄露扫描（stdlib only，非阻塞 exit 0，可挂 pre-commit） |
 | `wb.py` | WorkBuddy / CodeBuddy CLI 封装（让 Ikaros / 子代理直接驱动 WorkBuddy，不再文件交接 TASK.md） |

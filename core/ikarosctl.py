@@ -182,7 +182,7 @@ def start_component(
             # web profile auto-loads the patch from ~/.dsh/profiles/web/;
             # --patch is NOT passed here (the old start-dsh-ikaros.bat only
             # used --patch for headless mode).  The patch is synced by
-            # bin/sync-dsh-profile-patch.bat.
+            # `ikaros dsh sync` (see _dsh_sync() below).
             # --no-open 防止 dsh 自动开系统默认浏览器（用户偏好：自己用 ikaros dsh open 开 Chrome --app，
             # 避免 Edge/Chrome 重复窗口）。
             argv = [
@@ -774,7 +774,7 @@ def _dsh_open(root: Path) -> int:
 
 
 def _dsh_sync(root: Path) -> int:
-    """cordis.patch.yml → ~/.dsh/profiles/web/cordis.patch.yml (与 sync-dsh-profile-patch.bat 等价)."""
+    """Sync cordis.patch.yml -> ~/.dsh/profiles/web/cordis.patch.yml (only entry point for this operation)."""
     src = root / "core" / "ikaros-dsh" / "cordis.patch.yml"
     dst_dir = Path.home() / ".dsh" / "profiles" / "web"
     dst = dst_dir / "cordis.patch.yml"

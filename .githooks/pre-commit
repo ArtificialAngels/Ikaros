@@ -4,8 +4,8 @@
 # LF-only .bat files correctly (paths with spaces get truncated,
 # scripts fail silently).  Pure sh, no Python dependency.
 #
-# Install once with:  bin\install-git-hooks.bat
-# Uninstall with:     bin\install-git-hooks.bat uninstall
+# Install once with:  git config core.hooksPath .githooks
+# Uninstall with:     git config --unset core.hooksPath
 #
 # 2026-07-05 rewrite:  bin/fix-eol.py was deleted by the 7-4b
 # architecture cleanup (commit 11d682f), so the previous hook that

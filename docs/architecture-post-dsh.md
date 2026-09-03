@@ -257,7 +257,7 @@ config/components.yaml ← 3 组件元数据 (dsh / conversation-tree / embeddin
 - **dsh 组件的递归防护**：dsh 的 `start_script` 是 thin wrapper（调 ikaros），ikaros 又会调 start_script 启动 dsh → 直接派 `node bin.js web --no-open` 真启动 dsh（兄弟 commit `593bda8`）
 - **`port_file` 健康检查**（兄弟 commit `593bda8`）：`server.py --port 0` 绑定后写 `tmp/ct-port.json`，启动器从文件读实际端口再探测（取代死等固定 48920）
 - **thin wrapper 不删**：旧 `bin/start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 全部调 `ikaros` 启动器
-- **新薄壳 4 件**（`bin/dsh-{open,status,sync,restart}.bat`）：每个动作独立 `.bat`，`Win+R` 即可调，背后全走 `ikaros dsh <sub>`；CRLF 正确（pre-commit hook 验证过）
+- **新薄壳 3 件**（`bin/dsh-{open,status,sync}.bat`）：每个动作独立 `.bat`，`Win+R` 即可调，背后全走 `ikaros dsh <sub>`；CRLF 正确（pre-commit hook 验证过）。**重启统一走 `bin/restart-dsh-ikaros.ps1`**（覆盖更全：先 sync patch 再 stop+start，含 mcp_server 健康检查，日志到 `~/.dsh/ikaros-dsh-restart.log`），不另设 `dsh-restart.bat` 避免双入口漂移
 
 ---
 

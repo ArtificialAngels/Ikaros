@@ -1,6 +1,6 @@
-﻿# ikaros-env.ps1 — Ikaros 便携环境 (单一权威源, 自锚定)
-# 由 PowerShell 脚本 dot-source 本文件; 锚点 = $PSScriptRoot 规范化推导, 不写死盘符
-# 重构: 2026-08-18 (移除 hermes/neko, 新增 dsh)
+﻿# ikaros-env.ps1 -- Ikaros portable environment (single source of truth, self-anchored)
+# Dot-source this file from PowerShell scripts; anchor = $PSScriptRoot normalized, no hardcoded drive letters.
+# Refactored 2026-08-18 (removed hermes/neko, added dsh).
 $env:IKAROS_ROOT = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path.TrimEnd('\')
 $root = $env:IKAROS_ROOT
 
@@ -20,7 +20,7 @@ $env:IKAROS_MEMORY_MODELS = Join-Path $root "core\memory_v5\models"
 $env:IKAROS_MEMORY_SCRIPT = Join-Path $root "core\memory_v5\store.py"
 $env:IKAROS_MODEL_EMBEDDING = Join-Path $root "core\memory_v5\models\bge-m3-q8_0.gguf"
 
-# DeepSeek Harness (dsh) 工作引擎
+# DeepSeek Harness (dsh) work engine
 $env:IKAROS_DSH = Join-Path $root "runtime\dsh"
 $env:IKAROS_DSH_SOURCE = Join-Path $root "runtime\deepseek-harness-master"
 $env:IKAROS_DSH_PROFILE = Join-Path $root "data\dsh\profiles"
@@ -29,11 +29,11 @@ $env:IKAROS_DSH_OVERLAY = Join-Path $root "core\ikaros-dsh\cordis.patch.yml"
 
 
 
-# 其它
+# Other
 $env:IKAROS_RUST = Join-Path $root "runtime\rust"
 $env:THIRDSPACE_VAULT = Join-Path $root "data\thirdspace-vault"
 
-# 端口
+# Ports
 $env:IKAROS_PORT_EMBEDDING = "8587"
 $env:IKAROS_PORT_LLM = "8080"
 $env:IKAROS_PORT_LLAMA = "8080"

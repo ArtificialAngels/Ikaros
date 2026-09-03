@@ -64,7 +64,8 @@ bin\start-dsh-ikaros.bat headless "<task>"
 ### 重启（让已运行会话加载 overlay）
 
 ```bat
-:: 杀旧 dsh web + 用 --patch 重启（独立进程，日志 ikaros-dsh-restart.log）
+:: Restart dsh web (sync patch + stop + start; logs to ~/.dsh/ikaros-dsh-restart.log)
+:: 2026-08-30 fix: no longer passes --patch (web mode loads from profile); sets IKAROS_ROOT.
 powershell -ExecutionPolicy Bypass -File bin\restart-dsh-ikaros.ps1
 ```
 
