@@ -549,3 +549,38 @@ V5 现有（5.1.0）的上下文缩减手段：LLM 摘要旧轮（`summary.py`�
 3. 下载用 `scripts/fetch-upstreams.py`（内嵌 gopeed/aria2 上游；`bin/ikaros-fastdl.py` 已抽离为 WorkBuddy skill `ikaros-fastdl`）
    --mirror hf → hf-mirror.com
 ```
+
+---
+
+## 第七章：详细设计索引（按需下钻到 archive）
+
+本文件是**架构骨架**——只含 agent onboarding 必须知道的事实。具体设计稿、
+选型过程、命名细节、专题深度，按需下钻：
+
+| 主题 | 详细文档 |
+|------|---------|
+| 安全 / Secrets / 扫描 | `docs/archive/decision-history/SECURITY.md` |
+| 启动器三壳 + 6 子命令 + 跨平台约束 | `docs/archive/decision-history/ikaros-launcher-design.md` |
+| 组件插件 YAML Schema + 注册 SOP | `docs/archive/decision-history/COMPONENT-PLUGIN-SPEC.md` |
+| dsh 接入层 + UI 集成 + 迁移 Phase | `docs/archive/decision-history/ikaros-dsh-plugin-architecture.md` |
+| 命名规则 / 大小写 / V5 vs memory_v5 vs v5 | `docs/archive/decision-history/naming.md` |
+| V5 记忆架构深度 | `docs/archive/decision-history/v5-architecture-convergence.md` + `v5-memory-evolution-plan.md` + `memory_v5-analysis-20260819.md` |
+| 对话树卡片 DSL | `docs/archive/decision-history/conversation-tree-cards.md` |
+| MCP 工具合并历史 | `docs/archive/decision-history/v5-mcp-consolidation.md` |
+
+更老的报告（hermes/neko/pi/herdr/omp 退役 + 9200/9100/9119 等）见 `docs/archive/` 根目录。
+
+---
+
+## 第八章：Agent onboarding 路径（精炼版）
+
+1. 读 `AGENTS.md`（契约入口，≤200 行）
+2. 读本文档 §1-§6（架构骨架 ~600 行）
+3. 读 `docs/architecture-post-dsh.md`（dsh 时代 5 分钟总览）
+4. 按 git log 看最近 30 commit 了解时间线
+5. 涉及专题细节 → 下钻 `docs/archive/decision-history/<name>.md`
+
+**不要**：
+- 不读 docs/archive/ 里 8-14 之前的报告（commit log 能查）
+- 不读 dsh-base-audit / hermes-bridge-design 等历史（已不在主干）
+- 不依赖 docs/omnipanel-* 等灵感清单（已落地的看代码，未落地的看 issue）

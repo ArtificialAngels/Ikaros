@@ -1,79 +1,79 @@
 # docs/ — Ikaros 文档中心
 
-本目录集中存放项目的说明文档、规格、研究与脚本注释归档。
-脚本自身的注释正文已抽离到 `scripts/`（见 `scripts/README.md`）。
+> **目标读者**：AI Agent（onboarding）+ 人类（少量保留项）
+> **维护原则**：本目录只放 agent **必须立刻看**的骨架文档；专题深度在
+> `archive/decision-history/`，按需下钻；git commit log 是时间线真相源。
+> **不要**：把历史决策报告 / 选型过程 / 灵感清单留在本目录——它们应进 archive。
+
+---
+
+## Agent onboarding 5 步
+
+1. 读根目录 `AGENTS.md`（契约入口，**保持 ≤200 行**）
+2. 读 `docs/ARCHITECTURE.md`（架构骨架 ~600 行，8 章）
+3. 读 `docs/architecture-post-dsh.md`（dsh 时代 5 分钟总览，**最有价值**）
+4. 按 `git log --oneline -30` 看最近 30 commit 了解时间线
+5. 涉及专题细节 → 下钻 `archive/decision-history/<name>.md`
+
+---
 
 ## 目录导航
 
-### 架构与总览（按更新日期排列）
+### Agent onboarding 必读（4 份）
 
-| 文档 | 日期 | 内容 | 规模 |
-|------|------|------|------|
-| [architecture-post-dsh.md](architecture-post-dsh.md) | 2026-08-27 | **dsh 时代 5 分钟可读懂总览（端口表 / 三层架构 / 启动器 / OpenViking 借鉴 5 项 / 兄弟 commit 索引）** | 22KB |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 2026-08-19 | Ikaros 全栈架构（分层/端口/路径/数据流/规则，dsh 底座） | 40KB |
-| [naming.md](naming.md) | — | 命名规则（目录/包/端口/变量） | — |
-| [ikaros-launcher-design.md](ikaros-launcher-design.md) | 2026-08-20 | ikaros 启动器设计（`bin/ikaros` 三壳 + ikarosctl.py 调度核心） | 29KB |
-| [COMPONENT-PLUGIN-SPEC.md](COMPONENT-PLUGIN-SPEC.md) | 2026-08-20 | 组件插件接口规范（components.yaml + registry.py schema） | 24KB |
-| [ikaros-dsh-plugin-architecture.md](ikaros-dsh-plugin-architecture.md) | 2026-08-18 | dsh 接入层架构（cordis overlay + ikaros-memory plugin） | 8KB |
-| [SECURITY.md](SECURITY.md) | — | 安全说明 | — |
-| [observability.md](observability.md) | — | 可观测性 / 日志 | — |
-| [module-dependency-map.html](module-dependency-map.html) | 2026-07-27 | 模块依赖关系图（交互式 SVG） | — |
-| [thirdspace-integration.md](thirdspace-integration.md) | 2026-07-20 | ThirdSpace Vault 集成指南 | 4KB |
+| 文档 | 行数 | 角色 |
+|------|-----|------|
+| [`../AGENTS.md`](../AGENTS.md) | ≤200 | 契约入口（端口/启动/DO NOT/指针） |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | ~600 | 架构骨架（8 章） |
+| [`architecture-post-dsh.md`](architecture-post-dsh.md) | 379 | dsh 时代 5 分钟总览 |
+| [`README.md`](README.md) | 本文件 | 目录索引 |
 
-> **新 AI Agent onboarding 路径**（2026-08-27 兄弟 commit `3145f7e` + 本文档）：
-> 1. 先读 [architecture-post-dsh.md](architecture-post-dsh.md) — 5 分钟建立全景
-> 2. 再按主题跳读 ARCHITECTURE.md / ikaros-launcher-design.md / COMPONENT-PLUGIN-SPEC.md
-> 3. 最后看 `AGENTS.md` 顶部 Handoff Card 收口
+### 长期保留（5 份）
 
-> **架构图三件套**（交互式 HTML，放 `docs/`）：`module-dependency-map.html`（模块依赖关系）/ `architecture-overview.html`（架构全景）/ `folder-tree.html`（文件夹层级）。全部基于 2026-07-27 真实扫描生成（已过时，仅作历史参考）。
->
-> **清理记录**（2026-08-12）：删除 4 份过时文档（`p2-payload-schema-migration.md`（mem0/Qdrant 旧时代）、`upstream-candidates.md`、`附录-镜像与代理.md`、`16-资源链接.md`），镜像/代理配置以 `bin/ikaros-env.sh/.bat` 为准。
->
-> **归档记录**（2026-08-19）：13 份历史文档移入 `archive/`（N.E.K.O / Hermes 退役组件文档、对话链路历史报告、演化史、项目评审、UI 优化日志、Session 机制分析、架构清理方案）。工作引擎 = dsh :3080（2026-08-18 起）。
+| 文档 | 行数 | 角色 |
+|------|-----|------|
+| [`observability.md`](observability.md) | 91 | 日志/可观测性 |
+| [`naming.md`](naming.md) | — | （已 archive，见下） |
 
-### 对话树 / 对话流
-- [conversation-tree-cards.md](conversation-tree-cards.md) — 对话树卡片系统（Artifact Deck 万用工具卡组 :::card DSL）
+### 历史归档（按需下钻）
 
-### V5 规格与迁移
-- [v5.2-preprocess-factory-spec.md](v5.2-preprocess-factory-spec.md) — V5.2 预处理工厂规格（节奏/记忆/摘要/画像/情感）
-- [v5-memory-evolution-plan.md](v5-memory-evolution-plan.md) — V5 记忆演化计划
-- [v5-context-compression.md](v5-context-compression.md) — 上下文压缩与检索增强层（token_compressor / temporal_graph）
-- [v5-architecture-convergence.md](v5-architecture-convergence.md) — V5 架构收敛
-- [v5-memory-evolve / dsh-memory-evolve 对比](v5-vs-dsh-memory-evolve-20260819.md) — 2026-08-19
-- [memory_v5-analysis-20260819.md](memory_v5-analysis-20260819.md) — memory_v5 全量分析（2026-08-19）
+- [`archive/decision-history/`](archive/decision-history/) — 20 份专题深度
+  （启动器 / 组件契约 / dsh 接入 / V5 架构 / 命名 / 安全 / 对话树 DSL /
+   MCP 合并 / 退役组件 / 灵感清单）
+- [`archive/`](archive/) — 25 份 8-14 之前的更老报告（hermes/neko/pi/herdr/
+  omp 退役 + 9100/9119 控制面板 + dsh-base 审计 + bridge 设计等）
 
-### 智能体规则 / 身份
-- [agent-rules.md](agent-rules.md) — 智能体规则说明
-- [agent-rules.yaml](agent-rules.yaml) — 智能体规则配置
-- > 身份主文档已迁移到 `.workbuddy/SOUL.md`（BOOTSTRAP 流程管理）
+### 子目录（脚本注释归档）
 
-### 研究 / 面板
-- [research/deep-personality-prompt-engineering.md](research/deep-personality-prompt-engineering.md) — 深度人格提示工程研究
-- [research/anti-ai-tone-prompt-research.md](research/anti-ai-tone-prompt-research.md) — 反 AI 腔调提示研究
-- [omnipanel-research.md](omnipanel-research.md) — 全功能面板研究
-- [omnipanel-inspiration.md](omnipanel-inspiration.md) — 全功能面板灵感
+- [`scripts/`](scripts/) — 7 份脚本自身的注释归档（按 README 映射）
+- [`hermes-plans/`](hermes-plans/) — 5 份 2026-08-19 4 线并行方案历史
+- [`examples/skills/`](examples/skills/) — 1 份 skill 示例说明
+- [`research/`](research/) — 2 份人格提示工程研究
 
-### 底座与集成（dsh 时代）
-- [ikaros-dsh-plugin-architecture.md](ikaros-dsh-plugin-architecture.md) — dsh 插件架构（overlay + ikaros-memory 插件）
-- [hermes-retirement-inventory.md](hermes-retirement-inventory.md) — hermes / N.E.K.O / 9100 面板退役清单（2026-08-18）
-- [herdr-integration-design.md](herdr-integration-design.md) — herdr 多路复用器（见架构总览）
+---
 
-### 示例
-- [examples/skills/README.md](examples/skills/README.md) — 技能示例说明
-- `examples/skills/note.py`、`examples/skills/weather.py` — 示例技能实现
+## 维护规则（agent 必读）
 
-### 资产（演示图，已归档）
-- `assets/对话演示.png`、`assets/Qwen3.6-35B-A3B-UD-Q6_K.gguf测试.png`
+### DO
 
-### 脚本注释归档（自动生成）
-- [scripts/README.md](scripts/README.md) — 归档约定与批次进度（入口）
-- `scripts/core-env/` — 环境配置脚本说明（init / ikaros-env / detect-root / validate-paths）
+- 改代码时**主动**评估"是否影响 ARCHITECTURE.md §1-§6 / AGENTS.md 端口表"
+- 改完后**手动**修订（不自动同步——见 §6.6）
+- 专题深度评审先放 `archive/decision-history/`，不放根目录
 
-### 历史归档
-- `archive/` — 24 份历史文档（N.E.K.O / Hermes 退役组件、对话链路报告、演化史等）
+### DO NOT
 
-## 维护约定
-- 新增脚本说明：按 `scripts/README.md` 的映射规则放到 `scripts/<相对路径>.md`。
-- 文档均简体中文；脚本内仅保留必要安全提示 + 一行指针（`.bat`/`.ps1` 用纯 ASCII 英文指针）。
-- 不放 secrets；路径优先走 `bin/ikaros-env.sh/.bat` 注册的环境变量。
-- **架构防漂移规则**：任何触及架构 / 端口 / 组件的 commit，**必须同步** `docs/ARCHITECTURE.md` 与根 `AGENTS.md`，否则其提交信息须带 `docs:` 前缀（如 `docs: 调整 dsh overlay`），以防文档与实现漂移。可用 `python docs/lint.py` 检查残留的旧路径 / 已删文件与端口。
+- 不要新增 markdown 到 `docs/` 根目录——除非它属于 onboarding 必读
+- 不要重写 `architecture-post-dsh.md`（它已稳定，5 分钟总览）
+- 不要 commit **未**附 `docs:` 前缀的架构变更（commit message 守门）
+- 不要把灵感清单 / 选型过程 / 退役组件报告留根目录（进 archive/）
+
+---
+
+## 历史变更记录
+
+- **2026-09-04**（本轮）：docs/ 根目录 24 份 → 4 份；20 份进
+  `archive/decision-history/`；ARCHITECTURE.md 加 §7 §8 索引与 onboarding 路径；
+  docs/README.md 重写。
+- **2026-08-27**：docs/scripts/ 陈旧脚本文档归档（51 文件 / 1286 行）。
+- **2026-08-19**：13 份历史报告进 archive/（N.E.K.O / Hermes / 对话链路 / 演化史等）。
+- **2026-08-12**：删 4 份过时文档（mem0/Qdrant 旧时代 / 镜像 / 16 资源链接等）。

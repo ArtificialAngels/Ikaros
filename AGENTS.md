@@ -1,225 +1,110 @@
 # Ikaros — Handoff Card
 
-> Quick-start for any AI Agent picking up the project.
-> Full architecture: `docs/ARCHITECTURE.md`. Naming rules: `docs/naming.md`.
-> Drift guard: `python docs/lint.py` (run after doc edits).
+> **目标读者**：所有接入本项目的 AI Agent。
+> **总入口**：本文档只含 agent onboarding 必须知道的硬契约 + 指针。
+> **完整架构**：`docs/ARCHITECTURE.md`（~600 行，8 章）。
+> **dsh 时代 5 分钟总览**：`docs/architecture-post-dsh.md`。
+> **专题深度**：`docs/archive/decision-history/<name>.md`（按需下钻）。
+> **时间线真相源**：`git log --oneline -30` + `docs/CHANGELOG.md`。
+> **漂移守门**：`python docs/lint.py`（doc 改动后跑）。
+> **Agent onboarding 路径**：`docs/README.md` §Agent onboarding 5 步。
 
-## Ports (3 active services)
+---
+
+## Ports (3 active)
 
 | Port | Service | Component |
-|------|---------|----------|
-| :8080 | 本地 LLM（**已退役 2026-08-18**，按需恢复） | 退役，无看门狗；恢复时由对应组件启动脚本自带 watchdog 拉起 |
-| :8587 | Embedding (bge-m3 q8_0, 1024 dim) | 各组件启动脚本自带 watchdog |
-| :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` (npm 本地安装; 启动 `bin/start-dsh-ikaros.bat web`; overlay `core/ikaros-dsh/cordis.patch.yml`) |
-| :48920 | Conversation Tree 面板 (树形对话面板) | `core/conversation-tree/server.py` (后端引擎 `core/memory_v5/conversation_tree.py`) |
+|------|---------|-----------|
+| :8587 | Embedding (bge-m3-q8_0, 1024 dim, cls pooling) | `core/memory_v5/models/` + watchdog 自管 |
+| :3080 | **dsh (DeepSeek Harness)** 工作引擎 web | `runtime/dsh/` + `core/ikaros-dsh/cordis.patch.yml` |
+| :48920 | Conversation Tree 面板 (动态端口, 见 `tmp/ct-port.json`) | `core/conversation-tree/server.py` |
 
-Added (2026-08-10 → 退役 2026-08-23): herdr agent `pi` = omp (oh-my-pi, go-deepseek 通道)、pi 的 V5 MCP 挂载、omp 便携化（`data/omp/`、`runtime/bun/omp.exe`、`PI_CODING_AGENT_DIR`、`bin/start-omp.bat`、`core/herdr/`、herdr 命名管道）**已整体退役删除**——底座统一为 dsh (deepseek-harness) 工作引擎，外部 agent 能力由其 overlay（terminal / LSP / MCP）承载。相关文件/组件/脚本勿再恢复。
-Added (2026-08-19): **`[dsh-only]` 内容隔离** — 内容含 `[dsh-only]` 标记 = 仅 dsh 工作引擎可见（平台纪律/密钥类）；**外部执行器检索时须传 `include_dsh_only=false`**（`v5_memory_search`/`v5_project_retrieve` 均已支持该参，默认 true 不过滤）。dsh 本体不传参（默认全量）。
-
-Added (2026-07-28): Conversation Tree 面板 `:48920`.
-Removed (do not re-add): voice bridge (ports 7870 / 7871).
-2026-08-18: Hermes gateway (:8642) / Bridge (:8650) / Dashboard (:9119) 已随底座整体退役; 工作引擎 = dsh (:3080, DeepSeek Harness).
-2026-08-23: pi/herdr (omp) 编码 agent 底座整体退役; 组件收敛为 3 (dsh / conversation-tree / embedding); 对话树底座语义统一为 deepseek-harness (推理经 DeepSeek API, 同 dsh 源).
+> 详细端口表 + 退役端口（:8080 Phi-4 / :9100/9119 dashboard / :7870/7871 voice bridge）见 `docs/ARCHITECTURE.md` §1.2。
 
 ## Startup
-- dsh 工作引擎（Web GUI）: `bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080（`--patch` 加载 Ikaros overlay: memory_v5 MCP + 终端 + LSP + persona）
-- dsh headless（one-shot 任务）: `bin/start-dsh-ikaros.bat headless "<task>"`
-- 对话树面板: `python core/conversation-tree/server.py --port 48920` → http://127.0.0.1:48920
-- Embedding (:8587): 由各组件启动脚本自带 watchdog 拉起（不再由集中看门狗管理）
 
-## 便携环境 (2026-08-11, 学秋叶整合包)
-- IKAROS_* 全部变量收敛到 **`bin/ikaros-env.sh` / `bin/ikaros-env.bat`**（自锚定 `BASH_SOURCE[0]`/`%~dp0`，移动文件夹后仍正确）
-- **dsh (2026-08-18 新增)**：`runtime/dsh/` npm 本地安装；overlay `core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）
-- 注册表 IKAROS_* 已清零（勿再 setx IKAROS_*，改 .env / ikaros-env.*）
-- 权威源链：`bin/ikaros-env.sh|bat|ps1`（单一权威源, 自锚定 IKAROS_ROOT）; 根 `.env` 只放密钥；`model_config.json` 决定本地 LLM 模型
-- Renamed: the V5 soul-core dir is now `core/memory_v5/` (the old `v5` subdir under `core` is gone). Python package `v5` → **`memory_v5`** (`import memory_v5`); `sys.path` must include `E:/Ikaros/core`.
-- Data still at `core/memory_v5/data/v5/`; DB file **still** `v5.db`. MCP tools are **still** prefixed `v5_*` (external contract — do NOT rename the db or the tool prefix). Count is now mode-dependent: 58 in `legacy` / 17 in `slim` (2026-08-30, see `docs/v5-mcp-consolidation.md`).
-- **统一检索路由（2026-08-01）**：新检索入口 `memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`（借鉴 cognee recall；auto 语义不足自动补图扩散路）。`memory_api` fuse 路径与 conversation-tree 的 `memory_search` 工具已切换；⚠️ `rules_retriever` 已于 2026-08-14 删除（孤儿, 无代码调用; 规则数据 `docs/agent-rules.yaml` 暂未消费）。检索排序新增频率/反馈权重（`frequency_weight`/`reinforcement_weight`/`freshness_weight`/`long_term_boost`，config 可关）。`temporal_graph` supersede 已接进 `dissonance._record_dissonance`（矛盾旧事实 `valid_to` 失效 + `reinforcement` 降权）；`reflect/registry.py` 新增 `memory_promote`（6h 两档桥接）+ `temporal_extract`（24h 时间戳抽取）两个 op；`extensions/ontology_align.py` 为轻量本体对齐（difflib，默认关）。⚠️ `store.conn()` 退出默认 rollback——写操作必须显式 `c.commit()`（temporal_graph 原骨架因此从未生效）。
+- **dsh web（Web GUI）**：`bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080
+- **dsh headless（one-shot）**：`bin/start-dsh-ikaros.bat headless "<task>"`
+- **对话树**：`bin/ikaros tree` 或 `python core/conversation-tree/server.py --port 0`（动态端口写 `tmp/ct-port.json`）
+- **全部启动**：`bin/ikaros all`（拓扑序 embedding → tree → dsh）
+- **dsh 重启**：`bin/ikaros dsh restart` 或 `bin/restart-dsh-ikaros.ps1`（**会中断 :3080 Web 会话**）
 
-## dsh 底座 overlay（2026-08-18，替代 hermes 插件外置）
-- **工作引擎底座 = dsh (DeepSeek Harness)**；Ikaros 定制经 overlay `core/ikaros-dsh/cordis.patch.yml` 注入（memory_v5 MCP stdio `v5_*` 工具 + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
-- **MCP 工具双模（2026-08-30）**：`V5_MCP_TOOL_MODE=legacy`（默认，58 工具，全兼容）| `slim`（17 工具 = 9 热路径 + 8 门面）。清单真相源**唯一** = `core/memory_v5/tools/registry.py`，漏登记/幽灵登记**启动即 `RuntimeError`**（不再有第二份手抄表）。⚠️ `V5_MCP_TOOL_GROUPS` 必须含 `loop`，否则 slim 下只剩 16 个工具且无 Loop 入口。⚠️ **切 slim 前必须跑闸门**：`python core/memory_v5/tools/slim_check.py`（退出码 0 才能切；**必须以脚本方式跑，`-m` 起不来**）—— slim 下另外 41 个工具不再注册，persona / 插件 / AGENTS.md / SOUL.md 里的旧工具名会变成指向不存在的工具，而这类问题**测试永远抓不到**（测试直接 import Python 函数，不走 MCP 注册）。详见 `docs/v5-mcp-consolidation.md` §7.1。
-- **标准记忆循环（2026-08-30）**：`core/memory_v5/loop.py` 三阶段声明式引擎 —— `pre`（身份+召回+项目经验）/ `post`（精力+关系推进+反重复语料）/ `maintenance`（反思管线，6h 冷却）。ikaros-memory 插件 3 个 hook 各调一次 `v5_call loop`：`agent/pre-step`→pre、`agent/turn-stopping`→post、`ctx.interval 6h`→maintenance（原 `tick` op 已 deprecated）。4 个机器态旧工具（vitality_tick / relationship_tick / anti_repeat_record / reflect_run_op）已内化 —— 实测它们**从未被模型调用过**，状态只进不出。⚠️ post 阶段与自动沉淀**必须分开注册**（沉淀有 5min 冷却 + 最短轮长闸，挂一起会出现「聊 50 轮关系一次没推进」的欠账）。
-- **检索已过滤 archived（2026-08-30）**：`memory_retrieval._live_ids()` 在三路融合 `_add` **入口**拦掉 archived / 孤儿 id（chroma 1200 条向量里 753 条属于 archived 记忆 + 110 条孤儿，向量路原先完全不看 `archived`，归档机制形同虚设）。查库失败 → 返回 None = **fail-open 不过滤**。只拦 fts/vec/time（memory 表主键空间），graph(`eg_*`)/vault 的 id 不在 memory 表，动它会误杀。⚠️ chroma 里那 753+110 条向量**尚未物理清理**，待哥哥拍板。
-- **两个顺带根治的旧 bug（2026-08-30，见 `docs/v5-mcp-consolidation.md` §6）**：
-  ① **`vitality.tick()` 的 `conversation` 标志语义不对称** —— 它曾同时管「收一次性对话成本」（合理）和「抑制整段经过时间的空闲恢复」（bug），导致任何每轮 `tick(conversation=True)` 的路径**只减不增、精力单调抽干到 0**。受害面**不止 Loop**：`vitality_prompt()` 走 cloud_chat 主链路同样是这条路径。已拆出 `conversation_minutes` 参数，恢复改按真空闲分钟计算（连打 60 轮不再归零）。
-  ② **`unified_retrieve(scope="lexical")` 契约违背** —— lexical 分支拿到结果后不 return，会继续跑 semantic 再进 graph fallback，实际是三路叠加；同层 `tree`/`temporal` 都有 return，唯独它漏了。已补 return（已核实生产代码无 `scope="lexical"` 调用方，零风险）。
-  ③ **`v5_recall` 候选被冷却一空就交空纸条** —— `recall_ledger` 落盘持久化 + `turn` 永不清零 + 插件 `session_id` 硬编码 `'dsh'`（所有会话共用一本账），三者叠加导致同话题连问几轮时 top-k 候选整批冷却 → 装配 0 条 → 返回「(无相关记忆)」（而 `stats.retrieved` 明明是 14）。已加兜底：`fresh` 为空且 `results` 非空时放宽去重，stats 置 `dedup_relaxed: true`。**设计裁定：去重是优化，返回空上下文是功能性失败 —— 宁可重复，不可失忆。** 实测不同 query 的 cooled 仅 0~2 条，兜底极少触发。⚠️ 根治要改插件 `session_id` 为真实 dsh 会话 id，但需重启 dsh 才能验证（会中断 :3080 会话），暂缓。
-- 插件目录 `core/ikaros-dsh/plugins/ikaros-memory`（**已实现 2026-08-18**，**2026-08-24 增强 v0.1.2**：turn-stopping 自动沉淀写回 + pre-step 召回注入（每 turn 幂等，dispose/re-register 解决同名 context 重复注册 throw 问题）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要 API 成本，零额外 LLM 调用沉淀进 v5）+ **maintenance tick（2026-08-24）**：`ctx.interval` 周期驱动 `v5_call.py tick` → `reflect.scheduler.run_all`（补齐 watchdog 退役后生命周期调度器的触发空缺，默认 6h 对齐 retention/promote）+ systemPrompt 前缀缓存友好注入；npm 包 `@ikaros/dsh-ikaros-memory` 经 pnpm file: 链接装入 `~/.dsh/profiles/web`，patch 里以裸包名装配。重建/迁移步骤：`npm run build`（tsc→dist/，dist 被 gitignore）+ `cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory`（**pnpm file: 是复制非符号链接，必须 remove/add 才会带新 dist**）。⚠️ **漏了重装这步全程无报错** —— 代码看着改了、测试从源码目录跑也通，但 dsh 加载的是 `~/.dsh/profiles/web/node_modules/` 里的旧副本，新功能像不存在一样（2026-08-30 实测：Loop 三阶段改完 6 天都没生效，冒烟测试还全绿，因为它跑的是源码目录）。**改完插件必跑 `python core/ikaros-dsh/tools/plugin_sync_check.py`**（按内容 sha256 比对源码与已装副本，exit 1 = 不同步，`--fix-cmd` 打印修复命令）。⚠️ 装完还需**重启 dsh** 才会加载新代码（`bin/restart-dsh-ikaros.ps1`，会中断 :3080 会话）。⚠️ Entry.name **不支持** `!!js` 表达式（只有 config 字段走 interpolate），Windows 绝对路径 name 也不支持（走 bare module 解析报 e: scheme）——必须裸包名。
-- 启动: `bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
-- 架构参考: `docs/ikaros-dsh-plugin-architecture.md`；退役历史: `docs/hermes-retirement-inventory.md`。
+> 启动器完整设计 + 三壳入口：`docs/archive/decision-history/ikaros-launcher-design.md`。
+> 启动器当前用法：`bin/ikaros --help` / `bin/ikaros doctor`。
 
-## DO NOT
-- ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always start via the component start script (自带 watchdog).
-- ❌ Never auto-commit / auto-push without an explicit user instruction.
-- ❌ After editing `core/conversation-tree/server.py`, restart the corresponding service.
-- ❌ Don't edit `runtime/` 下的上游/工具链（dsh npm 包、portable-python 等）——它们是拉取的二进制/依赖，定制走 `core/ikaros-dsh/` overlay 或 `bin/` 包装层。
-- ✅ hermes / N.E.K.O / 9100 控制面板均已退役（2026-08-18），勿再启动或恢复相关服务；历史见 `docs/hermes-retirement-inventory.md`。
+## dsh 底座 overlay
 
-## 2026-08-14 接手审计修复记录（记忆恢复资料）
+- **底座 = dsh 0.1.1-rc.2**；Ikaros 定制经 `core/ikaros-dsh/cordis.patch.yml` 注入
+  （memory_v5 MCP + 持久 PTY 终端 + LSP + 工作引擎 persona），0 源码侵入。
+- **插件目录**：`core/ikaros-dsh/plugins/{ikaros-memory, ikaros-conversation-tree, ikaros-memory-settings}/`
+  每个插件是 npm 包，源码改后**必须**：
+  1. `cd <plugin> && node scripts/build.mjs`（tsc → dist/，**dist 被 .gitignore**）
+  2. `cd ~/.dsh/profiles/web && pnpm remove <name> && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/<plugin>`
+     （pnpm file: 是复制非符号链接，必须 remove/add 才带新 dist）
+  3. **重启 dsh**（`bin/restart-dsh-ikaros.ps1`）才会加载新代码
+- **改完插件必跑** `python core/ikaros-dsh/tools/plugin_sync_check.py`（sha256 比对源码 vs 已装副本；exit 1 = 不同步，会打印 `--fix-cmd`）
 
-<!-- v5-history: 本节是**历史变更日志**。里面出现的 v5_* 工具名是事实陈述
-     （记录「过去修了什么」），不是给 agent 的运行期契约 —— 其中不少工具
-     已在 2026-08-30 的 MCP 合并里被门面吸收或内化进 Loop，slim 模式下不再注册。
-     切 slim 前跑 `python core/memory_v5/tools/slim_check.py`，它会跳过本节。
-     新增历史条目请保持在这对哨兵之间。 -->
+> 插件细节 + ikaros-memory-settings v0.2 HTTP server 模式：`docs/archive/decision-history/ikaros-dsh-plugin-architecture.md`。
+> ikaros-memory plugin loop 三阶段（pre/post/maintenance）：`core/memory_v5/loop.py`。
 
-- **2026-08-24 记忆系统指标测试 + 生命周期停摆修复（重要）**：
-  - **指标**：全量 pytest **333+61 passed**；检索基准（真实 bge-m3，:8587）**composite 84.8**（hit@1=0.8 / hit@3=0.9 / MRR=0.833；剩余 MISS「本地 LLM 用的是什么模型」因 :8080 已退役记忆归档，符合预期）；memory_api 1095 条（conversation 523/fact 291/lesson 53/decision 8/identity 1…）；v5_call search ✓、MCP server ✓、embedding :8587 ✓。
-  - **⚠️ 发现生命周期调度器停摆**：集中看门狗 2026-08-19 退役后，memory_v5 反思管线/生命周期 **无任何自动触发源** → `reflect_state.json` 从未生成、`long_term=0`（AGENTS.md 期望 563）、大量记忆欠账（classification: vector_sync 22 + rule_entity_extract 2871 一次补齐）。`v5_reflect_run_op` 是唯一入口且只被手动/MCP 调用。
-  - **修复**：① ikaros-memory 插件新增 **maintenance tick**（`ctx.interval` 默认 6h，`v5_call.py tick` → `reflect.scheduler.run_all`，纯算法无 LLM 成本）——万物皆插件，零 runtime 侵入；② **reflect_state.json 孤儿路径 bug**：`reflect/scheduler.py` 的 `_V5_DATA_DIR` 用 `Path(__file__).parent` 锚定到 `reflect/` 目录 → 状态写到 `core/memory_v5/reflect/data/v5/` 孤儿目录 → 已改为 `parent.parent`（memory_v5 包根），与 `store.py` 的 `MEM_ROOT/data/v5` 同目录；已迁移状态文件并清空孤儿目录（root cause：改包名 v5→memory_v5 后嵌套子包 `__file__` 层级变化，教训同「改名后必须全局搜旧 import」）。
-  - **另修复**：pre-step 注入幂等性（每 turn 指纹去重 + dispose/re-register，修同名 `systemPrompt.context` 重复注册 throw → 第二轮用户消息后记忆停在旧快照的 bug）；新增 compaction 捕获（复用 dsh 压缩摘要成本沉淀进 v5）。
-  - ⚠️ 测试偶发：pytest `-p randomly` 随机顺序 + embedding 服务并发下，`test_unified_retrieve_excludes_expired` / `test_search_roundtrip` 偶发失败（live DB id 混入 / WinError 10053 连接中断）——`-p no:randomly` 或单独跑即过，与本次改动无关。
+## V5 记忆核心（最小契约）
 
-- **embed 模型已恢复 → 2026-08-14 定稿 bge-m3**：原 `nomic-embed-text-v2-moe.f32.gguf`（1.8GB）在 llama.cpp b10000 下**输出全零向量**（`Mask token missing, please reconvert`，f32 全零 / Q8_0 挂起 / `--pooling last` 也挂起）——**语义向量检索因此静默死了很久**（watchdog 心跳只查端口+health，不校验嵌入值；live chroma 1220 条全零）。中间试过 `nomic-embed-text-v1.5`（139MB，能出非零但**中文语义弱**，相关句 cos 反而最低）；**最终换 `bge-m3-q8_0.gguf`**（605MB，1024 维，中英多语言强，实测相关 cos 0.93 vs 不相关 0.33，需 `--pooling cls` + query 检索指令"为这个句子生成表示以用于检索相关文章："、document 无前缀）。配置链 14 处已同步（ikaros-env.sh|bat / core/env/* / dashboard build_env+panel_models.json / watchdog 默认+pooling / scripts / search.py 前缀 / benchmark.py）；**:8587 已切 bge-m3（cls pooling），chroma 删除重建 + 1068 条全量重嵌（全非零）**；**真实嵌入评分 composite 92.1**（hit@1=0.9/MRR=0.925，超 mock 90.5）。**已删除坏模型文件**：v2-moe.f32（1.78GB）/ v2-moe.Q8_0（488MB）/ v1.5（139MB）全部删除释放 ~2.4GB（models 目录只剩 bge-m3 + Phi-4）；旧全零 chroma 备份也已删。`models/Phi-4-mini-instruct-Q4_K_M.gguf` 已归位；`data/config/panel_models.json` 已同步 Phi-4。⚠️ `data/hermes-agent/` 目录在真实 FS 不存在（仅 harness 虚拟视图可见，曾短暂存在 .env 后消失）——Hermes 侧 env 镜像待核。
-- **v5.db 历史合并已执行（2026-08-14，决策 A）**：8/13 21:26 重建丢失的历史记忆已恢复——
-  - 合并结果：**1686 行** = 实时 6 行 + 7/31 备份 1186 行 + chroma 独有 494 条（8/1-8/12，含全部树节点对话）；FTS 同步、chroma 重建 1686==1686 校验通过、13 个树指针重映射（旧 id → 100000+）全部解析
-  - 合并前备份：`tmp/v5-merged-prep/applied-backup/`（v5.live.before-merge.db + 树 JSON）
-  - 合并源资料：7/31 备份 `tmp/backup-v5del-20260731-094553/v5.db`；chroma 元数据导出 `tmp/chroma-docs-backup-20260814.json`
-- **记忆→对话树推送链（2026-08-14 已恢复）**：旧 `hermes_provider.push_to_conversation_tree()` 已随重构删除，改由插件 `memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（静默失败）；源 `patches/` 与运行时 `data/hermes-agent/plugins/ikaros_v5/` 同版（20145B 同 mtime）。草稿 `tmp/push-chain-restore-draft.txt` 可清理。
-- **2026-08-14 记忆去重清理**：哲学味月度叙事 5 条 + user_trait 579→61（噪声/思维链泄漏 + 主导签名聚类去重）+ identity 5→1 + emotional_event 40→6 + conversation 脏行（ANSI/空）。1686→1127，FTS/chroma 全一致。备份：`tmp/v5.before-narrative-cleanup-*.db`、`tmp/v5.before-dedup-*.db`。
-- **2026-08-14 决策 A：反思管线 LLM 生成类停用**——`make_default_scheduler` 移除 consolidate/distill/reflect/narrative/self_discovery 5 个 op（无去重产生雷同 user_trait/哲学叙事/思维链泄漏，白烧 API）；情绪因果 `emotional_memory._generate_causal` 改纯规则（不调 LLM）。保留算法类：promote/cleanup/vector_sync/memory_promote/temporal_extract/reflection_promote/expire_directives。
-- **⚠️ 修复看门狗反思循环死链**：`_maybe_reflect` 原 import `v5.reflect.registry`（改名前的旧包名）自 v5→memory_v5 后一直 ModuleNotFoundError 被吞——**全部反思 op 数周未运行**。已改为 `memory_v5.reflect.registry`，首次真正跑通：promote 901 / cleanup 564（历史欠账一次补齐）。教训：改名后必须全局搜旧包名 import。
-- **⚠️ 修复合并时间戳缺口**：v5.db 合并时 chroma 派生行 created=0（未带 chroma created_at），被 cleanup 误归档 251 条（7 decision + 244 conversation）。已从 `tmp/chroma-docs-backup-20260814.json` 经 mapping 反查恢复 459 条时间戳 + 撤销误归档；真过期行由下次 cleanup 按正确时间戳重新归档。
-- **⚠️ 修复 promote/memory_promote 打架**：memory_promote 回收步原条件把"从未访问"（last_accessed=0）行无条件降级，与 promote_op 冲突（promote 901 → 立刻回收 901，全卡 short=0/long=0）。改为只回收"有访问史且 90 天未访问"；已恢复 697 条并验证 promote 落定（long_term=563）。另修 temporal_extract 缺 `import time`（一直 NameError 静默失败）。
-- **2026-08-14 Phase 1：记忆生命周期控制器起步（情境锚 + upsert 写策略）**——针对"记忆系统无感知（不知时间/何时记/何时改/何时调）"：
-  - `core/memory_v5/context_anchor.py`：情境锚 `now_context()`（epoch/时间叙事/周几/活动/前台窗口），复用 cogno_5d（时间作息+窗口活动），供后续召回决策与时间锚定检索
-  - `store.upsert()`：写策略——同类相似记忆存在则**合并强化**（权重取高/内容取长/tags 并集/access+1），否则新建；相似判定=LIKE 子句探针 + difflib ratio/子串包含；**带 v5_key: 标签的结构化写入跳过合并**
-  - `memory_api.store` 已切到 upsert（MCP v5_memory_store / 项目笔记等路径受益）
-  - 根治"永远 INSERT"的雷同膨胀机制性根源（upsert 在写入口挡掉 + 2026-08-14 后 dedup op 也补成纯算法实现，见 registry.make_dedup_op）
-  - 测试：tests/test_upsert.py 7 项（合并/新建/类型隔离/阈值/内容取长/reinforcement 上限/情境锚）
-- **2026-08-14 Phase 2：召回决策（should_recall）**——"什么时候该调用记忆"：
-  - `context_anchor.should_recall(user_text)`：线索词（记得/上次/回顾/关于/最近/remember...）**必召回**；寒暄/琐碎开头且 <20 字（你好/谢谢/晚安/ok）**跳过**；实质内容（>=8 字）**召回**
-  - 接入 Hermes 插件 `on_pre_compress`（规范源 + 运行时已部署，gateway 已重启）：寒暄不翻记忆（省 token + 免噪声），情感状态块恒保留
-  - 实测：你好/谢谢/晚安 → 不注入记忆；"回顾omp配置"→ 注入 ✓
-  - 测试：should_recall 4 项（线索/寒暄/实质/空）
-- **2026-08-14 Phase 3：时间锚定检索**——"时间锚点"落地：
-  - `memory_retrieval._finish`：统一出口接入时间锚——now 用 `context_anchor.now_epoch()` 统一；**默认排除已失效事实**（memory.valid_to < now，与 temporal_graph "检索永远取当前值" 意图一致）；列不存在/未迁移 → fail-open 不过滤
-  - live 库已跑 `temporal_graph.apply_migration()`（memory + eg 表补 valid_to，幂等）
-  - 实测：supersede 一条事实 → valid_to 落库，unified_retrieve 默认排除 ✓
-  - 测试：2 项（排除过期 / 未迁移 fail-open）
-- **2026-08-14 Phase 4：全套记忆加权**（`memory_retrieval._score_items` 纯函数，config 全可调）：
-  - **A 基础权重进评分**：`score × (base_weight_factor + (1-f)×weight)`，写侧重要性真正影响排名（bwf=1.0 关）
-  - **B+E 类型化衰减**：`type_decay` 每类独立 per_day/floor——conversation 快衰减(0.05/0.2)，user_trait/identity/decision/lesson 保值(0.005-0.01/0.6-0.7)
-  - **C 合并即强化**：upsert 每次合并 +0.05 reinforcement（`merge_reinforce_increment`），被合并越多检索越靠前
-  - **D 情境加权**：`situational`——写代码/IDE/终端活动 → v5_project 标签记忆 +0.10；created 小时 ≈ 当前小时(±1h/跨午夜) → +0.05 时段联想；enabled=false 全关
-  - 检索过程每轮取一次 `now_context()`（costo 低）；tags 已透传到融合层
-  - 测试：tests/test_weighting.py 8 项（各因子 + 关闭开关 + 合并强化累积）
-- **2026-08-14 推荐落地：信号透明 + 意图加权 + V5.7 类型化项目知识边**（对比 graph-memory/mnemon 后落地）：
-  - 检索信号透明：`_score_items` 每条结果带 `signals`（fts/vector/time/base_weight/type_decay/type_boost/frequency/situational）+ `intent`，供上层/LLM 自主重排
-  - 意图驱动加权：`detect_intent`（WHY/WHEN/ENTITY/GENERAL）→ `memory_retrieval.intent` 配置调类型 boost；ENTITY 意图 auto scope 总是补实体图扩散
-  - 循环依赖解开：`valid_to_map`→store、`retrieve_temporal`→memory_retrieval；summary 死字段 model 已删
-  - **V5.7 类型化项目知识边**（graph-memory 借鉴）：`project_edges` 表 + `project_edges.py`，`v5_project_note` 写入自动建边（SOLVES/PREVENTS/CAUSED_BY/RELATES_TO，kind 规则+关键词重叠，纯规则无 LLM）；`v5_project_retrieve(with_links=true)` 沿边返回类型化邻居（pi 能问"这个坑怎么解的"）；`eg_edges` 补 `relation_type` 列（幂等迁移 + `upsert_entity_edge` 参数）
-  - **推荐 4 PPR/社区（graph-memory 借鉴）**：`graph_rank.py`（personalized_pagerank + label_propagation 纯函数）；`spreading_activation_search` 用 PPR 多跳扩散取代单跳传播（失败回退 1-hop）
-  - **推荐 5 EI 统一生命周期（mnemon 借鉴）**：`lifecycle.py`（`effective_importance` = weight×强化×访问×衰减 + `retention_pass` demote/promote/archive 单轮批写）；`reflect.registry` 默认调度器用 `retention` op 取代 promote/cleanup/memory_promote 三个打架的 op
-  - **project_edges 并轨 graph scope**：`project_graph_search` 接入 `unified_retrieve(scope="graph")` + auto 补路（通用检索也能沿类型化边扩散）
-  - 测试：test_retrieval_signals.py 12 项 + test_project_edges.py 6 项 + test_v57_recommendations.py 9 项
-  - **检索质量基准**：`memory_v5/benchmark.py`（golden-query eval，`--real` = 真实 bge-m3 嵌入）。实测 10 查询：hit@1=0.9 / MRR=0.925 / **composite 92.1/100**
-- **2026-08-14 融汇（P1-P5 架构收敛，治"功能分散"）**：
-  - **P1 检索收敛**：删 `search.fused_search`（旧双路），`dissonance`/`metacog` 切到 `unified_retrieve`（阈值 0.4→0.3 融合尺度）；`unified_retrieve` = 唯一对外检索入口，`retrieve` = 内部语义引擎
-  - **P2 统一重要性**：新建 `importance.py`（`effective_importance`/`memory_importance` 单一口径）；`lifecycle` 改为 re-export，`_score_items` 在 `signals.ei` 透出 EI——写时强化/检索排序/生命周期共用同一 EI
-  - **P3 图收敛**：新建 `memory_retrieval._graph_retrieve`（实体图 + 项目知识图一致性收集 + graph_min 过滤），graph scope 与 auto 补路共用，取代 OR 拼装
-  - **P4 扩展裁决**：删无调用的 `gated_retrieval.py`（骨架，其分层思想由 `should_recall`+`type_decay` 覆盖）；其余扩展接入状态写入 ARCHITECTURE §5.2.5
-  - **P5 存储理顺**：ARCHITECTURE §5.2.1 明确三层真相源：`v5.db`=唯一真相源 / `chroma`=派生(可重建, 1024 维 bge-m3) / JSON 状态=灵魂状态(非记忆)
-  - 测试：279→285 (新增 test_importance.py 6 项)，评分 92.1 不变（重构行为保持）
-  - **P6 契约/工具收敛（第二轮）**：① `_norm` 增强为兼容 dict/sqlite.Row/Memory 的唯一归一化，`memory_api._row_to_dict` 委托它（结果形状唯一, 结构化路径标记 source="structured"）；② tree_adapter / conversation-tree 跨分支检索切到 `unified_retrieve(scope="semantic")`（`retrieve` 仅剩内部语义引擎身份, 外部零直连）；③ 删孤儿 `rules_retriever.py`（无代码调用, 其调用方 orchestrator 已删; `docs/agent-rules.yaml` 暂未消费）；④ `v5_memory_search` docstring 修正（本就走 unified_retrieve）
-  - **P7 配置双源防漂移（第三轮）**：`preprocess_config.py._DEFAULTS` 曾是 yaml 的**漂移旧镜像**（min_fused_score 0.6 vs yaml 0.3、缺 Phase 4 全套加权键、残留 summary.model）——yaml 缺失/损坏时回退会落到错误值打空检索。已**全量同步 `_DEFAULTS` 到 yaml**（含 type_decay/situational/intent/auto_route 等），并新增 `tests/test_config_alignment.py`（4 项：键覆盖/无陈旧键/关键兜底值/合并结果）强制防漂移。测试 285→289
-  - **P8 可观测性（第四轮）**：新增 `memory_retrieval.explain_result(item)`——从 signals/intent/relation/kind 生成"为什么召回这条"的 `why` 可读说明，已接入 `v5_memory_search` / `v5_project_retrieve`（pi/Hermes 能看到召回依据：向量分量/关键词/图 relation/意图加权/EI）。收敛后架构参考：**`docs/v5-architecture-convergence.md`**。测试 289→292
-  - **2026-08-18 真实 FS 不一致大修（生产事故根因）**：发现 harness 文件工具视图与真实磁盘存在**不一致**（`data/hermes-agent/`、`patches/` 在 harness 可见但真实 FS 不存在，同先例）。游离进程 `tmp/patch-dashboard.py`（hermes/neko 退役补丁，无任何引用方）在 09:35-09:37 重跑，把真实 `core/dashboard/server.py` 覆盖回 **v2-moe + `--pooling mean`**（harness 的 bge-m3 编辑从未落盘）——导致 :8587 以**错误池化(mean)**跑 bge-m3 且端口全部掉线（8587/9100/8080 closed）。修复：杀掉游离 patch 进程 → 用 pwsh（真实 FS）把 server.py 5 处 v2-moe→bge-m3 + `--pooling mean→cls` + LLM Qwen→Phi-4，并同步 `ikaros-env.sh|bat|ps1` / `core/env/ikaros_paths.py|ikaros-paths.json` / `validate-paths.py` / 文档注释（全链 10+ 文件，含死配置 `config/models.yaml` 遗留未动）；重启面板(:9100) + memory 组件 → **:8587 = bge-m3 + cls，1024 维全非零 norm=1，语义区分 0.74 vs 0.41**，看门狗心跳正常，live chroma 1105 条 100% 非零；真实嵌入评分 **composite 92.1**（hit@1=0.9/MRR=0.925，与 AGENTS.md 历史一致）。⚠️ 教训：**改 `core/dashboard/server.py` / env 后必须用真实 FS（pwsh）验证 mtime 与内容**，harness 编辑可能落在虚拟视图；面板重启前检查无游离 `tmp/patch-*.py` 进程。另：pytest 9.0.3 在 Windows 有 `pytest-current` junction bug（启动即 PermissionError），全量跑需 `--basetemp=<项目内目录>` 或项目内 TMP；并发写文件测试勿用项目内 TMP。
-  - **2026-08-18 hermes 退役收尾（测试适配）**：hermes 整体退役（hermes-web-ui 0.20.0 独立桌面应用，`patches/`、`runtime/hermes-agent/` 已删），遗留过时测试已适配：① `test_token_compressor_integration.py` 依赖已删插件路径 → 文件不存在时模块级 skip（pytest.skip allow_module_level）；② `test_dashboard_server.py` 依赖已删 `hermes_patch_status`/`local_repo_version`/hermes 组件 → 2 测试 skip + `test_get_component_statuses_complete` 组件断言更新为 local_model/memory/conversation_tree/dsh/herdr/runtime；③ `test_tree_agent_mode.py` 的 hermes 模式断言 → 更新为「hermes 退役后 build_system_prompt 统一返回 ikaros 人格」语义；④ `test_tree_adapter_module.py` 的 `_patch` 目标 `mr.retrieve` → `mr.unified_retrieve`（P6 收敛后旧目标已非调用点，patch 无效导致真实检索乱序）。测试 **353 passed / 3 skipped**（3 skipped 均为 hermes 退役标记）。⚠️ `conversation-tree/server.py` 已 2026-08-18 起 ikaros 唯一模式（build_system_prompt 忽略 mode）。
+- **Python 包**：`memory_v5`（`import memory_v5`，`sys.path` 含 `E:/Ikaros/core`）
+- **唯一对外检索**：`memory_retrieval.unified_retrieve(query, scope=auto|semantic|lexical|graph|tree|temporal)`
+- **MCP 工具**：58 in `legacy` / 17 in `slim`（模式 = `V5_MCP_TOOL_MODE`）
+  - 切 slim 前**必跑闸门**：`python core/memory_v5/tools/slim_check.py`（exit 0 才能切）
+  - 工具清单真相源 = `core/memory_v5/tools/registry.py`，**漏登记启动即 RuntimeError**
+- **DB**：`core/memory_v5/data/v5/v5.db`（**文件名冻结**，外部契约）
+- **Chroma**：`core/memory_v5/data/v5/chroma/ikaros_v5`（可删重建，不影响 v5.db）
+- **`[dsh-only]` 隔离**：内容含此标记 = 仅 dsh 可见；外部检索须传 `include_dsh_only=false`
+- **数据真相源链路**：`v5.db` (SQLite+FTS5) = 唯一真相源 / `chroma/` = 派生可重建 / JSON 状态 = 灵魂状态
 
-- **2026-08-18 本地 LLM 退役（memory 架构移除）**：用户确认本地基本不用（工作流主走 dsh/DeepSeek API），从 memory 架构整体移除：① **删模型文件** `core/memory_v5/models/Phi-4-mini-instruct-Q4_K_M.gguf`（2.3GB，E 盘释放）；② **配置链清指向**——`model_config.json` `initial_model` 置 `""`（**显式"无本地 LLM"标记**，`resolve_model_config`/`_resolve_llm_model` 已适配：空串直接返回/返回 None，不再回退 Qwen 默认、不被空目录误扫描重建）；`panel_models.json` 移除 8080、`ikaros-paths.json` models.llm 置空、`ikaros-env.sh|bat|ps1` 删 `IKAROS_MODEL_LLM`、`core/env/ikaros_paths.py` 清 Phi-4、`server.py` 3 处（build_env L135 / 默认 dict / 8080 兜底）移除；③ **校验/模板** `setup-native.py` llm 槽空、`validate-paths.py` 移除强制 LLM 检查、`config/defaults/panel_models.json` local_model 空 + memory 修 bge-m3；④ **面板/架构页** 8080 组件标"已退役"、`tools/gen_architecture_html.py` 8080/8587 同步。行为验证：`resolve_model_config()` 保持 `''` 不重写、`_resolve_llm_model()` 返 None、看门狗重启（PID 8128）embed 正常 LLM 懒加载无回退、**全量测试 353 passed / 2 skipped 无回归**。🛠️ **恢复方法**：放 gguf 进 `core/memory_v5/models/` + `model_config.json` 设 `initial_model` 为模型名即可（其余链路按 config 自动生效）。⚠️ `benchmark.py` 的 golden query（"本地 LLM 用的是什么模型→Phi-4-mini"）**保留**——是历史检索数据非配置。<br>**检测到并行会话持续活跃**：P1（fc1759b）/P2-P3（6102ca6）退役批次 + 一批未提交清理（pytest.ini/ports.yaml/models.yaml 归档 0b34b93 已提）——工作区经常会无预警变化，**commit 前务必 git status 复核**。
-- **2026-08-24 架构审计修复 + OpenViking 借鉴（记忆系统增强）**：
-  - **审计修复（P0-P4，26 项）**：① `validation.py:166,702` `e.code.actual_value`→`.value`（`ErrorCode` 无该属性，原抛 AttributeError 掩盖校验错误）；② `tools/utils.py` `V5_DATA` 路径错配（指向不存在的 `tools/data/v5`，`v5_latest_thought`/`v5_subconscious` 永远空返）→ 改 `V5_ROOT.parent/data/v5`；③ `lifecycle.py` demote 去 `access_count==0` 矛盾条件 → `last_accessed>0 + 90d`（与 `registry.memory_promote` 语义一致）；④ `memory_api` 结构化检索补 `include_dsh_only` 过滤；⑤ `search.py` `_embed_conn` 全局→**thread-local**（dsh 多线程 HTTP 竞态根治）；⑥ `entity_graph.py` N+1→批量 `GROUP BY` + 死 `ALTER TABLE` 门控 + `eg_conn` 读写分流（`total_changes` 判定）；⑦ `cogno_5d._llm_infer_activity` 停用 `:8080`（已退役，每次浪费 5s）；⑧ validation `apply_config` 补 enable + `rule.enabled` 生效；⑨ `project_edges.traverse` 改真 BFS（depth+防环）+ `get_batch`；⑩ `graph_rank` PPR 加收敛早停；⑪ `cogno_5d._fetch_geo_sync` socket 泄漏→`try/finally`；⑫ 多处冗余 `c.commit()`（committed 内）+ `_tls` 死代码清理；⑬ `mcp_server._NEW_V5_TOOLS` 改从 `tools.__all__` 派生（单一来源，消双清单漂移）。
-  - **OpenViking（VikingMem VLDB 2026）借鉴 5 项**：调研 `D:\PZS0X\下载\OpenViking-main`，落地 5 个独立可增量演进的功能，不动 `unified_retrieve` 现有契约：
-    - **F1 跨轮去重账本**（`recall_ledger.py`）：每会话 JSON `recall_log_<session>.json`，记近 `dedup_turns`(=5) 轮展示过**正文**的记忆 id，召回时跳过。**核心：bare-URI 不冷却**（输给预算≠读者看过，下轮可正常展示）——根治 `identity`/`user_trait` 连续多轮重复注入噪声。
-    - **F2 token 预算装配**（`recall_budget.py`）：`plan_entries(candidates, max_tokens)` 广度后深度 + `per_entry_cap=2×平均份额` + 超限**降级不截断**（full→abstract→uri）+ body-hash dedup + stats。tier：uri=`#id`/abstract=content[:120]/full=content。
-    - **F4 检索轨迹 stats**：`v5_recall` 返回 `{context, stats}` 含 retrieved/cooled/placed/dropped/deduped/tier_counts/fill——补 P8 `explain_result`（逐条）缺的**每查询聚合轨迹**。
-    - **F3 结构化经验抽取 op**（`reflect/extract_experiences.py`）：24h，严格 JSON schema（禁哲学叙事/思维链泄漏）从 conversation 抽 lesson/decision/preference/fact，**写入走 `store.upsert()`**（合并强化，不堆积雷同）——安全恢复 LLM 抽取，直击 2026-08-14 决策 A 砍掉的根因（无 schema+无合并）。identity/axiom 不抽。
-    - **F5 集群新鲜度计数器**（`freshness.py`）：`cluster_freshness` 表按 bucket(type) 维护 watermark+pending，`reconcile_totals` 标 `pending/total>=0.10` due；`watermark(bucket)` 供水印增量扫描——治「vector_sync 22 + rule_entity_extract 2871 一次补齐」式反思欠账。
-    - **新工具** `v5_recall`（第 50 个 MCP 工具，归 memory 组）：一次调用 = retrieve→ledger 去重→预算装配→记录 served→返回 context+stats。`tools/__init__.py` 扫描元组加 `recall_tool`；`_TOOL_GROUPS` memory 组 21→22。
-    - **配置**：`preprocess_config.yaml` + `_DEFAULTS` 同步加 `recall`（max_tokens/dedup_turns/top_k）+ `freshness`（refresh_ratio/min_pending）节（防漂移测试 `test_config_alignment.py` 通过）。
-    - **反思调度器**：`make_default_scheduler` 注册 `extract_experiences` + `refresh_freshness` 两个新 op（lazy import 防循环依赖）。
-    - **测试**：新增 31 项（test_recall_budget 9 / test_recall_ledger 9 / test_freshness 7 / test_extract_experiences 6）；全量 **364 passed**（:8587 离线 333 基准+31 新 / 在线 364 全绿）。顺手修了 `test_search_roundtrip` 历史偶发 flake（原用 live DB 无隔离 + 按 :8587 离线设计，:8587 在线时向量命中挤掉弱 FTS5 标记）→ 改 autouse fixture 切独立 temp DB + temp chroma dir，与 live 库/:8587 状态完全解耦，现在线上线下均 364 全绿。
-
-<!-- /v5-history -->
-
-## 文件搜索优先级 (2026-08-03)
-- **首选 MCP everything**（`mcp__everything__search`）：支持 Everything 语法（通配符 / `ext:` / `size:` 等）、`parentPath` 限定目录、全盘索引秒级返回。
-- **降级**：everything MCP 服务不可用/报错时，回退默认 `search_files`（ripgrep）。
-- 已实测在线（E:\Ikaros 内搜索秒回）。V5 directive #2 同步此规则。
-
-## 9100 panel refactor (2026-07-26) — 历史，9100 已退役 2026-08-18
-- Memory watchdog `:8080`/`:8587` split into `local_model` / `memory` cards (both model-switchable). (:8080 本地 LLM 已退役 2026-08-18; 集中 watchdog 也已于 2026-08-19 退役)
-- Neko's 3 services merged into `neko_group` (ports 48911 + 48912 + 48915), one-click or separate control. (N.E.K.O 已退役 2026-08-18)
-- Person Sync removed (sync script deleted). Hermes API gateway (:8642) was ACTIVE again at the time — served by `python -m hermes_cli.main gateway run` (used by dashboard + chat-tree). (:8642 已随 hermes 底座退役 2026-08-18) The legacy `bin/hermes-api-server.py` script is unused.
-- `hermes` cloud_chat provider now aliases to `dashboard`. (dashboard :9119 已退役 2026-08-18)
-
-## Conversation Tree 面板 (2026-07-28, 2026-08-01 得兼改造; 2026-08-04 S1/S2 结构性修复)
-- 新增 `:48920` 树形对话面板（Explore.poker 风格），启动 `core/conversation-tree/server.py --port 48920`。
-- 后端引擎 `core/memory_v5/conversation_tree.py`（`ConversationTree`，93 tests）；REST：`fork` / `conclude` / `merge` / `unmerge` / `abandon` / `full_context` / `set_trunk`（主线提升，废弃分支拒绝）。
-- 对话内容存 V5（`v5_memory_id` + `summary` + 拓扑落 `core/memory_v5/data/v5/ui_conversation_tree.json`），树 JSON 仅存指针。
-- 与 V5 集成：`memory_provider.sync_turn` step 7 内联 HTTP POST `:48920 /api/add_turn` 推送树节点（2026-08-14 恢复）。
-- **chat 链路（2026-08-01 得兼；2026-08-18 ikaros 唯一模式）**：对话树统一 ikaros 模式——**dsh 直连**（`CT_DEEPSEEK_MODEL` 默认 `deepseek-v4-flash`，OpenAI function-calling + `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，`MAX_TOOL_ROUNDS=4` 多轮，模型可自主调工具；第 0 步 memory_search 预检索注入上下文）。注入「完整 persona + 树域记忆」。dsh 不可达/空响应 → 降级链仍走本地 DeepSeek 直连 + 只读工具回路，SSE `warn` 事件提示降级（黄色提示条）。thinking / usage / tool_calls / skills_used 全落库。`build_tree_aware_context`（TreePathCompressor）已修复可用。前端单飞（发送期间禁用输入）+ AbortController（切换节点/重置中止在飞请求）。
-- **S1 主线模型（2026-08-04）**：显式 `trunk_id` 主线终点取代 node_type 时序快照判定（旧逻辑"父节点有无子节点"导致 branch 下继续对话被误标 trunk、主线身份随创建顺序漂移）。`add_turn` 按 `trunk_id` 判定主线延续；`set_trunk(node, cascade)` 显式提升分支为主线；`is_valid_branch`/`__trunk__` 合并查找沿 `trunk_id`（唯一真源）。序列化带 `trunk_id`，旧 JSON 自动按最深 trunk 链推断。前端 trunk 徽标（★）+ 右键"设为主线终点"。
-- **S2 降级工具协议（2026-08-04）**：降级链从"纯文本补全"升级为完整工具循环——`_call_llm_tools`（带 `_READONLY_TOOLS`：memory_search / get_current_time / branch_overview，OpenAI function-calling）+ `MAX_TOOL_ROUNDS=4` 多轮，模型可自主调工具；第 0 步保留 memory_search 预检索注入上下文。降级链模型名用 `CT_DEEPSEEK_MODEL`（废弃的 deepseek-chat 别名不再使用）。
-- **S4 SSE chunked（2026-08-04）**：`_send_sse` 手动 `Transfer-Encoding: chunked`（HTTP/1.1 标准客户端不再等 EOF 挂起）。
-|- **存量回填**：`bin/backfill-session-tags.py`（**已删**，2026-08-22 确认不存在）曾给 7-28~8-01 期间无 `session:` 标签的记忆补标签（H1 会话隔离）。
-- **F 系列 2026-08-04**：node_type 继承（branch 下继续仍 branch）/ merge 引用清理（prune/delete 后 merged_from 等无残留）/ 废弃分支不注入上下文 / `_effective_mode` 全局 mode 修复（model_switch 的 hermes 模式生效）/ `_touch_active_session` 传局部 tree / `/api/state` 解析 `inline` 参数 / `_send_sse` 捕 ConnectionAbortedError / fork 标签取实际父节点。
-- **2026-08-12 zoom 弃用（残影根治）**：移除 `.mini-thread.l3{zoom:0.8}`（border-radius 22.5px→18px）与全部 ×1.25 补偿（topbar/empty-brand/applyTransform innerZoom-mz）；L3 与 L2 内容同尺寸实时渲染；残影实测 0 像素（根源 = zoom 位图缓存纹理缩放），zoom 计算样式全 "1"。
-- **2026-08-12 de-globalization B+C（切卡不牵动他卡）**：reflowAroundCard 增量推挤（删 anyCardPairOverlap 全量触发 + clearReflow 全局复位——从当前显示位只推实际重叠卡；降级 L3→L2 仅目标卡回基础位再按新尺寸重排，他卡保持）；miniUpgradeToL3 去全局 clearReflow（降级在改类前 delete displayPositions[id]）；closeMiniCard 重构（wasFocus 前置 + applyModeClass + 非焦点仅删自身 displayPositions，焦点卡关闭仍全量 clearReflow）；`_focusLevel()`（焦点卡 class 唯一真源）取代全局 cardLevel 读取面 20+ 处；`applyModeClass()` 收敛 mode 类更新三处；cardLevel 降级为写缓存+瞬态 fallback；拖动碰撞连锁推挤收敛不变。
-- **H 系列 2026-08-12（多 L3 激活错乱）**：根因 = **hover 自动升主卡 + 布局变动组合**——mini 卡 mouseenter 300ms → `setFocusCard` 抢焦点，而激活卡时 autoCenter 视口平移 / reflow 推挤会把其他 mini 卡**被动滑到鼠标下** → 无意悬停抢焦点 → 拉锯/空壳卡（L3 无 mini 无 card）+ 布局错乱；内容残留 = openMiniCard hydrate 回调 `h2=null`（节点无消息）无 else + 无 `.catch` → 「正在加载」永久残留。修复：**移除 hover 自动升主卡**（mouseenter 定时器删除——现仅手动路径：点击 mini 对话区 `bindMiniScrollDrag` wasClick → setFocusCard，双击卡 = openNodeCard L2↔L3 切换）；openMiniCard hydrate 回调 h2=null → 空态品牌 + `.catch` 空态品牌；refreshMiniCards null → 空态品牌。
-- **多 L3 并存修复（2026-08-12）**：「无法同时存在多个 L3」根因 = `reflowAroundCard` 把升级卡与焦点卡都当锚点且互不推挤 → 第二个 L3 直接叠在焦点 L3 上（DOM/功能其实都在）。三处修复：① 新增升级卡↔焦点卡互斥约束（焦点锚定、新卡让位）+ 写回段包含升级卡（否则落回 nodePositions 旧位）；② `setFocusCard` 对已是 L3 的 mini 不再 toggle 降级（原无条件 `miniUpgradeToL3(from)` 会把 L3 mini 降回 L2，等级保持失效）；③ `doJump` 后补 `scheduleReflow(currentId, level)`（跳转打开新焦点 L3 不推挤旧 mini 卡）。`p0` 改为优先 `displayPositions[id]`（升级卡从当前可见位开始推挤）。
-- **hover 零刷新（2026-08-12 续）**：鼠标从一个 L 卡移入另一 L3 卡（300ms 停驻快切）曾必触发全局位置刷新——`openMiniCard` 无条件 `scheduleReflow` + `reflowAroundCard` 无碰撞也跑 clearReflow/40 轮推挤/ensureCardsInViewport。修复：① `reflowAroundCard` 入口加 `overlapsAnyCard(id,level)` 无碰撞快速路径（无碰撞仅 ensureCardsInViewport，零位置变动）；② `focusCardOverlaps` 委托同一判定（改用显示位置）；③ `openMiniCard` 保留宿主等级——焦点 L3 降 mini 直接建 L3 mini（含输入框），不再先降 L2 再升 L3（消除尺寸抖动与多余 reflow）。
-- **mini L3 溢出修复（2026-08-12 再续）**：多个 L3 并存时 mini 卡输入框/底缘掉出卡外显示不全——`.mini-thread.l3{zoom:0.8;width:125%;height:125%}` 的 125% 补偿是错的：Chromium 对 zoom 元素的百分比尺寸按**未缩放**包含块解析（净效果 = 百分比不变），125% 实际渲染 ≈124%，mini 恒比卡高 24%（实测卡 642 / mini 796），输入框整块落在卡外。改回 `width:100%;height:100%`（与主卡 `#card` zoom:0.8 + 100% 同机理，渲染恰为卡尺寸）。⚠️ 教训：zoom 元素上不要做 1/zoom 百分比补偿，除非基准来自未 zoom 祖先。
-- **L2 盖 L3 根因修复（2026-08-12 续 4）**：「L2 状态极不稳定、有概率覆盖在 L3 上」= 两个叠加缺陷。① **快速路径重叠残留**：`reflowAroundCard` 无碰撞快速路径只查目标卡自身（`overlapsAnyCard`），不查其他展开卡之间——`clearReflow`（降级/升级触发）把多卡恢复到紧凑树布局位后，卡间重叠残留到下一次真正有碰撞的 reflow。修复：快速路径条件加 `!anyCardPairOverlap(id)`（除 id 外任意两张展开卡两两检测，O(n²) n<8 可忽略），有重叠则走全量推挤。② **焦点卡带 stale mini-thread**：开 mini 卡时鼠标恰在卡上（真实用户常态）→ 300ms hover 快切 `setFocusCard` 升焦点 → 焦点卡同时挂 #card 和 mini-thread（mini 被 #card 覆盖仍残留）→ 后续 `openNodeCard` 因 `_cards.has(id)` 误走 miniUpgradeToL3 分支（双击焦点卡变「降级 L2」而非「关闭回 L1」）。修复：`setCardLevel` 非 L1 分支挂 #card 前、L1 分支还原前，均清理目标节点残留 `.mini-thread` 并 `_cards.delete`（焦点形态 = #card，与 mini 互斥）。验证：强制 A/C 数据层重叠 → reflow(B) 全量推挤分开零重叠；hover 快切后焦点卡无 mini 残留；双击焦点卡正确关闭。
-- **架构重构 A+B+C（2026-08-12 焦点≠currentId 解耦 + 双击关闭修复）**：① **焦点卡 ≠ `tree.currentId` 系统性解耦**（空壳面板根因）——`tree.currentId` 经 installState 重置为后端当前节点（root），与焦点卡解耦，**所有焦点判定统一 `_focusId()`（data-fid + `_transferFocusIds` 按焦点面板转移），currentId 仅 fallback**，共 11 处：openNodeCard 关闭判定 / setCardLevel prevId-newId / closeMiniCard 焦点回退 / miniUpgradeToL3 焦点同步 / setFocusCard 幂等+from / mini 对话区点击快切 / headerDragStart2 顶栏切换 / collidePushCards+reflowAroundCard 锚点（fid） / openMiniCard keepL3 / renderAll+renderThread+renderHeader 焦点优先 / sendMessage 挂载（parentId/depth/branchLabel 用 fcNode）。回归教训：openNodeCard 曾含 `id===tree.currentId` 分支 → 双击 root（currentId 但非焦点）误关焦点卡，已删。② **双击卡语义**（350ms 两次 mousedown <6px → openNodeCard）：焦点卡双击关闭回 L1（实测 panels=0、无 shell）；非焦点卡双击 openMiniCard 开 mini；mini 卡双击 miniUpgradeToL3。点击 mini 对话区（bindMiniScrollDrag wasClick）→ setFocusCard 切主卡（实测焦点转 root、旧卡保留 mini 无重叠）。③ **doJump 焦点面板迁移**：跳转后 `_focusId()!==jid` → setCardLevel(cardLevel, jid)（新 currentId 成焦点面板、旧焦点降 mini），已焦点仅 scheduleReflow（实测跳转 root：焦点迁移、level 保持、cards 保留、零重叠）。④ **L1 容器化（消灭 `#card` 迁移空壳）**：`_panelInnerHTML` + `ensurePanel`（幂等守卫）+ `_panelOf`——卡片 = 容器内面板，无 `#card` 迁移；空壳 = 焦点判定用 currentId 导致焦点面板被清而容器残留。滚动引擎 scrollTop 统一 + bindScrollDrag appRoot 委托 + capture wheel（惯性续动实测 500→1462→2067→2081 衰减曲线）。⑤ **组视图**：组卡类名 `.group-card`（非 `.topic-card`）；组折叠时组内 `.node-card` 不渲染（先 `toggleGroup('grp_...')` 展开再操作节点）；holdsPanel 强制展开（组内焦点/卡节点）。
-- **卡片图重构（2026-08-15/16）+ 锚点修复（2026-08-17）**：把「节点树」升级为「卡片图」（poker 对齐）——`ConvCard`（卡片 = 一段多轮会话，`messages` 数组；底层 `node=回合` 仍是事实源，V5 store 零改动）；卡片按**分叉点切分自动聚合**（卡片头 = ROOT + 每个分叉点 ≥2 子的孩子），手动建卡（child/parallel/branching）+ 分支点/未读经 `cards_meta` 持久化；**显式连接图**（`links` 多对多可断开，`link_cards`/`unlink_cards`，前端出锚点(右/下)→入锚点(左/上)拖线 `onAnchorDown`/`onLinkMove`/`onLinkUp`）；`viewMode` 收敛单一 `card`（旧 node/group 移除）；分支继承链 `get_branch_chain`/`build_branch_chain_block` 注入 system（hermes/ikaros 双模式）；消息 id（`_ensure_message_ids`/`_strip_msg_ids`）供分支点/发散点定位，**导出剥离 id 修复 `test_export` 2 项回归**。**⚠️ 8/17 锚点裁剪修复**：`.node-card.is-card{overflow:hidden}` 把定位在边缘外(-7px)的四锚点裁掉不可见 → 加 `.node-card.is-card .card-anchor` 内侧贴边覆盖；连线端点几何实测对齐 0.00px（L1/L3 双态）。REST 新增 `card/create|read|parent|link|unlink|branch_point` + `card_branch_chain`。测试：引擎 47 + 服务 62 全绿。
+> V5 架构深度 + unified_retrieve 设计取舍：见 `core/memory_v5/memory_retrieval.py` `unified_retrieve` 头注释。
+> MCP 合并历史 + slim 闸门细节：`docs/archive/decision-history/v5-mcp-consolidation.md`。
 
 ## Doc-drift rule
-Any commit touching architecture / ports / components MUST sync `docs/ARCHITECTURE.md` and this file, or carry a `docs:` prefix. (See `docs/README.md`.)
 
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+- 改架构 / 端口 / 组件的 commit **必须同步** `docs/ARCHITECTURE.md` 与本文件，否则 commit message 带 `docs:` 前缀
+- 改完跑 `python docs/lint.py` 检查残留旧路径 / 旧端口 / 旧组件名
+- 专题深度评审先放 `docs/archive/decision-history/`，**不放** `docs/` 根目录
+- 详见 `docs/README.md` §维护规则
 
-This project is indexed by GitNexus as **Ikaros** (5795 symbols, 10497 relationships, 286 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+## DO NOT
 
-> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
-
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
+- ❌ Never auto-commit / auto-push without an explicit user instruction
+- ❌ Never run `llama-server.exe` bare — missing CUDA env → SIGSEGV. Always via component start script
+- ❌ After editing `core/conversation-tree/server.py`, restart the corresponding service
+- ❌ Don't edit `runtime/` 下的上游/工具链（dsh npm 包 / portable-python / llama 二进制）——它们是拉取的依赖，定制走 `core/ikaros-dsh/` overlay 或 `bin/` 包装层
+- ❌ Don't rename `v5.db` 或 `v5_*` MCP 工具前缀（外部契约）
+- ❌ Don't restore 已退役组件：hermes / N.E.K.O / 9100/9119/8642/8650 控制面板 / voice bridge / herdr / omp / pi / 本地 LLM Phi-4
+  （历史见 `docs/archive/decision-history/hermes-retirement-inventory.md` 等）
 
 ## Resources
 
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/Ikaros/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Ikaros/clusters` | All functional areas |
-| `gitnexus://repo/Ikaros/processes` | All execution flows |
-| `gitnexus://repo/Ikaros/process/{name}` | Step-by-step execution trace |
+- **架构骨架**：`docs/ARCHITECTURE.md`（8 章，必读 §1-§6）
+- **dsh 5 分钟总览**：`docs/architecture-post-dsh.md`
+- **专题深度**：`docs/archive/decision-history/`（45 份按需下钻）
+- **历史报告**：`docs/archive/`（25 份 8-14 之前的）
+- **4 线方案历史**：`docs/hermes-plans/`
+- **4 计划 SLM skill + WorkBuddy skill**：`docs/examples/skills/`
+- **环境权威源**：`bin/ikaros-env.{sh,bat,ps1}`（自锚定 IKAROS_ROOT）
 
 ## CLI
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+```bash
+# 启动器（统一入口，三壳同名）
+bin/ikaros all                   # 拓扑序起 embedding → tree → dsh
+bin/ikaros {web|tree|embed}      # 起单个
+bin/ikaros dsh {status,open,sync,restart,stop}
+bin/ikaros {status,ps,logs,stop,restart}
+bin/ikaros doctor                 # 诊断（components.yaml + runtime 缺失检查）
 
-<!-- gitnexus:end -->
+# dsh 直调（绕过启动器）
+bin/start-dsh-ikaros.bat {web,headless} ["<task>"]
+powershell -ExecutionPolicy Bypass -File bin/restart-dsh-ikaros.ps1
+
+# 测试 / lint
+runtime/portable-python/python.exe -m pytest tests/ core/memory_v5/tests/ core/conversation-tree/tests/ -p no:randomly
+runtime/portable-python/python.exe docs/lint.py
+runtime/portable-python/python.exe core/ikaros-dsh/tools/plugin_sync_check.py
+```
