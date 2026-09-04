@@ -15,6 +15,10 @@
 4. 按 `git log --oneline -30` 看最近 30 commit 了解时间线
 5. 涉及专题细节 → 下钻 `archive/decision-history/<name>.md`
 
+> **Agent 私有笔记**：`tmp/ARCHITECTURE.local.md`（gitignored，不推送）。
+> 每个 agent 进来**首次**应主动扫描 git log + 代码生成/更新本文件。
+> 维护原则见 `tmp/ARCHITECTURE.local.md` 头部说明。
+
 ---
 
 ## 目录导航
