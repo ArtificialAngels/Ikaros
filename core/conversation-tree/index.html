@@ -5067,8 +5067,12 @@ document.addEventListener('keydown',e=>{
   else if(k==='Enter'&&selectedNode){e.preventDefault();doJump(selectedNode);}
   else if(k==='F2'&&selectedNode){e.preventDefault();renameNodePrompt(selectedNode);}
   else if(k==='Delete'&&selectedNode){
+    // 2026-09-05 fix: keydown 回调不是 async, 不能直接 await confirmDialog (语法错误).
+    // 改用 .then 链 (B4 改造 alert->dialog 时引入的 bug)
     const n=tree.nodes.get(selectedNode);
-    if(n&&n.id!==tree.rootId&&await confirmDialog('删除该节点？其子节点将重挂到父节点。',{title:'删除节点',danger:true,okText:'删除'})){API.deleteNode(selectedNode).then(refresh);}
+    if(n&&n.id!==tree.rootId){
+      confirmDialog('删除该节点？其子节点将重挂到父节点。',{title:'删除节点',danger:true,okText:'删除'}).then(ok=>{if(ok){API.deleteNode(selectedNode).then(refresh);}});
+    }
   }
 });
 

@@ -2,7 +2,7 @@
 
 > **目标读者**: 所有接入本项目的 AI Agent
 > **核心原则**: 便携性（零系统依赖）+ 路径统一管理（一处注册，全局可查）
-> **最后更新**: 2026-08-18（hermes / N.E.K.O / 9100 面板退役，dsh 底座）
+> **最后更新**: 2026-09-05（§1.6 平行双轨架构：A 路 dsh 为主壳/当前生产，B 路 tree 为主壳仅文档占位；ct server.py 强依赖 v5 决定 B 路非"独立于 dsh"）
 
 ---
 
@@ -85,7 +85,64 @@ agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**�
 - **启动 / 重启**：统一入口 `bin/ikaros.bat`（双击出 13 项菜单 / CLI `ikaros <subcommand>` 透传）。具体：`ikaros web`（:3080 web GUI）/ `ikaros tree`（对话树面板）/ `ikaros dsh restart`（杀旧 dsh + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
 
-### 1.6 启动器：`bin/ikaros`（2026-08-20 起）
+### 1.6 平行双轨架构：当前状态与未来方向（2026-09-05 决策）
+
+**核心问题**：dsh 是当前唯一集成底座（§1.5），但对话树本身可独立运行（`core/conversation-tree/server.py` 通过 `python core/conversation-tree/server.py --port 0` 拉起，**不依赖 dsh**）。这引出一个架构选择——**以 dsh 为主壳（dsh 内嵌入 tree iframe），还是以 tree 为主壳（tree 内嵌入 dsh 后端能力）**。
+
+> **决策结论（2026-09-05）**：**两条路并行演进**，先用 A 路落地（风险最低），同时为 B 路预留接口；**默认不切换**，等 A 路稳定后再决定是否上 B 路。
+
+#### 1.6.1 三块底层架构（两条路共用）
+
+无论哪条路为主壳，以下三层都是**不变核心**，改动只在 UI 编排层：
+
+| 层 | 路径 | 进程 | 职责 |
+|---|---|---|---|
+| **记忆核心** | `core/memory_v5/` | Python `mcp_server.py`（stdio）| V5 自我认知、长期记忆、反思、人格（v5_* MCP 工具 50+；`v5.db` SQLite + Chroma） |
+| **记忆自动写回** | `core/ikaros-dsh/plugins/ikaros-memory` | dsh plugin（tsc→dist）| pre-step 召回注入 + turn-stopping 自动沉淀 + 6h 反思（hook 钩在 dsh） |
+| **记忆控制面板** | `core/ikaros-dsh/plugins/ikaros-memory-settings` | dsh plugin + 独立 HTTP `:19001` | 用户手动管理模型/embedding/向量重建 |
+| **对话树后端** | `core/conversation-tree/server.py` | Python（独立进程）| 树形对话面板 + 卡片图 + REST API（**强依赖 memory_v5.store + memory_v5.conversation_tree**，无法独立） |
+| **对话树 dsh 集成壳** | `core/ikaros-dsh/plugins/ikaros-conversation-tree` | dsh plugin（Node 看门狗 spawn server.py + iframe 嵌入）| dsh sidebar 入口 + iframe 容器 |
+| **对话树渲染** | `core/conversation-tree/index.html`（8151 行单文件） | server.py serve | 实际画布 / 卡片 / 连线 / 三级 L1→L2→L3 形变 |
+| **embedding** | `runtime/llama/b10000-cuda/llama-server.exe` | 独立（各上层脚本 watchdog）| bge-m3 `:8587` 向量检索 |
+| **工作引擎底座** | `runtime/dsh/` | Node (本地安装) | DeepSeek Harness 全套（llm/session/tools/fs/sandbox/subagent/compaction/skill/goal/workflow/ralph） |
+| **dsh overlay** | `core/ikaros-dsh/cordis.patch.yml` | 加载到 dsh | 注入 v5 MCP + ikaros-memory + ikaros-memory-settings + ikaros-conversation-tree + terminal + lsp + persona |
+
+#### 1.6.2 A 路（dsh 为主壳，**当前生产**）
+
+**启动链**：`ikaros web` → ikarosctl → `node runtime/dsh/.../bin.js web --port 3080 --no-open` → dsh 启动时 auto-load `~/.dsh/profiles/web/cordis.patch.yml` → overlay 注入 8 个插件（memory-v5 MCP + ikaros-memory + ikaros-memory-settings + ikaros-conversation-tree + terminal + lsp + ...） → dsh spawn `core/conversation-tree/server.py` 作为 ikaros-conversation-tree Node 看门狗子进程 → user 点 dsh sidebar "对话树" 按钮 → iframe src = `http://127.0.0.1:<port>/`（port 由 server.py stdout `PORT=<n>` 注入到 dist/client.js）→ 渲染 8151 行 index.html。
+
+**用户路径**：`双击 ikaros.bat` → `1 open` → Chrome --app 打开 :3080 → sidebar 按钮 → 树 UI。
+
+**优点**：当前生产链已通，dsh 自带的 LSP/terminal/sandbox/ skill/ 全套工程能力全部就绪（agent 直接用），用户从单一入口使用一切。
+**缺点**：iframe 隔离（`window.parent.postMessage` 跨域），ct 页面无法直接调 dsh hook；要"嵌入式体验"必须绕 postMessage。
+
+#### 1.6.3 B 路（tree 为主壳，dsh 作后端）
+
+**概念**：tree 页面直接持 dsh session（不再是 iframe），user 一打开就是 tree UI，背后调 dsh LLM/tool/event bus。
+
+**入口候选**：
+1. **新启动命令** `ikaros tree-web`（在 ikarosctl.py dispatch 加）→ 起 dsh headless + 起 conversation-tree server + 浏览器直接打开 `:48920`（或 ct 随机端口），ct 页面嵌入 dsh WebSocket 客户端。
+2. **ct 自带 dsh client SDK**（`core/conversation-tree/dsh_client.js`）→ ct `boot()` 时连 `ws://127.0.0.1:3080/ws`（dsh headless）→ 通过 dsh RPC 调 LLM（取代 ct 当前的 `chat_with_ikaros` 本地直连 DeepSeek）。
+3. **可选 UI 改造**：ct 顶部加 "Agent 模式" 切换 → 启用 dsh 全套工具（terminal/lsp/skill/subagent）。
+
+**优点**：以 ct UI 为日常入口（agent 写卡的体验不需要 dsh 主面板那层抽象），减少一层 iframe 复杂度。
+**难点**：
+- **强依赖 memory_v5**（ct server.py 第 76-78 行直接 `import memory_v5.conversation_tree as ct` + `memory_v5.store as v5s`）——B 路不能完全"独立于 dsh 起来"，必须先有 v5 数据 + ct 看 v5.db。
+- **dsh headless 不能直接 serve UI**（dsh 的 web 模式 = bundle 的 React 渲染，与 ct 无关）——需要 ct 页面**外加 dsh client SDK**（worktree 估算 2-4 周）。
+- **用户已有 dsh 习惯**（工程师向）——B 路对 agent 友好，但对日常对话用户切换成本高。
+- **插件生命周期**：B 路要不要保留 `ikaros-conversation-tree` dsh plugin？若保留 = 双壳（多余）；若删除 = dsh 主壳就缺 ct 入口（A 路依赖死掉）。
+
+#### 1.6.4 当前阶段：A 路落地，B 路仅文档占位
+
+- ✅ A 路已可用（dsh + ct + v5 全跑），是当前生产
+- ⚠️ **B 路仅在 §1.6.3 描述**，**不实现**——等 A 路稳定 + 用户明确"我要 tree 为主壳"再启动 B 路 worktree
+- ⚠️ 任何改动若影响两条路共用核心（§1.6.1 三层），必须**先跑 A 路全链路测试** + 在此章节标记影响面
+- 🔖 决策点检查表：B 路启用前必须满足
+  1. ct 页面**无 iframe 跨**——**问题**：当前 dsh plugin 用 iframe 包 ct（A 路边际成本）
+  2. v5 记忆层**不再依赖 dsh 触发 hook**——**问题**：ikaros-memory plugin 钩在 dsh turn-stopping，B 路上 ct 不能直接复用这个自动写回
+  3. ct UI 改造为支持 dsh tool/skill/lsp——**问题**：ct 页面当前是 pure canvas，无 dsh 工具面板
+
+### 1.7 启动器：`bin/ikaros`（2026-08-20 起）
 
 所有 Ikaros 组件的**统一入口**（dsh / 对话树 / embedding），跨 3 shell（bash / cmd / PowerShell）：
 
