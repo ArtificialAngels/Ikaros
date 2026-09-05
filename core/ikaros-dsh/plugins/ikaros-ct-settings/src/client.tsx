@@ -428,6 +428,45 @@ function apply(ctx: any) {
 
   const t = ctx.locale.bind(NS)
 
+  /* ── Phase 2: 监听 CT 的「打开设置」请求, 尝试打开 dsh 设置面板 ── */
+  const openDshSettings = () => {
+    // 策略1: DOM 点击设置按钮 (aria-label / title / class 匹配)
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>(
+      'button[aria-label*="etting"], button[aria-label*="设置"], button[title*="etting"], button[title*="设置"], [class*="settings"] button, [class*="Settings"] button'
+    ))
+    for (const btn of candidates) {
+      if (btn.offsetParent !== null) { btn.click(); return true }
+    }
+    // 策略2: 键盘快捷键 Ctrl+, (dsh 常见设置快捷键)
+    try {
+      const ev = new KeyboardEvent('keydown', { key: ',', code: 'Comma', ctrlKey: true, bubbles: true })
+      document.dispatchEvent(ev)
+      return true
+    } catch { return false }
+  }
+
+  ctx.effect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data
+      if (!d || typeof d !== 'object') return
+      if (d.type === 'ikaros-ct-open-settings') {
+        const ok = openDshSettings()
+        if (ok) {
+          // 通知 CT: dsh 已打开设置, 取消 CT 内部模态框 fallback
+          const iframe = findCtIframe()
+          iframe?.contentWindow?.postMessage({ type: 'ikaros-ct-settings-opened' }, '*')
+          // 同时尝试定位到对话树分区 (延迟等待设置面板渲染)
+          setTimeout(() => {
+            const section = document.querySelector<HTMLElement>('[data-settings-section="ikaros-ct-settings"], #ikaros-ct-settings')
+            section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }, 300)
+        }
+      }
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, 'ikaros-ct-settings: open-settings bridge')
+
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'ikaros-ct-settings',

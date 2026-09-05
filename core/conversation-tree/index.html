@@ -8055,10 +8055,22 @@ window.addEventListener('message',function(ev){
 });
 try{ window.parent.postMessage({type:'ikaros-ct-ready'},'*'); }catch(e){}
 var _origOpenSettings=window.openSettings;
+var _ctSettingsFallbackTimer=null;
 window.openSettings=function(){
+  /* Phase 2: 优先通知 dsh 打开设置面板; dsh 500ms 内未确认则 fallback 到 CT 内部模态框 */
   try{ window.parent.postMessage({type:'ikaros-ct-open-settings'},'*'); }catch(e){}
-  if(typeof _origOpenSettings==='function')_origOpenSettings();
+  if(_ctSettingsFallbackTimer)clearTimeout(_ctSettingsFallbackTimer);
+  _ctSettingsFallbackTimer=setTimeout(function(){
+    if(typeof _origOpenSettings==='function')_origOpenSettings();
+  },500);
 };
+/* dsh 确认已打开设置面板时取消 fallback */
+window.addEventListener('message',function(ev){
+  var d=ev.data;
+  if(d&&d.type==='ikaros-ct-settings-opened'){
+    if(_ctSettingsFallbackTimer){clearTimeout(_ctSettingsFallbackTimer);_ctSettingsFallbackTimer=null;}
+  }
+});
 </script>
 
 
