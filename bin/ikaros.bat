@@ -6,13 +6,11 @@ rem   Double-click (no args) -> interactive menu (12 options) for desktop users.
 rem   CLI with args (e.g. "ikaros web" or "ikaros dsh status") -> forward to
 rem     PowerShell + ikarosctl.py transparently (same as before).
 rem
-rem Why this file (and not separate):
-rem   - Single entry point per profile (no per-action .bat scatter)
-rem   - GUI users see menu; CLI users keep transparent forwarding
-rem   - Win+R "ikaros" hits the menu (was: hit ikaros.bat -> forwarded to ikaros.ps1 with no args, error)
-rem
-rem Merged from (deleted 2026-09-05): start-dsh-ikaros.bat, restart-dsh-ikaros.ps1,
-rem   dsh-open.bat, dsh-status.bat, dsh-sync.bat, ikaros-launcher.bat
+rem Design:
+rem   - Single entry per action: menu -> pick -> run -> exit. NO menu loops
+rem     (cmd `call :label` + `goto :label` inside sub creates call stack
+rem     recursion that loops forever on EOF. Avoided by single-shot flow.)
+rem   - After an action, bat closes. User re-double-clicks for next action.
 rem
 rem ASCII only -- cmd parses bat in ANSI/GBK; UTF-8 comments turn into
 rem mojibake that cmd tries to execute (AGENTS.md hard rule).
@@ -26,26 +24,21 @@ set "IKAROS_BIN=%IKAROS_ROOT%\bin"
 set "LAUNCHER=%IKAROS_BIN%\ikaros.ps1"
 
 rem Check if we were invoked with arguments.
-rem  - Double-click: %CMDCMDLINE% ends with the .bat path; %1..%9 are empty
-rem  - CLI: at least one non-empty %1
-rem
-rem Edge cases handled:
-rem  - "/c ikaros.bat web" (cmd /c): %1=web
-rem  - "ikaros web" (from Win+R after PATH set): %1=web
-rem  - ""  (double-click, run via cmd): %1 empty
-if "%~1"=="" goto :menu
-
-rem CLI path -- transparent forwarding
-call "%IKAROS_BIN%\ikaros-env.bat" >nul 2>&1
-if errorlevel 1 (
-    echo [FATAL] ikaros-env.bat failed
-    exit /b 1
+rem  - Double-click: %~1 empty -> menu
+rem  - CLI: at least one non-empty %1 -> forward
+if not "%~1"=="" (
+    call "%IKAROS_BIN%\ikaros-env.bat" >nul 2>&1
+    if errorlevel 1 (
+        echo [FATAL] ikaros-env.bat failed
+        exit /b 1
+    )
+    :: 2026-09-05 fix: 不要让 cmd 用文件关联打开 .ps1 (很多机器 .ps1 关联 notepad).
+    :: 显式调 powershell, 避免 .ps1 被 cmd 当数据文件/资源打开.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" %*
+    exit /b %ERRORLEVEL%
 )
-"%IKAROS_BIN%\ikaros.ps1" %*
-exit /b %ERRORLEVEL%
 
-:menu
-rem Interactive menu -- shown when invoked with no args
+rem === Double-click entry: show menu (single shot, no inner loop) ===
 cls
 echo ============================================================
 echo   Ikaros Launcher  (IKAROS_ROOT=%IKAROS_ROOT%)
@@ -73,71 +66,57 @@ echo ============================================================
 set /p "CHOICE=choose [1-11 / s / r / q]: "
 
 if /i "%CHOICE%"=="q" exit /b 0
-if /i "%CHOICE%"=="s" call :run_interactive stop
-if /i "%CHOICE%"=="r" call :run_interactive restart
-if "%CHOICE%"=="1" call :run web
-if "%CHOICE%"=="2" call :run tree
-if "%CHOICE%"=="3" call :run embed
-if "%CHOICE%"=="4" call :run all
-if "%CHOICE%"=="5" call :run dsh open
-if "%CHOICE%"=="6" call :run dsh status
-if "%CHOICE%"=="7" call :run dsh sync
-if "%CHOICE%"=="8" call :run doctor
-if "%CHOICE%"=="9" call :run check
-if "%CHOICE%"=="10" call :run status
-if "%CHOICE%"=="11" call :run ps
+if /i "%CHOICE%"=="s" goto :menu_stop
+if /i "%CHOICE%"=="r" goto :menu_restart
+
+rem === 1-11: direct dispatch (no inner prompt) ===
+if "%CHOICE%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" web & exit /b 0
+if "%CHOICE%"=="2" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" tree & exit /b 0
+if "%CHOICE%"=="3" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" embed & exit /b 0
+if "%CHOICE%"=="4" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" all & exit /b 0
+if "%CHOICE%"=="5" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh open & exit /b 0
+if "%CHOICE%"=="6" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh status & exit /b 0
+if "%CHOICE%"=="7" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh sync & exit /b 0
+if "%CHOICE%"=="8" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" doctor & exit /b 0
+if "%CHOICE%"=="9" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" check & exit /b 0
+if "%CHOICE%"=="10" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" status & exit /b 0
+if "%CHOICE%"=="11" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" ps & exit /b 0
 
 echo.
 echo [WARN] unknown choice: %CHOICE%
 pause
-goto menu
+exit /b 0
 
-:run
-call "%LAUNCHER%" %~1
-set "EXITCODE=%ERRORLEVEL%"
+:menu_stop
+rem === s: stop, then pick from 3-component list ===
 echo.
-echo ------------------------------------------------------------
-if "%EXITCODE%"=="0" (
-    echo [OK] command completed
-) else (
-    echo [FAIL] command exited with code %EXITCODE% -- see above for details
-)
+echo   Pick component to STOP:
+echo     1) dsh                 DeepSeek Harness work engine (:3080)
+echo     2) conversation-tree  Tree panel (dynamic port)
+echo     3) embedding          bge-m3 embed service (:8587)
+echo     0) cancel
+set /p "IDX=number [1-3 / 0=cancel]: "
+if "%IDX%"=="0" exit /b 0
+if "%IDX%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" stop dsh & exit /b 0
+if "%IDX%"=="2" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" stop conversation-tree & exit /b 0
+if "%IDX%"=="3" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" stop embedding & exit /b 0
+echo [WARN] unknown number: %IDX% (valid: 1=dsh / 2=conversation-tree / 3=embedding / 0=cancel)
 pause
-goto menu
+exit /b 0
 
-:run_interactive
-:: 列出组件状态, 用户选数字 (1=dsh / 2=conversation-tree / 3=embedding), 不用背 id 字符串
+:menu_restart
+rem === r: restart, then pick from 3-component list ===
 echo.
-echo   Components (running / stopped):
-call "%LAUNCHER%" status >nul 2>&1
-call "%LAUNCHER%" status
-echo.
-set "IDX="
-set /p "IDX=component number [1=dsh, 2=conversation-tree, 3=embedding, ENTER=skip]: "
-:: 空输入 (或 EOF) 跳过, 不强行默认
-if "%IDX%"=="" (
-    echo [SKIP] no component selected
-    pause
-    goto menu
-)
-:: 数字 -> 组件 id 映射
-set "COMP_ID="
-if "%IDX%"=="1" set "COMP_ID=dsh"
-if "%IDX%"=="2" set "COMP_ID=conversation-tree"
-if "%IDX%"=="3" set "COMP_ID=embedding"
-if "%COMP_ID%"=="" (
-    echo [WARN] unknown number: %IDX% (valid: 1=dsh / 2=conversation-tree / 3=embedding)
-    pause
-    goto menu
-)
-call "%LAUNCHER%" %~1 %COMP_ID%
-set "EXITCODE=%ERRORLEVEL%"
-echo.
-echo ------------------------------------------------------------
-if "%EXITCODE%"=="0" (
-    echo [OK] command completed
-) else (
-    echo [FAIL] command exited with code %EXITCODE% -- see above for details
-)
+echo   Pick component to RESTART:
+echo     1) dsh                 DeepSeek Harness work engine (:3080)
+echo     2) conversation-tree  Tree panel (dynamic port)
+echo     3) embedding          bge-m3 embed service (:8587)
+echo     0) cancel
+set /p "IDX=number [1-3 / 0=cancel]: "
+if "%IDX%"=="0" exit /b 0
+if "%IDX%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" restart dsh & exit /b 0
+if "%IDX%"=="2" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" restart conversation-tree & exit /b 0
+if "%IDX%"=="3" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" restart embedding & exit /b 0
+echo [WARN] unknown number: %IDX% (valid: 1=dsh / 2=conversation-tree / 3=embedding / 0=cancel)
 pause
-goto menu
+exit /b 0
