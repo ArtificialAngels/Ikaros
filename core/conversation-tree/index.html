@@ -6360,7 +6360,7 @@ function openSettings(){
   renderGridToggle();
   renderFxParticlesSettings();
   const m=document.getElementById('settingsModal');
-  if(m){m.classList.add('open'); showSettingsSection(_currentSettingsSection||'models');}
+  if(m){m.classList.add('open'); showSettingsSection(_currentSettingsSection||'colortheme');}
 }
 function closeSettings(){
   const m=document.getElementById('settingsModal');
@@ -8081,10 +8081,7 @@ window.addEventListener('message',function(ev){
     <div class="settings-layout">
       <nav class="settings-nav">
         <div class="settings-nav-head"><h2 data-i18n="settings.title">设置</h2></div>
-        <button class="settings-nav-item active" data-section="models" onclick="showSettingsSection('models')" data-i18n="nav.models">可用模型</button>
-        <button class="settings-nav-item" data-section="assignment" onclick="showSettingsSection('assignment')" data-i18n="nav.assignment">模型分配</button>
-        <button class="settings-nav-item" data-section="apikeys" onclick="showSettingsSection('apikeys')" data-i18n="nav.apikeys">API 密钥</button>
-        <button class="settings-nav-item" data-section="colortheme" onclick="showSettingsSection('colortheme')" data-i18n="nav.colortheme">颜色主题</button>
+                                <button class="settings-nav-item active" data-section="colortheme" onclick="showSettingsSection('colortheme')" data-i18n="nav.colortheme">颜色主题</button>
         <button class="settings-nav-item" data-section="permissions" onclick="showSettingsSection('permissions')" data-i18n="nav.permissions">编辑权限</button>
         <button class="settings-nav-item" data-section="shortcuts" onclick="showSettingsSection('shortcuts')" data-i18n="nav.shortcuts">快捷键</button>
         <button class="settings-nav-item" data-section="language" onclick="showSettingsSection('language')" data-i18n="nav.language">语言</button>
@@ -8093,26 +8090,11 @@ window.addEventListener('message',function(ev){
       </nav>
       <div class="settings-content" id="settingsContent">
         <!-- Available Models (来自 Ikaros 根 .env / 运行时配置, 点击切换当前会话模型) -->
-        <div class="settings-section active" data-section="models">
-          <h3 data-i18n="sec.models.title">可用模型</h3>
-          <p class="settings-desc" data-i18n="desc.models">来自 Ikaros 根 .env（DEEPSEEK_*）。点击模型即切换当前会话使用。</p>
-          <div class="settings-models" id="settingsModels"><div class="settings-desc">加载中…</div></div>
-        </div>
+        
         <!-- Agent Assignment (节点级代理分配, 对应右键菜单「代理→Ikaros」) -->
-        <div class="settings-section" data-section="assignment">
-          <h3 data-i18n="sec.assignment.title">代理分配</h3>
-          <p class="settings-desc" data-i18n="desc.assignment">当前节点统一由 Ikaros 伴侣作答（对话/探索/工具）。</p>
-          <div class="settings-row"><div><div class="settings-row-label" id="assignCurrent">当前节点：—</div><div class="settings-row-desc" id="assignCurrentDesc">—</div></div></div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <button class="settings-btn primary" id="assignIkarosBtn" onclick="assignAgent('ikaros')">✦ Ikaros 伴侣</button>
-            </div>
-        </div>
+        
         <!-- API Keys (只读状态: 密钥由根 .env 配置管理, 此处仅展示配置状态) -->
-        <div class="settings-section" data-section="apikeys">
-          <h3 data-i18n="sec.apikeys.title">API 密钥</h3>
-          <p class="settings-desc" data-i18n="desc.apikeys">密钥由根 .env 统一管理（DEEPSEEK_API_KEY 等），此处只读展示配置状态，不接触密钥本身。</p>
-          <div id="settingsProviders"><div class="settings-desc">加载中…</div></div>
-        </div>
+        
         <!-- Color Theme (global controller) -->
         <div class="settings-section" data-section="colortheme">
           <h3 data-i18n="sec.colortheme.title">颜色主题</h3>
