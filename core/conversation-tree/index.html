@@ -4634,15 +4634,31 @@ async function exportSession(id,format){
   }catch(e){toast('导出出错：'+(e.message||e));}
 }
 /* ===== B2: 事件流订阅 (对应 herdr events.subscribe) ===== */
+// B3 (2026-09-04): 加重连退避 (1s, 2s, 4s, 8s, max 30s). 之前 es.onerror=()=>{}
+// 浏览器默认重连是 1-3s 立即重试, 服务器重启时疯狂重连. 退避后稳定.
+let _es=null, _esBackoffMs=1000;
+const _ES_MAX_BACKOFF=30000;
 function connectEventStream(){
   if(typeof EventSource==='undefined')return;
+  if(_es)try{_es.close();}catch(_){}
   try{
-    const es=new EventSource('/api/events');
-    es.onmessage=ev=>{
+    _es=new EventSource('/api/events');
+    _es.onmessage=ev=>{
       let d;try{d=JSON.parse(ev.data);}catch(_){return;}
       if(d&&d.type==='node.exec_state_changed')applyExecEvent(d.data||{});
     };
-    es.onerror=()=>{/* 连接断开时浏览器会自动重连 */};
+    _es.onerror=()=>{
+      // EventSource 默认会重连, 但我们额外加客户端可见的退避
+      // (浏览器自带重连不可控间隔, 自己关掉重连 + 用 setTimeout 调度)
+      if(_es)try{_es.close();}catch(_){}
+      const delay=_esBackoffMs;
+      _esBackoffMs=Math.min(_esBackoffMs*2, _ES_MAX_BACKOFF);
+      setTimeout(connectEventStream, delay);
+    };
+    _es.onopen=()=>{
+      // 连接成功 -> 重置 backoff
+      _esBackoffMs=1000;
+    };
   }catch(e){console.warn('EventSource init failed',e);}
 }
 function applyExecEvent(d){

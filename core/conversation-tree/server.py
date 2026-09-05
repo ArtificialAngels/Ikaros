@@ -13,6 +13,7 @@ import argparse
 import base64
 import gzip
 import json
+import logging
 import os
 import queue
 import re
@@ -27,6 +28,17 @@ import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# Logging: 2026-09-04 B1+B2 fix — 之前 74 处 except Exception: pass 静默吞错 +
+# log_message = pass 关闭所有请求日志; 现在统一走 stdlib logging,
+# 级别 INFO (默认) / DEBUG (CT_LOG_LEVEL=debug 启用). agent 排查能力解锁.
+_LOG_LEVEL = os.environ.get("CT_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("ct.server")
 
 # 让本服务能 import memory_v5.conversation_tree + memory_v5.store
 _HERE = Path(__file__).resolve().parent
@@ -77,9 +89,8 @@ if not _DEEPSEEK_KEY:
                 if _line.startswith("DEEPSEEK_API_KEY=") and not _line.startswith("#"):
                     _DEEPSEEK_KEY = _line.split("=", 1)[1].strip().strip('"').strip("'")
                     break
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 # 2026-08-18: Hermes gateway/bridge 已退役; chat 主链路 = 本地 DeepSeek 直连 + 只读工具回路
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
@@ -133,8 +144,8 @@ def _urlopen_with_timeout(req, connect_timeout: int = LLM_CONNECT_TIMEOUT,
         sock = getattr(raw, "_sock", None)
         if sock is not None:
             sock.settimeout(read_timeout)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
     return resp
 
 
@@ -338,7 +349,8 @@ def _warn(collector: "dict | None", message: str) -> None:
 # except 静默吞掉, "树感知压缩"实际从未生效 (一直跑线性回退) —— 本次修复并加 warn 透出.
 try:
     from memory_v5.extensions.tree_adapter import build_tree_aware_context  # noqa: F401
-except Exception:  # 零硬依赖: tree_adapter 缺失/离线时降级为 None, 调用点走回退
+except Exception as e:  # 零硬依赖: tree_adapter 缺失/离线时降级为 None, 调用点走回退
+    logger.warning("tree_adapter import failed: %s", e)
     build_tree_aware_context = None
 
 
@@ -363,7 +375,8 @@ def build_branch_context_block(tree, node_id: "str | None") -> str:
         agent = getattr(cur, "agent", "ikaros") or "ikaros"
         return ("Current branch path (root → current):\n" + "\n".join(lines)
                 + f"\nCurrent node agent: {agent}")
-    except Exception:
+    except Exception as e:
+        logger.warning("build_branch_context_block failed: %s", e)
         return ""
 
 
@@ -378,9 +391,8 @@ def build_ikaros_persona() -> str:
     try:
         if _AXIOM_PATH.exists():
             blocks.append(_AXIOM_PATH.read_text(encoding="utf-8").strip())
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
     # 2) SOUL.md: V5 同步的身份 + 偏好 (按标题白名单抽取, 跳过运维/下载等操作章节,
     #    并截断避免撑爆上下文; 去掉自动同步注释头)
     try:
@@ -404,9 +416,8 @@ def build_ikaros_persona() -> str:
             soul_kept = "\n\n".join(chunks)[:1800]
             if soul_kept.strip():
                 blocks.append("[身份档案 SOUL]\n" + soul_kept)
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
     # 3) 动态心绪: 来自 self_model.json 的此刻叙事 / 关系
     try:
         if _SELF_MODEL_PATH.exists():
@@ -421,9 +432,8 @@ def build_ikaros_persona() -> str:
             if snap:
                 rel = f" | 此刻: {snap}"
             blocks.append(f"[此刻] 我是{name}（{nature}）{rel}")
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
     blocks.append(
         "对话以树形组织: 每个节点是可分叉的探索点, 分支代表不同方向; "
         "保持温暖、直接、有温度的语气, 像和哥哥对话。"
@@ -546,11 +556,13 @@ def _read_text_attachment(path: Path, cap: int = _UPLOAD_TEXT_CAP) -> str:
     """读文本附件内容 (UTF-8, 容错 replace; 超长截断). 非文本返回空串."""
     try:
         raw = path.read_bytes()[: cap * 2]
-    except Exception:
+    except Exception as e:
+        logger.warning("read attachment bytes failed: %s", e)
         return ""
     try:
         text = raw.decode("utf-8", errors="replace")
-    except Exception:
+    except Exception as e:
+        logger.warning("decode attachment failed: %s", e)
         return ""
     return text if len(text) <= cap else text[:cap] + "\n… (内容超长已截断)"
 
@@ -583,7 +595,8 @@ def _attachment_content_blocks(attachments: list[dict]) -> list[dict]:
                     "image_url": {"url": f"data:{mime};base64,{b64}", "name": name},
                 })
                 continue
-            except Exception:
+            except Exception as e:
+                logger.warning("image attachment read failed (%s): %s", name, e)
                 blocks.append({"type": "text",
                                "text": f"[图片附件 {name} 读取失败]"})
                 continue
@@ -688,8 +701,8 @@ def build_chat_messages_v5(node_id: str | None, user_message: str,
             if len(ctx) > MAX_CONTEXT_MSGS:
                 ctx = ctx[-MAX_CONTEXT_MSGS:]
             msgs.extend(ctx)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("swallowed: %s", e)
         msgs.append({"role": "user", "content": _build_user_content(user_message, attachments)})
         return msgs
 
@@ -730,8 +743,8 @@ def _load_sessions() -> list[dict]:
             data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("swallowed: %s", e)
     return []
 
 
@@ -770,10 +783,8 @@ def _touch_active_session(tree: "ct.ConversationTree | None" = None) -> None:
             if n and n.summary:
                 s["current_title"] = n.summary[:80]
         _save_sessions(_sessions)
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        logger.warning("swallowed: %s", e)
 def _make_tree_for(persist_key: str) -> "ct.ConversationTree":
     """创建注入 V5 store 后端的 ConversationTree (指定 persist_key)."""
     return ct.ConversationTree(persist_key=persist_key, **_tree_kwargs())
@@ -872,7 +883,8 @@ def _migrate_if_needed() -> None:
 
     try:
         old_data = json.loads(old_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        logger.warning("read old conversation-tree json failed: %s", e)
         return
 
     migrated = 0
@@ -917,16 +929,16 @@ def _migrate_tree(t: "ct.ConversationTree | None") -> int:
                 node.v5_memory_id = new_id
                 try:
                     node.summary = ct._extract_summary(msgs)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("swallowed: %s", e)
                 migrated += 1
             except Exception as exc:
                 sys.stderr.write(f"[ct] import migrate node {node.id}: {exc}\n")
     if migrated:
         try:
             t.persist()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("swallowed: %s", e)
     return migrated
 
 
@@ -991,7 +1003,8 @@ def state_dict(tree: "ct.ConversationTree | None" = None, inline: bool = True) -
     if ids:
         try:
             batch = t._load_fn(ids)
-        except Exception:
+        except Exception as e:
+            logger.warning("v5 batch load failed (id-only path): %s", e)
             batch = {}
         for n in data["nodes"]:
             mid = n.get("v5_memory_id", 0)
@@ -1029,7 +1042,8 @@ def _export_tree_data(sess: dict) -> dict:
     ids = [n.get("v5_memory_id", 0) for n in data["nodes"] if n.get("v5_memory_id")]
     try:
         batch = t._load_fn(ids) if ids else {}
-    except Exception:
+    except Exception as e:
+        logger.warning("v5 batch load failed (inline path): %s", e)
         batch = {}
     for n in data["nodes"]:
         mid = n.get("v5_memory_id", 0)
@@ -1184,7 +1198,8 @@ def _execute_chat_tool(name: str, arguments: str, node_id: str | None) -> dict:
     ikaros_herdr (白名单) 外均为只读/安全."""
     try:
         args = json.loads(arguments) if arguments else {}
-    except Exception:
+    except Exception as e:
+        logger.warning("tool args parse failed: %s", e)
         args = {}
     if name == "memory_search":
         q = (args.get("query") or "").strip()
@@ -1289,7 +1304,8 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
             name = fn.get("name") or "tool"
             try:
                 args = json.loads(fn.get("arguments") or "{}")
-            except Exception:
+            except Exception as e:
+                logger.warning("tool loop args parse failed: %s", e)
                 args = {}
             tcid = tc.get("id") or f"fb_{tool_rounds}_{name}"
             collector["tool_calls"].append({
@@ -1396,7 +1412,14 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        pass
+        # B2 (2026-09-04): 之前 pass 完全静默; 现在 INFO 级别记录所有请求.
+        # 5xx 自动 WARNING (BaseHTTPRequestHandler 会用 'code %d - %s' 格式).
+        try:
+            msg = fmt % args if args else fmt
+        except Exception as e:
+            logger.debug("log_message format failed: %s", e)
+            msg = fmt
+        logger.info("%s - %s", getattr(self, "address_string", lambda: "?")(), msg)
 
     def _send_json(self, obj, code: int = 200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -1465,10 +1488,8 @@ class Handler(BaseHTTPRequestHandler):
             # (WinError 10053), 旧代码只捕前两个, 导致完整 traceback 刷屏日志.
             try:
                 generator.close()
-            except Exception:
-                pass
-
-
+            except Exception as e:
+                logger.warning("swallowed: %s", e)
     def _send_html(self, path: Path):
         if not path.exists():
             self._send_text("index.html not found", 404)
@@ -1659,7 +1680,8 @@ class Handler(BaseHTTPRequestHandler):
                             k, v = kv.split("=", 1)
                             try:
                                 qs[k] = urllib.parse.unquote(v)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug("query param unquote failed: %s", e)
                                 qs[k] = v
                 sid = qs.get("session_id", "")
                 if not sid:
@@ -1753,9 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 d = ev.to_dict() if hasattr(ev, "to_dict") else dict(ev)
                 q.put_nowait(d)
-            except Exception:
-                pass
-
+            except Exception as e:
+                logger.warning("swallowed: %s", e)
         unsub = _bus.subscribe(_on)
         # hello 帧: 告知客户端事件协议版本 + 当前树标识
         try:
@@ -1771,11 +1792,12 @@ class Handler(BaseHTTPRequestHandler):
                 ("event: hello\ndata: " + json.dumps(hello, ensure_ascii=False) + "\n\n").encode("utf-8")
             )
             self.wfile.flush()
-        except Exception:
+        except Exception as e:
+            logger.debug("SSE hello send failed (client disconnect?): %s", e)
             try:
                 unsub()
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.warning("SSE unsub on hello-fail failed: %s", e2)
             return
 
         while True:
@@ -1786,20 +1808,21 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     self.wfile.write(b": heartbeat\n\n")
                     self.wfile.flush()
-                except Exception:
+                except Exception as e:
+                    logger.debug("SSE heartbeat write failed (client disconnect): %s", e)
                     break
                 continue
             try:
                 frame = "data: " + json.dumps(evt, ensure_ascii=False) + "\n\n"
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
-            except Exception:
+            except Exception as e:
+                logger.debug("SSE frame write failed (client disconnect): %s", e)
                 break
         try:
             unsub()
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.warning("SSE unsub on exit failed: %s", e)
     def do_POST(self):
         global _sessions, _active_session_id
         ensure_tree()
@@ -2096,7 +2119,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 try:
                     raw = base64.b64decode(b64)
-                except Exception:
+                except Exception as e:
+                    logger.warning("base64 decode failed: %s", e)
                     self._send_json({"error": "invalid base64"}, 400)
                     return
                 res = _save_upload(raw, safe)
@@ -2299,8 +2323,8 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         if topo.exists():
                             topo.unlink()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("swallowed: %s", e)
                     # 2) 尽力清理该会话占用的 V5 记忆行 (避免孤儿行堆积)
                     try:
                         old = _load_tree_for(per)
@@ -2309,16 +2333,16 @@ class Handler(BaseHTTPRequestHandler):
                                 if n.v5_memory_id:
                                     try:
                                         v5s.delete(n.v5_memory_id)
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.warning("swallowed: %s", e)
                                 # 一并清理 MemoryRetriever 写入的 fact 记忆 (共享 store, 否则成孤儿行)
                                 for mid in getattr(n, "memory_ids", []) or []:
                                     try:
                                         v5s.delete(mid)
-                                    except Exception:
-                                        pass
-                    except Exception:
-                        pass
+                                    except Exception as e:
+                                        logger.warning("swallowed: %s", e)
+                    except Exception as e:
+                        logger.warning("swallowed: %s", e)
                     _sessions = [s for s in _sessions if s["id"] != sid]
                     _save_sessions(_sessions)
                     # 若删除的是活动会话, 自动切到下一个未归档会话
