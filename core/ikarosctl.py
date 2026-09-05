@@ -1031,7 +1031,10 @@ def _cmd_runtime_check(root: Path) -> int:
 
 def dispatch(argv: Sequence[str]) -> int:
     """Dispatch one launcher subcommand and return an exit code."""
-    if not argv:
+    # P1 fix (2026-09-05): --help / -h 走 usage, 之前 raise LauncherError
+    # 让人以为"unknown subcommand: --help" 是 bug. 用户问过"ikaros.bat 缺 stop/restart"
+    # 根因是 usage 不可见, 不是真的缺.
+    if not argv or argv[0] in ("--help", "-h"):
         return _usage_error()
     command = argv[0].lower()
     args = tuple(argv[1:])
