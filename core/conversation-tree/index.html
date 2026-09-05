@@ -6385,29 +6385,128 @@ function renderSettingsThemeGrid(){
     </div>`;
   }).join('');
 }
-/* ── 可用模型: 真实列表 (model_switch 同源), 点击切换当前会话模型 ── */
+/* ── 可用模型: 真实列表 (llm_config 同源, 复用 dsh 设置的 provider/models).
+   2026-09-05: 完全复用 dsh 配置. 卡片点击 = 节点级 override (_CT_RUNTIME.model);
+   "在 dsh 设置中编辑"按钮 = 弹 iframe 加载 http://127.0.0.1:3080/ (dsh web).
+   dsh 那边改完关闭 iframe, 重新拉 /api/llm_config 刷新显示. ── */
 async function renderSettingsModels(){
   const box=document.getElementById('settingsModels');
   if(!box)return;
   box.innerHTML='<div class="settings-desc">加载中…</div>';
   try{
-    if(!CT_MODELS.length){const r=await fetch('/api/model_switch');const c=await r.json();CT_MODELS=c.available||[];}
-    if(!CT_MODELS.length){box.innerHTML='<div class="settings-desc">未发现可用模型（配置为空）。</div>';return;}
-    box.innerHTML=CT_MODELS.map(it=>{
-      const active=it.model===CT_MODEL_ACTIVE;
-      return `<div class="settings-card model-pick ${active?'active':''}" onclick="pickSettingsModel(${JSON.stringify(it.model)})">
-        <div class="settings-card-title">${escapeHtml(it.label)} ${active?'<span class="settings-badge">当前</span>':''}</div>
-        <div class="settings-card-meta">${escapeHtml(it.model)}${it.context_window?(' · 上下文 '+fmtTok(it.context_window)):''}${it.mode?(' · '+escapeHtml(it.mode)):''}</div>
+    const r=await fetch('/api/llm_config');
+    const c=await r.json();
+    if(!c.ok){
+      box.innerHTML=`<div class="settings-desc" style="color:#ef4444">
+        加载失败: ${escapeHtml(c.error||'unknown')}<br>
+        <span style="font-size:11px;opacity:0.7">DSH_HOME: ${escapeHtml(c.dsh_home||'?')}</span>
+      </div>`;
+      return;
+    }
+    const provider=escapeHtml(c.provider||'?');
+    const model=escapeHtml(c.model||'?');
+    const base=escapeHtml(c.baseURL||'?');
+    const ctxw=c.contextWindow?fmtTok(c.contextWindow):'—';
+    const maxTok=c.maxTokens?fmtTok(c.maxTokens):'—';
+    const keyBadge=c.apiKey_set
+      ? '<span class="settings-badge">已配置</span>'
+      : '<span class="settings-badge" style="background:color-mix(in srgb,#ef4444 18%,transparent);color:#ef4444">未配置</span>';
+    const models=c.models||[];
+    if(!models.length){
+      box.innerHTML=`<div class="settings-desc">当前 provider 无可用模型 (provider=${provider}).</div>`;
+      return;
+    }
+    // 同步全局 CT_MODELS 给 pickSettingsModel / onModelPick 用 (label + context_window)
+    CT_MODELS=models.map(m=>({model:m.id,label:m.name||m.id,context_window:m.contextWindow}));
+    // 当前激活卡片 + 列表
+    const cards=models.map(m=>{
+      const active=m.id===model;
+      return `<div class="settings-card model-pick ${active?'active':''}" onclick="pickSettingsModel(${JSON.stringify(m.id)})">
+        <div class="settings-card-title">${escapeHtml(m.name||m.id)} ${active?'<span class="settings-badge">当前</span>':''}</div>
+        <div class="settings-card-meta">${escapeHtml(m.id)}${m.contextWindow?(' · 上下文 '+fmtTok(m.contextWindow)):''}${m.maxTokens?(' · max_tokens '+fmtTok(m.maxTokens)):''}</div>
       </div>`;
     }).join('');
+    // 当前激活信息块 + "在 dsh 设置中编辑" 按钮
+    box.innerHTML=`
+      <div class="settings-card" style="border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)">
+        <div class="settings-card-title">当前激活 · ${provider} ${keyBadge}</div>
+        <div class="settings-card-meta">
+          <strong>${model}</strong> · 上下文 ${ctxw} · max_tokens ${maxTok}<br>
+          <span style="opacity:0.7">baseURL: ${base}</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin:10px 0">
+        <button class="settings-btn primary" onclick="openDshSettingsOverlay()" style="flex:1">
+          在 dsh 设置中编辑 →
+        </button>
+      </div>
+      <p class="settings-desc" style="font-size:12px;opacity:0.7;margin-bottom:8px">
+        dsh 设置里切换激活模型 / 编辑 providers / 改 API key, 关闭本弹窗后自动同步.
+      </p>
+      <h4 style="margin:14px 0 8px;font-size:13px;opacity:0.85">本 provider 所有模型 (${models.length})</h4>
+      ${cards}`;
   }catch(e){box.innerHTML='<div class="settings-desc">模型列表加载失败。</div>';}
 }
 function pickSettingsModel(model){
-  const it=CT_MODELS.find(x=>x.model===model);
-  if(it)onModelPick(it);
+  // 节点级 override, 进程内 _CT_RUNTIME.model. 不写 dsh 配置.
+  // 从全局 CT_MODELS 找完整记录 (含 label/context_window); 找不到就用裸 model 名.
+  const it=(CT_MODELS||[]).find(x=>x.model===model);
+  onModelPick(it || {model,label:model});
   renderSettingsModels();
 }
-/* ── provider 配置状态 (只读, 脱敏) ── */
+/* ── dsh iframe overlay ──
+   全屏 iframe 加载 http://127.0.0.1:3080/, 用户在 dsh 设置面板里改模型/key.
+   关闭后调 /api/llm_config 刷新本地显示. 跨域 iframe, 无 postMessage 桥 (够用). ── */
+let _dshIframeOverlay=null;
+function ensureDshIframeOverlay(){
+  if(_dshIframeOverlay)return _dshIframeOverlay;
+  const div=document.createElement('div');
+  div.id='dshSettingsOverlay';
+  div.style.cssText='position:fixed;inset:0;z-index:20000;background:#0a0a0a;display:none;flex-direction:column';
+  div.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#1a1a1a;border-bottom:1px solid #333;flex:none">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-weight:600;font-size:14px;color:#fff">dsh 设置 (共享 LLM 配置)</span>
+        <span style="font-size:12px;opacity:0.6">在 dsh 设置里改完后, 点 ✕ 关闭弹窗, CT 自动刷新</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="refreshDshOverlayAndClose()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px">关闭并刷新</button>
+        <button onclick="closeDshSettingsOverlay()" style="background:#333;color:#fff;border:none;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px">关闭</button>
+      </div>
+    </div>
+    <iframe id="dshSettingsIframe" src="about:blank" style="flex:1;border:none;background:#0a0a0a" allow="same-origin"></iframe>
+  `;
+  document.body.appendChild(div);
+  _dshIframeOverlay=div;
+  return div;
+}
+function openDshSettingsOverlay(){
+  const ov=ensureDshIframeOverlay();
+  const iframe=ov.querySelector('#dshSettingsIframe');
+  // dsh web 默认在 3080 (ikaros-dsh 的 IKAROS_DSH_WEB_PORT). 本 iframe 仅展示,
+  // 用户在 dsh UI 里点齿轮 + Models tab 编辑. 跨域, 无 postMessage 桥.
+  iframe.src='http://127.0.0.1:3080/';
+  ov.style.display='flex';
+}
+function closeDshSettingsOverlay(){
+  if(_dshIframeOverlay){
+    _dshIframeOverlay.style.display='none';
+    const iframe=_dshIframeOverlay.querySelector('#dshSettingsIframe');
+    if(iframe)iframe.src='about:blank';
+  }
+}
+async function refreshDshOverlayAndClose(){
+  closeDshSettingsOverlay();
+  // 关闭后重新拉 /api/llm_config + /api/model_switch, 刷新本地 + 清 _CT_RUNTIME override
+  try{
+    const r=await fetch('/api/model_switch');const c=await r.json();
+    if(c.available)CT_MODELS=c.available;
+  }catch(e){}
+  if(typeof renderSettingsModels==='function')renderSettingsModels();
+  if(typeof renderSettingsProviders==='function')renderSettingsProviders();
+  toast('已刷新 dsh 共享配置');
+}
+/* ── provider 配置状态 (只读, 脱敏). 2026-09-05: 改读 /api/llm_config (新字段 apiKeyEnv) ── */
 async function renderSettingsProviders(){
   const box=document.getElementById('settingsProviders');
   if(!box)return;
@@ -6415,18 +6514,18 @@ async function renderSettingsProviders(){
     const r=await fetch('/api/providers');
     const d=await r.json();
     const list=d.providers||[];
-    if(!list.length){box.innerHTML='<div class="settings-desc">未发现 provider 配置。</div>';return;}
+    if(!list.length){box.innerHTML='<div class="settings-desc">未发现 provider 配置 (在 dsh 设置里添加).</div>';return;}
     box.innerHTML=list.map(p=>{
-      const keyState=p.has_key?'<span class="settings-badge">已配置</span>':'<span class="settings-badge" style="background:color-mix(in srgb,#ef4444 18%,transparent);color:#ef4444">未配置</span>';
-      const role=p.role==='default'?'默认通道':'自定义';
-      const extra=p.role==='default'
-        ? `模型 ${escapeHtml(p.model||'—')} · ${escapeHtml(p.source||'')}`
-        : `base_url ${escapeHtml(p.base_url||'—')}${(p.models||[]).length?(' · '+escapeHtml((p.models||[]).join(', '))):''}`;
+      const keyState=p.configured
+        ? '<span class="settings-badge">已配置</span>'
+        : '<span class="settings-badge" style="background:color-mix(in srgb,#ef4444 18%,transparent);color:#ef4444">未配置</span>';
+      const ms=(p.models||[]).length?` · ${(p.models||[]).length} 个模型`:'';
       return `<div class="settings-card" style="margin-bottom:10px">
-        <div class="settings-card-title">${escapeHtml(p.name)} <span class="settings-badge">${role}</span> ${keyState}</div>
-        <div class="settings-card-meta">${extra}</div>
+        <div class="settings-card-title">${escapeHtml(p.name||p.id)} ${keyState}</div>
+        <div class="settings-card-meta">id: ${escapeHtml(p.id)}${ms}<br>
+        <span style="opacity:0.7">apiKey via: ${escapeHtml(p.api_key_env||'—')} · base: ${escapeHtml(p.base_url||'—')}</span></div>
       </div>`;
-    }).join('');
+    }).join('')+`<p class="settings-desc" style="font-size:12px;opacity:0.7;margin-top:8px">所有 provider 配置由 dsh 设置 UI (3080) 管理, 本面板只读展示.</p>`;
   }catch(e){box.innerHTML='<div class="settings-desc">provider 状态加载失败。</div>';}
 }
 /* ── 代理分配: 当前节点 agent 切换 (setAgent, 含子树) ── */

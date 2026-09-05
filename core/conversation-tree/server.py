@@ -2746,10 +2746,13 @@ def main():
         sys.stderr.write("[ct] health: tree_adapter OK (树域记忆可用)\n")
     except Exception as e:
         sys.stderr.write(f"[ct] health: tree_adapter UNAVAILABLE ({e}); 树域记忆将降级为空\n")
-
-        sys.stderr.write("[ct] health: DeepSeek key present (降级链可用)\n")
-    else:
-        sys.stderr.write("[ct] health: DeepSeek key MISSING; 本地直连将不可用\n")
+    # 2026-09-05: dsh 共享 LLM 配置取代旧的 _DEEPSEEK_KEY 兜底
+    try:
+        import _dsh_shared as _dsh_health
+        llm = _dsh_health.get_active_llm_cached()
+        sys.stderr.write(f"[ct] health: dsh LLM resolved ({llm.get('provider')}/{llm.get('model')} via {llm.get('source')})\n")
+    except _dsh_health.LLMConfigError as e:
+        sys.stderr.write(f"[ct] health: dsh LLM UNRESOLVED ({e}); chat 主链路将不可用\n")
     # 阶段 5.3: ThreadingHTTPServer 连接上限 + 单请求超时, 防 SSE 长连接线程堆积
     class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
         allow_reuse_address = False
