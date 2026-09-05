@@ -102,6 +102,9 @@ LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 LLM_CONNECT_TIMEOUT = int(os.environ.get("CT_LLM_CONNECT_TIMEOUT", "20"))
 LLM_READ_TIMEOUT = int(os.environ.get("CT_LLM_READ_TIMEOUT", "600"))
 MAX_CONTEXT_MSGS = int(os.environ.get("CT_MAX_CONTEXT_MSGS", "50"))
+# B8 (2026-09-04): LLM 推理参数 (之前 4 处硬编码 max_tokens=2048/temperature=0.7)
+LLM_MAX_TOKENS = int(os.environ.get("CT_LLM_MAX_TOKENS", "2048"))
+LLM_TEMPERATURE = float(os.environ.get("CT_LLM_TEMPERATURE", "0.7"))
 
 # ── 运行时模型切换 (2026-08-03): POST /api/model_switch 覆盖默认 ──
 # mode: ""=节点属性优先(默认) | "ikaros";  model: 模型名覆盖 (hermes 已退役)
@@ -171,7 +174,7 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
                 # S2: 用 CT_DEEPSEEK_MODEL (默认 deepseek-v4-flash) 替代已废弃的
                 # deepseek-chat 别名 (AGENTS.md: deepseek-chat 已废弃)
                 "model": CT_DEEPSEEK_MODEL, "messages": messages,
-                "max_tokens": 2048, "temperature": 0.7, "stream": False,
+                "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
             }).encode("utf-8")
             req = urllib.request.Request(
                 DEEPSEEK_CHAT_URL, data=ds_body,
@@ -198,7 +201,7 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
     try:
         l_body = json.dumps({
             "model": "local-llm", "messages": messages,
-            "max_tokens": 2048, "temperature": 0.7, "stream": False,
+            "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
         }).encode("utf-8")
         req = urllib.request.Request(LOCAL_CHAT_URL, data=l_body,
                                      headers={"Content-Type": "application/json"})
@@ -283,7 +286,7 @@ def _call_llm_tools(
         try:
             body = {
                 "model": CT_DEEPSEEK_MODEL, "messages": messages,
-                "max_tokens": 2048, "temperature": 0.7, "stream": False,
+                "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
                 "tools": tools,
             }
             req = urllib.request.Request(
@@ -313,7 +316,7 @@ def _call_llm_tools(
     try:
         l_body = json.dumps({
             "model": "local-llm", "messages": messages,
-            "max_tokens": 2048, "temperature": 0.7, "stream": False,
+            "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
         }).encode("utf-8")
         req = urllib.request.Request(LOCAL_CHAT_URL, data=l_body,
                                      headers={"Content-Type": "application/json"})
