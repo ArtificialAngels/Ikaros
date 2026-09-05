@@ -128,6 +128,7 @@ def _effective_mode(node_agent: str | None) -> str:
 # server.py 位于 core/conversation-tree/ ; 根目录 = parent.parent
 _IKAROS_ROOT = _HERE.parent.parent
 _AXIOM_PATH = _IKAROS_ROOT / "config" / "identity" / "axiom.md"
+_SOUL_PATH = _IKAROS_ROOT / "config" / "identity" / "SOUL.md"
 
 _SELF_MODEL_PATH = _HERE.parent / "memory_v5" / "data" / "v5" / "self_model.json"
 

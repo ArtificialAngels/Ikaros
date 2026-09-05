@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
 import sys
 import threading
 import urllib.error
@@ -168,16 +169,138 @@ def http_server(tmp_data_dir, patched_store, reset_state):
 
 
 # ── HTTP 小工具: 让测试代码更紧凑 ──
+#
+# Why raw socket (not urllib): urllib.request.urlopen('http://host:port/path')
+# sends an absolute URI in the request line (`GET http://host:port/path HTTP/1.1`).
+# BaseHTTPRequestHandler's self.path then contains the FULL URI, not the path,
+# so every `if path == '/api/sessions/create'` branch misses and the server
+# returns 404. This bit 45 conversation-tree tests on 2026-09-05; see
+# `test_boot_renders.py::_sock_get` for the original fix.
+#
+# A real browser sends a relative path (`GET /api/sessions/create HTTP/1.1`).
+# We mimic that here so tests exercise the same code path that the browser
+# does in production.
+
+
+def _parse_response(raw: bytes) -> tuple[int, bytes]:
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    status = int(lines[0].split(" ", 2)[1])
+    return status, body
+
+
+def _dechunk(body: bytes) -> bytes:
+    """Decode a chunked Transfer-Encoding body.
+
+    Server uses Transfer-Encoding: chunked for SSE (see server.py::_send_sse).
+    Format: `<hex-size>\\r\\n<data>\\r\\n` ... `0\\r\\n\\r\\n` terminator. Standard
+    clients (curl, urllib, browsers) handle this automatically; raw sockets
+    don't, so we strip chunk headers here. Returns the decoded body.
+    """
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        # Find the next \\r\\n (end of chunk-size line)
+        crlf = body.find(b"\r\n", i)
+        if crlf == -1:
+            # Malformed; return what we have
+            out.extend(body[i:])
+            break
+        size_str = body[i:crlf].decode("latin-1", errors="replace").strip()
+        if not size_str:
+            # Empty line — skip
+            i = crlf + 2
+            continue
+        try:
+            chunk_size = int(size_str, 16)
+        except ValueError:
+            # Not a chunk-size line; bail out
+            out.extend(body[i:])
+            break
+        if chunk_size == 0:
+            # Terminator; we're done
+            break
+        data_start = crlf + 2
+        out.extend(body[data_start : data_start + chunk_size])
+        # Skip past data + trailing \\r\\n
+        i = data_start + chunk_size + 2
+    return bytes(out)
+
+
+def _raw_http(
+    method: str,
+    base_url: str,
+    path: str,
+    body: bytes = b"",
+    extra_headers: dict | None = None,
+) -> tuple[int, bytes]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    headers = {
+        "Host": f"{host}:{port}",
+        "Connection": "close",  # request connection close so server EOFs
+        "Content-Length": str(len(body)),
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    raw = f"{method} {path} HTTP/1.1\r\n"
+    for k, v in headers.items():
+        raw += f"{k}: {v}\r\n"
+    raw += "\r\n"
+    s = socket.socket()
+    # Short timeout — server should respond in <2s for non-streaming, <5s for SSE.
+    s.settimeout(5.0)
+    s.connect((host, port))
+    s.sendall(raw.encode("latin-1") + body)
+    buf = b""
+    try:
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            # Stop reading once we have the full response: chunked terminator
+            # is `0\\r\\n\\r\\n` at the start of a line. We match the *previous*
+            # \\r\\n + terminator to avoid false positives on data bytes that
+            # happen to be `0\\r\\n\\r\\n`.
+            if b"\r\n0\r\n\r\n" in buf or buf.endswith(b"0\r\n\r\n"):
+                break
+    except socket.timeout:
+        import os as _os
+        _os.write(2, f"[raw http] TIMEOUT at {port} {method} {path} after 5s, got {len(buf)} bytes\n".encode())
+        if buf:
+            _os.write(2, f"  head: {buf[:200]!r}\n".encode())
+        # Fall through to finally: s.close() triggers server-side BrokenPipe
+        # which the server's _send_sse handler logs and exits gracefully.
+    finally:
+        # CRITICAL: shut down the write side immediately. BaseHTTPRequestHandler
+        # on HTTP/1.1 keeps the socket open by default (keep-alive) and
+        # ignores our `Connection: close` request header. If we only close()
+        # the socket, the server might not see EOF before our recv() timeout.
+        # shutdown(SHUT_WR) signals "no more data" and the server's next
+        # read returns '' which triggers connection close.
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        s.close()
+    # Parse status + headers
+    status, raw_body = _parse_response(buf)
+    # Dechunk if needed
+    # (Check the header from buf; we already partitioned it away so
+    # peek at the first 4KB of buf.)
+    if b"transfer-encoding: chunked" in buf[:4096].lower():
+        raw_body = _dechunk(raw_body)
+    return status, raw_body
+
 
 def http_get(base_url: str, path: str):
     """GET <base_url><path>, 返回 (status, parsed_json_or_text)."""
-    try:
-        with urllib.request.urlopen(base_url + path) as resp:
-            body = resp.read().decode("utf-8")
-            status = resp.status
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8")
-        status = e.code
+    status, body_bytes = _raw_http("GET", base_url, path)
+    body = body_bytes.decode("utf-8", errors="replace")
     try:
         return status, json.loads(body)
     except json.JSONDecodeError:
@@ -187,18 +310,14 @@ def http_get(base_url: str, path: str):
 def http_post(base_url: str, path: str, payload: dict | None = None):
     """POST JSON, 返回 (status, parsed_json_or_text)."""
     data = json.dumps(payload or {}).encode("utf-8")
-    req = urllib.request.Request(
-        base_url + path, data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    status, body_bytes = _raw_http(
+        "POST",
+        base_url,
+        path,
+        body=data,
+        extra_headers={"Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            body = resp.read().decode("utf-8")
-            status = resp.status
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8")
-        status = e.code
+    body = body_bytes.decode("utf-8", errors="replace")
     try:
         return status, json.loads(body)
     except json.JSONDecodeError:
