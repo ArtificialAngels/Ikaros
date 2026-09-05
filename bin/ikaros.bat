@@ -64,16 +64,17 @@ echo     8) doctor    - read-only environment diagnostics
 echo     9) check     - full runtime environment check
 echo     10) status   - show component states
 echo     11) ps       - show running processes
-echo     12) stop     - stop one component (then prompts for id)
-echo     0) restart  - restart one component (then prompts for id)
+echo     s) stop      - stop a component (then pick from list)
+echo     r) restart   - restart a component (then pick from list)
 echo     q) exit
 echo ============================================================
 echo Tip: from CLI use "ikaros web" / "ikaros dsh status" etc.
 echo ============================================================
-set /p "CHOICE=choose [0-12 or q]: "
+set /p "CHOICE=choose [1-11 / s / r / q]: "
 
 if /i "%CHOICE%"=="q" exit /b 0
-if "%CHOICE%"=="0" call :run_interactive restart
+if /i "%CHOICE%"=="s" call :run_interactive stop
+if /i "%CHOICE%"=="r" call :run_interactive restart
 if "%CHOICE%"=="1" call :run web
 if "%CHOICE%"=="2" call :run tree
 if "%CHOICE%"=="3" call :run embed
@@ -85,7 +86,6 @@ if "%CHOICE%"=="8" call :run doctor
 if "%CHOICE%"=="9" call :run check
 if "%CHOICE%"=="10" call :run status
 if "%CHOICE%"=="11" call :run ps
-if "%CHOICE%"=="12" call :run_interactive stop
 
 echo.
 echo [WARN] unknown choice: %CHOICE%
@@ -106,13 +106,31 @@ pause
 goto menu
 
 :run_interactive
-set /p "ID=component id: "
-if "%ID%"=="" (
-    echo [WARN] component id required
+:: 列出组件状态, 用户选数字 (1=dsh / 2=conversation-tree / 3=embedding), 不用背 id 字符串
+echo.
+echo   Components (running / stopped):
+call "%LAUNCHER%" status >nul 2>&1
+call "%LAUNCHER%" status
+echo.
+set "IDX="
+set /p "IDX=component number [1=dsh, 2=conversation-tree, 3=embedding, ENTER=skip]: "
+:: 空输入 (或 EOF) 跳过, 不强行默认
+if "%IDX%"=="" (
+    echo [SKIP] no component selected
     pause
     goto menu
 )
-call "%LAUNCHER%" %~1 %ID%
+:: 数字 -> 组件 id 映射
+set "COMP_ID="
+if "%IDX%"=="1" set "COMP_ID=dsh"
+if "%IDX%"=="2" set "COMP_ID=conversation-tree"
+if "%IDX%"=="3" set "COMP_ID=embedding"
+if "%COMP_ID%"=="" (
+    echo [WARN] unknown number: %IDX% (valid: 1=dsh / 2=conversation-tree / 3=embedding)
+    pause
+    goto menu
+)
+call "%LAUNCHER%" %~1 %COMP_ID%
 set "EXITCODE=%ERRORLEVEL%"
 echo.
 echo ------------------------------------------------------------
