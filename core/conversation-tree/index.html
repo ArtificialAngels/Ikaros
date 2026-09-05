@@ -446,6 +446,17 @@ box-shadow:0 12px 48px rgba(0,0,0,.6),0 0 30px color-mix(in srgb,var(--brand) 6%
 .modal-close{background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;line-height:1}
 .modal-close:hover{color:var(--text-primary)}
 .modal-body{padding:16px;overflow:auto;color:var(--text-secondary);font-size:13px;line-height:1.65;white-space:pre-wrap}
+/* B4 (2026-09-04): confirmDialog / promptDialog 共用样式 (替代 alert/confirm/prompt) */
+.modal-msg{padding:4px 4px 14px;color:var(--text-primary);font-size:13px;line-height:1.6;white-space:normal}
+.modal-input{display:block;width:100%;box-sizing:border-box;margin:0 0 14px;padding:8px 10px;background:var(--bg);color:var(--text-primary);border:1.5px solid var(--border-std);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;outline:none;transition:border-color .15s}
+.modal-input:focus{border-color:var(--brand)}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:4px;border-top:1px solid var(--border-divider);margin-top:4px;padding-top:12px}
+.modal-btn{padding:6px 16px;border-radius:var(--radius-sm);border:1px solid var(--border-std);background:transparent;color:var(--text-primary);cursor:pointer;font-size:12px;font-weight:500;transition:background .12s,border-color .12s}
+.modal-btn:hover{background:var(--bg-elevated, rgba(255,255,255,0.04))}
+.modal-btn.primary{background:var(--brand);color:var(--bg);border-color:var(--brand)}
+.modal-btn.primary:hover{filter:brightness(1.08)}
+.modal-btn.danger{background:#d94545;color:#fff;border-color:#d94545}
+.modal-btn.danger:hover{background:#b53737;border-color:#b53737}
 .fc-msg{margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border-divider)}
 .fc-msg:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
 .fc-role{display:inline-block;font-size:10px;text-transform:uppercase;font-weight:700;color:var(--brand);margin-right:8px;letter-spacing:.03em}
@@ -3437,12 +3448,12 @@ async function handleCtxAction(action){
     case 'fullContext':await showFullContext(nid);break;
     case 'fork': branchParentId=nid;branchForkMode=true;_focusEl('inputField').placeholder=t('input.forkPrefix')+nodeText(tree.nodes.get(nid))+'…';focusInput();break;
     case 'setTrunk':await API.setTrunk(nid,false);await refresh();break;
-    case 'conclude':if(destructiveConfirm('收尾')){await API.conclude(nid);await refresh();}break;
+    case 'conclude':if(await destructiveConfirm('收尾')){await API.conclude(nid);await refresh();}break;
     case 'merge':await API.merge(nid,'__trunk__');await refresh();break;
     case 'unmerge':await API.unmerge(nid);await refresh();break;
-    case 'abandon':if(destructiveConfirm('舍弃')){await API.abandon(nid);await refresh();}break;
-    case 'deleteNode':if(nid!==tree.rootId){if(destructiveConfirm('删除节点')){await API.deleteNode(nid);await refresh();}}break;
-    case 'prune':if(nid!==tree.rootId){if(destructiveConfirm('剪枝子树')){await API.prune(nid);await refresh();}}break;
+    case 'abandon':if(await destructiveConfirm('舍弃')){await API.abandon(nid);await refresh();}break;
+    case 'deleteNode':if(nid!==tree.rootId){if(await destructiveConfirm('删除节点')){await API.deleteNode(nid);await refresh();}}break;
+    case 'prune':if(nid!==tree.rootId){if(await destructiveConfirm('剪枝子树')){await API.prune(nid);await refresh();}}break;
   }
 }
 
@@ -3533,7 +3544,7 @@ function copyNodeSummary(nid){
 async function renameNodePrompt(nid){
   const n=tree.nodes.get(nid);if(!n)return;
   const cur=(n.meta&&n.meta.title)||nodeText(n);
-  const t=prompt('重命名节点：',cur);
+  const t=await promptDialog('重命名节点：',cur);
   if(t===null)return;
   await API.rename(nid,t);await refresh();
 }
@@ -3574,6 +3585,49 @@ function showModal(title,html){
 }
 function hideModal(){document.getElementById('modalOverlay').classList.remove('show')}
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')hideModal()});
+
+// B4 (2026-09-04): 替代浏览器原生 alert/confirm/prompt — 后者在 iframe /
+// sandbox / PWA 模式下会被静默拦截, 且阻塞线程不可主题化. 走应用 modal +
+// 返回 Promise. 与 showModal 共用 #modalOverlay, 互斥 (同时只一个 dialog).
+function _modalDialog({title, body, okText='确定', cancelText='取消', danger=false, withInput=false, defaultValue=''}){
+  return new Promise((resolve)=>{
+    const overlay=document.getElementById('modalOverlay');
+    const isFresh=!overlay.classList.contains('show');
+    if(!isFresh)return resolve(null);   // 已有 modal 在显示 -> 不重入
+    const inputHtml=withInput
+      ? `<input id="_modalPromptInput" class="modal-input" value="${(defaultValue||'').replace(/"/g,'&quot;')}" />`
+      : '';
+    const okCls=danger?'modal-btn danger':'modal-btn primary';
+    document.getElementById('modalTitle').textContent=title;
+    document.getElementById('modalBody').innerHTML=
+      `<div class="modal-msg">${body}</div>${inputHtml}`+
+      `<div class="modal-actions">`+
+        `<button class="modal-btn" data-act="cancel">${cancelText}</button>`+
+        `<button class="${okCls}" data-act="ok">${okText}</button>`+
+      `</div>`;
+    overlay.classList.add('show');
+    if(withInput){
+      const inp=document.getElementById('_modalPromptInput');
+      if(inp){inp.focus();inp.select();inp.addEventListener('keydown',e=>{if(e.key==='Enter')doAct('ok');});}
+    }
+    function close(v){overlay.classList.remove('show');document.getElementById('modalBody').innerHTML='';resolve(v);}
+    function doAct(act){
+      if(act==='ok'){
+        const inp=document.getElementById('_modalPromptInput');
+        close(withInput?(inp?inp.value:defaultValue):true);
+      }else close(withInput?null:false);
+    }
+    overlay.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',e=>doAct(e.currentTarget.dataset.act)));
+    const escHandler=e=>{if(e.key==='Escape'){close(withInput?null:false);document.removeEventListener('keydown',escHandler);}};
+    document.addEventListener('keydown',escHandler);
+  });
+}
+function confirmDialog(msg, {title='请确认', okText='确定', cancelText='取消', danger=false}={}){
+  return _modalDialog({title, body:msg, okText, cancelText, danger});
+}
+function promptDialog(msg, defaultValue='', {title='请输入', okText='确定', cancelText='取消'}={}){
+  return _modalDialog({title, body:msg, okText, cancelText, withInput:true, defaultValue});
+}
 // Esc 关闭右键菜单 / 弹窗 (键盘可达性)
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){hideCtxMenu();hideModal()}});
 let _toastTimer=null;
@@ -4581,7 +4635,7 @@ async function createSession(){
   try{
     const d=await API.sessionCreate({});
     _applySessionState(d);toast('已新建会话');
-  }catch(e){alert('新建会话失败：'+(e.message||e));}
+  }catch(e){toast('新建会话失败：'+(e.message||e));}
 }
 async function switchSession(id){
   if(id===_activeSessionId)return;
@@ -4589,25 +4643,25 @@ async function switchSession(id){
   try{
     const d=await API.sessionSwitch(id);
     _applySessionState(d);
-  }catch(e){alert('切换会话失败：'+(e.message||e));}
+  }catch(e){toast('切换会话失败：'+(e.message||e));}
 }
 async function deleteSession(id){
-  if(!confirm('删除该会话？其对话树与记忆将被永久移除，且不可恢复。'))return;
+  if(!await confirmDialog('删除该会话？其对话树与记忆将被永久移除，且不可恢复。',{title:'删除会话',danger:true,okText:'删除'}))return;
   abortActiveChat();
   try{
     const d=await API.sessionDelete({id:id});
     _applySessionState(d);toast('已删除会话');
-  }catch(e){alert('删除失败：'+(e.message||e));}
+  }catch(e){toast('删除失败：'+(e.message||e));}
 }
 async function archiveSession(id){
   try{await API.sessionArchive({id:id});}
-  catch(e){alert('归档失败：'+(e.message||e));}
+  catch(e){toast('归档失败：'+(e.message||e));}
 }
 async function renameSession(id){
-  const title=prompt('重命名会话：','');
+  const title=await promptDialog('重命名会话：','');
   if(title===null)return;
   try{await API.sessionRename({id:id,title:title});}
-  catch(e){alert('重命名失败：'+(e.message||e));}
+  catch(e){toast('重命名失败：'+(e.message||e));}
 }
 /* 任务1: 导出当前会话 (JSON 完整历史 / TXT 压缩可读版), 触发浏览器下载 */
 async function exportSession(id,format){
@@ -4866,7 +4920,7 @@ async function branchFromCurrent(){
   _focusEl('inputField').placeholder=t('input.forkPrefix')+nodeText(cur)+'…';focusInput();
 }
 async function pruneCurrent(){
-  if(tree.currentId===tree.rootId){alert('Cannot prune root');return}
+  if(tree.currentId===tree.rootId){toast('不能剪枝根节点');return}
   await API.prune(tree.currentId);await refresh();
 }
 /* 每张卡独立: 分支/修剪针对指定节点 (上横条按钮用, 不再依赖 currentId) */
@@ -4879,7 +4933,7 @@ async function branchNode(id){
 }
 async function pruneNode(id){
   if(!id||!tree.nodes.has(id))return;
-  if(id===tree.rootId){alert('Cannot prune root');return}
+  if(id===tree.rootId){toast('不能剪枝根节点');return}
   await API.prune(id);await refresh();
 }
 async function resetAll(){branchParentId=null;Object.keys(manualPositions).forEach(k=>delete manualPositions[k]);abortActiveChat();await API.reset();await refresh();centerOnCurrent()}
@@ -5014,7 +5068,7 @@ document.addEventListener('keydown',e=>{
   else if(k==='F2'&&selectedNode){e.preventDefault();renameNodePrompt(selectedNode);}
   else if(k==='Delete'&&selectedNode){
     const n=tree.nodes.get(selectedNode);
-    if(n&&n.id!==tree.rootId&&confirm('删除该节点？其子节点将重挂到父节点。')){API.deleteNode(selectedNode).then(refresh);}
+    if(n&&n.id!==tree.rootId&&await confirmDialog('删除该节点？其子节点将重挂到父节点。',{title:'删除节点',danger:true,okText:'删除'})){API.deleteNode(selectedNode).then(refresh);}
   }
 });
 
@@ -6397,9 +6451,9 @@ function renderPermToggles(){
   });
 }
 /* 破坏性操作确认 (权限 confirm 开启时生效) */
-function destructiveConfirm(action){
+async function destructiveConfirm(action){
   if(!CT_PERMS.confirm)return true;
-  return confirm('确认执行「'+action+'」？该操作不可撤销。');
+  return await confirmDialog('确认执行「'+action+'」？该操作不可撤销。',{title:'危险操作',danger:true,okText:'执行'});
 }
 /* ── 画布网格开关 (默认关闭: CSS 已 [REMOVED] 点格图; 设置里可重新打开) ── */
 const GRID_KEY='conv-tree-grid';
