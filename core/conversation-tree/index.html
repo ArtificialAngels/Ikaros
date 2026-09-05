@@ -6165,7 +6165,7 @@ function applyTheme(pref){
 function broadcastTheme(){
   try{
     var c=getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
-    if(c) window.parent.postMessage({type:'ikaros-ct-theme',color:c},'*');
+    if(c) window.parent.postMessage({type:'ikaros-ct-theme',color:c,theme:_themePref||'dark'},'*');
   }catch(e){}
 }
 function renderThemeSwitcher(){
@@ -8051,6 +8051,33 @@ window.addEventListener('message',function(ev){
   }
   else if(d.type==='ikaros-ct-setting'&&d.key){
     _ctSetSetting(d.key,d.value);
+  }
+  /* Phase 4: 会话同步 */
+  else if(d.type==='ikaros-ct-session-switch'&&d.session){
+    /* dsh 切换会话时通知 CT; CT 按名称匹配并切换 */
+    try{
+      var name=d.session.name||d.session.title||'';
+      if(name&&typeof switchSessionByName==='function'){
+        switchSessionByName(name);
+      } else if(name&&typeof loadSession==='function'){
+        loadSession(name);
+      }
+    }catch(e){ console.warn('[ct-bridge] session switch failed:',e); }
+  }
+  else if(d.type==='ikaros-ct-get-session'){
+    /* CT 向 dsh 请求当前会话信息 */
+    try{
+      var cur={name:null,id:null};
+      if(typeof tree!=='undefined'&&tree.currentId){ cur.id=tree.currentId; }
+      if(typeof currentSessionName==='function'){ cur.name=currentSessionName(); }
+      else if(typeof getCurrentSession==='function'){ cur.name=getCurrentSession(); }
+      window.parent.postMessage({type:'ikaros-ct-session-info',session:cur,reqId:d.reqId},'*');
+    }catch(e){}
+  }
+  /* Phase 4: CT → dsh toast 桥接 */
+  else if(d.type==='ikaros-ct-toast'&&d.message){
+    /* CT 内部 toast 同时转发给 dsh (dsh 插件显示原生 toast) */
+    try{ console.log('[ct-bridge] toast:',d.message); }catch(e){}
   }
 });
 try{ window.parent.postMessage({type:'ikaros-ct-ready'},'*'); }catch(e){}

@@ -467,6 +467,100 @@ function apply(ctx: any) {
     return () => window.removeEventListener('message', onMsg)
   }, 'ikaros-ct-settings: open-settings bridge')
 
+  /* ── Phase 4: dsh-CT 联动（会话同步 / toast 桥接 / 主题名存储） ── */
+
+  // 注入 toast 动画 keyframes
+  if (!document.getElementById('ikaros-ct-toast-style')) {
+    const style = document.createElement('style')
+    style.id = 'ikaros-ct-toast-style'
+    style.textContent = '@keyframes ctToastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}'
+    document.head.appendChild(style)
+  }
+
+  // 简单 DOM toast（dsh 未暴露 toast API 时的 fallback）
+  const showDshToast = (msg: string, type: 'info' | 'success' | 'error' = 'info') => {
+    const toast = document.createElement('div')
+    toast.style.cssText = `
+      position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+      padding:10px 20px;border-radius:10px;font-size:13px;z-index:2147483647;
+      background:var(--dsw-alias-bg-floating,#1c2128);color:var(--dsw-alias-label-primary,#e6edf3);
+      border:1px solid var(--dsw-alias-border-l2,#30363d);box-shadow:0 8px 24px rgba(0,0,0,0.4);
+      animation:ctToastIn .2s ease-out;pointer-events:none;
+    `
+    toast.textContent = msg
+    document.body.appendChild(toast)
+    setTimeout(() => {
+      toast.style.transition = 'opacity .3s ease, transform .3s ease'
+      toast.style.opacity = '0'
+      toast.style.transform = 'translateX(-50%) translateY(10px)'
+      setTimeout(() => toast.remove(), 350)
+    }, 2500)
+  }
+
+  // 尝试获取 dsh 当前会话信息（graceful: 服务不存在则返回 null）
+  const getDshSession = (): { name: string | null; id: string | null } => {
+    try {
+      // 尝试常见 dsh session 服务名
+      const candidates = ['session', 'sessions', 'currentSession', 'sessionProjection']
+      for (const name of candidates) {
+        try {
+          const svc = (ctx as any).get?.(name)
+          if (svc) {
+            const id = svc.currentId ?? svc.id ?? svc.sessionId ?? null
+            const name = svc.name ?? svc.title ?? svc.label ?? null
+            if (id || name) return { name, id }
+          }
+        } catch { /* continue */ }
+      }
+    } catch { /* ignore */ }
+    return { name: null, id: null }
+  }
+
+  // 会话同步：dsh 会话变化时通知 CT
+  let lastSessionId: string | null = null
+  const checkSessionChange = () => {
+    const sess = getDshSession()
+    if (sess.id && sess.id !== lastSessionId) {
+      lastSessionId = sess.id
+      postToCt({ type: 'ikaros-ct-session-switch', session: sess })
+    }
+  }
+
+  ctx.effect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data
+      if (!d || typeof d !== 'object') return
+
+      // CT 请求当前 dsh 会话信息
+      if (d.type === 'ikaros-ct-get-session') {
+        const sess = getDshSession()
+        postToCt({ type: 'ikaros-ct-session-info', session: sess, reqId: d.reqId })
+      }
+      // CT toast 转发到 dsh
+      else if (d.type === 'ikaros-ct-toast' && d.message) {
+        showDshToast(String(d.message), d.type === 'error' ? 'error' : d.type === 'success' ? 'success' : 'info')
+      }
+      // 增强主题同步：同时存储主题名
+      else if (d.type === 'ikaros-ct-theme') {
+        if (d.theme) {
+          document.documentElement.style.setProperty('--ct-theme-name', String(d.theme))
+        }
+        if (d.color) {
+          document.documentElement.style.setProperty('--ct-brand', String(d.color))
+        }
+      }
+    }
+    window.addEventListener('message', onMsg)
+
+    // 会话变化轮询（dsh 未暴露 session change event 时的 fallback）
+    const sessionTimer = setInterval(checkSessionChange, 2000)
+
+    return () => {
+      window.removeEventListener('message', onMsg)
+      clearInterval(sessionTimer)
+    }
+  }, 'ikaros-ct-settings: phase4 linkage')
+
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'ikaros-ct-settings',
