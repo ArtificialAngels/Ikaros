@@ -95,6 +95,15 @@
     - id: ikarosMemory
       name: '@ikaros/dsh-ikaros-memory-settings'
 
+    # ── 1e) ikaros-ct-settings 对话树设置面板 (2026-09-05 新增) ─────────
+    # 将 CT 独有设置（主题/权限/布局/粒子/语言）迁移到 dsh 设置面板。
+    # 通过 postMessage 与 iframe 内 CT 双向同步设置。
+    # 模型/API Key 复用 dsh 已有设置，不在此重复。
+    # 构建: cd core/ikaros-dsh/plugins/ikaros-ct-settings && node scripts/build.mjs
+    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-ct-settings"
+    - id: ikarosCtSettings
+      name: '@ikaros/dsh-ct-settings'
+
     # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
     # 状态（cd/export/REPL）跨 tool 调用存活，SIGINT/超时/后台运行齐全。
@@ -142,10 +151,14 @@
 
       You have a complete long-term memory system (Ikaros V5) reachable through
       mcp__ikaros-v5__* tools. When the user asks you to remember something, call
-      mcp__ikaros-v5__v5_memory_store. When historical context, prior decisions,
-      project notes, or lessons may be relevant, search with
-      mcp__ikaros-v5__v5_memory_search (or v5_project_retrieve for project-scoped
-      decisions/pitfalls/conventions) and use the results.
+      mcp__ikaros-v5__v5_memory_store.
+
+      Auto-recall is injected by the ikaros-memory plugin every turn (pre-step
+      hook) as a context block — you do NOT need to manually search at the start
+      of every turn. Only call mcp__ikaros-v5__v5_memory_search (or
+      v5_project_retrieve for project-scoped decisions/pitfalls/conventions)
+      when you need a deeper second-pass retrieval, a project-specific query,
+      or the auto-recalled context is insufficient.
 
       For token-bounded recall that auto-dedupes against recently-injected
       memories (so the same fact isn't re-served every turn), call

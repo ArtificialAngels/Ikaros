@@ -7992,6 +7992,73 @@ window.addEventListener('resize',()=>{
     autoCenterCurrent();   // L2/L3 按新视口重新适配 zoom
   },120);
 });
+
+/* === dsh postMessage bridge (ikaros-ct-settings plugin) === */
+function _ctGetAllSettings(){
+  var fx={}; try{var s=JSON.parse(localStorage.getItem('conv-tree-fx')||'{}');Object.assign(fx,s);}catch(e){}
+  var perms={}; try{var p=JSON.parse(localStorage.getItem('conv-tree-perms')||'{}');Object.assign(perms,p);}catch(e){}
+  var gridEl=document.querySelector('.canvas-grid');
+  return {
+    theme: _themePref||'dark',
+    accent: getComputedStyle(document.documentElement).getPropertyValue('--brand').trim()||'#13E425',
+    perms: { edit: perms.edit!==false, fork: perms.fork!==false, confirm: perms.confirm!==false },
+    lang: (function(){try{return localStorage.getItem('LANG_KEY')||'zh';}catch(e){return 'zh';}})(),
+    grid: !!(gridEl&&gridEl.style.display==='block'),
+    fx: fx,
+  };
+}
+function _ctSetSetting(key,value){
+  try{
+    if(key==='theme'){ applyTheme(value); }
+    else if(key==='accent'){
+      document.documentElement.style.setProperty('--brand',value);
+      try{localStorage.setItem('conv-tree-accent',value);}catch(e){}
+      broadcastTheme();
+    }
+    else if(key==='perms'&&typeof value==='object'){
+      Object.keys(value).forEach(function(k){ if(k in CT_PERMS){ CT_PERMS[k]=!!value[k]; } });
+      try{localStorage.setItem('conv-tree-perms',JSON.stringify(CT_PERMS));}catch(e){}
+      renderPermToggles();
+    }
+    else if(key==='lang'){ applyLanguage(value); }
+    else if(key==='grid'){
+      var grid=document.querySelector('.canvas-grid');
+      if(grid){ grid.style.display=value?'block':'none'; try{localStorage.setItem('conv-tree-grid',value?'1':'0');}catch(e){} renderGridToggle(); }
+    }
+    else if(key==='fx'&&typeof value==='object'){
+      Object.keys(value).forEach(function(k){ __fxConfig[k]=value[k]; });
+      __fxSave();
+      if(typeof __fxRebuild==='function')__fxRebuild();
+    }
+    else if(key==='reset'){
+      applyTheme('dark');
+      document.documentElement.style.setProperty('--brand','#13E425');
+      CT_PERMS.edit=true;CT_PERMS.fork=true;CT_PERMS.confirm=true;
+      try{localStorage.setItem('conv-tree-perms',JSON.stringify(CT_PERMS));}catch(e){}
+      renderPermToggles();
+      applyLanguage('zh');
+      var grid=document.querySelector('.canvas-grid'); if(grid)grid.style.display='none';
+      try{localStorage.setItem('conv-tree-grid','0');}catch(e){}
+      renderGridToggle();
+    }
+  }catch(e){ console.warn('[ct-bridge] apply setting failed:',key,e); }
+}
+window.addEventListener('message',function(ev){
+  var d=ev.data;
+  if(!d||typeof d!=='object')return;
+  if(d.type==='ikaros-ct-get-settings'){
+    try{ window.parent.postMessage({type:'ikaros-ct-settings',data:_ctGetAllSettings(),reqId:d.reqId},'*'); }catch(e){}
+  }
+  else if(d.type==='ikaros-ct-setting'&&d.key){
+    _ctSetSetting(d.key,d.value);
+  }
+});
+try{ window.parent.postMessage({type:'ikaros-ct-ready'},'*'); }catch(e){}
+var _origOpenSettings=window.openSettings;
+window.openSettings=function(){
+  try{ window.parent.postMessage({type:'ikaros-ct-open-settings'},'*'); }catch(e){}
+  if(typeof _origOpenSettings==='function')_origOpenSettings();
+};
 </script>
 
 

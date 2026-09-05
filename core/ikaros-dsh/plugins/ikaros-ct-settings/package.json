@@ -1,0 +1,32 @@
+{
+  "name": "@ikaros/dsh-ct-settings",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "description": "Ikaros 对话树设置 dsh 插件：将 CT 独有设置（主题/权限/布局/粒子/语言）迁移到 dsh 设置面板，通过 postMessage 与 iframe 内 CT 双向同步。",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["slots"]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "license": "BSD-3-Clause"
+}
