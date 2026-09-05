@@ -86,8 +86,9 @@ def test_get_component_dsh_returns_spec(specs: list[ComponentSpec]) -> None:
     assert found.port == 3080
     assert found.process_marker == "dsh"
     assert found.category == "tool"
-    assert found.lifecycle.get("start_script") == "bin/start-dsh-ikaros.bat"
-    assert found.lifecycle.get("restart_script") == "bin/restart-dsh-ikaros.ps1"
+    # 2026-09-05 重构: start_script 改用 ikarosctl (之前 bin/start-dsh-ikaros.bat 已删)
+    assert found.lifecycle.get("start_script") == "python core/ikarosctl.py web"
+    assert found.lifecycle.get("restart_script") == "python core/ikarosctl.py dsh restart"
     assert found.lifecycle.get("watchdog") == "self"
     assert found.dsh_integration.get("overlay") == "core/ikaros-dsh/cordis.patch.yml"
     assert "ikaros-v5-memory" in found.dsh_integration.get("mcp_servers", [])

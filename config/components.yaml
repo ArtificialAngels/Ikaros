@@ -33,10 +33,14 @@ components:
       type: port
       endpoint: 3080
     lifecycle:
-      start_script: bin/start-dsh-ikaros.bat
+      # 2026-09-05 重构: 改用 ikaros.bat 统一入口 (原来 3 个 start-dsh-ikaros.bat
+      # / restart-dsh-ikaros.ps1 / ikaros-launcher.bat 合并到 ikaros.bat).
+      # ikaros.bat 检测 web 子命令: start=ikaros web, restart=ikaros dsh restart.
+      # start_script 直接调 ikarosctl (绕过 bat 透传, 减少 1 层进程).
+      start_script: python core/ikarosctl.py web
       stop_script: null   # 暂无优雅 stop (Ctrl-C / kill 兜底)
-      restart_script: bin/restart-dsh-ikaros.ps1
-      watchdog: self     # bin/start-dsh-ikaros.bat 内嵌 self-respawn
+      restart_script: python core/ikarosctl.py dsh restart
+      watchdog: self     # dsh 进程无外部 watchdog, 重启走 ikaros dsh restart
     dsh_integration:
       overlay: core/ikaros-dsh/cordis.patch.yml
       mcp_servers: [ikaros-v5-memory]

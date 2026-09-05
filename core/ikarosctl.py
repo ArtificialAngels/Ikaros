@@ -340,6 +340,55 @@ def _port_is_open(port: int) -> bool:
         return False
 
 
+def _read_port_from_file(root: Path, component: ComponentSpec) -> int | None:
+    """Read dynamic port from healthcheck (type=port_file, endpoint=<rel_path>).
+    healthcheck shape: {type: 'port_file', endpoint: 'tmp/ct-port.json'}.
+    Returns port int if file exists and contains valid JSON {port: N}, else None."""
+    healthcheck = component.healthcheck or {}
+    if healthcheck.get("type") != "port_file":
+        return None
+    rel = healthcheck.get("endpoint")  # path is in 'endpoint' field, not 'port_file'
+    if not rel:
+        return None
+    path = root / rel
+    if not path.is_file():
+        return None
+    try:
+        import json as _json
+        with path.open(encoding="utf-8") as f:
+            data = _json.load(f)
+        port = data.get("port")
+        return int(port) if isinstance(port, (int, float)) else None
+    except (OSError, ValueError, _json.JSONDecodeError):
+        return None
+
+
+def _pids_for_port(port: int) -> list[int]:
+    """Return list of unique PIDs listening on the given TCP port (Windows)."""
+    if os.name != "nt":
+        return []
+    script = (
+        "$p = Get-NetTCPConnection -LocalPort "
+        f"{port} -State Listen -ErrorAction SilentlyContinue; "
+        "$p | Select-Object -ExpandProperty OwningProcess -Unique"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return sorted(
+        {
+            int(line.strip())
+            for line in result.stdout.splitlines()
+            if line.strip().isdigit()
+        }
+    )
+
+
 def _windows_processes_for(component: ComponentSpec) -> list[int]:
     if os.name != "nt":
         return []
@@ -380,6 +429,16 @@ def _windows_processes_for(component: ComponentSpec) -> list[int]:
 
 def component_state(root: Path, component: ComponentSpec) -> tuple[str, list[int]]:
     """Return a shallow launcher-owned state from port/process metadata."""
+    # 2026-09-05 修复: 支持 healthcheck.type=port_file (conversation-tree 用):
+    # 动态端口, 不能用 component.port 硬检查. 从 port_file 读实际端口再探.
+    healthcheck = component.healthcheck or {}
+    if healthcheck.get("type") == "port_file":
+        port = _read_port_from_file(root, component)
+        if port is not None and _port_is_open(port):
+            # 用读出的端口找 PID (同 component.port 路径, 走 Get-NetTCPConnection)
+            pids = _pids_for_port(port)
+            return ("running", pids)
+        return "stopped", []
     if component.port is not None:
         if _port_is_open(component.port):
             return "running", _windows_processes_for(component)
@@ -581,29 +640,17 @@ def start_all(root: Path) -> int:
 
 
 def _stop_windows_pids(component: ComponentSpec, pids: Sequence[int]) -> int:
-    if not pids:
-        print(f"[ikaros] {component.id} is not running")
+    # 2026-09-05 修复: Stop-Process 在 server.py 有 self-respawn watchdog 时停不下来
+    # (它会立刻再起). 用 taskkill /T /F 强制杀进程树. 父进程已 detached spawn,
+    # 树杀才能真正清理.
+    if os.name != "nt":
         return 0
-    script = (
-        "$ids = @("
-        + ",".join(str(pid) for pid in pids)
-        + "); foreach ($id in $ids) { Stop-Process -Id $id -ErrorAction Stop }"
-    )
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=15,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise LauncherError(
-            f"failed to stop {component.id!r} gracefully: {detail}"
+    for pid in pids:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True, check=False, timeout=10,
         )
-    print(f"[ikaros] stopped {component.id} (graceful signal)")
+    print(f"[ikaros] stopped {component.id} (tree-killed: {','.join(str(p) for p in pids)})")
     return 0
 
 
