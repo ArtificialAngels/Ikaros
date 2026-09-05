@@ -25,7 +25,7 @@
 | 本地落点 | `runtime/dsh/node_modules/@deepseek-ai/dsh/` |
 | 状态 | 独立 profile：`data/dsh/profiles/`；Ikaros overlay：`core/ikaros-dsh/cordis.patch.yml`（memory_v5 MCP + terminal + lsp + persona，路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）|
 | 是否入库 | **否**（`runtime/` 整体忽略）|
-| 启动 | `bin/start-dsh-ikaros.bat web`（web :3080）/ `headless`；`bin/restart-dsh-ikaros.ps1` |
+| 启动 | `ikaros web`（web :3080）/ `ikaros dsh headless "<task>"`；`ikaros dsh restart` |
 | 环境变量 | `IKAROS_DSH` / `IKAROS_DSH_SOURCE` / `IKAROS_DSH_PROFILE` / `IKAROS_DSH_WEB_PORT` / `IKAROS_DSH_OVERLAY`（`bin/ikaros-env.*`）|
 
 ---
@@ -87,7 +87,7 @@ REM 2) 落地原生配置（校验 runtime exe、写 ikaros-paths.json、dsh pro
 python scripts/setup-native.py
 
 REM 3) 启动（dsh web :3080；embed :8587 由组件启动脚本内嵌 watchdog 拉起；本地 LLM :8080 已退役）
-bin/start-dsh-ikaros.bat web
+ikaros web
 ```
 
 ## 本地忽略汇总（`.gitignore` 已覆盖）

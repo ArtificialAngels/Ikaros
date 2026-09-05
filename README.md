@@ -15,7 +15,7 @@
 
 ## 🎯 一句话
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\start-dsh-ikaros.bat web` 拉起 **工作引擎(dsh) :3080**,一键联动 **记忆 + 对话树**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前仅 bge-m3 embedding;本地 LLM 已退役按需恢复)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros.bat` 拉起 **工作引擎(dsh) :3080**,一键联动 **记忆 + 对话树**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前仅 bge-m3 embedding;本地 LLM 已退役按需恢复)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
 
 > **仓库是「瘦身版」**:本云端仓库只保留 **Ikaros 原生代码 + 配置 + 上游清单/拉取/配置脚本**。所有「有上游」的组件(runtime 工具链、dsh、各类 MCP)**不入库**,统一由 `scripts/fetch-upstreams.py` 拉取、`scripts/setup-native.py` 落地配置。详见 `UPSTREAM.md`。
 
@@ -25,7 +25,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 
 ```
                     ┌──── dsh 工作引擎 :3080 ────┐
-                    │  bin/start-dsh-ikaros.bat  │
+                    │  bin/ikaros.bat (入口)   │
                     │  overlay: MCP+终端+LSP+人格 │
                     └──────────┬─────────────┘
                                │ 联动
@@ -55,7 +55,7 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 | Port | 组件 | 用途 | 状态 |
 |------|------|------|------|
 | **8587** | Memory (bge-m3 embed) | embedding 1024 dim, V5 记忆写入/召回 | ✅ 常驻 |
-| **3080** | dsh (DeepSeek Harness) | 工作引擎 web 界面 + memory_v5 MCP + 工具链 | ⏸ 按需(`bin/start-dsh-ikaros.bat web`) |
+| **3080** | dsh (DeepSeek Harness) | 工作引擎 web 界面 + memory_v5 MCP + 工具链 | ⏸ 按需(`ikaros web` 或双击 `bin\ikaros.bat`) |
 | **48920** | 对话树 | 树形对话面板(`core/conversation-tree/server.py`),DeepSeek 直连 | ✅ 常驻 |
 | **8080** | 本地模型 (Local LLM) | **已退役 2026-08-18**(按需恢复: 放 gguf 进 `core/memory_v5/models/` + `model_config.json` 设 `initial_model`) | ⏸ 禁用 |
 
@@ -89,7 +89,6 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 3. python scripts/fetch-upstreams.py     ← 拉取上游 (runtime / mcp / 模型权重)
 4. python scripts/setup-native.py        ← 落地 ikaros-paths.json + dsh profile env 参考
 5. `bin\ikaros web`                          ← 拉起工作引擎 :3080 (dsh, 2026-08-20 启动器起)
-   (老入口 `bin\start-dsh-ikaros.bat web` 仍可用, 已收敛为 thin wrapper)
 ```
 
 > `scripts/fetch-upstreams.py` 支持 `--list` / `--dry-run` / 按名拉取;`setup-native.py` 支持 `--check` 校验。详见 `UPSTREAM.md`。
@@ -102,8 +101,8 @@ Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U �
 3. 浏览器开 http://127.0.0.1:3080 / http://127.0.0.1:48920, 开始对话
 ```
 
-> 启动器 (`bin\ikaros`) 跨 3 shell (bash / cmd / PowerShell), 支持子命令 `web` / `tree` / `embed` / `all` / `doctor` / `update`.
-> 详见 `docs/ikaros-launcher-design.md`. 旧脚本 (`bin\start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1`) 仍兼容, 实际调 `ikaros` 启动器.
+> 启动器 (`bin\ikaros`) 跨 3 shell (bash / cmd / PowerShell), 支持子命令 `web` / `tree` / `embed` / `all` / `doctor` / `update`. 2026-09-05 起 `bin\ikaros.bat` 双击出 13 项菜单。
+> 详见 `docs/ikaros-launcher-design.md`. 旧脚本 (`bin\start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1`) 已删除 (2026-09-05).
 
 ---
 
@@ -158,14 +157,14 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 | 用途 | 命令 |
 |------|------|
-| 拉起工作引擎 (dsh web) | `bin\start-dsh-ikaros.bat web` (http://127.0.0.1:3080) |
-| 启动对话树 | `python core/conversation-tree/server.py --port 48920` |
-| 停止 dsh | 任务管理器结束 dsh 进程 / 重启脚本 `bin/restart-dsh-ikaros.ps1` |
+| 拉起工作引擎 (dsh web) | `ikaros web` (或双击 `bin\ikaros.bat` 选 1) (http://127.0.0.1:3080) |
+| 启动对话树 | `ikaros tree` |
+| 停止 dsh | `ikaros dsh stop` |
 | 拉取上游 | `python scripts/fetch-upstreams.py` |
 | 落地原生配置 | `python scripts/setup-native.py` |
-| **dsh 启动 (web)** | `bin\start-dsh-ikaros.bat web` → :3080 (或面板 dsh 卡片 start) |
-| **dsh 启动 (headless)** | `bin\start-dsh-ikaros.bat headless <task>` |
-| dsh 重启 | `bin\restart-dsh-ikaros.ps1` |
+| **dsh 启动 (web)** | `ikaros web` → :3080 (或面板 dsh 卡片 start) |
+| **dsh 启动 (headless)** | `ikaros dsh headless <task>` |
+| dsh 重启 | `ikaros dsh restart` |
 | 记忆服务状态 | 由各组件启动脚本自带 watchdog 管理；查对应服务日志 |
 | 本地 LLM | 已退役 (2026-08-18); 按需恢复见 `core/memory_v5/models/model_config.json` |
 | 模型配置 | `core/memory_v5/models/model_config.json` (本地模型单一事实来源) |
@@ -199,7 +198,7 @@ Ikaros\
 
 | 现象 | 第一看 |
 |------|--------|
-| dsh web 打不开 | `bin/restart-dsh-ikaros.ps1` 重启 (日志 data/logs/ikaros-dsh-restart.log) |
+| dsh web 打不开 | `ikaros dsh restart` (日志 data/logs/ikaros-dsh-restart.log) |
 | 记忆召回弱 | 检查 :8587 embedding 是否在对应组件启动脚本下正常运行 |
 | 本地 LLM 没反应 | 本地 LLM 已退役 (2026-08-18); 恢复需放 gguf + 设 `model_config.json` 的 `initial_model` |
 | dsh 没起 / :3080 无响应 | 面板 dsh 卡片 start;日志 `data\logs\dsh.log`(UTF-8) |
@@ -285,4 +284,4 @@ Ikaros\
 ---
 
 *当前架构: dsh 工作引擎(:3080) + Memory(:8587, bge-m3) + 对话树(:48920, DeepSeek 直连)*
-*启动: `bin\start-dsh-ikaros.bat web` · 故障看各组件自带 watchdog 日志 · dsh 日志: `data\logs\dsh.log`*
+*启动: `ikaros web` (双击 `bin\ikaros.bat` 选 1) · 故障看各组件自带 watchdog 日志 · dsh 日志: `data\logs\dsh.log`*

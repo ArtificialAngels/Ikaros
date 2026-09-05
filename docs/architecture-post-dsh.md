@@ -23,7 +23,7 @@ Ikaros 是**装在 U 盘里的自包含 AI 数字管家**——V5 灵魂核心�
 | 端口 | 组件 | 进程入口 | watchdog | 启动方式 | 关键契约 |
 |------|------|---------|----------|---------|---------|
 | **:8587** | Embedding (bge-m3, 1024 dim) | `runtime/llama/b10000-cuda/llama-server.exe` | 各组件脚本自带 `self` | `bin/ikaros embed` | 模型 = `core/memory_v5/models/bge-m3-q8_0.gguf`（已被 :3080 / :48920 双重依赖） |
-| **:3080** | **dsh (DeepSeek Harness)** | `node runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open` | `bin/start-dsh-ikaros.bat` self-respawn | `bin/ikaros web` | 必须传 `IKAROS_ROOT` 环境变量；`--no-open` 防 dsh 自动开 Edge（**2026-08-27 兄弟 commit `d0052c3` 修复双弹窗**） |
+| **:3080** | **dsh (DeepSeek Harness)** | `node runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open` | `bin/ikaros.bat` self-respawn | `ikaros web` | 必须传 `IKAROS_ROOT` 环境变量；`--no-open` 防 dsh 自动开 Edge（**2026-08-27 兄弟 commit `d0052c3` 修复双弹窗**） |
 | **:48920** | **对话树面板（卡片图）** | `python core/conversation-tree/server.py --port 0` | **`dsh` 插件 `ikaros-conversation-tree` 每 3s 探活 + 拉起**（2026-08-24 起从集中 watchdog 切换） | `bin/ikaros tree` | 动态端口：`server.py` 把实际端口写 `tmp/ct-port.json`，`components.yaml` 用 `healthcheck.type=port_file` 健康检查；**兄弟 commit `593bda8` 落地** |
 | ~~`:8080`~~ | ~~本地 LLM (Phi-4)~~ | — | — | — | **🚫 已退役 2026-08-18**；`model_config.json` `initial_model=""` 显式禁用；恢复方法 = 放 gguf 进 `core/memory_v5/models/` + 设 `initial_model` |
 
@@ -102,7 +102,7 @@ Ikaros 是**装在 U 盘里的自包含 AI 数字管家**——V5 灵魂核心�
 |------|------|
 | **`--no-open`**（web 模式） | dsh 默认会开系统浏览器，2026-08-27 哥哥确认双弹窗问题 |
 | **`--patch`** 仅 headless 模式 | web 模式自动从用户层 `~/.dsh/profiles/web/cordis.patch.yml` 加载；启动脚本不传避免 duplicate loader |
-| **环境变量 `IKAROS_ROOT`** 必须由 `bin/start-dsh-ikaros.bat` 注入 | `cordis.patch.yml` 用 `!!js process.env.IKAROS_ROOT + "\\runtime\\portable-python\\python.exe"` 推导路径，0 盘符硬编码 |
+| **环境变量 `IKAROS_ROOT`** 必须由 `bin/ikaros.bat` 注入 | `cordis.patch.yml` 用 `!!js process.env.IKAROS_ROOT + "\\runtime\\portable-python\\python.exe"` 推导路径，0 盘符硬编码 |
 
 ### 4.3 插件装配（pnpm file:，**2026-08-24 起落地**）
 
@@ -219,7 +219,7 @@ cd ~/.dsh/profiles/web && pnpm remove @ikaros/dsh-ikaros-memory-settings && \
 - ⚠️ **CORS 预检 OPTIONS 必须 `Allow-Headers: Content-Type`**——浏览器 fetch POST + `Content-Type: application/json` 看不到这条直接拒，报"host-bridge unreachable"
 - ⚠️ **dsh subprocess Service 在 win32 不设 `windowsHide`**——起 llama-server 会弹 cmd 窗口驻留桌面，必须 `spawnDetachedNoWindow` 走 `child_process.spawn` 原生
 - ⚠️ **依赖覆盖文件路径**：`<pluginDir>/.runtime.json` 是**绝对路径**（用 `IKAROS_ROOT` + `path.join` 推导），**不是** cwd 相对；用户填路径时也要绝对
-- ⚠️ patch.yml 启动走 `ikarosctl dsh restart`（web 模式，user layer only）——**不要用 `bin/restart-dsh-ikaros.ps1`**（ps1 走 `--patch` + user layer 双 source，在 dsh 0.1.1-rc.2 + 当前 dsh-base 默认 patch 组合下会 `duplicate loader entry id: memory-ikaros-v5`，与本插件无关，是 dsh 自己的兼容 bug）
+- ⚠️ patch.yml 启动走 `ikaros dsh restart`（web 模式，user layer only）——**不要在 patch.yml 里手加 `--patch`**（dsh 0.1.1.1-rc.2 + 当前 dsh-base 默认 patch 组合会 `duplicate loader entry id: memory-ikaros-v5`，与本插件无关，是 dsh 自己的兼容 bug；2026-09-05 已统一走 `ikaros.bat` 透传 + ikarosctl start_component）
 
 ---
 
@@ -249,15 +249,15 @@ config/components.yaml ← 3 组件元数据 (dsh / conversation-tree / embeddin
 | `ikaros update` | 拉 upstream（TODO） |
 
 ⚠️ `headless` **非一级子命令**——是 `start_component` 对 dsh 的内部 `web|headless` 分支（`ikarosctl.py:172`）。
-一级走 `web`（web GUI），headless one-shot 走 `bin/start-dsh-ikaros.bat headless <task>`（薄壳转 `ikaros web`）。
+一级走 `web`（web GUI），headless one-shot 走 `ikaros dsh headless <task>`。
 
 ### 6.3 关键设计
 
 - **IKAROS_ROOT 自锚定**：bash 用 `${BASH_SOURCE[0]}`、cmd 用 `%~dp0`、PS 用 `$PSScriptRoot`，复用 `bin/ikaros-env.*` 的环境权威源
 - **dsh 组件的递归防护**：dsh 的 `start_script` 是 thin wrapper（调 ikaros），ikaros 又会调 start_script 启动 dsh → 直接派 `node bin.js web --no-open` 真启动 dsh（兄弟 commit `593bda8`）
 - **`port_file` 健康检查**（兄弟 commit `593bda8`）：`server.py --port 0` 绑定后写 `tmp/ct-port.json`，启动器从文件读实际端口再探测（取代死等固定 48920）
-- **thin wrapper 不删**：旧 `bin/start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 全部调 `ikaros` 启动器
-- **新薄壳 3 件**（`bin/dsh-{open,status,sync}.bat`）：每个动作独立 `.bat`，`Win+R` 即可调，背后全走 `ikaros dsh <sub>`；CRLF 正确（pre-commit hook 验证过）。**重启统一走 `bin/restart-dsh-ikaros.ps1`**（覆盖更全：先 sync patch 再 stop+start，含 mcp_server 健康检查，日志到 `~/.dsh/ikaros-dsh-restart.log`），不另设 `dsh-restart.bat` 避免双入口漂移
+- **重启 dsh**：`ikaros dsh restart`（覆盖更全：先 sync patch 再 stop+start，含 mcp_server 健康检查，日志到 `~/.dsh/ikaros-dsh-restart.log`）
+- **统一入口**：`bin/ikaros.bat` 双击出 13 项菜单 / CLI `ikaros <subcommand>` 透传；2026-09-05 删 `bin/start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1` / `dsh-{open,status,sync}.bat` / `ikaros-launcher.bat` 5 个薄壳
 
 ---
 
@@ -350,7 +350,7 @@ config/components.yaml ← 3 组件元数据 (dsh / conversation-tree / embeddin
    `category: memory` 独立条目，要么把 conversation-tree 的 `dependencies` 改为 `[embedding]`。
    详见 `docs/COMPONENT-PLUGIN-SPEC.md` §6 open questions。
 2. **`watchdog: self` 缺口**：embedding 由各组件脚本自带 watchdog 拉起，但脚本无 self-respawn；
-   死了没人拉起。dsh `bin/start-dsh-ikaros.bat` 是 self（实测）。
+   死了没人拉起。dsh `ikaros dsh restart` 是 self（实测）。
 3. **`process_marker` 命名规范**：当前 `conversation-tree` 的 marker 是 `conversation_tree`（下划线），
    与 id 不同形。Windows tasklist 实际命令行含 `-`（dash）—— tasklist 匹配可能失败。
 4. **本地 LLM 恢复路径**：若恢复，把 gguf 放进 `core/memory_v5/models/` + 设 `model_config.json` 的
@@ -377,4 +377,3 @@ config/components.yaml ← 3 组件元数据 (dsh / conversation-tree / embeddin
 
 **未跟随本批入库**（哥哥 2026-08-27 指令）：所有 `tests/` + `tests/test_*` + `core/conversation-tree/tests/test_*` +
 `core/memory_v5/tests/test_*` 测试文件改动；`.cache/` `projects/` `tmp_start.*` `.hermes/` 临时目录；
-`bin/dsh-{open,restart,status,sync}.bat` + `bin/ikaros-launcher.bat` 新薄壳（untracked，CRLF 已修对）。

@@ -49,24 +49,28 @@ core/ikaros-dsh/
 
 ## 用法
 
-### 启动器（推荐）
+### 启动器（推荐，2026-09-05 起统一入口）
 
 ```bat
-:: 交互式 Web GUI（等价 dsh web --patch）
-bin\start-dsh-ikaros.bat
+:: 交互式 Web GUI（双击 ikaros.bat 选 1=web；CLI 透传）
+ikaros web
+bin\ikaros.bat                :: 双击出 13 项菜单
 
 :: one-shot 工作引擎（跑一个 task 退出）
-bin\start-dsh-ikaros.bat headless "<task>"
+ikaros dsh headless "<task>"
 ```
 
-`bin/start-dsh-ikaros.bat` 自锚定 IKAROS_ROOT（`%~dp0`）、`call bin/ikaros-env.bat` 注入便携环境，再 `dsh web --patch` 或 `dsh --profile headless --patch`。
+`bin/ikaros.bat` 自锚定 IKAROS_ROOT（`%~dp0`）、`call bin/ikaros-env.bat` 注入便携环境，再透传给 `ikaros.ps1` -> `core/ikarosctl.py`。`ikaros dsh headless` 是 dsh 组件的 `web|headless` 分支，非一级子命令。
+
+> 历史入口（2026-09-05 删除）：`bin/start-dsh-ikaros.bat` 薄壳已并入 `ikaros.bat`；`bin/restart-dsh-ikaros.ps1` 已并入 `ikaros dsh restart`。`Win+R` 快捷入口 `dsh-open/status/sync` 三个 .bat 已并入 `ikaros.bat` 菜单（选项 5/6/7）。
 
 ### 重启（让已运行会话加载 overlay）
 
 ```bat
-:: Restart dsh web (sync patch + stop + start; logs to ~/.dsh/ikaros-dsh-restart.log)
-:: 2026-08-30 fix: no longer passes --patch (web mode loads from profile); sets IKAROS_ROOT.
-powershell -ExecutionPolicy Bypass -File bin\restart-dsh-ikaros.ps1
+:: 同步 patch + 停 dsh + 启 dsh（日志 ~/.dsh/ikaros-dsh-restart.log）
+ikaros dsh restart
+
+:: 2026-09-05 修复: 不再传 --patch（web 模式从 profile 加载），IKAROS_ROOT 已由 ikaros.bat 注入。
 ```
 
 > ⚠️ 重启会中断当前 Web 会话；刷新 http://127.0.0.1:3080 后从持久化会话恢复。

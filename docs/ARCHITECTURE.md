@@ -48,7 +48,7 @@ Ikaros 是一个**完全自包含的 AI 数字管家系统**，核心引擎为 V
 | 端口 | 服务 | 路径 | 启动方式 |
 |------|------|------|---------|
 | :8587 | Embedding (bge-m3, 本地) | 各组件启动脚本自带 watchdog | 自动拉起 |
-| :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | `bin/start-dsh-ikaros.bat web` |
+| :3080 | dsh 工作引擎 (DeepSeek Harness web) | `runtime/dsh/`（npm 本地安装）+ overlay `core/ikaros-dsh/cordis.patch.yml` | `ikaros web` |
 | :48920 | 对话树面板 (Conversation Tree) | `core/conversation-tree/server.py`（后端引擎 `core/memory_v5/conversation_tree.py`） | `python core/conversation-tree/server.py --port 48920` |
 | :8080 | 本地 LLM | **已退役 2026-08-18**（`model_config.json` `initial_model` 空串=禁用；恢复=放 gguf + 设模型名） | 禁用 |
 
@@ -82,7 +82,7 @@ agent 底座 = **DeepSeek Harness (dsh)**，Ikaros 定制全部走 **overlay**�
 - **overlay**：`core/ikaros-dsh/cordis.patch.yml`（路径经 `!!js process.env.IKAROS_ROOT` 推导，0 硬编码）——注入 memory_v5 MCP（stdio，`v5_*` 工具；**2026-08-30 起双模**：`V5_MCP_TOOL_MODE=legacy` 58 个 / `slim` 17 个 = 9 热路径 + 8 门面；8 组可按 `V5_MCP_TOOL_GROUPS` 过滤，⚠️ 必须含 `loop`）+ **ikaros-memory 自动记忆插件**（turn-stopping 每轮自动沉淀写回 + pre-step `should_recall` 门控召回注入（每 turn 幂等，dispose/re-register）+ compaction 捕获（`session/event` → `compaction/summary` 复用 dsh 压缩摘要成本，零额外 LLM 沉淀进 v5）+ **标准记忆循环（2026-08-30）**）+ 持久 PTY 终端（terminal / terminal-bash / tool-terminal）+ LSP 精确导航（lsp / lsp-stdio / tool-lsp，typescript 默认挂、**python 默认不挂**（未装 pyright 会中止启动））+ Ikaros 工作引擎 persona（system-prompt 覆盖）。
 - **标准记忆循环（2026-08-30）**：`core/memory_v5/loop.py` 三阶段声明式引擎，把散落各处的记忆仪式收敛成「一个 phase 一次调用」：`pre`（身份锚定 + 预算感知召回 + 项目经验）→ `post`（精力/关系推进 + 反重复语料）→ `maintenance`（反思管线，6h 冷却）。插件 3 个 hook 各调一次 `v5_call loop`：`agent/pre-step`→pre、`agent/turn-stopping`→post（与自动沉淀**分开注册**，沉淀有 5min 冷却）、`ctx.interval 6h`→maintenance。4 个机器态旧工具（vitality_tick / relationship_tick / anti_repeat_record / reflect_run_op）已内化，slim 模式下不再暴露。设计文档：`docs/v5-mcp-consolidation.md`。
 - **插件**：`core/ikaros-dsh/plugins/ikaros-memory`（recallMemory / writeMemory，替代旧 hermes ikaros_v5 插件职责）。**构建/装配链**：`npm run build`（tsc `src/`→`dist/`）→ `pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"` 装到 `~/.dsh/profiles/web/`。插件名 `@ikaros/dsh-ikaros-memory` 不走 `!!js` 表达式（`Entry.name` 不经过 interpolate），用裸包名从 profile 的 node_modules 解析。
-- **启动**：`bin/start-dsh-ikaros.bat web|headless`；重启 `bin/restart-dsh-ikaros.ps1`（杀旧 dsh web + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
+- **启动 / 重启**：统一入口 `bin/ikaros.bat`（双击出 13 项菜单 / CLI `ikaros <subcommand>` 透传）。具体：`ikaros web`（:3080 web GUI）/ `ikaros tree`（对话树面板）/ `ikaros dsh restart`（杀旧 dsh + --patch 重启，日志 `data/logs/ikaros-dsh-restart.log`）。⚠️ 重启中断当前 Web 会话，刷新 :3080 从持久化会话恢复。
 - **架构参考**：`docs/ikaros-dsh-plugin-architecture.md`；退役历史：`docs/hermes-retirement-inventory.md`。
 
 ### 1.6 启动器：`bin/ikaros`（2026-08-20 起）
@@ -106,7 +106,7 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 | `ikaros tree` | 拉起对话树 (:48920) |
 | `ikaros embed` | 拉起 embedding (:8587) |
 | `ikaros all` | 拓扑序启动 web 栈三件套（`START_COMPONENTS` = embedding / conversation-tree / dsh） |
-| `ikaros dsh headless <任务>` | ⚠️ **非一级子命令**：`headless` 是 `ikarosctl.start_component` 内部对 dsh 组件的 `web|headless` 分支（`ikarosctl.py:172`）；一级走 `web`(web GUI)，headless one-shot 走 `bin/start-dsh-ikaros.bat headless <任务>`（薄壳转 `ikaros web`） |
+| `ikaros dsh headless <任务>` | ⚠️ **非一级子命令**：`headless` 是 `ikarosctl.start_component` 内部对 dsh 组件的 `web|headless` 分支（`ikarosctl.py:172`）；一级走 `ikaros web`（web GUI），headless one-shot 走 `ikaros dsh headless <任务>` |
 | `ikaros status` | 组件状态（`component_state`） |
 | `ikaros ps` | 列出各组件进程（`_cmd_ps`） |
 | `ikaros logs <组件>` | 打印指定组件日志（`_cmd_logs`） |
@@ -126,7 +126,7 @@ core/components/registry.py  ← ComponentSpec + load_components / get_component
 - `dsh_integration`：`overlay` 路径 + `mcp_servers` 列表
 
 **Backward compat**（不删旧脚本）：
-- `bin/start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1` / `core/memory_v5/services/start-embedding.bat` 都已重写为 thin wrapper，调 `ikaros` 启动器
+- `bin/ikaros.bat`（统一入口：双击出菜单 / CLI 透传）已收敛所有启动器薄壳；`core/memory_v5/services/start-embedding.bat` 走 `ikaros embed`
 - 用户照旧可双击启动，**真实实现全部走 `core/ikarosctl.py`**（`start-omp.bat` 已随 pi 底座删除）
 
 ### 2.1 核心设计：零系统依赖
@@ -366,7 +366,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 - `cordis.patch.yml` — 规范源 overlay: memory_v5 MCP (v5_* 工具, legacy 58 / slim 17, stdio 挂 `runtime/portable-python/python.exe`)、terminal、typescript LSP、persona。含 `V5_MCP_TOOL_MODE` 与 `V5_MCP_TOOL_GROUPS`(须含 `loop`)。
 - 路径全部经 `!!js process.env.IKAROS_ROOT + ...` 推导, 0 盘符硬编码, 可整体移动。
 - 用户层 `~/.dsh/profiles/web/cordis.patch.yml` 为自动加载副本, 与规范源保持同步 (启动脚本不传 `--patch`, 避免 duplicate loader)。
-- 启动: `bin/start-dsh-ikaros.bat web` (web :3080) / `headless <task>`; 面板 dsh 组件可启停 (kill 精确匹配 dsh CLI 进程, 不误伤 DSH Desktop)。
+- 启动: `ikaros web` (web :3080) / `ikaros dsh headless <task>`; 面板 dsh 组件可启停 (kill 精确匹配 dsh CLI 进程, 不误伤 DSH Desktop)。
 
 > 历史: N.E.K.O 前端 (`apps/neko/`) 已于 2026-08-18 随底座退役移除。
 ### 4.3 bin/ — 启动器和桥接
@@ -375,8 +375,7 @@ setlocal 不可用（被 call 的子批中会丢失）
 |------|------|
 | `ikaros` / `ikaros.bat` / `ikaros.ps1` | **统一启动器** 3-shell 入口，全部 exec 到 `core/ikarosctl.py`（11 子命令：web/tree/embed/all/status/ps/logs/stop/restart/doctor/check） |
 | `ikaros-env.sh` / `ikaros-env.bat` / `ikaros-env.ps1` | **环境权威源三件套**（自锚定 `IKAROS_ROOT`，设置全部 `IKAROS_*` 变量，锚点原则学 ComfyUI-aki） |
-| `start-dsh-ikaros.bat` | dsh 启动器薄壳 → `ikaros web` / `ikaros dsh headless <任务>` |
-| `restart-dsh-ikaros.ps1` | dsh 重启器（杀旧 dsh web 进程 + `--patch` 重启 + 日志，`$port` 兜底 3080） |
+| `ikaros.bat` | **统一入口**（双击出 13 项菜单 / CLI `ikaros <subcommand>` 透传给 ikarosctl.py） |
 | `proc.py` | 进程管理（`ps` 列出 python/node 进程、`kill <port|name>` 按端口/关键词强杀） |
 | `secret-scan.py` | 仓库密钥泄露扫描（stdlib only，非阻塞 exit 0，可挂 pre-commit） |
 | `wb.py` | WorkBuddy / CodeBuddy CLI 封装（让 Ikaros / 子代理直接驱动 WorkBuddy，不再文件交接 TASK.md） |

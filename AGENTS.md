@@ -23,14 +23,12 @@
 
 ## Startup
 
-- **dsh web（Web GUI）**：`bin/start-dsh-ikaros.bat web` → http://127.0.0.1:3080
-- **dsh headless（one-shot）**：`bin/start-dsh-ikaros.bat headless "<task>"`
-- **对话树**：`bin/ikaros tree` 或 `python core/conversation-tree/server.py --port 0`（动态端口写 `tmp/ct-port.json`）
-- **全部启动**：`bin/ikaros all`（拓扑序 embedding → tree → dsh）
-- **dsh 重启**：`bin/ikaros dsh restart` 或 `bin/restart-dsh-ikaros.ps1`（**会中断 :3080 Web 会话**）
-
-> 启动器完整设计 + 三壳入口：`docs/archive/decision-history/ikaros-launcher-design.md`。
-> 启动器当前用法：`bin/ikaros --help` / `bin/ikaros doctor`。
+- **dsh web（Web GUI）**：`ikaros web` → http://127.0.0.1:3080
+- **dsh headless（one-shot）**：`ikaros dsh headless "<task>"`（**非一级子命令**——`headless` 是 dsh 组件 `web|headless` 分支）
+- **对话树**：`ikaros tree`
+- **全部启动**：`ikaros all`（拓扑序 embedding → tree → dsh）
+- **dsh 重启**：`ikaros dsh restart`（**会中断 :3080 Web 会话**）
+- **统一入口**：`bin/ikaros.bat` 双击出 13 项菜单（components / dsh shortcuts / diagnostics / control），CLI 直接 `ikaros <subcommand>` 透传给 ikarosctl.py
 
 ## dsh 底座 overlay
 
@@ -41,7 +39,7 @@
   1. `cd <plugin> && node scripts/build.mjs`（tsc → dist/，**dist 被 .gitignore**）
   2. `cd ~/.dsh/profiles/web && pnpm remove <name> && pnpm add file:E:/Ikaros/core/ikaros-dsh/plugins/<plugin>`
      （pnpm file: 是复制非符号链接，必须 remove/add 才带新 dist）
-  3. **重启 dsh**（`bin/restart-dsh-ikaros.ps1`）才会加载新代码
+  3. **重启 dsh**（`ikaros dsh restart`）才会加载新代码
 - **改完插件必跑** `python core/ikaros-dsh/tools/plugin_sync_check.py`（sha256 比对源码 vs 已装副本；exit 1 = 不同步，会打印 `--fix-cmd`）
 
 > 插件细节 + ikaros-memory-settings v0.2 HTTP server 模式：`docs/archive/decision-history/ikaros-dsh-plugin-architecture.md`。
@@ -92,19 +90,14 @@
 ## CLI
 
 ```bash
-# 启动器（统一入口，三壳同名）
-bin/ikaros all                   # 拓扑序起 embedding → tree → dsh
-bin/ikaros {web|tree|embed}      # 起单个
-bin/ikaros dsh {status,open,sync,restart,stop}
-bin/ikaros {status,ps,logs,stop,restart}
-bin/ikaros doctor                 # 诊断（components.yaml + runtime 缺失检查）
+# 统一入口 (双击出菜单 / CLI 透传)
+ikaros                       # 双击或无参 -> 13 项交互菜单
+ikaros {web,tree,embed,all}  # 起单个组件
+ikaros dsh {status,open,sync,restart,stop}
+ikaros {status,ps,logs,stop,restart}
+ikaros doctor                 # 诊断 (components.yaml + runtime 缺失检查)
 
-# dsh 直调（绕过启动器）
-bin/start-dsh-ikaros.bat {web,headless} ["<task>"]
-powershell -ExecutionPolicy Bypass -File bin/restart-dsh-ikaros.ps1
-
-# 测试 / lint
-runtime/portable-python/python.exe -m pytest tests/ core/memory_v5/tests/ core/conversation-tree/tests/ -p no:randomly
-runtime/portable-python/python.exe docs/lint.py
-runtime/portable-python/python.exe core/ikaros-dsh/tools/plugin_sync_check.py
+# 兼容调用 (薄壳, 等价于 ikaros <subcommand>)
+bin/start-dsh-ikaros.bat {web,headless}  # 历史入口, 已合并到 ikaros.bat
+bin/restart-dsh-ikaros.ps1                # 历史入口, 已合并到 ikaros dsh restart
 ```
