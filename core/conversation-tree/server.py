@@ -70,6 +70,8 @@ _TEXT_EXTENSIONS = {".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json",
                     ".toml", ".cfg", ".conf", ".diff", ".patch"}
 # 文本附件读入上下文的内容上限 (防超大文件把上下文撑爆)
 _UPLOAD_TEXT_CAP = 20000
+# B6 (2026-09-04): 普通 JSON body 大小上限 (附件 multipart 走 50MB 单独限制)
+_MAX_BODY_BYTES = 5 * 1024 * 1024
 
 import memory_v5.conversation_tree as ct  # noqa: E402
 from memory_v5.conversation_tree import V5_DATA_DIR  # noqa: E402
@@ -1558,13 +1560,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body(self) -> dict:
+        # B6 (2026-09-04): 加 body 大小上限, 防止恶意 Content-Length: 999999999
+        # 导致 rfile.read(length) 直接 OOM. 5MB 对正常 API 调用足够 (含附件 base64).
+        # multipart 走 _parse_multipart 自带 50MB 限制 (Content-Length 提前拦截).
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length == 0:
             return {}
+        if length > _MAX_BODY_BYTES:
+            logger.warning("body too large: %d bytes (max %d) from %s", length, _MAX_BODY_BYTES, self.headers.get("Host", "?"))
+            raise ValueError(f"body too large: {length} > {_MAX_BODY_BYTES}")
         raw = self.rfile.read(length)
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning("body JSON decode failed (%d bytes): %s", length, e)
+            raise ValueError(f"invalid JSON body: {e}")
 
     def _q(self, key: str):
         from urllib.parse import urlparse, parse_qs
@@ -1867,7 +1879,16 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send_json(res)
                 return
-            data = self._body()
+            try:
+                data = self._body()
+            except ValueError as e:
+                # B6: body too large / invalid JSON -> 413 / 400, 不当 500
+                msg = str(e)
+                if "too large" in msg:
+                    self._send_json({"error": msg}, 413)
+                else:
+                    self._send_json({"error": msg}, 400)
+                return
             if path == "/api/init":
                 build_demo()
                 self._send_json(state_dict())
