@@ -79,22 +79,13 @@ from memory_v5 import store as v5s     # noqa: E402
 # B2: 任务事件总线 (herdr events.subscribe 语义内化); core/ 已在 sys.path
 from taskbus import EventBus, exec_state_event  # noqa: E402
 # ── LLM 配置 ──────────────────────────────────────────────────
-
-# 2026-08-18: 单一 env 权威 = 根 .env（bin/ikaros-env.* 生成，不再扫描多个 env 文件）
-_DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-if not _DEEPSEEK_KEY:
-    try:
-        _envf = _HERE.parent.parent / ".env"
-        if _envf.is_file():
-            for _line in _envf.read_text(encoding="utf-8").splitlines():
-                _line = _line.strip()
-                if _line.startswith("DEEPSEEK_API_KEY=") and not _line.startswith("#"):
-                    _DEEPSEEK_KEY = _line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-    except Exception as e:
-        logger.warning("swallowed: %s", e)
-DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
-# 2026-08-18: Hermes gateway/bridge 已退役; chat 主链路 = 本地 DeepSeek 直连 + 只读工具回路
+# 2026-09-05: 配置源 = 共享 dsh (DeepSeek Harness) 配置, 不再单独读 .env 的 DEEPSEEK_*
+# - provider / model / baseURL / apiKeyEnv: ~/.dsh/settings.yaml -> llm-pi-ai.providers.<route>
+# - 当前激活: ~/.dsh/settings.yaml -> agent-default-model
+# - apiKey: ~/.dsh/.credentials.yaml -> refs.<apiKeyEnv>  (env 也作 fallback)
+# 用户在 dsh 设置 UI (3080) 改, CT 下一次 /api/chat 自动用新模型. 完全消除双源不同步.
+# env 兜底保留: 如果 dsh 配置缺失, 回退 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL (旧启动器路径).
+import _dsh_shared as _dsh
 LOCAL_CHAT_URL = os.environ.get("IKAROS_LOCAL_LLM_URL", "http://127.0.0.1:8080").rstrip("/") + "/v1/chat/completions"
 LLM_TIMEOUT = int(os.environ.get("CT_LLM_TIMEOUT", "120"))
 # R2: 分离连接与读取超时. 连接用短超时(快速失败), 流式读取用长超时(允许长生成
@@ -157,7 +148,7 @@ def _urlopen_with_timeout(req, connect_timeout: int = LLM_CONNECT_TIMEOUT,
 
 def _call_llm(messages: list[dict], agent: str = "ikaros",
               collector: "dict | None" = None) -> tuple[str, dict]:
-    """两层 chat 补全 (DeepSeek → Local LLM) 降级链路.
+    """两层 chat 补全 (shared dsh LLM → Local LLM) 降级链路.
 
     返回 (content, usage). 任一 provider 成功即返回; 全部失败抛 RuntimeError.
     collector 非 None 时把用量写入 collector["usage"] (供 SSE usage 事件).
@@ -168,19 +159,19 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
                 for m in messages]
     errors: list[str] = []
 
-    # 1) DeepSeek API
-    if _DEEPSEEK_KEY:
+    # 1) Shared dsh LLM (provider/model/baseURL/apiKey from ~/.dsh/settings.yaml)
+    try:
+        llm = _dsh.get_active_llm_cached()
+        endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             ds_body = json.dumps({
-                # S2: 用 CT_DEEPSEEK_MODEL (默认 deepseek-v4-flash) 替代已废弃的
-                # deepseek-chat 别名 (AGENTS.md: deepseek-chat 已废弃)
-                "model": CT_DEEPSEEK_MODEL, "messages": messages,
+                "model": llm["model"], "messages": messages,
                 "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
             }).encode("utf-8")
             req = urllib.request.Request(
-                DEEPSEEK_CHAT_URL, data=ds_body,
+                endpoint, data=ds_body,
                 headers={"Content-Type": "application/json",
-                         "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
+                         "Authorization": f"Bearer {llm['apiKey']}"},
             )
             with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -190,15 +181,15 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
                     if collector is not None:
                         collector["usage"] = usage
                     return content.strip(), usage
-                errors.append("DeepSeek returned empty content")
+                errors.append(f"{llm['provider']}: empty content")
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-            errors.append(f"DeepSeek: {e}")
+            errors.append(f"{llm['provider']}: {e}")
         except Exception as e:
-            errors.append(f"DeepSeek unexpected: {e}")
-    else:
-        errors.append("DeepSeek: no API key")
+            errors.append(f"{llm['provider']} unexpected: {e}")
+    except _dsh.LLMConfigError as e:
+        errors.append(f"dsh config: {e}")
 
-    # 2) Local LLM
+    # 2) Local LLM (unchanged fallback)
     try:
         l_body = json.dumps({
             "model": "local-llm", "messages": messages,
@@ -282,18 +273,20 @@ def _call_llm_tools(
                 for m in messages]
     errors: list[str] = []
 
-    # 1) DeepSeek API (唯一支持 tools 的降级层)
-    if _DEEPSEEK_KEY:
+    # 1) Shared dsh LLM (唯一支持 tools 的降级层, provider/model/baseURL/apiKey from ~/.dsh/settings.yaml)
+    try:
+        llm = _dsh.get_active_llm_cached()
+        endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             body = {
-                "model": CT_DEEPSEEK_MODEL, "messages": messages,
+                "model": llm["model"], "messages": messages,
                 "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
                 "tools": tools,
             }
             req = urllib.request.Request(
-                DEEPSEEK_CHAT_URL, data=json.dumps(body).encode("utf-8"),
+                endpoint, data=json.dumps(body).encode("utf-8"),
                 headers={"Content-Type": "application/json",
-                         "Authorization": f"Bearer {_DEEPSEEK_KEY}"},
+                         "Authorization": f"Bearer {llm['apiKey']}"},
             )
             with _urlopen_with_timeout(req, LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -305,13 +298,13 @@ def _call_llm_tools(
                     if collector is not None:
                         collector["usage"] = usage
                     return content.strip(), usage, tool_calls
-                errors.append("DeepSeek returned empty response")
+                errors.append(f"{llm['provider']}: empty response")
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-            errors.append(f"DeepSeek: {e}")
+            errors.append(f"{llm['provider']}: {e}")
         except Exception as e:
-            errors.append(f"DeepSeek unexpected: {e}")
-    else:
-        errors.append("DeepSeek: no API key")
+            errors.append(f"{llm['provider']} unexpected: {e}")
+    except _dsh.LLMConfigError as e:
+        errors.append(f"dsh config: {e}")
 
     # 2) Local LLM (不带 tools)
     try:
@@ -1148,8 +1141,8 @@ def _export_txt(sess: dict) -> str:
 # ───────────────────────── HTTP 处理 ─────────────────────────
 
 # ── B6: 流式 chat (SSE) + 只读工具回路 (chat 面板思考/工具可视化) ──
-# 默认 deepseek-v4-flash (与 V5 认知管线一致; thinking 默认 disabled); 仅影响本地降级路径,
-# gateway 正常时无关. 设 CT_DEEPSEEK_MODEL=deepseek-reasoner 可开启思考可视化.
+# 2026-09-05: CT_DEEPSEEK_MODEL 退役 -- 默认模型从 dsh 共享配置取
+# (env 仍可覆写作为兜底: 当 dsh settings.yaml 缺失时, _dsh.get_active_llm_cached 内部回退)
 CT_DEEPSEEK_MODEL = os.environ.get("CT_DEEPSEEK_MODEL", "deepseek-v4-flash")
 # 上下文窗口 (用于"上下文用量"进度条). 默认 128K 贴合 DeepSeek-V3 旗舰 / Claude 200K;
 # 旧默认值 64K 是 deepseek-flash 上限. env CT_CONTEXT_WINDOW 仍可覆盖 (例 v4-flash 配 65536).
@@ -1428,8 +1421,13 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
         # 2026-09-05: 上下文预算检查 — LLM 自报 prompt_tokens vs CT_CONTEXT_WINDOW.
         # 80% 触发 SSE 'warn' 事件 (前端 toast); 100% 触发 SSE 'auto_fork' + 新卡.
         ctx_check = _check_context_usage(usage, context_window=CT_CONTEXT_WINDOW)
+        # 2026-09-05: model 字段优先用 dsh 当前激活 (运行时 override 时用 _CT_RUNTIME.model)
+        try:
+            _llm_model = _dsh.get_active_llm_cached()["model"]
+        except _dsh.LLMConfigError:
+            _llm_model = CT_DEEPSEEK_MODEL  # 兜底
         yield {"type": "usage", "usage": usage,
-               "model": _CT_RUNTIME.get("model") or CT_DEEPSEEK_MODEL,
+               "model": _CT_RUNTIME.get("model") or _llm_model,
                "context_window": CT_CONTEXT_WINDOW,
                "context_pct": ctx_check["pct"],
                "context_level": ctx_check["level"]}
@@ -1837,30 +1835,115 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"error": "format must be json or txt"}, 400)
             elif path == "/api/health":
-                # 底座语义 (2026-08-23): 对话树 LLM 底座 = deepseek-harness (dsh),
-                # 推理经 DeepSeek API (与 dsh 同源). local_llm 字段随本地 LLM 退役移除.
-                self._send_json({"base": "deepseek-harness",
-                                 "deepseek_key": bool(_DEEPSEEK_KEY),
-                                 "model": CT_DEEPSEEK_MODEL, "ts": time.time()})
+                # 底座语义 (2026-08-23, 重写于 2026-09-05): LLM 配置来自 dsh 共享
+                # 推理走 dsh 配置的 provider (opencode-go 等); 配置缺失时 dsh_key=false
+                try:
+                    llm = _dsh.get_active_llm_cached()
+                    self._send_json({
+                        "base": "deepseek-harness-shared",
+                        "dsh_key": bool(llm.get("apiKey")),
+                        "provider": llm.get("provider"),
+                        "model": llm.get("model"),
+                        "base_url": llm.get("baseURL"),
+                        "source": llm.get("source"),
+                        "ts": time.time(),
+                    })
+                except _dsh.LLMConfigError as e:
+                    self._send_json({
+                        "base": "deepseek-harness-shared",
+                        "dsh_key": False,
+                        "error": str(e),
+                        "ts": time.time(),
+                    })
             elif path == "/api/providers":
-                # 2026-08-23: 底座 provider 状态 (只读脱敏; 密钥不落此响应)
-                self._send_json({"base": "deepseek-harness", "providers": [
-                    {"id": "deepseek-harness",
-                     "name": "DeepSeek Harness 底座 (dsh)",
-                     "base_url": DEEPSEEK_CHAT_URL,
-                     "configured": bool(_DEEPSEEK_KEY),
-                     "models": [CT_DEEPSEEK_MODEL],
-                     "note": "对话树经 deepseek-harness 底座推理 (DeepSeek API, 同 dsh 源)"},
-                ]})
+                # 2026-09-05: 改为读 dsh 共享配置, 列出 llm-pi-ai.providers 所有 provider
+                # 密钥脱敏: configured=true/false, 不返回 key
+                providers: list[dict] = []
+                try:
+                    settings = _dsh.read_dsh_settings()
+                    providers_root = (
+                        settings.get("llm-pi-ai", {}).get("providers", {})
+                        if isinstance(settings.get("llm-pi-ai"), dict)
+                        else {}
+                    )
+                    credentials = _dsh.read_dsh_credentials()
+                    refs = (credentials.get("refs") or {}) if isinstance(credentials, dict) else {}
+                    for pid, pcfg in providers_root.items():
+                        if not isinstance(pcfg, dict):
+                            continue
+                        api_key_env = pcfg.get("apiKeyEnv") or ""
+                        has_key = bool(refs.get(api_key_env)) or bool(os.environ.get(api_key_env))
+                        base = pcfg.get("baseURL") or ""
+                        models = [m.get("id") for m in (pcfg.get("models") or []) if isinstance(m, dict) and m.get("id")]
+                        providers.append({
+                            "id": pid,
+                            "name": pcfg.get("displayName") or pid,
+                            "base_url": base,
+                            "configured": has_key,
+                            "api_key_env": api_key_env,
+                            "models": models,
+                            "note": f"dsh-shared provider (apiKey via {api_key_env})",
+                        })
+                except _dsh.LLMConfigError:
+                    pass
+                self._send_json({"base": "deepseek-harness-shared", "providers": providers})
             elif path == "/api/model_switch":
-                self._send_json({
-                    "ok": True,
-                    "current": dict(_CT_RUNTIME),
-                    "defaults": {"ikaros": CT_DEEPSEEK_MODEL},
-                    "available": [{"mode": "ikaros", "model": CT_DEEPSEEK_MODEL,
-                                   "label": f"Ikaros · DeepSeek Harness 底座（{CT_DEEPSEEK_MODEL}）",
-                                   "context_window": CT_CONTEXT_WINDOW}],
-                })
+                # 2026-09-05: available 列表来自 dsh 共享配置的当前 provider.models[]
+                # 节点级 override 仍通过 _CT_RUNTIME.model (POST 设置)
+                try:
+                    llm = _dsh.get_active_llm_cached()
+                    available = [{
+                        "mode": "ikaros",
+                        "provider": llm["provider"],
+                        "model": m.get("id"),
+                        "label": m.get("name") or m.get("id"),
+                        "context_window": m.get("contextWindow"),
+                    } for m in llm.get("models", []) if isinstance(m, dict) and m.get("id")]
+                    if not available:
+                        # Catalog empty, fall back to single active model
+                        available = [{"mode": "ikaros", "provider": llm["provider"],
+                                     "model": llm["model"], "label": llm["model"],
+                                     "context_window": llm.get("contextWindow")}]
+                    self._send_json({
+                        "ok": True,
+                        "current": dict(_CT_RUNTIME),
+                        "defaults": {"ikaros": llm["model"]},
+                        "active": {"provider": llm["provider"], "model": llm["model"]},
+                        "available": available,
+                    })
+                except _dsh.LLMConfigError as e:
+                    self._send_json({"ok": False, "error": str(e)}, 503)
+            elif path == "/api/llm_config":
+                # 2026-09-05 新增: 返回当前 dsh 共享 LLM 完整配置 (脱敏)
+                # 前端"可用模型" section 数据源
+                try:
+                    llm = _dsh.get_active_llm_cached()
+                    models = [{
+                        "id": m.get("id"),
+                        "name": m.get("name") or m.get("id"),
+                        "contextWindow": m.get("contextWindow"),
+                        "maxTokens": m.get("maxTokens"),
+                    } for m in llm.get("models", []) if isinstance(m, dict) and m.get("id")]
+                    self._send_json({
+                        "ok": True,
+                        "provider": llm["provider"],
+                        "model": llm["model"],
+                        "baseURL": llm["baseURL"],
+                        "apiKeyEnv": llm.get("apiKeyEnv", ""),
+                        "apiKey_set": bool(llm.get("apiKey")),
+                        "contextWindow": llm.get("contextWindow"),
+                        "maxTokens": llm.get("maxTokens"),
+                        "models": models,
+                        "source": llm.get("source"),
+                        "dsh_home": str(_dsh.resolve_dsh_home()),
+                    })
+                except _dsh.LLMConfigError as e:
+                    self._send_json({
+                        "ok": False,
+                        "error": str(e),
+                        "code": type(e).__name__,
+                        "dsh_home": str(_dsh.resolve_dsh_home()),
+                    }, 503)
             elif path == "/api/events":
                 self._stream_events()
             else:

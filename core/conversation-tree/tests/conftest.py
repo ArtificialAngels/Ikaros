@@ -33,6 +33,15 @@ sys.path.insert(0, str(_CORE))
 _SERVER_PATH = _HERE.parent / "server.py"
 _spec = importlib.util.spec_from_file_location("ct_server", _SERVER_PATH)
 server = importlib.util.module_from_spec(_spec)
+
+# 2026-09-05: 预加载 _dsh_shared 并注册到 sys.modules, 确保 server.py 加载时
+# `import _dsh_shared` 拿到的是同一份模块对象 (避免缓存刷新不生效).
+_DSH_PATH = _HERE.parent / "_dsh_shared.py"
+_dsh_spec = importlib.util.spec_from_file_location("_dsh_shared", _DSH_PATH)
+dsh_shared = importlib.util.module_from_spec(_dsh_spec)
+sys.modules["_dsh_shared"] = dsh_shared
+_dsh_spec.loader.exec_module(dsh_shared)
+
 _spec.loader.exec_module(server)
 
 # 引入 memory_v5.conversation_tree, 便于 patch V5_DATA_DIR
@@ -153,6 +162,9 @@ def http_server(tmp_data_dir, patched_store, reset_state):
 
     测试用 urllib 直接打 HTTP, 覆盖完整请求-响应链路 (Handler + server.py 模块状态).
     每个 ensure_tree() 都会用已 patch 的 tmp_data_dir / MockStore.
+
+    2026-09-05: DSH_HOME 由调用方 (test_dsh_base 的 fixture) 通过 monkeypatch 设定,
+    本 fixture 不动 env (避免覆盖调用方的配置).
     """
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     httpd.daemon_threads = True
@@ -262,11 +274,24 @@ def _raw_http(
             if not chunk:
                 break
             buf += chunk
-            # Stop reading once we have the full response: chunked terminator
-            # is `0\\r\\n\\r\\n` at the start of a line. We match the *previous*
-            # \\r\\n + terminator to avoid false positives on data bytes that
-            # happen to be `0\\r\\n\\r\\n`.
-            if b"\r\n0\r\n\r\n" in buf or buf.endswith(b"0\r\n\r\n"):
+            # Stop reading once we have the full response:
+            # 1) HTTP/1.1 with Content-Length: header bytes match
+            # 2) Chunked transfer: terminator `\r\n0\r\n\r\n` at line start
+            head, _, _ = buf.partition(b"\r\n\r\n")
+            cl_match = None
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    try:
+                        cl_match = int(line.split(b":", 1)[1].strip())
+                    except (ValueError, IndexError):
+                        cl_match = None
+                    break
+            is_chunked = b"transfer-encoding: chunked" in head.lower()
+            if cl_match is not None and not is_chunked:
+                # Body starts after first \r\n\r\n; total = head_len + 4 + cl_match
+                if len(buf) >= len(head) + 4 + cl_match:
+                    break
+            elif is_chunked and (b"\r\n0\r\n\r\n" in buf):
                 break
     except socket.timeout:
         import os as _os

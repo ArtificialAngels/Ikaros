@@ -284,6 +284,7 @@ def get_active_llm_cached() -> dict[str, Any]:
     """Cached variant of get_active_llm(). Cache is per-process; cleared on
     explicit refresh (none today). Errors propagate (caller decides).
     """
+    global _active_llm_cache
     with _active_llm_lock:
         if _active_llm_cache is not None:
             return dict(_active_llm_cache)
