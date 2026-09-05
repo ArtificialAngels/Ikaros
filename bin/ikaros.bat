@@ -1,24 +1,21 @@
 @echo off
-rem ikaros.bat -- unified Ikaros entry point (2026-09-05 merged)
+rem ikaros.bat -- unified Ikaros entry point (2026-09-05)
 rem
 rem Behavior:
-rem   Double-click (no args) -> interactive menu (10 options) for desktop users.
+rem   Double-click (no args) -> interactive menu (6 options) for desktop users.
 rem   CLI with args (e.g. "ikaros web" or "ikaros dsh status") -> forward to
 rem     PowerShell + ikarosctl.py transparently.
 rem
 rem Architecture (2026-09-05 confirmed):
-rem   - dsh is the SOLE process. tree / v5 / embedding-control all load as
-rem     dsh plugins via cordis.patch.yml (auto on dsh start).
+rem   - dsh is the SOLE process. tree / v5 / settings auto-load as dsh plugins.
 rem   - core/conversation-tree/server.py is spawned by ikaros-conversation-tree
-rem     Node plugin (watchdog, :48920) -- no menu entry needed.
+rem     Node plugin watchdog (:48920) -- no menu entry needed.
 rem   - llama-server (bge-m3 :8587) is started by ikaros-memory-settings RPC
 rem     (settings panel) -- no menu entry needed.
-rem   - Therefore menu = dsh start/stop/restart + dsh maintenance + diagnostics.
+rem   - Therefore menu = dsh open/stop/restart + sync + status. That's it.
 rem
 rem Design:
-rem   - Single entry per action: menu -> pick -> run -> exit. NO menu loops
-rem     (cmd `call :label` + `goto :label` inside sub creates call stack
-rem     recursion that loops forever on EOF. Avoided by single-shot flow.)
+rem   - Single entry per action: menu -> pick -> run -> exit. NO menu loops.
 rem   - After an action, bat closes. User re-double-clicks for next action.
 rem
 rem ASCII only -- cmd parses bat in ANSI/GBK; UTF-8 comments turn into
@@ -55,40 +52,27 @@ echo   dsh is the sole process. Plugins (ct / v5 / settings)
 echo   auto-load via cordis.patch.yml. Use dsh main panel to
 echo   interact with them. This menu only manages dsh itself.
 echo.
-echo   dsh lifecycle
-echo     1) start    - start dsh work engine (:3080)
+echo     1) open     - start dsh and launch Chrome --app (:3080)
 echo     2) stop     - stop dsh (and its plugins)
-echo     3) restart  - stop + start dsh
-echo   dsh maintenance
-echo     4) dsh-open  - launch Chrome --app window for :3080
-echo     5) dsh-status- one-shot health summary
-echo     6) dsh-sync  - sync cordis.patch.yml to user profile
-echo   Diagnostics
-echo     7) doctor    - read-only environment diagnostics
-echo     8) check     - full runtime environment check
-echo     9) status    - show component states
-echo     10) ps       - show running processes
+echo     3) restart  - stop + start dsh (no Chrome; use 'open' after)
+echo     4) sync     - sync cordis.patch.yml to user profile
+echo     5) status   - one-shot status (dsh + plugins + ports)
 echo     q) exit
 echo ============================================================
 echo Tip: from CLI use "ikaros web" / "ikaros dsh status" etc.
 echo ============================================================
-set /p "CHOICE=choose [1-10 / q]: "
+set /p "CHOICE=choose [1-5 / q]: "
 
 if /i "%CHOICE%"=="q" exit /b 0
 
-rem === 1-10: direct dispatch (no inner prompt) ===
-if "%CHOICE%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" web & exit /b 0
+rem === 1-5: direct dispatch (no inner prompt) ===
+if "%CHOICE%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh open & exit /b 0
 if "%CHOICE%"=="2" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh stop & exit /b 0
 if "%CHOICE%"=="3" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh restart & exit /b 0
-if "%CHOICE%"=="4" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh open & exit /b 0
+if "%CHOICE%"=="4" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh sync & exit /b 0
 if "%CHOICE%"=="5" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh status & exit /b 0
-if "%CHOICE%"=="6" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" dsh sync & exit /b 0
-if "%CHOICE%"=="7" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" doctor & exit /b 0
-if "%CHOICE%"=="8" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" check & exit /b 0
-if "%CHOICE%"=="9" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" status & exit /b 0
-if "%CHOICE%"=="10" powershell -NoProfile -ExecutionPolicy Bypass -File "%IKAROS_BIN%\ikaros.ps1" ps & exit /b 0
 
 echo.
-echo [WARN] unknown choice: %CHOICE% (valid: 1-10 or q)
+echo [WARN] unknown choice: %CHOICE% (valid: 1-5 or q)
 pause
 exit /b 0
