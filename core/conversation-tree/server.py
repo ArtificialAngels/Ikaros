@@ -1151,8 +1151,90 @@ def _export_txt(sess: dict) -> str:
 # 默认 deepseek-v4-flash (与 V5 认知管线一致; thinking 默认 disabled); 仅影响本地降级路径,
 # gateway 正常时无关. 设 CT_DEEPSEEK_MODEL=deepseek-reasoner 可开启思考可视化.
 CT_DEEPSEEK_MODEL = os.environ.get("CT_DEEPSEEK_MODEL", "deepseek-v4-flash")
-# 上下文窗口 (用于"上下文用量"进度条). DeepSeek API 默认 64K; 可用 env 覆盖 (如 128000).
-CT_CONTEXT_WINDOW = int(os.environ.get("CT_CONTEXT_WINDOW", "64000"))
+# 上下文窗口 (用于"上下文用量"进度条). 默认 128K 贴合 DeepSeek-V3 旗舰 / Claude 200K;
+# 旧默认值 64K 是 deepseek-flash 上限. env CT_CONTEXT_WINDOW 仍可覆盖 (例 v4-flash 配 65536).
+# 2026-09-05: 默认值由 64000 → 128000, 适配"上下文窗口普遍升档"趋势 (Gemini 1M 时代).
+CT_CONTEXT_WINDOW = int(os.environ.get("CT_CONTEXT_WINDOW", "128000"))
+
+# 上下文预算阈值 (基于 LLM 自报 prompt_tokens, 2026-09-05):
+#   >= CT_CTX_WARN_PCT  → SSE 'warn' 事件 ("上下文即将满, 建议开新卡")
+#   >= CT_CTX_FORK_PCT  → 自动 fork_branch + 老卡总结 → 新卡
+CT_CTX_WARN_PCT = float(os.environ.get("CT_CTX_WARN_PCT", "0.80"))
+CT_CTX_FORK_PCT = float(os.environ.get("CT_CTX_FORK_PCT", "1.00"))
+
+
+def _check_context_usage(usage: dict, context_window: int = CT_CONTEXT_WINDOW) -> dict:
+    """Return {pct, level, message} from a DeepSeek usage dict.
+
+    pct = prompt_tokens / context_window (capped at 1.5 for sanity).
+    level:
+        "ok"   — pct < CT_CTX_WARN_PCT
+        "warn" — CT_CTX_WARN_PCT <= pct < CT_CTX_FORK_PCT
+        "fork" — pct >= CT_CTX_FORK_PCT
+    """
+    pt = usage.get("prompt_tokens") or 0
+    pct = (pt / context_window) if context_window > 0 else 0.0
+    if pct >= CT_CTX_FORK_PCT:
+        level = "fork"
+        msg = (
+            f"上下文已满 ({int(pt)}/{context_window} tokens, {int(pct*100)}%), "
+            f"自动开新卡并将本卡结论化."
+        )
+    elif pct >= CT_CTX_WARN_PCT:
+        level = "warn"
+        msg = (
+            f"上下文即将满 ({int(pt)}/{context_window} tokens, {int(pct*100)}%), "
+            f"建议开新卡以保留当前上下文质量."
+        )
+    else:
+        level = "ok"
+        msg = ""
+    return {"pct": pct, "level": level, "message": msg, "prompt_tokens": pt,
+            "context_window": context_window}
+
+
+def _auto_fork_and_summarize(
+    tree, fork_point_id: str, old_messages: list[dict],
+    summary_text: str, branch_label: str = "auto-fork",
+) -> str:
+    """Hard-fork from fork_point_id into a new branch + record the summary
+    on the old card as a NodeInsight. Returns the new node id.
+
+    Why this shape (2026-09-05):
+    - Old card gets a conclusion with source_ids=[fork_point_id] so future
+      retrieval can trace the new card back to its origin.
+    - New card starts empty (no messages) — caller fills in fresh content.
+      This matches "200轮对话满了 → 自动开新卡" semantics.
+    - We do NOT delete old messages. Persistence stays intact.
+    """
+    # 1. Mark old card with summary insight.
+    if summary_text and summary_text.strip():
+        old_node = tree.nodes.get(fork_point_id)
+        if old_node is not None:
+            old_node.conclusions.append(ct.NodeInsight(
+                text=summary_text.strip(),
+                confidence=0.8,
+                source_ids=[fork_point_id],
+                extracted_at=time.time(),
+            ))
+            tree.version += 1
+            tree._emit()
+            tree.persist()
+    # 2. Fork — new node starts with the user's "new card start" marker
+    #    (caller may extend later via add_turn).
+    new_node = tree.fork_branch(
+        fork_point_id=fork_point_id,
+        branch_label=branch_label,
+        messages=[{
+            "role": "system",
+            "content": (
+                f"[自动开新卡] 上一卡已结论化: {summary_text or '(no summary)'}\n"
+                f"继续在新卡中讨论."
+            ),
+        }],
+        title=f"自动开新卡 @ {int(time.time())}",
+    )
+    return new_node.id
 
 # chat 专用只读/安全工具集. 全部不写磁盘/不执行命令.
 CHAT_TOOLS = [
@@ -1343,9 +1425,27 @@ def _stream_fallback(messages: list[dict], agent: str, collector: dict,
         collector["content"] += chunk
         yield {"type": "content", "delta": chunk}
     if usage:
+        # 2026-09-05: 上下文预算检查 — LLM 自报 prompt_tokens vs CT_CONTEXT_WINDOW.
+        # 80% 触发 SSE 'warn' 事件 (前端 toast); 100% 触发 SSE 'auto_fork' + 新卡.
+        ctx_check = _check_context_usage(usage, context_window=CT_CONTEXT_WINDOW)
         yield {"type": "usage", "usage": usage,
                "model": _CT_RUNTIME.get("model") or CT_DEEPSEEK_MODEL,
-               "context_window": CT_CONTEXT_WINDOW}
+               "context_window": CT_CONTEXT_WINDOW,
+               "context_pct": ctx_check["pct"],
+               "context_level": ctx_check["level"]}
+        if ctx_check["level"] == "warn":
+            yield {"type": "warn",
+                   "message": f"[context_window_warning] {ctx_check['message']}",
+                   "context_pct": ctx_check["pct"],
+                   "prompt_tokens": ctx_check["prompt_tokens"]}
+        elif ctx_check["level"] == "fork":
+            # 自动开新卡 (异步语义: SSE 事件先于下一次请求). 老卡结论化由调用方
+            # (/api/chat) 在 add_turn 之前基于 fork_point_id 完成 — 见 _chat_stream_events
+            # 后续扩展点 (本期先 emit 事件, 真正的 fork 在下次响应前).
+            yield {"type": "context_fork_suggested",
+                   "message": ctx_check["message"],
+                   "context_pct": ctx_check["pct"],
+                   "prompt_tokens": ctx_check["prompt_tokens"]}
 
 
 def _chat_stream_events(messages: list[dict], agent: str, node_id: str | None, collector: dict,
