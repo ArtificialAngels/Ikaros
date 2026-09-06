@@ -57,7 +57,7 @@
     #   - 记忆控制面板: dsh 设置页 embedding 模型管理（启动/切换/下载/重建向量）
     #     Node 侧独立 HTTP RPC (:19001), client 侧 settings.section React 卡
     # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build
-    # 装配: dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory
+    # 装配: dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-memory
     - id: ikaros-memory
       name: '@ikaros/dsh-ikaros-memory'
       config: {}
@@ -69,7 +69,7 @@
     #   client 侧: sidebar.footer.action 入口按钮 + shell.overlay 全屏 iframe 面板
     #              + dsh 设置页 CT 6 分区（主题/权限/布局/粒子/语言）postMessage 双向同步
     # 构建: cd core/ikaros-dsh/plugins/ikaros-conversation-tree && npm run build
-    # 装配: dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-conversation-tree
+    # 装配: dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-conversation-tree
     - id: ikaros-conversation-tree
       name: '@ikaros/dsh-conversation-tree'
       config:

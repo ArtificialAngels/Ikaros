@@ -2,15 +2,22 @@
 // client bundle 必须包成 window.__ModuleLoader__.load({id, factory}) 形态（dsh client-modules 协议），
 // factory 内提供 var module/exports 骨架 + require 参数（Loader 注入模块词表）。
 //
-// 工具链复用（避免重复安装）：
-//   tsc     ← E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory/node_modules/typescript（同款 devDeps）
-//   esbuild ← E:/Ikaros/runtime/node/node_modules/esbuild（runtime 自带）
-// esbuild ← runtime 自带（NODE_PATH 对 ESM 无效，用绝对路径导入）
+// 可移植构建: esbuild / typescript 优先从本插件 node_modules 解析 (devDependencies),
+// 回退到 Ikaros runtime 路径 (本地开发时免重复安装). 从 git 安装时 prepare 脚本自动构建.
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { build } = require('E:/Ikaros/runtime/node/node_modules/esbuild/lib/main.js')
+
+// 解析 esbuild: 优先本插件 node_modules, 回退 Ikaros runtime
+let esbuild
+try {
+  esbuild = require('esbuild')
+} catch {
+  esbuild = require('E:/Ikaros/runtime/node/node_modules/esbuild/lib/main.js')
+}
+const { build } = esbuild
+
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,8 +26,14 @@ const root = `${here}/..`
 const dist = join(root, 'dist')
 mkdirSync(dist, { recursive: true })
 
-const IKAROS = join(root, '..', '..', '..', '..')   // plugins/ikaros-conversation-tree → ikaros-dsh → core → E:/Ikaros
-const TSC = join(IKAROS, 'core', 'ikaros-dsh', 'plugins', 'ikaros-memory', 'node_modules', 'typescript', 'bin', 'tsc')
+// 解析 tsc: 优先本插件 node_modules, 回退 memory 插件的 typescript
+let TSC
+try {
+  TSC = require.resolve('typescript/bin/tsc', { paths: [root] })
+} catch {
+  const IKAROS = join(root, '..', '..', '..', '..')
+  TSC = join(IKAROS, 'core', 'ikaros-dsh', 'plugins', 'ikaros-memory', 'node_modules', 'typescript', 'bin', 'tsc')
+}
 
 // ── 1) Node 侧：tsc（ESM 输出，cordis 保持外部解析，与 ikaros-memory 同款） ──
 try {

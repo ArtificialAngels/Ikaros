@@ -6,7 +6,7 @@ Ikaros 工作引擎的两个独立 dsh (DeepSeek Harness) 插件，依据 dsh �
 
 ### 1. @ikaros/dsh-conversation-tree（对话树）
 
-**路径**：`core/ikaros-dsh/plugins/ikaros-conversation-tree/`
+**仓库路径**：`core/ikaros-dsh/plugins/ikaros-conversation-tree/`
 
 **功能**：
 - Node 侧：server.py 看门狗（探活/拉起/崩溃自动重启，动态端口）
@@ -18,7 +18,7 @@ Ikaros 工作引擎的两个独立 dsh (DeepSeek Harness) 插件，依据 dsh �
 
 ### 2. @ikaros/dsh-ikaros-memory（记忆系统 v5）
 
-**路径**：`core/ikaros-dsh/plugins/ikaros-memory/`
+**仓库路径**：`core/ikaros-dsh/plugins/ikaros-memory/`
 
 **功能**：
 - Node 侧：自动记忆工程层（pre-step 召回注入 / turn-stopping 沉淀写回 / compaction 捕获 / 6h 维护循环）
@@ -32,21 +32,38 @@ Ikaros 工作引擎的两个独立 dsh (DeepSeek Harness) 插件，依据 dsh �
 
 ### 前置条件
 - dsh (DeepSeek Harness) 已安装，`dsh` 命令在 PATH 中
-- IKAROS_ROOT 环境变量指向 Ikaros 项目根目录
+- IKAROS_ROOT 环境变量指向 Ikaros 项目根目录（插件通过此变量找到 Python 核心代码）
 - 便携 Python：`$IKAROS_ROOT/runtime/portable-python/python.exe`
 
-### 安装命令
+### 从 GitHub 安装（推荐）
+
+插件位于 Ikaros monorepo 的子目录中，使用 pnpm 的 git 子目录格式安装：
 
 ```bash
 # 安装对话树插件
-dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-conversation-tree
+dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-conversation-tree
 
 # 安装记忆系统插件
-dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory
+dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-memory
 ```
 
 > `dsh plugin --profile web add` 会转发到 profile 目录的 pnpm，等价于：
-> `cd ~/.dsh/profiles/web && pnpm add file:<path>`
+> `cd ~/.dsh/profiles/web && pnpm add github:ArtificialAngels/Ikaros#main:<path>`
+>
+> 从 git 安装时，pnpm 会自动运行 `prepare` 脚本构建 `dist/`（需要 esbuild / typescript，已在 devDependencies 中）。
+
+### 从本地克隆安装（开发用）
+
+```bash
+# 先克隆 Ikaros 仓库
+git clone https://github.com/ArtificialAngels/Ikaros.git
+cd Ikaros
+export IKAROS_ROOT=$(pwd)
+
+# 安装插件
+dsh plugin --profile web add file:$IKAROS_ROOT/core/ikaros-dsh/plugins/ikaros-conversation-tree
+dsh plugin --profile web add file:$IKAROS_ROOT/core/ikaros-dsh/plugins/ikaros-memory
+```
 
 ### 注册到 cordis.patch.yml
 
@@ -73,19 +90,19 @@ dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memor
 
 ```bash
 dsh --profile web restart
-# 或通过 Ikaros 启动器
-ikaros dsh restart
 ```
 
-## 构建
+## 构建（开发用）
 
 ```bash
 # 构建对话树插件
 cd core/ikaros-dsh/plugins/ikaros-conversation-tree
+npm install
 npm run build
 
 # 构建记忆系统插件
 cd core/ikaros-dsh/plugins/ikaros-memory
+npm install
 npm run build
 ```
 
@@ -101,8 +118,10 @@ npm run build
 - **Client bundle**：esbuild 打包为 `window.__ModuleLoader__.load({id, factory})` 格式
 - **配置**：`package.json` 的 `dsh.client` 字段声明平台和注入点
 - **外部依赖**：react / cordis / dsh-client-* 在 bundle 时标记为 external，运行时由 dsh 提供
+- **Git 安装**：`prepare` 脚本自动构建；`pnpm.onlyBuiltDependencies` 允许 esbuild postinstall
 
 ### 与 Ikaros 核心的关系
 - 插件是 dsh 进程内的 Node/Client 代码
 - Python 核心（conversation-tree / memory_v5）通过子进程 / HTTP / MCP 与插件通信
 - 路径全部通过 `IKAROS_ROOT` 环境变量推导，无硬编码盘符
+- 插件可独立安装到任何 dsh profile，但运行时需要完整 Ikaros 仓库（Python 核心 + 便携 Python）

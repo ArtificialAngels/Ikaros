@@ -5,7 +5,13 @@
   "main": "dist/index.js",
   "description": "Ikaros memory_v5 dsh 插件：自动记忆工程层（pre-step 召回/turn-stopping 沉淀/compaction 捕获/6h 维护）+ embedding 模型控制面板（dsh 设置页）",
   "scripts": {
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArtificialAngels/Ikaros.git",
+    "directory": "core/ikaros-dsh/plugins/ikaros-memory"
   },
   "dsh": {
     "client": {
@@ -29,11 +35,20 @@
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
     "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "esbuild": "^0.21.0",
     "typescript": "^5.5.0"
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "src",
+    "scripts",
+    "tsconfig.build.json"
   ],
-  "license": "BSD-3-Clause"
+  "license": "BSD-3-Clause",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
 }

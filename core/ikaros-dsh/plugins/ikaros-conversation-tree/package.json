@@ -5,7 +5,13 @@
   "main": "dist/index.js",
   "description": "Ikaros 对话树 dsh 插件：server.py 看门狗拉起 + sidebar 入口 + shell.overlay 全屏 iframe + dsh 设置面板 CT 6 分区（主题/权限/布局/粒子/语言）",
   "scripts": {
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArtificialAngels/Ikaros.git",
+    "directory": "core/ikaros-dsh/plugins/ikaros-conversation-tree"
   },
   "dsh": {
     "client": {
@@ -26,7 +32,20 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "src",
+    "scripts",
+    "tsconfig.build.json"
   ],
-  "license": "BSD-3-Clause"
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0"
+  },
+  "license": "BSD-3-Clause",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
 }

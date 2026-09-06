@@ -1,7 +1,20 @@
 // ikaros-memory 构建：Node 侧 tsc → dist/index.js；client 侧 esbuild CJS → dist/client.js
+// client bundle 必须包成 window.__ModuleLoader__.load({id, factory}) 形态（dsh client-modules 协议）。
+//
+// 可移植构建: esbuild / typescript 优先从本插件 node_modules 解析 (devDependencies),
+// 回退到 Ikaros runtime 路径. 从 git 安装时 prepare 脚本自动构建.
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { build } = require('E:/Ikaros/runtime/node/node_modules/esbuild/lib/main.js')
+
+// 解析 esbuild: 优先本插件 node_modules, 回退 Ikaros runtime
+let esbuild
+try {
+  esbuild = require('esbuild')
+} catch {
+  esbuild = require('E:/Ikaros/runtime/node/node_modules/esbuild/lib/main.js')
+}
+const { build } = esbuild
+
 import { execFileSync } from 'node:child_process'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -12,8 +25,13 @@ const root = `${here}/..`
 const dist = join(root, 'dist')
 mkdirSync(dist, { recursive: true })
 
-const IKAROS = join(root, '..', '..', '..', '..')
-const TSC = join(IKAROS, 'core', 'ikaros-dsh', 'plugins', 'ikaros-memory', 'node_modules', 'typescript', 'bin', 'tsc')
+// 解析 tsc: 优先本插件 node_modules
+let TSC
+try {
+  TSC = require.resolve('typescript/bin/tsc', { paths: [root] })
+} catch {
+  TSC = join(root, 'node_modules', 'typescript', 'bin', 'tsc')
+}
 
 // ── 1) Node 侧：tsc（ESM 输出） ──
 try {
