@@ -45,34 +45,31 @@
         failOnStartupError: false
         toolCallTimeoutMs: 60000
 
-    # ── 1b) ikaros-memory 自动记忆工程层（2026-08-18 新增） ─────────────
-    # mcp-client 暴露 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回:
-    #   - 标准记忆循环 (2026-08-30): 三个 hook 各调一次 v5_call.py loop ——
+    # ── 1b) ikaros-memory 自动记忆工程层 + 记忆控制面板（2026-09-06 合并 memory-settings） ─
+    # mcp-client 暴露 v5_* 工具给模型「主动」调用；本插件做「自动」注入/写回 + 设置面板:
+    #   - 标准记忆循环: 三个 hook 各调一次 v5_call.py loop ——
     #       agent/pre-step     -> loop(phase=pre)          身份 + 召回 + 项目经验
     #       agent/turn-stopping-> loop(phase=post)         精力/关系推进 + 反重复语料
     #       6h 定时器          -> loop(phase=maintenance)  反思管线
-    #     引擎见 memory_v5/loop.py, step 表在 _default_steps()。
     #   - turn-stopping 自动沉淀: 每轮结束把真实对话提炼写回 v5 (source:dsh, upsert)
     #   - pre-step 召回注入: should_recall 门控 + 检索 + systemPrompt.context() 快照
-    #     (user-role 快照, 前缀缓存友好; 静态纪律走 section 字节稳定锚)
-    # ⚠️ name 不支持 !!js 表达式（Entry.name 不经过 interpolate, 只有 config 走），
-    #    用裸包名从 profile 的 node_modules 解析（pnpm file: 链接, 源在 E 盘不复制）。
-    # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build (tsc -> dist/)
-    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory"
-    # ⚠️ pnpm file: 是**复制**不是符号链接 —— 改了 src/ 或 bin/ 不做这三步, dsh 跑的
-    #    仍是旧副本, **全程无报错**。装完还必须重启 dsh 才加载新代码。
-    #    检查是否漏装: python core/ikaros-dsh/tools/plugin_sync_check.py (exit 1 = 不同步)
+    #   - compaction 捕获: dsh 压缩会话摘要沉淀进 v5（零额外 LLM）
+    #   - 记忆控制面板: dsh 设置页 embedding 模型管理（启动/切换/下载/重建向量）
+    #     Node 侧独立 HTTP RPC (:19001), client 侧 settings.section React 卡
+    # 构建: cd core/ikaros-dsh/plugins/ikaros-memory && npm run build
+    # 装配: dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-memory
     - id: ikaros-memory
       name: '@ikaros/dsh-ikaros-memory'
       config: {}
 
-    # ── 1c) ikaros-conversation-tree 对话树面板（2026-08-24 新增） ─────────
-    # 对话树保持独立服务（:48920, 零第三方依赖 Python）; 本插件双面:
+    # ── 1c) ikaros-conversation-tree 对话树面板 + 设置面板（2026-09-06 合并 ct-settings） ─
+    # 对话树保持独立服务（Python aiohttp, 零第三方依赖）; 本插件双面:
     #   Node 侧: 探活 + 未启动时用便携 Python 拉起 server.py (看门狗, 每 3s);
-    #            提供 ctx.conversationTree {healthy,url,lastChecked}
-    #   client 侧: sidebar.footer.action 入口按钮 + shell.overlay iframe 面板
-    # 构建: cd core/ikaros-dsh/plugins/ikaros-conversation-tree && node scripts/build.mjs
-    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-conversation-tree"
+    #            端口文件 watch + client.js URL patch; 提供 ctx.conversationTree 状态
+    #   client 侧: sidebar.footer.action 入口按钮 + shell.overlay 全屏 iframe 面板
+    #              + dsh 设置页 CT 6 分区（主题/权限/布局/粒子/语言）postMessage 双向同步
+    # 构建: cd core/ikaros-dsh/plugins/ikaros-conversation-tree && npm run build
+    # 装配: dsh plugin --profile web add file:E:/Ikaros/core/ikaros-dsh/plugins/ikaros-conversation-tree
     - id: ikaros-conversation-tree
       name: '@ikaros/dsh-conversation-tree'
       config:
@@ -80,29 +77,6 @@
         python: !!js 'process.env.IKAROS_ROOT + "/runtime/portable-python/python.exe"'
         serverPath: !!js 'process.env.IKAROS_ROOT + "/core/conversation-tree/server.py"'
         probeTimeoutMs: 3000
-
-    # ── 1d) ikaros-memory-settings 记忆控制面板 (2026-08-27 新增) ─────────
-    # dsh 设置页 'settings.section' slot 注册 React 卡 (id=ikarosMemory, order=50).
-    # 仿 @deepseek-ai/dsh-client-ui-settings-models 的 settings.section 模式.
-    # Node 侧 apply() 起独立 HTTP server (127.0.0.1:19001) 暴露 7 个 RPC
-    # (listModels/getStatus/startEmbedding/stopEmbedding/switchModel/
-    # downloadModel/rebuildVectors). Client 端 fetch 调 (URL Node 侧启动时
-    # patch 进 dist/client.js, 仿 ikaros-conversation-tree 模式).
-    # 不走 dsh connection.api.ikarosMemory —— dsh 0.1.1-rc.2 host-bridge
-    # 只硬编码 5 个 namespace, 自定义 service 不会自动序列化.
-    # 构建: cd core/ikaros-dsh/plugins/ikaros-memory-settings && node scripts/build.mjs
-    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-memory-settings"
-    - id: ikarosMemory
-      name: '@ikaros/dsh-ikaros-memory-settings'
-
-    # ── 1e) ikaros-ct-settings 对话树设置面板 (2026-09-05 新增) ─────────
-    # 将 CT 独有设置（主题/权限/布局/粒子/语言）迁移到 dsh 设置面板。
-    # 通过 postMessage 与 iframe 内 CT 双向同步设置。
-    # 模型/API Key 复用 dsh 已有设置，不在此重复。
-    # 构建: cd core/ikaros-dsh/plugins/ikaros-ct-settings && node scripts/build.mjs
-    # 装配: cd ~/.dsh/profiles/web && pnpm add file:"${IKAROS_ROOT}/core/ikaros-dsh/plugins/ikaros-ct-settings"
-    - id: ikarosCtSettings
-      name: '@ikaros/dsh-ct-settings'
 
     # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
     # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，

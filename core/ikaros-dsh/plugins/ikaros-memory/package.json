@@ -1,11 +1,28 @@
 {
   "name": "@ikaros/dsh-ikaros-memory",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
-  "description": "Ikaros memory_v5 自动记忆工程层：turn-stopping 自动沉淀写回 + pre-step 召回注入 + compaction 捕获 + 前缀缓存友好",
+  "description": "Ikaros memory_v5 dsh 插件：自动记忆工程层（pre-step 召回/turn-stopping 沉淀/compaction 捕获/6h 维护）+ embedding 模型控制面板（dsh 设置页）",
   "scripts": {
-    "build": "tsc src/index.ts --outDir dist --module esnext --moduleResolution bundler --target es2022 --skipLibCheck --allowSyntheticDefaultImports"
+    "build": "node scripts/build.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["slots"]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

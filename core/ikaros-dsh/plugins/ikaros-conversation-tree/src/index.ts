@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appendFileSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+// 合并自 ikaros-ct-settings: CT 设置面板的端口 watch + client.js patch
+import { apply as applyCtSettings } from './settings/node'
 
 export const name = 'ikaros-conversation-tree'
 
@@ -234,6 +236,9 @@ const apply = (ctx: any, config: Config) => {
   })
 
   ctx.logger?.info?.(`[ikaros-conversation-tree] 插件就绪, 目标 ${status.url}`)
+
+  // 合并: CT 设置面板 (端口 watch + client.js patch)
+  applyCtSettings(ctx)
 }
 
 export { apply }

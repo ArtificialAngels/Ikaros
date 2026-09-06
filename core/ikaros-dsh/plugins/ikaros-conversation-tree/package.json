@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
-  "description": "Ikaros 对话树面板 dsh 插件：探活/拉起 :48920 服务 + dsh UI 一键打开 (sidebar 入口 + shell.overlay iframe 面板)",
+  "description": "Ikaros 对话树 dsh 插件：server.py 看门狗拉起 + sidebar 入口 + shell.overlay 全屏 iframe + dsh 设置面板 CT 6 分区（主题/权限/布局/粒子/语言）",
   "scripts": {
     "build": "node scripts/build.mjs"
   },

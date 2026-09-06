@@ -38,6 +38,8 @@
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+// 合并自 ikaros-memory-settings: 记忆控制面板 HTTP RPC (embedding 模型管理) + dsh 设置面板
+import { apply as applyMemorySettings } from './settings/node'
 // 引用 dsh-agent / dsh-session 类型声明以加载它们的 Events module augmentation
 // （agent/pre-step、agent/turn-stopping、session/event 的事件类型）。仅类型侧,
 // 编译产物不引入运行时依赖。
@@ -131,6 +133,10 @@ let _lastWritebackAt = 0
 //   2) 注入前先 dispose 旧 context, 再注册新快照（内容变化只击穿快照自身）
 let _lastRecallTurnKey = ''
 let _recallContextDispose: (() => void) | null = null
+
+// P3-3 (2026-09-05): loop post 阶段检测到的重复话题提示, 暂存到下一轮 pre-step 注入。
+// turn-stopping 时本轮回复已生成完, penalty_hint 是给"下一轮"用的, 所以跨轮暂存。
+let _pendingPenaltyHint = ''
 
 /** 生成 recall 注入的 turn 指纹：真实用户文本驻留的 turn 唯一键。 */
 function recallTurnKey(turn: number, query: string): string {
@@ -468,7 +474,8 @@ function renderStaticRules(): string {
     '- 记忆系统 = memory_v5 (v5.db 唯一真相源 + chroma 向量)。工具为 mcp__ikaros-v5__* 前缀。',
     '- 完成实质性工作后：调 mcp__ikaros-v5__v5_memory_store 显式落盘（type=conversation 走 upsert 合并强化）。',
     '- 项目决策/坑/约定 → mcp__ikaros-v5__v5_project_note（kind=decision|pitfall|convention）。',
-    '- 开工先检索：历史上下文先用 mcp__ikaros-v5__v5_memory_search / v5_project_retrieve 回顾。',
+    '- 自动召回已由插件在每轮 pre-step 注入（[Ikaros 相关记忆] 段），无需每轮手动检索；',
+    '  仅当需要二次深检索、项目特定查询或自动召回不足时，才调 v5_memory_search / v5_project_retrieve。',
     '- 记忆操作结果要在正文可见（用户能看到的回复文本里说明存了什么/查到了什么）。',
     '- 自动沉淀由插件兜底：每轮结束背景写回，不依赖你自觉；寒暄/琐碎轮跳过。',
     '- 记忆仅作补充，不替代正常回复与交付物。',
@@ -667,13 +674,21 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
         if (!session || typeof session.deriveMessages !== 'function') return
         const pair = extractTurnPair(session.deriveMessages())
         if (!pair.assistant) return
-        await callV5(ctx, 'loop', {
+        const loopRes = await callV5(ctx, 'loop', {
           phase: 'post',
           query: pair.user ?? '',
           response: pair.assistant,
           session_id: 'dsh',
           character: 'ikaros',
         })
+        // P3-3: 提取 anti_repeat 步骤的 penalty_hint, 暂存到下一轮注入
+        if (loopRes?.ok && loopRes.results) {
+          const ar = (loopRes.results as Record<string, unknown>)?.anti_repeat
+          if (ar && typeof ar === 'object') {
+            const hint = (ar as { penalty_hint?: string }).penalty_hint
+            if (hint && typeof hint === 'string') _pendingPenaltyHint = hint
+          }
+        }
       } catch { /* 循环失败静默, 不干扰会话 */ }
     })()
   })
@@ -715,6 +730,12 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
       if (memory?.ok && memory.items?.length) {
         snapshot = renderMemorySnapshot(memory.items, config.injectBudgetChars)
       }
+    }
+    // P3-3: 上一轮 loop post 检测到的重复话题提示, 追加到召回快照后注入
+    if (_pendingPenaltyHint) {
+      const hint = _pendingPenaltyHint
+      _pendingPenaltyHint = ''  // 消费后清空, 只注入一次
+      snapshot = snapshot ? `${snapshot}\n\n${hint}` : hint
     }
     if (snapshot) {
       // 注入走 systemPrompt.context() —— user-role 快照, 前缀缓存友好
@@ -795,4 +816,7 @@ export function apply(ctx: Context, config: Config = defaultConfig) {
       }
     } catch { /* timer/interval 不可用则静默（维护是增强, 不硬依赖） */ }
   }
+
+  // 合并: 记忆控制面板 (embedding 模型管理 HTTP RPC + dsh 设置面板)
+  applyMemorySettings(ctx as any, config as any)
 }
