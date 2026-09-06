@@ -5314,14 +5314,17 @@ function closeModelDropdown(){
 (function bindModelPicker(){
   // usageBar 删除后, 模型触发点改为输入栏的 modelChip (若不存在则回退 modelPicker)
   const trigger=_focusEl('modelChip')||document.getElementById('modelPicker');
-  if(!trigger||trigger.dataset.fx)return;
-  trigger.dataset.fx='1';
-  trigger.addEventListener('click',(e)=>{e.stopPropagation();openModelDropdown();});
-  document.addEventListener('click',(e)=>{
-    if(e.target.closest('.model-dropdown')||e.target===trigger)return;
-    closeModelDropdown();
-  });
-  document.addEventListener('keydown',(e)=>{if(e.key==='Escape')closeModelDropdown();});
+  if(trigger&&!trigger.dataset.fx){
+    trigger.dataset.fx='1';
+    trigger.addEventListener('click',(e)=>{e.stopPropagation();openModelDropdown();});
+    document.addEventListener('click',(e)=>{
+      if(e.target.closest('.model-dropdown')||e.target===trigger)return;
+      closeModelDropdown();
+    });
+    document.addEventListener('keydown',(e)=>{if(e.key==='Escape')closeModelDropdown();});
+  }
+  // 2026-09-06 修复: refreshModelPicker 不能在 early return 之后,
+  // 否则页面加载时无聚焦卡片 → trigger 为 null → CT_MODELS 永远为空 → 下拉框空白.
   refreshModelPicker();
 })();
 
