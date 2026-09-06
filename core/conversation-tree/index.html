@@ -5371,7 +5371,7 @@ async function onModelPick(it){
   if(btn){ btn.textContent=label;
     btn.title=it.label+(it.context_window?('（上下文 '+fmtTok(it.context_window)+'）'):''); }
   const chip=_focusEl('modelChip');
-  if(chip){const l=_focusEl('mcLabel');if(l)l.textContent=label;else chip.textContent=label;}
+  if(chip){const l=_focusEl('mcLabel');if(l){l.textContent='AI';chip.title=label;}else chip.textContent='AI';}
   // 同步 context window (选项 value 对应模型)
   if(it.context_window) CT_CTX_LIVE=Number(it.context_window);
   closeModelDropdown();
