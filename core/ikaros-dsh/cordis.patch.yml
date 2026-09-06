@@ -2,11 +2,14 @@
 #
 # 叠加在 dsh-headless 或 dsh-web 之上（dsh-base 已含 llm/session/tools/fs/
 # sandbox/subagent/compaction/skill/goal/workflow/ralph 等全部基础能力）。
-# 本 overlay 补上 dsh-base 默认没挂、但 Ikaros 工作引擎需要的三块能力：
+# 本 overlay 补上 dsh-base 默认没挂、但 Ikaros 工作引擎需要的能力：
 #   1) memory_v5 记忆（MCP 直连；58 工具 legacy / 17 工具 slim，见 V5_MCP_TOOL_MODE）
-#   2) 持久 PTY 终端（terminal + terminal-bash + tool-terminal）
-#   3) LSP 精确代码导航（lsp + lsp-stdio + tool-lsp）
+#   2) ikaros-memory 自动记忆工程层 + 记忆控制面板
+#   3) ikaros-conversation-tree 对话树面板 + 设置面板
 # 并覆盖 system-prompt 的 persona 为 Ikaros 工作引擎人格。
+#
+# 注: 0.1.2-rc.1 起 dsh-lsp*/dsh-terminal-bash/dsh-tool-terminal 已移除或不兼容,
+#     dsh-market 因 dsh-settings API 变更加载失败, 均在此禁用/移除。
 #
 # 路径全部用 !!js 表达式从进程环境 IKAROS_ROOT 推导（bat 启动器注入），
 # 无盘符硬编码，整个项目可随 IKAROS_ROOT 移动。
@@ -35,9 +38,9 @@
       config:
         serverName: ikaros-v5
         transport: stdio
-        command: !!js 'process.env.IKAROS_ROOT + "\\runtime\\portable-python\\python.exe"'
+        command: !!js '(process.env.IKAROS_ROOT || process.cwd()) + "\\runtime\\portable-python\\python.exe"'
         args:
-          - !!js 'process.env.IKAROS_ROOT + "\\core\\memory_v5\\mcp_server.py"'
+          - !!js '(process.env.IKAROS_ROOT || process.cwd()) + "\\core\\memory_v5\\mcp_server.py"'
         env:
           IKAROS_ROOT: !!js 'process.env.IKAROS_ROOT'
           V5_MCP_TOOL_GROUPS: 'memory,self,care,vitality,relationship,skill,project,loop'
@@ -74,50 +77,16 @@
       name: '@ikaros/dsh-conversation-tree'
       config:
         port: 48920
-        python: !!js 'process.env.IKAROS_ROOT + "/runtime/portable-python/python.exe"'
-        serverPath: !!js 'process.env.IKAROS_ROOT + "/core/conversation-tree/server.py"'
+        python: !!js '(process.env.IKAROS_ROOT || process.cwd()) + "/runtime/portable-python/python.exe"'
+        serverPath: !!js '(process.env.IKAROS_ROOT || process.cwd()) + "/core/conversation-tree/server.py"'
         probeTimeoutMs: 3000
 
-    # ── 2) 持久 PTY 终端（dsh-base 默认不挂的能力） ───────────────────
-    # terminal_bash 经 ctx.subprocess + ctx.sandboxPolicy 起交互 shell，
-    # 状态（cd/export/REPL）跨 tool 调用存活，SIGINT/超时/后台运行齐全。
-    - id: terminal
-      name: '@deepseek-ai/dsh-terminal'
-    - id: terminal-bash
-      name: '@deepseek-ai/dsh-terminal-bash'
-    - id: tool-terminal
-      name: '@deepseek-ai/dsh-tool-terminal'
-      config:
-        enableRunInBackground: true
+    # ── 2) 禁用 dsh 0.1.2-rc.1 中不兼容的内置插件 ─────────────────────
+    # dsh-market: 依赖已移除的 installSettingsSection 导出 (dsh-settings API 变更)
+    - id: dsh-market
+      disabled: true
 
-    # ── 3) LSP 精确导航（定义/引用/实现/hover） ───────────────────────
-    # typescript 经 npx 按需拉取；python 需预装 (pip install pyright) 后
-    # 取消下方注释的 python 段（未装时 python LSP 启动失败会中止 web 启动，
-    # 故默认不挂 python；typescript 不受影响）。
-    - id: lsp
-      name: '@deepseek-ai/dsh-lsp'
-    - id: lsp-stdio
-      name: '@deepseek-ai/dsh-lsp-stdio'
-      config:
-        servers:
-          typescript:
-            command: npx
-            args: ['-y', 'typescript-language-server', '--stdio']
-            extensionToLanguage:
-              '.ts': 'typescript'
-              '.tsx': 'typescriptreact'
-              '.js': 'javascript'
-              '.jsx': 'javascriptreact'
-              '.mjs': 'javascript'
-          # python:
-          #   command: pyright-langserver
-          #   args: ['--stdio']
-          #   extensionToLanguage:
-          #     '.py': 'python'
-    - id: tool-lsp
-      name: '@deepseek-ai/dsh-tool-lsp'
-
-# ── 4) Ikaros 工作引擎 persona ─────────────────────────────────────────
+# ── 3) Ikaros 工作引擎 persona ─────────────────────────────────────────
 - id: system-prompt
   config:
     persona: >-
@@ -141,5 +110,5 @@
       v5_memory_search when you want a ready-to-inject context block within a
       token budget.
 
-      Verify your work by running the code or tests in a terminal session. Keep
+      Verify your work by running the code or tests in a shell. Keep
       answers brief and factual.
