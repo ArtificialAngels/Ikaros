@@ -26,6 +26,8 @@ $env:IKAROS_DSH_SOURCE = Join-Path $root "runtime\deepseek-harness-master"
 $env:IKAROS_DSH_PROFILE = Join-Path $root "data\dsh\profiles"
 $env:IKAROS_DSH_WEB_PORT = "3080"
 $env:IKAROS_DSH_OVERLAY = Join-Path $root "core\ikaros-dsh\cordis.patch.yml"
+# dsh 加载插件(ct/memory/settings)后启动需 15-25s, 默认 10s 超时会误判启动失败
+$env:IKAROS_START_WAIT_TIMEOUT = "30"
 
 
 
