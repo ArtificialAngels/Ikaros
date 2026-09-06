@@ -64,13 +64,19 @@ def test_facade_absorbs_reference_real_tools():
 
 
 def test_every_legacy_tool_is_accounted_for():
-    """每个 legacy 工具都被某个门面或某个 Loop 阶段认领 —— 不留孤儿。"""
+    """每个 legacy 工具都被某个门面或某个 Loop 阶段认领 —— 不留孤儿。
+
+    2026-09-05: v5_content 的 3 个 action (dissonance/narrative/proactive)
+    已从 slim facade 移除 (零消费方清理), 底层函数仍在 legacy 中但不再被
+    任何 facade action 吸收。这些是"已从 slim 移除"的合法孤儿, 豁免。
+    """
+    from memory_v5.tools.slim_check import SLIM_REMOVED_LEGACY
     claimed = set()
     for absorbed in registry.FACADE_ABSORBS.values():
         claimed.update(absorbed)
     for absorbed in registry.LOOP_ABSORBS.values():
         claimed.update(absorbed)
-    orphans = sorted(set(registry.LEGACY_ONLY_NAMES) - claimed)
+    orphans = sorted(set(registry.LEGACY_ONLY_NAMES) - claimed - SLIM_REMOVED_LEGACY)
     assert orphans == [], f"以下 legacy 工具无人认领: {orphans}"
 
 
@@ -101,11 +107,14 @@ def test_tools_for_mode_invalid_fails_open_to_all(mode):
     assert sorted(names) == sorted(registry.ALL_TOOL_NAMES)
 
 
-def test_slim_set_is_the_documented_17():
-    """精简面 = 9 热路径 + 8 门面。改这个数字必须同步 docs/v5-mcp-consolidation.md。"""
-    assert len(registry.SLIM_TOOL_NAMES) == 17
+def test_slim_set_is_the_documented_16():
+    """精简面 = 9 热路径 + 7 门面。改这个数字必须同步 docs/v5-mcp-consolidation.md。
+
+    2026-09-05: v5_content 从 slim 移除, facade 8→7, slim 17→16。
+    """
+    assert len(registry.SLIM_TOOL_NAMES) == 16
     assert len([n for n, t in registry.TOOL_TIERS.items() if t == "core"]) == 9
-    assert len([n for n, t in registry.TOOL_TIERS.items() if t == "facade"]) == 8
+    assert len([n for n, t in registry.TOOL_TIERS.items() if t == "facade"]) == 7
 
 
 def test_hot_path_tools_are_core():

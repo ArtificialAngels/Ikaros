@@ -458,6 +458,10 @@ def retrieve(
                 seen.add(v["content"])
                 result.append(v)
 
+    # ── P3-1: ban_topic directive 过滤 (用户禁止话题自动剔除) ──
+    # fail-open: directives 查询失败不过滤; 只过滤 memory 类型, vault/skill 保留
+    result = _filter_by_ban_directives(result, character)
+
     if ttl > 0:
         with _RET_CACHE_LOCK:
             _RET_CACHE[cache_key] = (time.time(), result)
@@ -735,7 +739,7 @@ def unified_retrieve(
         #    调用方显式选 lexical 就是为了**只要**词法结果 (可控、可复现、
         #    不受 embedding 服务状态影响), 悄悄混入语义结果会破坏这个前提。
         #    影响面已核实: 生产代码无 scope="lexical" 调用方, 仅测试使用。
-        return _finish(merged, tk, include_dsh_only=include_dsh_only)
+        return _finish(merged, tk, include_dsh_only=include_dsh_only, query=query)
 
     elif scope == "graph":
         # P3 图收敛: 统一图检索 (实体图 + 项目知识图)
@@ -760,7 +764,7 @@ def unified_retrieve(
             except Exception as e:
                 logger.debug("unified tree failed: %s", e)
             if merged:
-                return _finish(merged, tk, include_dsh_only=include_dsh_only)
+                return _finish(merged, tk, include_dsh_only=include_dsh_only, query=query)
         # tree 不可用 → 降级 auto (保持树端调用行为不崩)
         return unified_retrieve(query, top_k=tk, scope="auto", character=character,
                                 time_range=time_range, exclude=exclude,
@@ -777,7 +781,7 @@ def unified_retrieve(
         except Exception as e:
             logger.debug("unified temporal failed: %s", e)
         if merged:
-            return _finish(merged, tk, include_dsh_only=include_dsh_only)
+            return _finish(merged, tk, include_dsh_only=include_dsh_only, query=query)
         return unified_retrieve(query, top_k=tk, scope="semantic", character=character,
                                 time_range=time_range, exclude=exclude,
                                 min_weight=min_weight,
@@ -793,7 +797,7 @@ def unified_retrieve(
     _merge(sem, "semantic")
     used.append("semantic")
     if scope == "semantic" or not auto_route:
-        return _finish(merged, tk, include_dsh_only=include_dsh_only)
+        return _finish(merged, tk, include_dsh_only=include_dsh_only, query=query)
 
     # ── auto 补路: semantic 不足时补图扩散 (低分 graph 不过 threshold) ──
     # 意图为 ENTITY (问"什么是/关于/是谁") 时总是补实体图扩散 (即使 semantic 已足),
@@ -805,10 +809,11 @@ def unified_retrieve(
             used.append("graph")
         except Exception as e:
             logger.debug("unified auto graph fallback failed: %s", e)
-    return _finish(merged, tk, include_dsh_only=include_dsh_only)
+    return _finish(merged, tk, include_dsh_only=include_dsh_only, query=query)
 
 
-def _finish(merged: dict[str, dict], tk: int, *, include_dsh_only: bool = True) -> list[dict]:
+def _finish(merged: dict[str, dict], tk: int, *, include_dsh_only: bool = True,
+            query: str = "") -> list[dict]:
     """排序截断 (fail-open: merged 可能为空).
 
     Phase 3 (2026-08-14): 时间锚定检索 ——
@@ -818,10 +823,14 @@ def _finish(merged: dict[str, dict], tk: int, *, include_dsh_only: bool = True) 
         不过滤 (不阻塞检索)。
     ``include_dsh_only=False`` drops ``[dsh-only]`` entries (used when building
     context for external executors such as pi / herdr).
+
+    P3-2 (2026-09-05): query 非空时追加 skill 检索结果到末尾 ——
+      相关技能/能力文档作为"能力参考"排在记忆之后, 不参与 memory 去重排序。
+      skill 结果 id 是文件路径, source="skill", 分数独立。
     """
     out = [v for v in merged.values() if v["score"] > 0]
     if not out:
-        return []
+        out = []
     try:
         from memory_v5.store import valid_to_map
         from memory_v5.context_anchor import now_epoch
@@ -837,7 +846,33 @@ def _finish(merged: dict[str, dict], tk: int, *, include_dsh_only: bool = True) 
         from memory_v5.scope import is_dsh_only
         out = [v for v in out if not is_dsh_only(v.get("content"))]
     out.sort(key=lambda x: -x["score"])
-    return out[:tk]
+    out = out[:tk]
+    # ── P3-2: skill 结果追加 (能力参考, 排在记忆之后) ──
+    if query and query.strip():
+        try:
+            from memory_v5 import skill_store
+            skill_hits = skill_store.search_skills(query, top_k=max(1, tk // 3))
+            for s in skill_hits:
+                if len(out) >= tk:
+                    break
+                out.append({
+                    "id": f"skill:{s['name']}",
+                    "content": f"[skill] {s['name']}: {s.get('description','')}",
+                    "type": "skill",
+                    "weight": 0.6,
+                    "tags": f"skill path:{s.get('path','')}",
+                    "created": float(s.get("updated", 0.0)),
+                    "pad_p": 0.0, "pad_a": 0.0, "pad_d": 0.0,
+                    "source": "skill",
+                    "score": float(s.get("score", 0.0)),
+                    "access_count": 0, "reinforcement": 0.0,
+                    "last_accessed": 0.0, "long_term": False,
+                    "intent": "GENERAL", "signals": {"skill_score": s.get("score", 0.0)},
+                    "relation": "", "kind": "skill",
+                })
+        except Exception as e:
+            logger.debug("_finish: skill lookup failed (fail-open): %s", e)
+    return out
 
 
 def retrieve_temporal(query: str, *, now: float | None = None,
@@ -1048,6 +1083,47 @@ def _vault_search(query: str, limit: int = 3) -> list[dict]:
         }
         for h in hits[:limit]
     ]
+
+
+# ─── P3-1: directive→recall 禁止话题过滤 (2026-09-05) ─────────────────
+def _filter_by_ban_directives(results: list[dict], character: str) -> list[dict]:
+    """根据 active ban_topic directives 过滤检索结果。
+
+    用户通过 v5_directive(action=add, directive_type='ban_topic', text='话题')
+    设置的禁止话题, 在召回时自动剔除命中的记忆, 避免模型反复被引导到
+    用户不想聊的话题上。
+
+    - 只过滤 memory 类型结果 (source ∈ semantic/lexical/graph/tree/temporal/kw),
+      不过滤 vault / skill 结果 (它们不是 v5.db 记忆)。
+    - fail-open: directives 查询失败 / character 为空 → 不过滤, 返回原结果。
+    - 匹配规则: directive_text 是 content 的子串 (大小写不敏感) 即命中。
+    """
+    if not character or not results:
+        return results
+    try:
+        from memory_v5 import user_directives
+        bans = user_directives.get_active_directives(character, directive_type="ban_topic")
+    except Exception as e:
+        logger.debug("ban_directives lookup failed (fail-open): %s", e)
+        return results
+    if not bans:
+        return results
+    ban_texts = [(d.get("directive_text") or "").lower() for d in bans]
+    ban_texts = [t for t in ban_texts if t]
+    if not ban_texts:
+        return results
+    memory_sources = {"semantic", "lexical", "graph", "tree", "temporal", "kw", "structured"}
+    filtered = []
+    for r in results:
+        src = r.get("source", "semantic")
+        if src not in memory_sources:
+            filtered.append(r)  # vault/skill 不过滤
+            continue
+        content = (r.get("content") or "").lower()
+        if any(t in content for t in ban_texts):
+            continue  # 命中禁止话题, 剔除
+        filtered.append(r)
+    return filtered
 
 
 if __name__ == "__main__":

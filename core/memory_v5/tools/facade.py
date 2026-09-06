@@ -44,18 +44,17 @@ def _bad_action(tool: str, action: str, table: dict) -> str:
 
 @safe_tool
 def v5_self(action: str = "model", mode: str = "reflect") -> str:
-    """Ikaros 自我模型与内省。一个工具覆盖自我轨全部读/触发动作。
+    """Ikaros 自我模型与内省。
 
     action:
         model       持久自我模型 (身份/能力/信念/问题/好奇心)
         reflect     跑一次元认知循环 —— mode: reflect | philosophy | cycle
-        thought     最近一次内心独白 / 想法
-        curiosity   好奇心驱动状态 (含空闲分钟数与当前待解问题)
-        subconscious 最近一次潜意识低语
         anchor      身份 + 情感 + 关系紧凑快照 (中途重新锚定自我用)
-        discover    跑一次自我架构探索 (读项目文件生成自我认知)
 
     mode 仅对 action=reflect 生效。
+
+    2026-09-05 精简: 移除 thought/curiosity/subconscious/discover 四个零消费方
+    action (dsh 插件层 + Python 生产代码均无调用)。底层函数仍在 legacy 模式保留。
     """
     if action == "model":
         from memory_v5.tools.self_tool import v5_self_model
@@ -63,24 +62,11 @@ def v5_self(action: str = "model", mode: str = "reflect") -> str:
     if action == "reflect":
         from memory_v5.tools.self_tool import v5_self_reflect
         return v5_self_reflect(mode=mode)
-    if action == "thought":
-        from memory_v5.tools.self_tool import v5_latest_thought
-        return v5_latest_thought()
-    if action == "curiosity":
-        from memory_v5.tools.self_tool import v5_curiosity_check
-        return v5_curiosity_check()
-    if action == "subconscious":
-        from memory_v5.tools.self_tool import v5_subconscious
-        return v5_subconscious()
     if action == "anchor":
         from memory_v5.tools.self_tool import v5_context_refresh
         return v5_context_refresh()
-    if action == "discover":
-        from memory_v5.tools.extra_tool import v5_self_discover
-        return v5_self_discover()
     return _bad_action("v5_self", action, {
-        "model": 1, "reflect": 1, "thought": 1, "curiosity": 1,
-        "subconscious": 1, "anchor": 1, "discover": 1,
+        "model": 1, "reflect": 1, "anchor": 1,
     })
 
 
@@ -89,21 +75,20 @@ def v5_self(action: str = "model", mode: str = "reflect") -> str:
 @safe_tool
 def v5_state(action: str = "emotion", text: str = "",
              intensity: float = 0.3, character: str = "") -> str:
-    """Ikaros 与哥哥的实时状态。一个工具覆盖全部状态轨。
+    """Ikaros 与哥哥的实时状态。
 
     action:
         emotion         当前 PAD 情感状态 (愉悦/激活/掌控 + 心情标签)
         emotion_update  用 text 更新 PAD 情感状态, 返回 delta 与强度
-        emotion_label   text 的情感标签 (规则匹配, 恒 method=rule)
         care            关怀监测累计计数 (编码/游戏/专注时长, 提醒次数)
         care_check      检查哥哥是否需要主动关怀 (休息/喝水/睡觉)
         vitality        当前精力值 + 标签 + 累计运行时长
         relationship    与哥哥的关系模型 (深度/温度/阶段/亲密/天数/互动数)
-        activity        实时活动感知 (前台窗口 + 推断叙述, 60s 缓存)
-        compression     上下文压缩引擎状态 (活动/节律/摘要/画像/记忆分布)
 
     写动作 (vitality_tick / relationship_tick) 已内化进标准 Loop 的 post 阶段,
     每轮自动推进 —— 由 loop.py 调用, 不再作为工具暴露。
+
+    2026-09-05 精简: 移除 emotion_label/activity/compression 三个零消费方 action。
     """
     if action == "emotion":
         from memory_v5.tools.emotion_tool import v5_emotion_status
@@ -111,9 +96,6 @@ def v5_state(action: str = "emotion", text: str = "",
     if action == "emotion_update":
         from memory_v5.tools.emotion_tool import v5_analyze_emotion
         return v5_analyze_emotion(text)
-    if action == "emotion_label":
-        from memory_v5.tools.emotion_tool import v5_emotion_label
-        return v5_emotion_label(text)
     if action == "care":
         from memory_v5.tools.care_tool import v5_care_status
         return v5_care_status()
@@ -126,43 +108,19 @@ def v5_state(action: str = "emotion", text: str = "",
     if action == "relationship":
         from memory_v5.tools.relationship_tool import v5_relationship
         return v5_relationship()
-    if action == "activity":
-        from memory_v5.tools.extra_tool import v5_activity_status
-        return v5_activity_status()
-    if action == "compression":
-        from memory_v5.tools.extra_tool import v5_context_compression_stats
-        return v5_context_compression_stats()
     return _bad_action("v5_state", action, {
-        "emotion": 1, "emotion_update": 1, "emotion_label": 1,
+        "emotion": 1, "emotion_update": 1,
         "care": 1, "care_check": 1, "vitality": 1, "relationship": 1,
-        "activity": 1, "compression": 1,
     })
 
 
-# ─── v5_content: 叙事 / 矛盾检测 / 主动搭话 (3 -> 1) ───────────────────
-
-@safe_tool
-def v5_content(action: str = "proactive", content: str = "",
-               mem_type: str = "fact", days: int = 30,
-               use_llm: bool = True) -> str:
-    """内容生成与一致性检测。
-
-    action:
-        narrative   把近期记忆合成一段月度自我叙事 —— days / use_llm
-        dissonance  检测 content 是否与已有记忆矛盾 —— content / mem_type
-        proactive   判断此刻是否该主动开口搭话 (纯本地门控, 无需 LLM)
-    """
-    if action == "narrative":
-        from memory_v5.tools.extra_tool import v5_narrative_generate
-        return v5_narrative_generate(days=days, use_llm=use_llm)
-    if action == "dissonance":
-        from memory_v5.tools.extra_tool import v5_dissonance_check
-        return v5_dissonance_check(content, mem_type)
-    if action == "proactive":
-        from memory_v5.tools.extra_tool import v5_proactive_check
-        return v5_proactive_check()
-    return _bad_action("v5_content", action,
-                       {"narrative": 1, "dissonance": 1, "proactive": 1})
+# ─── v5_content 已删除 (2026-09-05) ────────────────────────────────────
+# 三个 action 均零消费方:
+#   narrative  → 内化进 reflect op (30d 周期, 由调度器驱动)
+#   dissonance → store.py 已有异步 _run_dissonance_detection, 手动检测重复
+#   proactive  → dsh 无主动触发机制消费此门控
+# 底层函数 v5_narrative_generate / v5_dissonance_check / v5_proactive_check
+# 仍在 legacy 模式保留 (extra_tool.py), 测试/脚本可继续 import。
 
 
 # ─── v5_skill: 技能库 (5 -> 1) ───────────────────────────────────────

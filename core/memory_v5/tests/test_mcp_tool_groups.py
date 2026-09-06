@@ -8,8 +8,9 @@ mcp_server._TOOL_GROUPS。2026-08-24 新增 v5_recall 时只改了工具全集,
 
 根因是**两份真相源**。2026-08-30 起分组与层级收进 tools/registry.py,
 mcp_server 全部派生。本测试相应改为从注册表派生期望值:
-硬编码数字只保留 "slim = 17 (9 core + 8 facade)" 这一处, 且它由
+硬编码数字只保留 "slim = 16 (9 core + 7 facade)" 这一处, 且它由
 test_tool_registry.py 交叉验证。
+# 2026-09-05: v5_content 从 slim 移除, facade 8→7, slim 17→16
 
 覆盖:
 - S1: 分组表完整性 — 与工具全集双向一致, 无遗漏无多余
@@ -168,7 +169,7 @@ def test_slim_mode_registers_only_core_and_facade():
     rec = _RecordingMCP()
     _register_tools(rec, None, "slim")
     assert sorted(rec.added) == sorted(registry.SLIM_TOOL_NAMES)
-    assert len(rec.added) == 17
+    assert len(rec.added) == 16  # 2026-09-05: v5_content 移除, 9 core + 7 facade
 
 
 def test_slim_mode_excludes_legacy_tools():

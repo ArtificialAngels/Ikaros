@@ -36,7 +36,6 @@ def _json_of(raw: str):
 @pytest.mark.parametrize("tool,kwargs", [
     ("v5_self", {}),
     ("v5_state", {}),
-    ("v5_content", {}),
     ("v5_skill", {}),
     ("v5_reflection", {}),
     ("v5_directive", {}),
@@ -58,10 +57,8 @@ def test_unknown_action_lists_valid_options(tool, kwargs):
 
 @pytest.mark.parametrize("facade_action,legacy_fn,legacy_args", [
     ("model", self_tool.v5_self_model, ()),
-    ("thought", self_tool.v5_latest_thought, ()),
-    ("curiosity", self_tool.v5_curiosity_check, ()),
-    ("subconscious", self_tool.v5_subconscious, ()),
     ("anchor", self_tool.v5_context_refresh, ()),
+    # 2026-09-05: thought/curiosity/subconscious/discover 已从 slim action 移除
 ])
 def test_v5_self_delegates_byte_identical(facade_action, legacy_fn, legacy_args):
     assert facade.v5_self(action=facade_action) == legacy_fn(*legacy_args)
@@ -71,8 +68,7 @@ def test_v5_self_delegates_byte_identical(facade_action, legacy_fn, legacy_args)
     ("emotion", emotion_tool.v5_emotion_status),
     ("care", care_tool.v5_care_status),
     ("relationship", relationship_tool.v5_relationship),
-    ("activity", extra_tool.v5_activity_status),
-    ("compression", extra_tool.v5_context_compression_stats),
+    # 2026-09-05: emotion_label/activity/compression 已从 slim action 移除
 ])
 def test_v5_state_delegates_byte_identical(facade_action, legacy_fn):
     assert facade.v5_state(action=facade_action) == legacy_fn()
@@ -95,9 +91,8 @@ def test_v5_state_emotion_update_delegates():
             "intensity"} <= a.keys()
 
 
-def test_v5_state_emotion_label_delegates():
-    assert facade.v5_state(action="emotion_label", text="好开心") == \
-        emotion_tool.v5_emotion_label("好开心")
+# 2026-09-05: test_v5_state_emotion_label_delegates 已删除 (emotion_label action 移除)
+# 2026-09-05: test_v5_content_dissonance_shape 已删除 (v5_content 工具移除)
 
 
 # ─── S3: 各门面返回值形状 ────────────────────────────────────────────
@@ -126,11 +121,6 @@ def test_v5_directive_stats_shape():
 
 def test_v5_repeat_stats_shape():
     assert isinstance(json.loads(facade.v5_repeat(action="stats")), dict)
-
-
-def test_v5_content_dissonance_shape():
-    d = json.loads(facade.v5_content(action="dissonance", content="猫是哺乳动物"))
-    assert "conflicts" in d
 
 
 def test_v5_repeat_check_shape():

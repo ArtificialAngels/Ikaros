@@ -76,6 +76,16 @@ _TEXT_SUFFIXES = {".md", ".py", ".ts", ".tsx", ".json", ".yaml", ".yml", ".sh", 
 
 _TOOL_NAME_RE = re.compile(r"\bv5_[a-z0-9_]+")
 
+#: 已从 slim facade action 中移除的 legacy 工具 (2026-09-05 精简)。
+#: 底层函数仍在 extra_tool/self_tool/emotion_tool 中, legacy 模式可直接调用;
+#: 但 slim 模式下不再有 facade action 入口 (零消费方清理)。
+#: _replacement_for 对这些工具返回"已从 slim 移除", 不要求 facade action 反查。
+SLIM_REMOVED_LEGACY = frozenset({
+    "v5_latest_thought", "v5_curiosity_check", "v5_subconscious", "v5_self_discover",
+    "v5_emotion_label", "v5_activity_status", "v5_context_compression_stats",
+    "v5_narrative_generate", "v5_dissonance_check", "v5_proactive_check",
+})
+
 #: 长得像工具名、其实是别的东西的标识符 —— 不加白名单会制造一堆假阳性,
 #: 而假阳性一多, 真阻塞项就没人看了 (狼来了)。
 #:   v5_call      插件的 CLI 脚本名 (bin/v5_call.py), 不是 MCP 工具
@@ -206,12 +216,14 @@ def _facade_action_map() -> dict[str, tuple[str, str]]:
 def _replacement_for(name: str) -> str:
     """legacy-only 工具名 → 替代方案。
 
-    判定顺序**必须是 Loop 内化优先于门面**: 被 Loop 内化的工具在 slim 下
-    **根本不注册**, 告诉模型「改用 v5_repeat(action=...)」是错的 —— 那扇门也关着,
-    正确说法是「由 v5_loop 的 post 阶段自动推进, 不用手动调」。
-    (v5_anti_repeat_record 同时出现在 FACADE_ABSORBS 和 LOOP_ABSORBS 里,
-     顺序反了就会给出指向不存在工具的坏建议。)
+    判定顺序:
+      1. 已从 slim 移除的零消费方工具 → 明确说明
+      2. Loop 内化优先于门面 (被 Loop 内化的工具在 slim 下根本不注册)
+      3. facade action 反查
+      4. FACADE_ABSORBS 兜底
     """
+    if name in SLIM_REMOVED_LEGACY:
+        return "已从 slim 移除 (零消费方, legacy 模式仍可直接调用)"
     for phase, absorbed in R.LOOP_ABSORBS.items():
         if name in absorbed:
             return f"v5_loop(phase='{phase}') 内化 (无需手动调)"

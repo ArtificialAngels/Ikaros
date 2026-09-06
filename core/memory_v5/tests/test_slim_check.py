@@ -34,20 +34,25 @@ def test_gate_is_green():
             for b in res["block"]
         )
     )
-    assert res["slim_tools"] == 17
+    assert res["slim_tools"] == 16  # 2026-09-05: v5_content 从 slim 移除
     assert res["legacy_only_tools"] == 41
 
 
 # ── 2) 每个 legacy-only 工具都必须有明确去处 ──────────────────────────
 def test_every_legacy_tool_has_a_replacement():
-    """"?" = 不知道该改成什么, 闸门报了也白报。"""
+    """"?" = 不知道该改成什么, 闸门报了也白报。
+
+    2026-09-05: SLIM_REMOVED_LEGACY 中的工具已从 slim facade 移除,
+    它们的替代方案是"已从 slim 移除", 不含 "docstring" fallback。
+    """
     for name in R.LEGACY_ONLY_NAMES:
         fix = SC._replacement_for(name)
         assert fix != "?", f"{name} 没有替代方案 —— 补进 facade action 表或 LOOP_ABSORBS"
-        assert "docstring" not in fix, (
-            f"{name} 的 action 解析失败 (fallback={fix!r}) —— "
-            "多半是 facade.py 的分发写法变了, 检查 slim_check._facade_action_map"
-        )
+        if name not in SC.SLIM_REMOVED_LEGACY:
+            assert "docstring" not in fix, (
+                f"{name} 的 action 解析失败 (fallback={fix!r}) —— "
+                "多半是 facade.py 的分发写法变了, 检查 slim_check._facade_action_map"
+            )
 
 
 def test_loop_absorbed_tools_point_at_loop_not_facade():
@@ -65,22 +70,25 @@ def test_loop_absorbed_tools_point_at_loop_not_facade():
 
 # ── 3) action 反查覆盖率 (专守 re.MULTILINE 静默失效) ─────────────────
 def test_facade_action_map_covers_all():
-    """除 Loop 内化的外, 每个 legacy-only 工具都要能反查到 (facade, action)。
+    """除 Loop 内化和已从 slim 移除的外, 每个 legacy-only 工具都要能反查到 (facade, action)。
 
     ⚠️ 2026-08-30 踩过: `_DOC_ACTION_RE` 用了 `^` 锚点却漏了 `re.MULTILINE`,
        finditer 静默返回 0 条 → 整条兜底路径空转 → 覆盖率从 41 掉到 32,
        而**没有任何报错**, 只是输出里多了几个 "action=? 见 docstring"。
        这条测试就是那个 bug 的墓碑。
+
+    2026-09-05: 10 个零消费方工具从 slim facade 移除, 不计入覆盖率。
     """
     m = SC._facade_action_map()
     loop_absorbed = {t for v in R.LOOP_ABSORBS.values() for t in v}
-    unresolved = [t for t in R.LEGACY_ONLY_NAMES if t not in m and t not in loop_absorbed]
+    excluded = loop_absorbed | SC.SLIM_REMOVED_LEGACY
+    unresolved = [t for t in R.LEGACY_ONLY_NAMES if t not in m and t not in excluded]
     assert not unresolved, (
         f"这些 legacy 工具反查不到 action: {unresolved}\n"
         "常见原因: facade.py 的 docstring action 块缩进变了, 或正则丢了 re.MULTILINE"
     )
-    # 覆盖率不该悄悄退化
-    assert len(m) >= 37, f"action 映射从 37 掉到 {len(m)}, 检查解析逻辑"
+    # 覆盖率不该悄悄退化 (原 37, 移除 10 个零消费方后应为 27)
+    assert len(m) >= 27, f"action 映射从 27 掉到 {len(m)}, 检查解析逻辑"
 
 
 # ── 4) group 未登记必须被判为阻塞 ────────────────────────────────────

@@ -268,12 +268,28 @@ def _step_relationship(ctx: LoopContext) -> dict:
 
 
 def _step_anti_repeat(ctx: LoopContext) -> dict:
-    """post: 把本轮回复记进反重复语料 (原 v5_anti_repeat_record)。"""
+    """post: 把本轮回复记进反重复语料 (原 v5_anti_repeat_record)。
+
+    P3-3 (2026-09-05): record 后同步检测重复风险, 若命中则返回 penalty_hint,
+    供 dsh 插件注入下一轮 system prompt 提醒换话题。
+    """
     if not (ctx.response or "").strip():
         return {"skipped": "empty_response"}
     from memory_v5 import anti_repeat
-    n = anti_repeat.record_response(ctx.character or "ikaros", ctx.response)
-    return {"recorded": n}
+    character = ctx.character or "ikaros"
+    n = anti_repeat.record_response(character, ctx.response)
+    result = {"recorded": n}
+    # 检测本轮回复是否与历史高度重复
+    try:
+        hint = anti_repeat.get_penalty_hint(character, ctx.response)
+        if hint:
+            result["penalty_hint"] = hint
+    except Exception as e:
+        # 检测失败不影响 record, 静默降级
+        import logging
+        logging.getLogger("ikaros.v5.loop").debug(
+            "anti_repeat penalty check failed: %s", e)
+    return result
 
 
 def _step_reflect(ctx: LoopContext) -> dict:

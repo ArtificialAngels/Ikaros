@@ -73,17 +73,21 @@ _CORE: dict[str, str] = {
 # ─── 冷路径门面 (facade): 一个资源一个工具 + action 分发 ───────────────
 # 定义于 tools/facade.py。
 _FACADE: dict[str, str] = {
-    "v5_self": "self",            # 6 -> 1: model/reflect/thought/curiosity/
-                                  #          subconscious/anchor/discover
-    "v5_state": "self",           # 10 -> 1: emotion*/care*/vitality/relationship/
-                                  #          activity/compression
-    "v5_content": "self",         # 3 -> 1: narrative/dissonance/proactive
+    "v5_self": "self",            # 3 action: model/reflect/anchor
+                                  # (2026-09-05 精简: 移除 thought/curiosity/
+                                  #  subconscious/discover 四个零消费方 action)
+    "v5_state": "self",           # 6 action: emotion/emotion_update/care/
+                                  #          care_check/vitality/relationship
+                                  # (2026-09-05 精简: 移除 emotion_label/
+                                  #          activity/compression)
     "v5_skill": "skill",          # 5 -> 1: write/list/get/search/remove
     "v5_reflection": "memory",    # 5 -> 1: synthesize/read/apply/promote/stats
     "v5_directive": "memory",     # 4 -> 1: add/list/off/stats
     "v5_repeat": "memory",        # 5 -> 1 (record 内化进 Loop, 剩 4 个 action)
     "v5_loop": "loop",            # 新: 标准记忆循环的入口与状态观测
 }
+# v5_content 已于 2026-09-05 从 slim 移除 (narrative/dissonance/proactive
+# 均零消费方); 底层函数仍在 _LEGACY 中保留, legacy 模式可用。
 
 # ─── legacy: 被吸收 / 被内化的旧工具 ──────────────────────────────────
 # 这些函数在 Python 侧**全部保留** (测试、脚本、桥接层继续 import),
@@ -228,21 +232,24 @@ def tools_for_mode(mode: str) -> list[Callable]:
 
 
 # 门面 -> 被吸收的旧工具 (文档 / 迁移提示用)
+# 2026-09-05: v5_content 从 slim 移除; v5_self/v5_state 精简 action。
+# 被移除的 action 对应底层函数仍在 _LEGACY 中, legacy 模式可直接调用。
 FACADE_ABSORBS: dict[str, list[str]] = {
     "v5_self": [
-        "v5_self_model", "v5_self_reflect", "v5_latest_thought",
-        "v5_curiosity_check", "v5_subconscious", "v5_context_refresh",
+        "v5_self_model", "v5_self_reflect", "v5_context_refresh",
+        # 以下为 2026-09-05 从 slim action 移除的零消费方工具, legacy 仍可用:
+        "v5_latest_thought", "v5_curiosity_check", "v5_subconscious",
         "v5_self_discover",
     ],
     "v5_state": [
-        "v5_analyze_emotion", "v5_emotion_status", "v5_emotion_label",
-        "v5_care_check", "v5_care_status", "v5_vitality", "v5_vitality_tick",
-        "v5_relationship", "v5_relationship_tick", "v5_activity_status",
-        "v5_context_compression_stats",
+        "v5_analyze_emotion", "v5_emotion_status", "v5_care_check",
+        "v5_care_status", "v5_vitality", "v5_vitality_tick",
+        "v5_relationship", "v5_relationship_tick",
+        # 以下为 2026-09-05 从 slim action 移除的零消费方工具, legacy 仍可用:
+        "v5_emotion_label", "v5_activity_status", "v5_context_compression_stats",
     ],
-    "v5_content": [
-        "v5_narrative_generate", "v5_dissonance_check", "v5_proactive_check",
-    ],
+    # v5_content 已从 slim 移除, 但其吸收的工具仍列于此供迁移参考:
+    # "v5_content": ["v5_narrative_generate", "v5_dissonance_check", "v5_proactive_check"],
     "v5_skill": [
         "v5_skill_write", "v5_skill_list", "v5_skill_get",
         "v5_skill_search", "v5_skill_remove",
