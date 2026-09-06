@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 // 合并自 ikaros-memory-settings: 记忆控制面板 HTTP RPC (embedding 模型管理) + dsh 设置面板
-import { apply as applyMemorySettings } from './settings/node'
+import { apply as applyMemorySettings } from './settings/node.js'
 // 引用 dsh-agent / dsh-session 类型声明以加载它们的 Events module augmentation
 // （agent/pre-step、agent/turn-stopping、session/event 的事件类型）。仅类型侧,
 // 编译产物不引入运行时依赖。

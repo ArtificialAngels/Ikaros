@@ -10,7 +10,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appendFileSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 // 合并自 ikaros-ct-settings: CT 设置面板的端口 watch + client.js patch
-import { apply as applyCtSettings } from './settings/node'
+import { apply as applyCtSettings } from './settings/node.js'
 
 export const name = 'ikaros-conversation-tree'
 
