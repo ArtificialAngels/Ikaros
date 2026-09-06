@@ -47,7 +47,7 @@
     "scripts",
     "tsconfig.build.json"
   ],
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]
   }
