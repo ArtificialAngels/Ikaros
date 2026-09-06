@@ -883,8 +883,9 @@ body.deck-open .node-card.is-card.l3{width:max(340px,calc(85vw - var(--deck-w,40
  * L2 = 展开只读小卡 (右列) | L3 = 完整工具态 (参数/结果全量 + 复制)
  * 激活树卡 → 工具卡从右下角飞出 (1s) 向右展开; 树卡右边界收缩 (body.tooldeck-open) */
 #toolDeck{position:fixed;inset:0;pointer-events:none;z-index:118}
-.tool-deck-fan{position:absolute;right:18px;bottom:18px;width:0;height:0;pointer-events:auto}
-.tool-deck-handle{position:absolute;right:-4px;bottom:-4px;width:28px;height:28px;border-radius:8px;background:var(--bg-floating);border:1px solid var(--border-std);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--text-tertiary);cursor:grab;touch-action:none;user-select:none;z-index:2;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.tool-deck-wrap{position:absolute;right:18px;bottom:18px;pointer-events:auto}
+.tool-deck-fan{position:relative;width:0;height:0}
+.tool-deck-handle{position:absolute;right:-8px;bottom:-8px;width:30px;height:30px;border-radius:8px;background:var(--bg-floating);border:1px solid var(--border-std);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--text-tertiary);cursor:grab;touch-action:none;user-select:none;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .tool-deck-handle:active{cursor:grabbing}
 /* L1 扇形小卡: 46x68 (原 92x135 缩小50%) */
 .tool-card-l1{
@@ -1520,7 +1521,8 @@ border:1.5px solid var(--border-std);border-radius:7px}
   </div>
   <!-- 工具调用牌组 (Tool Deck): 右下角扇形 L1; 展开后成为画布上的独立工具卡 (见 #toolCardsLayer) -->
   <div id="toolDeck" aria-hidden="true">
-    <div class="tool-deck-fan" id="toolDeckFan">
+    <div class="tool-deck-wrap" id="toolDeckWrap">
+      <div class="tool-deck-fan" id="toolDeckFan"></div>
       <div class="tool-deck-handle" onpointerdown="toolDeckDragStart(event)" title="拖拽工具组">⋮⋮</div>
     </div>
   </div>
@@ -1986,19 +1988,19 @@ function mdRender(src){
   // 2026-09-06: 工具组扇形拖拽 (右下角 toolDeckFan)
   window.toolDeckDragStart=function(e){
     if(e.target.closest('.tool-card-l1'))return;
-    const fan=document.getElementById('toolDeckFan');
-    if(!fan)return;
-    const r=fan.getBoundingClientRect();
+    const wrap=document.getElementById('toolDeckWrap');
+    if(!wrap)return;
+    const r=wrap.getBoundingClientRect();
     const ox=e.clientX-r.left, oy=e.clientY-r.top;
-    fan.style.right='auto';fan.style.bottom='auto';
-    const move=ev=>{fan.style.left=(ev.clientX-ox)+'px';fan.style.top=(ev.clientY-oy)+'px';};
+    wrap.style.right='auto';wrap.style.bottom='auto';
+    const move=ev=>{wrap.style.left=(ev.clientX-ox)+'px';wrap.style.top=(ev.clientY-oy)+'px';};
     const up=()=>{
-      try{fan.releasePointerCapture(e.pointerId)}catch(_){}
+      try{wrap.releasePointerCapture(e.pointerId)}catch(_){}
       document.removeEventListener('pointermove',move);
       document.removeEventListener('pointerup',up);
       document.removeEventListener('pointercancel',up);
     };
-    if(e.pointerId!=null&&fan.setPointerCapture)try{fan.setPointerCapture(e.pointerId)}catch(_){}
+    if(e.pointerId!=null&&wrap.setPointerCapture)try{wrap.setPointerCapture(e.pointerId)}catch(_){}
     document.addEventListener('pointermove',move);
     document.addEventListener('pointerup',up);
     document.addEventListener('pointercancel',up);
