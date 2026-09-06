@@ -1,287 +1,108 @@
 # Ikaros
 
-> **赛博游民数字管家** · 装在 U 盘里 · 插到任何 Windows 电脑就能跑 · **零系统依赖**(自带便携 Python + llama.cpp + DeepSeek Harness 工作引擎)
+> **赛博游民数字管家** — 装在 U 盘里，插到任何 Windows 电脑就能跑。零系统依赖：自带便携 Python + Node.js + DeepSeek Harness (dsh) 工作引擎。
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)](https://www.microsoft.com/windows)
 [![Python](https://img.shields.io/badge/python-3.12.10-3776ab)](https://www.python.org/)
-[![llama.cpp](https://img.shields.io/badge/llama.cpp-b10000-blueviolet)](https://github.com/ggml-org/llama.cpp)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-🧠 **项目记忆库**:`AGENTS.md` — 架构 / 决策 / gotcha / 历史
-📦 **上游清单**:`UPSTREAM.md` — 有上游的组件怎么拉、落哪、是否入库
-📖 **架构文档**:`docs/ARCHITECTURE.md` — 分层 / 端口 / 数据流 / 路径注册表
-
 ---
 
-## 🎯 一句话
+## 🎯 目标
 
-Ikaros 是一个 **完全自包含** 的 AI Agent 运行环境 —— 拷到 U 盘里,插到任何一台 Windows 电脑上双击 `bin\ikaros.bat` 拉起 **工作引擎(dsh) :3080**,一键联动 **记忆 + 对话树**。云端 LLM(DeepSeek)为主,本地 GGUF 模型(由 `core/memory_v5/models/model_config.json` 决定,当前仅 bge-m3 embedding;本地 LLM 已退役按需恢复)**懒加载**备用,记忆系统(V5:SQLite + FTS5 + Chroma 向量)全链路本地运行。
+构建一个**完全自包含**的 AI Agent 运行环境：拷到 U 盘，换一台电脑双击即用，不依赖系统安装任何东西。以 **dsh (DeepSeek Harness)** 为工作引擎核心，联动**本地记忆系统**和**对话树**，云端 LLM 为主、本地模型懒加载备用。
 
-> **仓库是「瘦身版」**:本云端仓库只保留 **Ikaros 原生代码 + 配置 + 上游清单/拉取/配置脚本**。所有「有上游」的组件(runtime 工具链、dsh、各类 MCP)**不入库**,统一由 `scripts/fetch-upstreams.py` 拉取、`scripts/setup-native.py` 落地配置。详见 `UPSTREAM.md`。
+## 💡 理念
 
----
+- **零系统依赖** — 便携 Python / Node / 运行时全部自带，不写注册表、不装系统服务
+- **U盘即插即用** — 根路径自锚定推导，换盘符零配置
+- **隐私优先** — 记忆、数据、运行时全部本地存储，不上传
+- **云端优先，本地兜底** — 对话走 DeepSeek cloud，embedding 本地运行，本地 LLM 按需恢复
 
-## 🖼️ 架构 (dsh 工作引擎为核心, 2026-08-18)
+## 🏗️ 框架
 
 ```
-                    ┌──── dsh 工作引擎 :3080 ────┐
-                    │  bin/ikaros.bat (入口)   │
-                    │  overlay: MCP+终端+LSP+人格 │
-                    └──────────┬─────────────┘
-                               │ 联动
-       ┌───────────────────────┼───────────────────┐
-        ▼                       ▼                   
-┌─────────────┐      ┌──────────────────┐
-│ Memory      │      │ 对话树 :48920     │
-│ :8587 embed │◄────►│ DeepSeek 直连     │
-│ (bge-m3)    │      │ + 只读工具回路    │
-└──────┬──────┘      └──────────────────┘
-       │
-       ▼
-┌─────────────┐
-│ V5 数据层   │
-│ v5.db +     │
-│ ChromaDB    │
-└─────────────┘
-
-* 本地 LLM(:8080) 已退役(2026-08-18): 云端 DeepSeek 为主, 按需恢复(见 AGENTS.md)。
-* 对话树 :48920 单模式 DeepSeek 直连(人格 = Ikaros 伴侣), 底座 = deepseek-harness (dsh), 不可达时降级本地三层链路 + 只读工具回路。
-* dsh :3080 为 DeepSeek Harness 工作引擎 (overlay 挂载 memory_v5 MCP: 49 个 v5_* 工具 + ikaros-memory 自动记忆插件 + terminal + typescript LSP + persona)。
-* pi / herdr (omp, 命名管道) 编码 agent 底座已整体退役 (2026-08-23)。
+                    ┌── dsh 工作引擎 :3080 ──┐
+                    │   web UI + MCP + 工具链  │
+                    └───────────┬──────────────┘
+                                │ 插件联动
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+      ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+      │  对话树插件    │  │  记忆系统插件  │  │  MCP 工具链   │
+      │  :48920       │  │  :8587 embed │  │  49 个 v5_*  │
+      │  树形对话面板  │  │  SQLite+Chroma│  │  记忆操作工具  │
+      └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
-### 核心端口
+| 层 | 组件 | 说明 |
+|---|---|---|
+| 工作引擎 | dsh :3080 | DeepSeek Harness，web UI + 插件系统 + MCP |
+| 记忆 | memory_v5 | SQLite (FTS5) + Chroma 向量，三路融合召回，全本地 |
+| 对话树 | conversation-tree :48920 | 树形多轮对话面板，DeepSeek 直连 |
+| Embedding | bge-m3 :8587 | 本地向量编码，1024 维，中英多语言 |
 
-| Port | 组件 | 用途 | 状态 |
-|------|------|------|------|
-| **8587** | Memory (bge-m3 embed) | embedding 1024 dim, V5 记忆写入/召回 | ✅ 常驻 |
-| **3080** | dsh (DeepSeek Harness) | 工作引擎 web 界面 + memory_v5 MCP + 工具链 | ⏸ 按需(`ikaros web` 或双击 `bin\ikaros.bat`) |
-| **48920** | 对话树 | 树形对话面板(`core/conversation-tree/server.py`),DeepSeek 直连 | ✅ 常驻 |
-| **8080** | 本地模型 (Local LLM) | **已退役 2026-08-18**(按需恢复: 放 gguf 进 `core/memory_v5/models/` + `model_config.json` 设 `initial_model`) | ⏸ 禁用 |
+## ⚠️ 项目状态
 
-> **已退役 (2026-08-18)**: Hermes 底座(`:8642` gateway / `:8650` Bridge / `:9119` Dashboard / hermes venv)、N.E.K.O 桌宠(`:48911/:48912/:48915`)、QwenPaw(`:8088`)。工作引擎由 **dsh (deepseek-harness)** 承接。
->
-> **更早移除**:语音桥 `:7870`/`:7871`(07-24)、独立记忆 sidecar `:9587`(07-26)、自思考循环 `think.py`(07-26)。
+**这是一个半成品。** 核心链路可运行，但存在大量未优化的逻辑：
 
----
+- 记忆召回的评分和融合策略尚在调优，召回质量不稳定
+- 对话树前端为单文件 vanilla JS，代码组织和性能有待重构
+- 插件间通信通过 postMessage / HTTP 桥接，缺少统一的 IPC 层
+- 错误处理和降级机制不完整，部分异常路径会静默失败
+- 测试覆盖率低，多数模块只有 smoke test
+- 配置分散在多个文件，缺少统一的配置管理
 
-## ✨ 特性
+欢迎基于此框架继续开发，但请勿将当前状态视为生产可用。
 
-- **零系统依赖** — 自带便携 Python **3.12.10**(`runtime\portable-python\`)、Node.js(`runtime\node\`)、llama.cpp Windows 二进制 + DLL(`runtime/llama/`)、**dsh**(`runtime/dsh\`,npm 本地安装)。**不需要系统装 Python / Node / VS / CUDA toolkit**。
-- **U 盘即插即用** — 项目根路径由 `bin/ikaros-env.sh/.bat/.ps1`(单一权威源,自锚定 `%%~fI` 归一化)自动解析,不写死盘符;换盘符后无需手工改路径。
-- **dsh 工作引擎** — DeepSeek Harness 承接过往 agent 底座职责:web 界面(:3080)+ memory_v5 MCP(49 工具,stdio)+ **ikaros-memory 自动记忆插件**(turn-stopping 自动沉淀 + pre-step 召回注入)+ terminal + typescript LSP + persona(overlay `core/ikaros-dsh/cordis.patch.yml`,路径经 `!!js process.env.IKAROS_ROOT` 推导,0 硬编码,可整体移动)。
-- **本地记忆系统 (V5)** — SQLite(FTS5 关键词)+ Chroma(向量语义)+ 时间范围 **三路融合召回**(`min_fused_score` 默认 0.3),统一入口 `unified_retrieve(scope=auto|semantic|lexical|graph|tree|temporal)`;`store()` 实时写入、`consolidate/distill/reflect` 经云端 LLM 归约。无 Qdrant 依赖。
-- **5D 认知注入** — `cogno_5d.py` 在每轮对话注入时间/设备/地理/情绪/上下文锚点。
-- **云端 LLM 优先** — 对话走 DeepSeek cloud;本地 LLM 已退役,不占资源(按需恢复)。
-- **对话树** — `:48920` 树形对话面板,多轮/分支对话以可折叠树呈现;单模式 DeepSeek 直连(人格 = Ikaros 伴侣公理 + SOUL 身份)。
-- **CRLF 行尾保护** — `.githooks/pre-commit` 阻止 LF-only `.bat` 提交(cmd.exe 会把路径截断)。
-- **隐私优先** — `data/`、`runtime/`、`.env`、IDE 状态全在 `.gitignore`。
+## 🔌 核心 dsh 插件
 
----
-
-## 🚀 30 秒上手
-
-### 在一台全新 Windows 电脑上(刚 git clone)
-
-```
-1. git clone https://github.com/ArtificialAngels/Ikaros.git
-2. cd Ikaros
-3. python scripts/fetch-upstreams.py     ← 拉取上游 (runtime / mcp / 模型权重)
-4. python scripts/setup-native.py        ← 落地 ikaros-paths.json + dsh profile env 参考
-5. `bin\ikaros web`                          ← 拉起工作引擎 :3080 (dsh, 2026-08-20 启动器起)
-```
-
-> `scripts/fetch-upstreams.py` 支持 `--list` / `--dry-run` / 按名拉取;`setup-native.py` 支持 `--check` 校验。详见 `UPSTREAM.md`。
-
-### 在你现在的电脑上(已经解压过)
-
-```
-1. `bin\ikaros web`                  ← 工作引擎 :3080
-2. `bin\ikaros tree`                 ← 启动对话树 :48920
-3. 浏览器开 http://127.0.0.1:3080 / http://127.0.0.1:48920, 开始对话
-```
-
-> 启动器 (`bin\ikaros`) 跨 3 shell (bash / cmd / PowerShell), 支持子命令 `web` / `tree` / `embed` / `all` / `doctor` / `update`. 2026-09-05 起 `bin\ikaros.bat` 双击出 13 项菜单。
-> 详见 `docs/ikaros-launcher-design.md`. 旧脚本 (`bin\start-dsh-ikaros.bat` / `restart-dsh-ikaros.ps1`) 已删除 (2026-09-05).
-
----
-
-## 📦 上游组件(不入库, 拉取而来)
-
-| 目录 | 上游 | 是否入库 |
-|------|------|---------|
-| `runtime/` | llama.cpp + CUDA 工具链 + node + portable-python | 否 |
-| `runtime/dsh/` | [@deepseek-ai/dsh](https://npmjs.com/package/@deepseek-ai/dsh) (DeepSeek Harness) | 否(npm 本地安装) |
-| `runtime/MCPServe/` | 各类 MCP 服务器 | 否 |
-| `core/memory_v5/models/` | GGUF 模型权重 | 否 |
-
-完整清单、URL、落点、获取方式见 **`UPSTREAM.md`**。
-
-**为什么不直接 git track?** 上游加起来几十个 G(模型权重 + node_modules + runtime),git 仓库会爆。拉取脚本用 gopeed/aria2 + 镜像多线程下载,且 `.gitignore` 已排除这些目录。
-
----
-
-## 🤖 本地模型
-
-本地模型仅剩 **embedding**（:8587，bge-m3，由组件启动脚本内嵌的分布式 watchdog 管理）；chat / 反思等一切 LLM 调用走云端 DeepSeek（本地 LLM :8080 已退役 2026-08-18）。
-
-| 模型 | 用途 | 端口 | 加载方式 |
-|------|------|------|---------|
-| bge-m3 q8_0 | embedding (1024 dim, 中英多语言) | :8587 | 常驻 |
-| ~~Phi-4-mini-instruct Q4_K_M~~ | ~~本地 LLM 推理兜底~~ | ~~:8080~~ | **已退役**（恢复需放 gguf + 设 `model_config.json` 的 `initial_model`） |
-
-> 模型权重**不包含在本仓库**,由 `scripts/fetch-upstreams.py` 或手动从 HuggingFace / ModelScope 下载,落点与当前生效模型见 `core/memory_v5/models/model_config.json` 与 `bin/ikaros-env.bat` 的 `IKAROS_MODEL_EMBEDDING/IKAROS_MODEL_LLM`。
-
----
-
-## ⚙️ 配置(可选)
-
-### 云端 LLM
-
-编辑 `.env`(从 `.env.example` 复制,只放密钥与非路径覆写):
+两个核心能力以独立 dsh 插件形式发布，位于 monorepo 子目录，可通过 `dsh plugin` 安装：
 
 ```bash
-DEEPSEEK_API_KEY=sk-...
-DEEPSEEK_MODEL=deepseek-v4-flash
+# 对话树插件 — server.py 看门狗 + sidebar 入口 + 全屏 iframe + dsh 设置面板
+dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-conversation-tree
+
+# 记忆系统插件 — 自动记忆工程层 + embedding 模型管理 + dsh 设置面板
+dsh plugin --profile web add github:ArtificialAngels/Ikaros#main:core/ikaros-dsh/plugins/ikaros-memory
 ```
 
-### 本地模型 / 端口 / 路径
+> 插件运行时需要完整 Ikaros 仓库（Python 核心 + 便携 Python），通过 `IKAROS_ROOT` 环境变量定位。
 
-见 `core/memory_v5/models/model_config.json`(本地模型单一事实来源)与 `bin/ikaros-env.sh/.bat/.ps1`(环境权威源,设置全部 `IKAROS_*` 路径;路径一律由 IKAROS_ROOT 自锚定推导,不写死盘符)。
+## 🚀 快速开始
 
-> ⚠️ dsh 保留变量: `DEEPSEEK_BASE_URL` 只能由启动环境 `export` 设置,不能放进 `.env`(dsh 会拒绝启动)。需要覆写 base URL 时在启动前 `set DEEPSEEK_BASE_URL=...`。
+```bash
+# 1. 克隆仓库
+git clone https://github.com/ArtificialAngels/Ikaros.git
+cd Ikaros
 
----
+# 2. 拉取上游运行时（便携 Python / Node / dsh / 模型权重）
+python scripts/fetch-upstreams.py
 
-## 🛠️ 常用命令
+# 3. 落地配置
+python scripts/setup-native.py
 
-| 用途 | 命令 |
-|------|------|
-| 拉起工作引擎 (dsh web) | `ikaros web` (或双击 `bin\ikaros.bat` 选 1) (http://127.0.0.1:3080) |
-| 启动对话树 | `ikaros tree` |
-| 停止 dsh | `ikaros dsh stop` |
-| 拉取上游 | `python scripts/fetch-upstreams.py` |
-| 落地原生配置 | `python scripts/setup-native.py` |
-| **dsh 启动 (web)** | `ikaros web` → :3080 (或面板 dsh 卡片 start) |
-| **dsh 启动 (headless)** | `ikaros dsh headless <task>` |
-| dsh 重启 | `ikaros dsh restart` |
-| 记忆服务状态 | 由各组件启动脚本自带 watchdog 管理；查对应服务日志 |
-| 本地 LLM | 已退役 (2026-08-18); 按需恢复见 `core/memory_v5/models/model_config.json` |
-| 模型配置 | `core/memory_v5/models/model_config.json` (本地模型单一事实来源) |
-
----
-
-## 📁 目录速览
-
-```
-Ikaros\
-├── bin\                  ← 启动器/桥接脚本 (.py/.bat/.ps1) + ikaros-env(环境权威) + start-dsh-ikaros
-├── core\                 ← 核心系统
-│  ├── memory_v5\         ← ★ V5 灵魂核心 (记忆/情感/认知/反思) + 49 个 v5_* MCP 工具
-│  ├── conversation-tree\  ← 对话树面板 (:48920; index.html 前端 + server.py 后端)
-│  ├── env\               ← Python 侧环境引导副本 (ikaros-paths.json / llama_resolver.py)
-│  └── ikaros-dsh\        ← dsh overlay (cordis.patch.yml: MCP/ikaros-memory/terminal/lsp/persona)
-├── config\               ← 配置文件 (identity/axiom.md 等)
-├── data\                 ← ★ 运行时数据 (全部 git ignored; 含 soul/SOUL.md 身份)
-├── docs\                 ← 文档
-├── runtime\              ← 运行时依赖 (git ignored): portable-python + node + llama + dsh + MCPServe
-├── scripts\              ← 上游拉取 / 原生配置脚本
-├── tests\                ← 测试
-├── UPSTREAM.md           ← 上游组件清单
-├── AGENTS.md             ← 项目记忆库 (架构/决策/gotcha/历史)
-└── README.md             ← 你在这里
+# 4. 启动工作引擎
+bin\ikaros web
+# 浏览器打开 http://127.0.0.1:3080
 ```
 
----
+## 📁 目录
 
-## 🐛 故障排查
-
-| 现象 | 第一看 |
-|------|--------|
-| dsh web 打不开 | `ikaros dsh restart` (日志 data/logs/ikaros-dsh-restart.log) |
-| 记忆召回弱 | 检查 :8587 embedding 是否在对应组件启动脚本下正常运行 |
-| 本地 LLM 没反应 | 本地 LLM 已退役 (2026-08-18); 恢复需放 gguf + 设 `model_config.json` 的 `initial_model` |
-| dsh 没起 / :3080 无响应 | 面板 dsh 卡片 start;日志 `data\logs\dsh.log`(UTF-8) |
-| dsh overlay 未加载 | 检查用户层 `~/.dsh/profiles/web/cordis.patch.yml` 与规范源 `core/ikaros-dsh/cordis.patch.yml` 是否同步 |
-| 对话树只读工具 | 说明走了本地降级链(DeepSeek 直连失败) |
-| 端口被占 | `netstat -ano \| findstr :8587` / `:3080` / `:48920` |
-| 云端 API 失败 | 检查 `.env` 的 API Key |
-| USB 盘符变了 | 无需处理 — IKAROS_ROOT 自锚定, 一切相对推导 |
-
----
-
-## 🤝 致谢
-
-本项目是**整合 + 二次开发**,站在以下巨人的肩膀上:
-
-| 上游项目 | 链接 | 用途 | 协议 |
-|----------|------|------|------|
-| **DeepSeek Harness (dsh)** | [@deepseek-ai/dsh](https://npmjs.com/package/@deepseek-ai/dsh) | 工作引擎 (web + MCP + 工具链) | 上游许可 |
-| **llama.cpp** | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 LLM 推理 | MIT |
-| **DeepSeek** | [deepseek.com](https://platform.deepseek.com) | 云端 LLM | — |
-| **Hermes Agent** (历史) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 曾为 agent 底座, 2026-08-18 退役 | MIT |
-| **N.E.K.O** (历史) | [Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 曾为桌宠前端, 2026-08-18 退役 | Apache-2.0 |
-
-本项目所有二次开发放在 `core/memory_v5/`、`bin/`、`core/dashboard/`、`core/ikaros-dsh/` 下。
-
----
+```
+Ikaros/
+├── bin/                  # 启动器 + 环境配置 (ikaros-env 为路径权威源)
+├── core/
+│   ├── memory_v5/        # 记忆系统 (SQLite + Chroma + 49 MCP 工具)
+│   ├── conversation-tree/# 对话树 (index.html + server.py)
+│   └── ikaros-dsh/       # dsh 插件 + overlay 配置
+├── config/               # 身份 / 公理配置
+├── data/                 # 运行时数据 (git ignored)
+├── runtime/              # 便携运行时 (git ignored, fetch-upstreams 拉取)
+├── scripts/              # 上游拉取 / 配置脚本
+└── docs/                 # 架构文档
+```
 
 ## 📜 协议
 
-- 本整合包: MIT
-- llama.cpp: MIT
-- dsh / 模型权重遵循各自许可证(用户自备)
-
-模型权重**不包含在本仓库**。请从 HuggingFace / ModelScope 等渠道下载。
-
----
-
-## 📈 更新日志
-
-### 2026-08-23 — 底座收敛为 deepseek-harness, pi/omp 退役
-- 🔄 **pi/herdr (omp) 底座整体退役** — 删除 `core/herdr/`、`runtime/herdr/`、`data/omp/`、`runtime/bun/omp.exe`、`bin/start-omp.bat`;herdr 组件移除(组件收敛为 3:dsh / conversation-tree / embedding);`conversation-tree/server.py` 移除 supervisor 桥,底座语义统一标注 deepseek-harness。
-
-### 2026-08-18 — Hermes/N.E.K.O 底座退役,切换 dsh 工作引擎
-- 🔄 **底座切换** — agent 底座从 `hermes-agent` 整体切换为 **DeepSeek Harness (dsh)**;N.E.K.O 桌宠整体移除(仓库瘦身 ~7.4GB)。删除: `runtime/hermes-agent` / `data/hermes-agent` / `core/hermes-bridge` / `apps/neko` / `patches/hermes` / 7 个 bin hermes 脚本。
-- 📦 **env 权威收敛** — 单一权威源 `bin/ikaros-env.{bat,sh,ps1}`(自锚定 IKAROS_ROOT,归一化 `%%~fI`,0 盘符硬编码);根 `.env` 只放密钥;dsh overlay 路径经 `!!js process.env.IKAROS_ROOT` 推导。
-- 🎛️ **面板瘦身** — `:9100` 清理 usage/cron/kanban/upstream-repo/hermes 管理功能;组件收敛为 local_model / memory / dsh / conversation_tree / herdr / runtime;dsh 启停闭环(精确匹配 dsh CLI,不误伤 DSH Desktop)。
-- 🐛 **dsh 排障** — 修复 broken npm shim(改用本地 runtime/dsh)、`.env` 的 DEEPSEEK_BASE_URL 冲突(移除)、duplicate loader(overlay 单一来源+用户层同步)、pyright 缺失(默认关 python LSP)、bat 参数透传与 GBK 编码。
-- 🧹 **P1 清理** — 测试重写(14 文件退役/重写/新增 smoke_ikaros_env)、upstream 脚本清理、死文件/脚本删除、模型权威统一 bge-m3、文档改述。
-
-### 2026-08-13 — omp 配置迁出 C 盘
-- 📦 **omp 便携化补齐** — 配置目录迁到 `data/omp/agent/`,经 `PI_CODING_AGENT_DIR` 锚定项目。
-
-### 2026-08-12 — 文档/脚本同步清理
-- 📝 `README.md` / `docs/ARCHITECTURE.md` 全面同步:本地模型 Phi-4-mini、`:8642` gateway 重新启用(后于 08-18 退役)、`bin/ikaros-env.sh/.bat` 为环境权威源。
-
-### 2026-08-11 — env 收敛 + omp 便携化
-- 📦 **IKAROS_* 全部收敛到 `bin/ikaros-env.sh/.bat`**(自锚定)。
-
-### 2026-08-10 — herdr 接入 omp
-- 🤖 herdr agent `pi` = omp(oh-my-pi, go-deepseek 通道),`pi` 纳入 V5 核心。
-
-### 2026-08-05 — Hermes Bridge (历史)
-- 🌉 **Hermes Bridge `:8650`** — (2026-08-18 已随 hermes 底座退役)。
-
-### 2026-07-24 — 控制面板定型 + 去语音 (历史)
-- 🗑️ 语音桥 `:7870`/`:7871` 移除。
-
-### 2026-07-07 — no-bridge + Tauri 桌宠定型 (历史)
-- V4 记忆上线(SQLite + FTS5 + Chroma 双索引)。
-
----
-
-## 🔗 相关链接
-
-| 项目 | 链接 |
-|------|------|
-| **本仓库** | https://github.com/ArtificialAngels/Ikaros |
-| DeepSeek Harness (dsh) | https://npmjs.com/package/@deepseek-ai/dsh |
-| llama.cpp | https://github.com/ggml-org/llama.cpp |
-| DeepSeek 平台 | https://platform.deepseek.com |
-| GGUF 模型索引 | https://huggingface.co/models?library=gguf |
-
----
-
-*当前架构: dsh 工作引擎(:3080) + Memory(:8587, bge-m3) + 对话树(:48920, DeepSeek 直连)*
-*启动: `ikaros web` (双击 `bin\ikaros.bat` 选 1) · 故障看各组件自带 watchdog 日志 · dsh 日志: `data\logs\dsh.log`*
+MIT。上游组件（dsh / llama.cpp / 模型权重）遵循各自许可证。模型权重不包含在本仓库中。
