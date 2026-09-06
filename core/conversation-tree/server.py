@@ -101,6 +101,26 @@ LLM_TEMPERATURE = float(os.environ.get("CT_LLM_TEMPERATURE", "0.7"))
 # mode: ""=节点属性优先(默认) | "ikaros";  model: 模型名覆盖 (hermes 已退役)
 _CT_RUNTIME = {"mode": "", "model": ""}
 
+def _model_tier(model_id: str) -> str:
+    """从模型名后缀派生思考强度档位 (2026-09-06).
+
+    用于前端模型下拉框展示 '供应商 · 模型 · 思考强度'.
+    pi-ai provider data 没有显式 tier 字段, 按命名约定派生.
+    用词边界匹配, 避免 'minimax' 被误判为 'max'.
+    """
+    import re
+    mid = (model_id or "").lower()
+    # 用词边界: 前面是 -/_/开头, 后面是 -/_/数字/. 或结尾
+    def has(token):
+        return re.search(r'(?:^|[-_])' + re.escape(token) + r'(?=[-_0-9.]|$)', mid) is not None
+    if has("flash"): return "极速"
+    if has("pro"): return "深度"
+    if has("max"): return "最强"
+    if has("plus"): return "均衡"
+    if has("seed"): return "创新"
+    if has("hypersearch"): return "搜索"
+    return "标准"
+
 def _effective_mode(node_agent: str | None) -> str:
     """节点 agent 显式值优先; 无显式值时用运行时全局 mode; 再默认 ikaros。
 
@@ -1898,12 +1918,14 @@ class Handler(BaseHTTPRequestHandler):
                         "model": m.get("id"),
                         "label": m.get("name") or m.get("id"),
                         "context_window": m.get("contextWindow"),
+                        "tier": _model_tier(m.get("id") or ""),
                     } for m in llm.get("models", []) if isinstance(m, dict) and m.get("id")]
                     if not available:
                         # Catalog empty, fall back to single active model
                         available = [{"mode": "ikaros", "provider": llm["provider"],
                                      "model": llm["model"], "label": llm["model"],
-                                     "context_window": llm.get("contextWindow")}]
+                                     "context_window": llm.get("contextWindow"),
+                                     "tier": _model_tier(llm["model"])}]
                     self._send_json({
                         "ok": True,
                         "current": dict(_CT_RUNTIME),

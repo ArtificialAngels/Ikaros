@@ -5244,36 +5244,70 @@ function renderModelDropdown(){
   const body=document.getElementById('modelDropdownBody');
   if(!body)return;
   body.innerHTML='';
+  if(!CT_MODELS.length){
+    const empty=document.createElement('div');
+    empty.className='text-xs text-tertiary text-center py-6';
+    empty.textContent='加载模型列表中…';
+    body.appendChild(empty);return;
+  }
+  // 思考强度档位颜色映射
+  const tierColor={
+    '极速':'#22c55e','深度':'#f59e0b','最强':'#ef4444',
+    '均衡':'#3b82f6','创新':'#a855f7','搜索':'#06b6d4','标准':'#6b7280'
+  };
   CT_MODELS.forEach(it=>{
-    // 模型选择栏结构: 卡片项 p-3 px-4 bg-modal-floating border rounded-xl + h4 模型名 + 徽章 + 描述 (无右侧按钮, 整行可点)
     const row=document.createElement('div');
     row.className='model-dropdown-item'+(it.model===CT_MODEL_ACTIVE?' active':'');
     row.setAttribute('role','option');
-    row.title=it.label+(it.context_window?('（上下文 '+fmtTok(it.context_window)+'）'):'');
+    row.title=it.label+' ('+it.model+')'+(it.context_window?(' · 上下文 '+fmtTok(it.context_window)):'');
+    // 左侧: 名称 + 徽章行 + 模型ID
     const left=document.createElement('div');
-    left.className='min-w-0';
+    left.className='min-w-0 flex-1';
+    // 第一行: 模型名 + 选中标记
     const nameRow=document.createElement('div');
     nameRow.className='flex items-center gap-2 min-w-0';
     const name=document.createElement('h4');
     name.className='text-sm font-semibold text-primary truncate';
     name.textContent=it.label;
     nameRow.appendChild(name);
-    // 徽章: Free / ×0.3 风格
+    if(it.model===CT_MODEL_ACTIVE){
+      const check=document.createElement('span');
+      check.className='text-[10px] font-bold flex-shrink-0';
+      check.style.color='var(--brand)';
+      check.textContent='● 使用中';
+      nameRow.appendChild(check);
+    }
+    left.appendChild(nameRow);
+    // 第二行: 供应商 + 思考强度 + 上下文
     const tags=document.createElement('div');
-    tags.className='flex items-center gap-2 mt-1';
-    const badge=document.createElement('span');
-    badge.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
-    badge.textContent=it.context_window?('Free · '+fmtTok(it.context_window)):'Free';
-    tags.appendChild(badge);
-    if(it.mode){
-      const mode=document.createElement('span');
-      mode.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
-      mode.textContent=it.mode;
-      tags.appendChild(mode);
+    tags.className='flex items-center gap-1.5 mt-1.5 flex-wrap';
+    // 供应商徽章
+    if(it.provider){
+      const prov=document.createElement('span');
+      prov.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
+      prov.textContent=it.provider;
+      tags.appendChild(prov);
+    }
+    // 思考强度徽章 (带颜色)
+    const tier=it.tier||'标准';
+    const tierBadge=document.createElement('span');
+    tierBadge.className='text-[10px] font-medium rounded px-1.5 py-0.5 flex-shrink-0';
+    tierBadge.style.color=tierColor[tier]||'#6b7280';
+    tierBadge.style.border='1px solid '+(tierColor[tier]||'#6b7280')+'40';
+    tierBadge.style.background=(tierColor[tier]||'#6b7280')+'12';
+    tierBadge.textContent='思考: '+tier;
+    tags.appendChild(tierBadge);
+    // 上下文徽章
+    if(it.context_window){
+      const ctx=document.createElement('span');
+      ctx.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
+      ctx.textContent=fmtTok(it.context_window);
+      tags.appendChild(ctx);
     }
     left.appendChild(tags);
+    // 第三行: 模型ID
     const desc=document.createElement('p');
-    desc.className='text-xs text-tertiary mt-1 truncate';
+    desc.className='text-[11px] text-quaternary mt-1 truncate font-mono';
     desc.textContent=it.model;
     left.appendChild(desc);
     row.appendChild(left);

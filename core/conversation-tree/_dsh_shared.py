@@ -156,6 +156,11 @@ def _provider_base_url(provider_id: str, provider_cfg: dict[str, Any]) -> str | 
         if env:
             return env.rstrip("/")
         return "https://opencode.ai/zen/v1"
+    if provider_id == "minimax-cn":
+        env = os.environ.get("MINIMAX_CN_BASE_URL", "").strip()
+        if env:
+            return env.rstrip("/")
+        return "https://api.minimax.chat/v1"
     return None
 
 
@@ -252,7 +257,10 @@ def get_active_llm() -> dict[str, Any]:
 
     models = _provider_models(pcfg)
     model_entry = next((m for m in models if m.get("id") == model_id), None)
-    if model_id and not model_entry:
+    if model_id and not model_entry and models:
+        # 2026-09-06: 仅当 provider 有非空 models 目录时才校验.
+        # 部分 provider (如 minimax-cn) 只配 apiKeyEnv 不配 models,
+        # dsh 内部通过 pi-ai registry 解析, CT 直接用模型名即可.
         raise ModelNotInCatalog(
             f"model '{model_id}' not in providers.{provider_id}.models[]"
             f" (have: {[m.get('id') for m in models]})"
