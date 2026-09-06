@@ -165,7 +165,7 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
         endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             ds_body = json.dumps({
-                "model": llm["model"], "messages": messages,
+                "model": _CT_RUNTIME.get("model") or llm["model"], "messages": messages,
                 "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
             }).encode("utf-8")
             req = urllib.request.Request(
@@ -279,7 +279,7 @@ def _call_llm_tools(
         endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             body = {
-                "model": llm["model"], "messages": messages,
+                "model": _CT_RUNTIME.get("model") or llm["model"], "messages": messages,
                 "max_tokens": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "stream": False,
                 "tools": tools,
             }

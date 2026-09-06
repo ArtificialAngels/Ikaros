@@ -142,6 +142,20 @@ def _provider_base_url(provider_id: str, provider_cfg: dict[str, Any]) -> str | 
         if env:
             return env.rstrip("/")
         return "https://api.deepseek.com"
+    # 2026-09-06: opencode-go / opencode 是 dsh llm-pi-ai 的内置 provider,
+    # settings.yaml 不写 baseURL (由 pi-ai provider registry 解析). CT 直连
+    # OpenAI-compatible /chat/completions, 用 openai-completions 对应的端点.
+    # 来源: @earendil-works/pi-ai dist/providers/data/opencode-go.json / opencode.json
+    if provider_id == "opencode-go":
+        env = os.environ.get("OPENCODE_GO_BASE_URL", "").strip()
+        if env:
+            return env.rstrip("/")
+        return "https://opencode.ai/zen/go/v1"
+    if provider_id == "opencode":
+        env = os.environ.get("OPENCODE_BASE_URL", "").strip()
+        if env:
+            return env.rstrip("/")
+        return "https://opencode.ai/zen/v1"
     return None
 
 
