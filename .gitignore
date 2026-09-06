@@ -401,3 +401,7 @@ core/memory_v5/data/
 TASK.md
 core/memory_v5/reflect/data/
 home/
+
+# === 2026-09-06: 远端不需要的目录（本地保留） ===
+cad_visual_exports/
+tools/
