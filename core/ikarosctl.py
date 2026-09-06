@@ -185,10 +185,14 @@ def start_component(
             # `ikaros dsh sync` (see _dsh_sync() below).
             # --no-open 防止 dsh 自动开系统默认浏览器（用户偏好：自己用 ikaros dsh open 开 Chrome --app，
             # 避免 Edge/Chrome 重复窗口）。
+            # --trusted-host: dsh 0.1.2+ browser-trust fence 默认不信任 127.0.0.1,
+            # 需显式声明可信主机否则 Web UI 返回 401 authentication required。
             argv = [
                 str(node), str(dsh_bin), "web",
                 "--port", web_port,
                 "--no-open",
+                "--trusted-host", "127.0.0.1:" + web_port,
+                "--trusted-host", "localhost:" + web_port,
             ]
         else:
             # headless mode: --patch is required for the Ikaros overlay.
@@ -248,8 +252,16 @@ def start_component(
         # gives the child a valid but silent file descriptor, avoiding the
         # crash.  (llama-server.exe and other native binaries handle /dev/null
         # gracefully; this is a Python-specific issue.)
-        popen_kwargs["stdout"] = subprocess.DEVNULL
-        popen_kwargs["stderr"] = subprocess.DEVNULL
+        # dsh 0.1.2+: stdout 含带 token 的 Web URL (browser-trust fence),
+        # 必须写入日志供 _dsh_open 提取, 否则 Chrome --app 打开无 token URL 返回 401。
+        if component_id == "dsh":
+            dsh_log = root / "data" / "logs" / "dsh-web.out.log"
+            dsh_log.parent.mkdir(parents=True, exist_ok=True)
+            popen_kwargs["stdout"] = open(dsh_log, "w", encoding="utf-8", buffering=1)
+            popen_kwargs["stderr"] = subprocess.DEVNULL
+        else:
+            popen_kwargs["stdout"] = subprocess.DEVNULL
+            popen_kwargs["stderr"] = subprocess.DEVNULL
     else:
         popen_kwargs["start_new_session"] = True
 
@@ -800,6 +812,22 @@ def _dsh_open(root: Path) -> int:
         print("[dsh-open] Chrome 未找到, 请手动打开 http://localhost:3080/")
         return 1
     url = f"http://localhost:{web_port}/"
+    # dsh 0.1.2+: browser-trust fence 要求带 token 的 URL, 从启动日志提取。
+    # 日志行格式: "dsh web: http://127.0.0.1:3080/?token=xxx"
+    dsh_log = root / "data" / "logs" / "dsh-web.out.log"
+    if dsh_log.is_file():
+        import re as _re
+        for _ in range(5):  # 最多等 5 秒让 token 写入日志
+            try:
+                log_text = dsh_log.read_text(encoding="utf-8", errors="replace")
+                m = _re.search(r"dsh web:\s*(https?://\S+)", log_text)
+                if m:
+                    url = m.group(1)
+                    print(f"[dsh-open] 使用 token URL (browser-trust)")
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            import time as _t; _t.sleep(1)
     # 查 dsh 实际端口（CT 同步用，但浏览器只看 dsh）
     port_file = root / "tmp" / "ct-port.json"
     if port_file.is_file():
