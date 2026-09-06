@@ -179,7 +179,7 @@ def start_component(
             raise LauncherError(f"dsh bin.js not found: {dsh_bin}")
         web_port = os.environ.get("IKAROS_DSH_WEB_PORT") or str(component.port or 3080)
         if args[0] == "web":
-            # web profile auto-loads the patch from ~/.dsh/profiles/web/;
+            # web profile auto-loads the patch from $DSH_HOME/profiles/web/;
             # --patch is NOT passed here (the old start-dsh-ikaros.bat only
             # used --patch for headless mode).  The patch is synced by
             # `ikaros dsh sync` (see _dsh_sync() below).
@@ -236,6 +236,9 @@ def start_component(
         env.setdefault("IKAROS_COMPONENT_PORT", str(component.port))
     if component_id == "dsh":
         env.setdefault("IKAROS_DSH_WEB_PORT", str(component.port or 3080))
+        # DSH_HOME: dsh 配置/插件/会话存储根目录。
+        # 默认 ~/.dsh (C盘), Ikaros 统一放到 E:\Ikaros\data\dsh 避免 C 盘膨胀。
+        env["DSH_HOME"] = str(root / "data" / "dsh")
 
     popen_kwargs: dict[str, Any] = {
         "cwd": root,
@@ -700,13 +703,13 @@ def _resolve_log_path(root: Path, component_id: str) -> Path | None:
     Priority:
     1. ``data/logs/<id>.out.log`` (launcher convention, written by the
        component's own watchdog when running detached).
-    2. ``~/.dsh/ikaros-dsh-web.out.log`` (legacy dsh web stdout location,
-       preserved so existing users do not lose log access during the
-       base-swap transition).
+    2. ``$DSH_HOME/ikaros-dsh-web.out.log`` (dsh web stdout location,
+       DSH_HOME 默认 E:\\Ikaros\\data\\dsh).
     """
+    dsh_home = Path(os.environ.get("DSH_HOME") or str(root / "data" / "dsh"))
     candidates = [
         root / "data" / "logs" / f"{component_id}.out.log",
-        Path.home() / ".dsh" / "ikaros-dsh-web.out.log",
+        dsh_home / "ikaros-dsh-web.out.log",
     ]
     existing = [path for path in candidates if path.is_file()]
     if not existing:
@@ -719,7 +722,7 @@ def _cmd_dsh(root: Path, args: tuple[str, ...]) -> int:
 
     status: 3080 + CT 端口 + node 进程 + client.js URL 同步状态
     open:   自动开 Chrome --app 窗口（探测已有窗口则前置）
-    sync:   cordis.patch.yml → ~/.dsh/profiles/web/cordis.patch.yml
+    sync:   cordis.patch.yml → $DSH_HOME/profiles/web/cordis.patch.yml
     restart: stop + start_component('dsh', ('web',))  (与 `ikaros restart dsh` 等价)
     stop:   杀 dsh web 进程
     """
@@ -764,8 +767,9 @@ def _dsh_status(root: Path) -> int:
     else:
         print("[3] dsh node pids   -> none")
     # 4) client.js URL 同步
+    dsh_home = Path(os.environ.get("DSH_HOME") or str(root / "data" / "dsh"))
     client_js = (
-        Path.home() / ".dsh" / "profiles" / "web" / "node_modules"
+        dsh_home / "profiles" / "web" / "node_modules"
         / "@ikaros" / "dsh-conversation-tree" / "dist" / "client.js"
     )
     url_in_client = None
@@ -849,9 +853,11 @@ def _dsh_open(root: Path) -> int:
 
 
 def _dsh_sync(root: Path) -> int:
-    """Sync cordis.patch.yml -> ~/.dsh/profiles/web/cordis.patch.yml (only entry point for this operation)."""
+    """Sync cordis.patch.yml -> $DSH_HOME/profiles/web/cordis.patch.yml (only entry point for this operation)."""
     src = root / "core" / "ikaros-dsh" / "cordis.patch.yml"
-    dst_dir = Path.home() / ".dsh" / "profiles" / "web"
+    # DSH_HOME 默认 E:\Ikaros\data\dsh (与 start_component 中设置一致)
+    dsh_home = Path(os.environ.get("DSH_HOME") or str(root / "data" / "dsh"))
+    dst_dir = dsh_home / "profiles" / "web"
     dst = dst_dir / "cordis.patch.yml"
     if not src.is_file():
         print(f"[dsh-sync] source not found: {src}")
