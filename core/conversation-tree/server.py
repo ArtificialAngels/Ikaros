@@ -99,7 +99,7 @@ LLM_TEMPERATURE = float(os.environ.get("CT_LLM_TEMPERATURE", "0.7"))
 
 # ── 运行时模型切换 (2026-08-03): POST /api/model_switch 覆盖默认 ──
 # mode: ""=节点属性优先(默认) | "ikaros";  model: 模型名覆盖 (hermes 已退役)
-_CT_RUNTIME = {"mode": "", "model": ""}
+_CT_RUNTIME = {"mode": "", "model": "", "provider": ""}
 
 def _model_tier(model_id: str) -> str:
     """从模型名后缀派生思考强度档位 (2026-09-06).
@@ -120,6 +120,30 @@ def _model_tier(model_id: str) -> str:
     if has("seed"): return "创新"
     if has("hypersearch"): return "搜索"
     return "标准"
+
+
+def _build_all_providers_response() -> list[dict]:
+    """构建所有 provider + 模型列表, 用于前端按供应商分组折叠 (2026-09-06)."""
+    try:
+        providers = _dsh.get_all_providers()
+    except Exception:
+        return []
+    result = []
+    for p in providers:
+        models = [{
+            "model": m.get("id"),
+            "label": m.get("name") or m.get("id"),
+            "context_window": m.get("contextWindow"),
+            "tier": _model_tier(m.get("id") or ""),
+        } for m in p.get("models", []) if isinstance(m, dict) and m.get("id")]
+        result.append({
+            "id": p["id"],
+            "apiKey_set": p.get("apiKey_set", False),
+            "baseURL": p.get("baseURL"),
+            "models": models,
+        })
+    return result
+
 
 def _effective_mode(node_agent: str | None) -> str:
     """节点 agent 显式值优先; 无显式值时用运行时全局 mode; 再默认 ikaros。
@@ -181,7 +205,11 @@ def _call_llm(messages: list[dict], agent: str = "ikaros",
 
     # 1) Shared dsh LLM (provider/model/baseURL/apiKey from ~/.dsh/settings.yaml)
     try:
-        llm = _dsh.get_active_llm_cached()
+        # 2026-09-06: 运行时 provider 覆盖 (用户从下拉框选了非默认 provider 的模型)
+        if _CT_RUNTIME.get("provider") and _CT_RUNTIME.get("model"):
+            llm = _dsh.get_llm_for(_CT_RUNTIME["provider"], _CT_RUNTIME["model"])
+        else:
+            llm = _dsh.get_active_llm_cached()
         endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             ds_body = json.dumps({
@@ -295,7 +323,10 @@ def _call_llm_tools(
 
     # 1) Shared dsh LLM (唯一支持 tools 的降级层, provider/model/baseURL/apiKey from ~/.dsh/settings.yaml)
     try:
-        llm = _dsh.get_active_llm_cached()
+        if _CT_RUNTIME.get("provider") and _CT_RUNTIME.get("model"):
+            llm = _dsh.get_llm_for(_CT_RUNTIME["provider"], _CT_RUNTIME["model"])
+        else:
+            llm = _dsh.get_active_llm_cached()
         endpoint = f"{llm['baseURL']}/chat/completions"
         try:
             body = {
@@ -1932,6 +1963,8 @@ class Handler(BaseHTTPRequestHandler):
                         "defaults": {"ikaros": llm["model"]},
                         "active": {"provider": llm["provider"], "model": llm["model"]},
                         "available": available,
+                        # 2026-09-06: 所有 provider 及其模型, 前端按供应商分组折叠显示
+                        "all_providers": _build_all_providers_response(),
                     })
                 except _dsh.LLMConfigError as e:
                     self._send_json({"ok": False, "error": str(e)}, 503)
@@ -2359,14 +2392,20 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send_json(res)
             elif path == "/api/model_switch":
-                # POST: {"mode":"ikaros"|"","model":"<名>"} (hermes 模式已退役)
+                # POST: {"mode":"ikaros"|"","model":"<名>","provider":"<id>"}
+                # 2026-09-06: provider 可选, 设置后 _call_llm 用该 provider 而非默认
                 mode = (data.get("mode") or "").strip()
                 model = (data.get("model") or "").strip()
+                provider = (data.get("provider") or "").strip()
                 if mode not in ("", "ikaros"):
                     self._send_json({"error": "mode must be ikaros|''"}, 400)
                     return
                 _CT_RUNTIME["mode"] = mode
                 _CT_RUNTIME["model"] = model
+                _CT_RUNTIME["provider"] = provider
+                # 切换 provider 时清缓存, 确保下次 get_active_llm_cached 重读
+                if provider:
+                    _dsh.refresh_active_llm_cache()
                 self._send_json({"ok": True, "current": dict(_CT_RUNTIME)})
             elif path == "/api/chat":
                 user_message = data.get("message", "").strip()

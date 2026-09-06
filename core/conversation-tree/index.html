@@ -5208,8 +5208,10 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 /* ===== 模型切换 (2026-08-03): 自定义圆角下拉, 弹层风格 ===== */
-let CT_MODELS=[];        // 最近拉取的模型列表
+let CT_MODELS=[];        // 最近拉取的模型列表 (当前 provider, 兼容旧代码)
+let CT_ALL_PROVIDERS=[];  // 所有 provider + 模型 (2026-09-06 按供应商分组)
 let CT_MODEL_ACTIVE='';  // 当前选中模型
+let CT_MODEL_PROVIDER=''; // 当前选中模型的 provider (2026-09-06)
 
 function modelBtnText(it){
   return it? (it.label+(it.context_window?(' · '+fmtTok(it.context_window)+' ctx'):'')) : '—';
@@ -5220,106 +5222,150 @@ async function refreshModelPicker(){
   try{const r=await fetch('/api/model_switch');cfg=await r.json();}catch(e){return;}
   const cur=cfg.current||{}, defs=cfg.defaults||{};
   CT_MODELS=cfg.available||[];
-  // 当前值: 运行时覆盖优先, 否则默认模型
-  let active=cur.model||'';
-  if(!active) active=CT_MODELS[0]?CT_MODELS[0].model:'';
-  if(!CT_MODELS.find(x=>x.model===active)) active=CT_MODELS[0]?CT_MODELS[0].model:'';
+  CT_ALL_PROVIDERS=cfg.all_providers||[];
+  // 2026-09-06: 在所有 provider 中查找当前激活模型
+  const allFlat=[];
+  CT_ALL_PROVIDERS.forEach(p=>(p.models||[]).forEach(m=>allFlat.push({...m,provider:p.id})));
+  let active=cur.model||'', activeProvider=cur.provider||'';
+  if(!active){
+    const first=allFlat[0];
+    active=first?first.model:''; activeProvider=first?first.provider:'';
+  }
+  const found=allFlat.find(x=>x.model===active);
+  if(!found){const f=allFlat[0];active=f?f.model:'';activeProvider=f?f.provider:'';}
   CT_MODEL_ACTIVE=active;
-  const it=CT_MODELS.find(x=>x.model===active);
+  CT_MODEL_PROVIDER=activeProvider;
+  const it=found||allFlat.find(x=>x.model===active);
   const label=modelBtnText(it);
   if(btn){ btn.textContent=label;
     btn.title=it?(it.label+(it.context_window?('（上下文 '+fmtTok(it.context_window)+'）'):'')):'切换模型'; }
-  // usageBar 删除后, 标签也同步到输入栏的模型 chip (若仍存在); mcLabel 固定为 AI 图标, 模型名进 title
   const chip=_focusEl('modelChip');
   if(chip){
     const l=_focusEl('mcLabel');
     if(l){l.textContent='AI';chip.title=label;}
     else chip.textContent=label;
   }
-  // 同步实际 context window 供状态条使用
   if(it&&it.context_window) CT_CTX_LIVE=it.context_window;
   renderModelDropdown();
 }
+// 2026-09-06: 折叠状态跟踪
+const _ctCollapsedProviders=new Set();
 function renderModelDropdown(){
   const body=document.getElementById('modelDropdownBody');
   if(!body)return;
   body.innerHTML='';
-  if(!CT_MODELS.length){
+  const providers=CT_ALL_PROVIDERS.length?CT_ALL_PROVIDERS:(CT_MODELS.length?[{id:CT_MODELS[0].provider||'default',models:CT_MODELS}]:[]);
+  if(!providers.length){
     const empty=document.createElement('div');
     empty.className='text-xs text-tertiary text-center py-6';
     empty.textContent='加载模型列表中…';
     body.appendChild(empty);return;
   }
-  // 思考强度档位颜色映射
   const tierColor={
     '极速':'#22c55e','深度':'#f59e0b','最强':'#ef4444',
     '均衡':'#3b82f6','创新':'#a855f7','搜索':'#06b6d4','标准':'#6b7280'
   };
-  CT_MODELS.forEach(it=>{
-    const row=document.createElement('div');
-    row.className='model-dropdown-item'+(it.model===CT_MODEL_ACTIVE?' active':'');
-    row.setAttribute('role','option');
-    row.title=it.label+' ('+it.model+')'+(it.context_window?(' · 上下文 '+fmtTok(it.context_window)):'');
-    // 左侧: 名称 + 徽章行 + 模型ID
-    const left=document.createElement('div');
-    left.className='min-w-0 flex-1';
-    // 第一行: 模型名 + 选中标记
-    const nameRow=document.createElement('div');
-    nameRow.className='flex items-center gap-2 min-w-0';
-    const name=document.createElement('h4');
-    name.className='text-sm font-semibold text-primary truncate';
-    name.textContent=it.label;
-    nameRow.appendChild(name);
-    if(it.model===CT_MODEL_ACTIVE){
-      const check=document.createElement('span');
-      check.className='text-[10px] font-bold flex-shrink-0';
-      check.style.color='var(--brand)';
-      check.textContent='● 使用中';
-      nameRow.appendChild(check);
+  providers.forEach(p=>{
+    const pid=p.id, models=p.models||[];
+    if(!models.length)return;
+    const isCollapsed=_ctCollapsedProviders.has(pid);
+    const isActiveProvider=(pid===CT_MODEL_PROVIDER);
+    // 供应商分组头
+    const header=document.createElement('div');
+    header.className='model-dropdown-group-header';
+    header.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 14px;cursor:pointer;user-select:none;border-bottom:1px solid var(--border-std);position:sticky;top:0;background:var(--bg-floating);z-index:1;';
+    const headerLeft=document.createElement('div');
+    headerLeft.style.cssText='display:flex;align-items:center;gap:8px;min-width:0;';
+    const arrow=document.createElement('span');
+    arrow.style.cssText='font-size:10px;transition:transform .15s;transform:'+(isCollapsed?'rotate(-90deg)':'rotate(0)')+';';
+    arrow.textContent='▼';
+    headerLeft.appendChild(arrow);
+    const pname=document.createElement('span');
+    pname.style.cssText='font-size:12px;font-weight:600;color:var(--text-primary);';
+    pname.textContent=pid;
+    headerLeft.appendChild(pname);
+    if(!p.apiKey_set){
+      const warn=document.createElement('span');
+      warn.style.cssText='font-size:10px;color:#ef4444;';
+      warn.textContent='未配置Key';
+      headerLeft.appendChild(warn);
     }
-    left.appendChild(nameRow);
-    // 第二行: 供应商 + 思考强度 + 上下文
-    const tags=document.createElement('div');
-    tags.className='flex items-center gap-1.5 mt-1.5 flex-wrap';
-    // 供应商徽章
-    if(it.provider){
-      const prov=document.createElement('span');
-      prov.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
-      prov.textContent=it.provider;
-      tags.appendChild(prov);
+    if(isActiveProvider){
+      const activeTag=document.createElement('span');
+      activeTag.style.cssText='font-size:10px;color:var(--brand);font-weight:600;';
+      activeTag.textContent='● 当前';
+      headerLeft.appendChild(activeTag);
     }
-    // 思考强度徽章 (带颜色)
-    const tier=it.tier||'标准';
-    const tierBadge=document.createElement('span');
-    tierBadge.className='text-[10px] font-medium rounded px-1.5 py-0.5 flex-shrink-0';
-    tierBadge.style.color=tierColor[tier]||'#6b7280';
-    tierBadge.style.border='1px solid '+(tierColor[tier]||'#6b7280')+'40';
-    tierBadge.style.background=(tierColor[tier]||'#6b7280')+'12';
-    tierBadge.textContent='思考: '+tier;
-    tags.appendChild(tierBadge);
-    // 上下文徽章
-    if(it.context_window){
-      const ctx=document.createElement('span');
-      ctx.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
-      ctx.textContent=fmtTok(it.context_window);
-      tags.appendChild(ctx);
+    header.appendChild(headerLeft);
+    const count=document.createElement('span');
+    count.style.cssText='font-size:11px;color:var(--text-tertiary);';
+    count.textContent=models.length+' 个模型';
+    header.appendChild(count);
+    header.addEventListener('click',()=>{
+      if(_ctCollapsedProviders.has(pid))_ctCollapsedProviders.delete(pid);
+      else _ctCollapsedProviders.add(pid);
+      renderModelDropdown();
+    });
+    body.appendChild(header);
+    // 模型列表 (折叠时隐藏)
+    if(!isCollapsed){
+      models.forEach(it=>{
+        const item={...it,provider:pid};
+        const row=document.createElement('div');
+        row.className='model-dropdown-item'+(it.model===CT_MODEL_ACTIVE?' active':'');
+        row.setAttribute('role','option');
+        row.style.paddingLeft='28px';
+        row.title=it.label+' ('+it.model+')'+(it.context_window?(' · 上下文 '+fmtTok(it.context_window)):'');
+        const left=document.createElement('div');
+        left.className='min-w-0 flex-1';
+        const nameRow=document.createElement('div');
+        nameRow.className='flex items-center gap-2 min-w-0';
+        const name=document.createElement('h4');
+        name.className='text-sm font-semibold text-primary truncate';
+        name.textContent=it.label;
+        nameRow.appendChild(name);
+        if(it.model===CT_MODEL_ACTIVE){
+          const check=document.createElement('span');
+          check.className='text-[10px] font-bold flex-shrink-0';
+          check.style.color='var(--brand)';
+          check.textContent='● 使用中';
+          nameRow.appendChild(check);
+        }
+        left.appendChild(nameRow);
+        const tags=document.createElement('div');
+        tags.className='flex items-center gap-1.5 mt-1.5 flex-wrap';
+        const tier=it.tier||'标准';
+        const tierBadge=document.createElement('span');
+        tierBadge.className='text-[10px] font-medium rounded px-1.5 py-0.5 flex-shrink-0';
+        tierBadge.style.color=tierColor[tier]||'#6b7280';
+        tierBadge.style.border='1px solid '+(tierColor[tier]||'#6b7280')+'40';
+        tierBadge.style.background=(tierColor[tier]||'#6b7280')+'12';
+        tierBadge.textContent='思考: '+tier;
+        tags.appendChild(tierBadge);
+        if(it.context_window){
+          const ctx=document.createElement('span');
+          ctx.className='text-[10px] text-tertiary border border-std rounded px-1.5 py-0.5 flex-shrink-0';
+          ctx.textContent=fmtTok(it.context_window);
+          tags.appendChild(ctx);
+        }
+        left.appendChild(tags);
+        const desc=document.createElement('p');
+        desc.className='text-[11px] text-quaternary mt-1 truncate font-mono';
+        desc.textContent=it.model;
+        left.appendChild(desc);
+        row.appendChild(left);
+        row.addEventListener('click',()=>onModelPick(item));
+        body.appendChild(row);
+      });
     }
-    left.appendChild(tags);
-    // 第三行: 模型ID
-    const desc=document.createElement('p');
-    desc.className='text-[11px] text-quaternary mt-1 truncate font-mono';
-    desc.textContent=it.model;
-    left.appendChild(desc);
-    row.appendChild(left);
-    row.addEventListener('click',()=>onModelPick(it));
-    body.appendChild(row);
   });
 }
 async function onModelPick(it){
   if(!it)return;
   await fetch('/api/model_switch',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({mode:'ikaros',model:it.model})});
+    body:JSON.stringify({mode:'ikaros',model:it.model,provider:it.provider||''})});
   CT_MODEL_ACTIVE=it.model;
+  CT_MODEL_PROVIDER=it.provider||'';
   const btn=document.getElementById('modelPicker');
   const label=modelBtnText(it);
   if(btn){ btn.textContent=label;
@@ -6696,11 +6742,15 @@ background:conic-gradient(from 0deg,transparent 30%,var(--text-primary) 40%,var(
 .model-overlay.show{opacity:1}
 /* 面板: 统一到面板弹层语言 (ctx-menu/modal 统一 1.5px 边框 + radius-md + 同阴影), scale/opacity 显隐动画 */
 .model-dropdown{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.95);
-  width:360px;max-width:90vw;background:var(--bg-floating);color:var(--text-primary);
+  width:380px;max-width:90vw;max-height:70vh;background:var(--bg-floating);color:var(--text-primary);
   border:1.5px solid var(--border-std);border-radius:var(--radius-md);overflow:hidden;
   box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:251;
   opacity:0;transition:opacity .2s ease-in-out,transform .2s ease-in-out;
-  font-family:inherit}
+  font-family:inherit;display:flex;flex-direction:column}
+.model-dropdown-head{padding:12px 16px;font-weight:600;font-size:14px;border-bottom:1px solid var(--border-std);flex-shrink:0}
+.model-dropdown-body{overflow-y:auto;flex:1;min-height:0}
+.model-dropdown-body::-webkit-scrollbar{width:6px}
+.model-dropdown-body::-webkit-scrollbar-thumb{background:var(--border-std);border-radius:3px}
 .model-dropdown.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
 .model-dropdown-head{padding:10px 14px;font-size:11px;font-weight:600;color:var(--text-secondary);
   border-bottom:1px solid var(--border-divider);background:var(--bg-btn)}

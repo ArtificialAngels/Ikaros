@@ -321,3 +321,90 @@ def refresh_active_llm_cache() -> None:
     global _active_llm_cache
     with _active_llm_lock:
         _active_llm_cache = None
+
+
+def get_llm_for(provider_id: str, model_id: str) -> dict[str, Any]:
+    """Resolve a specific provider + model combo (2026-09-06).
+
+    Used when CT runtime overrides the provider (user picks a model from a
+    non-active provider in the dropdown). Same resolution logic as
+    get_active_llm() but for arbitrary provider_id / model_id.
+    """
+    settings = read_dsh_settings()
+    credentials = read_dsh_credentials()
+    providers_root = (
+        settings.get("llm-pi-ai", {}).get("providers", {})
+        if isinstance(settings.get("llm-pi-ai"), dict)
+        else {}
+    )
+    if provider_id not in providers_root:
+        raise ProviderNotFound(f"provider '{provider_id}' not in llm-pi-ai.providers")
+    pcfg = providers_root[provider_id]
+    if not isinstance(pcfg, dict):
+        raise ProviderNotFound(f"provider '{provider_id}' config is not a dict")
+    models = _provider_models(pcfg)
+    model_entry = next((m for m in models if m.get("id") == model_id), None)
+    if model_id and not model_entry and models:
+        raise ModelNotInCatalog(
+            f"model '{model_id}' not in providers.{provider_id}.models[]"
+        )
+    api_key_env = pcfg.get("apiKeyEnv") or ""
+    api_key = _resolve_api_key(api_key_env, credentials)
+    if api_key_env and not api_key:
+        raise ApiKeyMissing(f"apiKey '{api_key_env}' not found")
+    base_url = _provider_base_url(provider_id, pcfg)
+    if not base_url:
+        raise SettingsUnreadable(f"provider '{provider_id}' has no baseURL")
+    context_window = (
+        (model_entry or {}).get("contextWindow")
+        or pcfg.get("defaultContextWindow")
+        or 128000
+    )
+    max_tokens = (model_entry or {}).get("maxTokens")
+    return {
+        "provider": provider_id,
+        "model": model_id,
+        "baseURL": base_url,
+        "apiKey": api_key,
+        "apiKeyEnv": api_key_env,
+        "models": models,
+        "contextWindow": int(context_window),
+        "maxTokens": int(max_tokens) if isinstance(max_tokens, (int, float)) else None,
+        "source": "runtime-override",
+    }
+
+
+def get_all_providers() -> list[dict[str, Any]]:
+    """Return all configured providers with their model catalogs (2026-09-06).
+
+    Used by the model dropdown to show all available models grouped by provider.
+    Each entry: {id, apiKeyEnv, apiKey_set, baseURL, models:[{id,name,contextWindow,maxTokens}]}
+    """
+    settings = read_dsh_settings()
+    credentials = read_dsh_credentials()
+    providers_root = (
+        settings.get("llm-pi-ai", {}).get("providers", {})
+        if isinstance(settings.get("llm-pi-ai"), dict)
+        else {}
+    )
+    result = []
+    for pid, pcfg in providers_root.items():
+        if not isinstance(pcfg, dict):
+            continue
+        api_key_env = pcfg.get("apiKeyEnv") or ""
+        api_key = _resolve_api_key(api_key_env, credentials)
+        base_url = _provider_base_url(pid, pcfg)
+        models = _provider_models(pcfg)
+        # 无 models 目录的 provider (如 minimax-cn): 用 agent-default-model 的 model 作为唯一项
+        if not models:
+            active = settings.get("agent-default-model") or {}
+            if active.get("provider") == pid and active.get("model"):
+                models = [{"id": active["model"], "name": active["model"]}]
+        result.append({
+            "id": pid,
+            "apiKeyEnv": api_key_env,
+            "apiKey_set": bool(api_key),
+            "baseURL": base_url,
+            "models": models,
+        })
+    return result
